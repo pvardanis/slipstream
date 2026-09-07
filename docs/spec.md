@@ -98,8 +98,14 @@ independently.
 | **L1** — tuned replica | knob sweep: `max-num-seqs` · KV quant · chunked prefill · prefix cache · **LMCache offload** | sweep hits SLO at max concurrency | **Knob-sweep chart:** max sustained concurrency at SLO + the LMCache cache-extension win |
 | **L2a** — cold start + autoscale | cold-start-from-zero (image pull + weight load) measured; KEDA/HPA on `num_requests_waiting`; Karpenter provisioning | scales up under load from zero | **Cold-start latency breakdown + autoscaling-under-load timeline** |
 | **L2b** — spot + chaos | scale-to-zero + wake; spot-eviction drain; **chaos day** (evict node mid-generation, token stream survives) | a generation survives a spot eviction | **"vLLM on EKS spot: cold start, autoscaling, what breaks"** write-up + chaos-day survival capture |
-| **L3** — routing + obs spine | IGW + llm-d Router/EPP; prefix-cache-aware routing vs round-robin on a shared-prefix workload; request-ID join spine live | routing beats round-robin, pivot demo works | **"Prefix-cache-aware routing vs round-robin"** write-up + the cross-tool pivot demo |
+| **L3** — routing + obs spine | IGW + llm-d Router/EPP; prefix-cache-aware routing vs round-robin **across a prefix-share sweep**; request-ID join spine live | the sweep reports a crossover point, pivot demo works | **"Prefix-cache-aware routing vs round-robin"** write-up (a curve, not a point — where cache-aware routing wins, and where it stops) + the cross-tool pivot demo |
 | **L4** — P/D disaggregation | separate prefill/decode node pools; **LMCache KV transfer** between them; measured vs colocated | disagg runs and is measured | **P/D disaggregation result**, including an honest "where it didn't pay" |
+
+Note on L3: the routing eval must not win by construction. A workload built from
+`prefix_repetition` makes cache-aware routing beat round-robin almost tautologically, so L3
+**sweeps prefix-share % and reports the crossover** — the point below which cache-aware routing
+stops paying, including where it can lose. One real-trace arm anchors the sweep to reality. The
+deliverable is that curve, not a single rigged data point.
 
 Note on L4: vLLM's disaggregation is a **latency/TTFT** play, not a throughput win, and its tail
 latency is governed by KV-cache transport (NIXL/UCCL over EFA/RDMA-capable node pools). Do not
@@ -181,7 +187,9 @@ PostHog is product analytics, and the platform has no real users — resolved by
   `posthog-js` autocapture — autocapture grabs content/DOM and fights the shape-only privacy
   stance. No auth, no multi-user, no server-side persistence beyond PostHog events.
 - **PostHog's role:** the request-ID join is the anchor; **feature-flag A/B** for serving configs
-  (spec-decode on/off, quant variants — measuring outcome quality, not just latency) rides second.
+  (spec-decode on/off, quant variants) rides second. The A/B measures throughput, cost, and
+  latency — not output quality (the model is chosen for concurrency headroom, and no quality eval
+  is in scope).
 - **Data source:** both — Danny drives the box by hand for the real qualitative funnel; a **replay
   script wraps the L0 harness workload** (`prefix_repetition` + `--burstiness`) to fire synthetic
   sessions for statistics. One traffic generator, two entry points.
@@ -208,6 +216,11 @@ persona id, real = Danny, synthetic = generated persona, no PII):
 - **Cost / active user:** sum `cost_usd` by `distinct_id`; `cost_usd` derives from the L0 cost
   post-processor (tokens × $/1M) — no new cost math.
 - **A/B:** `flag_variants` as event property → compare `goodput_met` / `cost_usd` / `tpot_ms`.
+  Claim a win only at **≥5 pp absolute on `goodput_met`** (a rate — α 0.05, power 0.80, a
+  few-hundred synthetic sessions/arm) **or ≥10% relative on p95 latency / cost with
+  non-overlapping CIs across ≥5 replays** (these ride replayed traffic, so they are measured with
+  a confidence interval, not power-tested; 10% clears spot/thermal/batching jitter). Thresholds
+  are fixed before the run — the constraint is honesty about the bar, never sample count.
 
 ---
 
