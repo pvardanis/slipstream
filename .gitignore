@@ -45,3 +45,6 @@ kubeconfig
 
 # Claude Code local state (agent worktrees, local settings)
 .claude/
+
+# MLSD review scorecard (local artifact, not tracked)
+mlsd-scorecard-slipstream.md
