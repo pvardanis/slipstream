@@ -5,7 +5,7 @@
 A self-hosted LLM inference platform on AWS EKS: open models on spot GPUs, with the
 **cluster-level machinery around the model** as the focus — autoscaling on inference
 signals, spot-eviction survival mid-stream, cold-start elimination on large weight loads,
-inference-aware routing, and prefill/decode disaggregation. `make up` / `make down` fully
+inference-aware routing, and prefill/decode disaggregation. `just up` / `just down` fully
 create and destroy GPU capacity. It runs cost-competitive against commercial APIs and proves
 it on a live scoreboard.
 
@@ -35,7 +35,7 @@ six half-finished layers. Every decision below favours depth-first over breadth-
 - **GPU budget:** ~$100–250/mo. This is a **duty-cycle budget**, not 24/7 — even the cheapest
   24 GB card run continuously is ~$365/mo. Meaningful daily uptime under $250/mo means
   **scale-to-zero** and ~7–17 hrs/day of active GPU time. Teardown discipline is a design
-  requirement: `make down` must return GPU spend to zero.
+  requirement: `just down` must return GPU spend to zero.
 - **Cloud:** AWS only — chosen precisely because the cluster-orchestration gap is the point.
 - **IaC:** Terraform-only, never the console.
 - **Developable on CPU:** the platform must stand up against a tiny CPU model so GPU hours go to
@@ -181,7 +181,7 @@ depth.
 - **Grafana — "is the fleet healthy?"** GPU utilization, KV-cache occupancy,
   `num_requests_waiting`, TTFT p95, Karpenter scaling events, tokens/sec/$. Home of the cost
   scoreboard and SLO burn-rate alerts. Also a **cost-drift alert**: $/hr over the duty-cycle
-  budget pages — the guard against a forgotten GPU after a failed `make down`, which is the only
+  budget pages — the guard against a forgotten GPU after a failed `just down`, which is the only
   real-money failure mode here.
 - **Sentry — "what broke, and where in the code path?"** Instrument the router/gateway; trace
   gateway → routing decision → vLLM engine → first token → completion. CUDA OOMs, timeouts, spot
@@ -292,7 +292,7 @@ model, highest rabbit-hole risk). Both open new workstreams the binding constrai
 
 The output is public evidence, not the cluster:
 
-- Public repo, real commit history, Terraform-first, `make up` / `make down`.
+- Public repo, real commit history, Terraform-first, `just up` / `just down`.
 - Write-ups with real charts, produced as phase deliverables: **L2b** ("…what breaks"), **L3**
   ("prefix-cache-aware routing vs round-robin"), **L4** (P/D disaggregation result). The cost
   scoreboard is a live panel across all phases.
@@ -333,7 +333,7 @@ The output is public evidence, not the cluster:
                  │  Karpenter (spot nodes) + KEDA/HPA ─────────┘ │
                  │  (scale-to-zero, autoscale on num_requests_waiting)
                  └─────────────────────────────────────────────┘
-   Terraform provisions all of the above.  make up / make down.
+   Terraform provisions all of the above.  just up / just down.
 ```
 
 ---
