@@ -69,17 +69,38 @@ six half-finished layers. Every decision below favours depth-first over breadth-
   - **L3/L4 (routing + disaggregation):** **Gateway API Inference Extension (IGW, GA) as the
     routing contract + a version-pinned pre-1.0 llm-d Router/EPP as the scheduler.** These are
     two layers of one stack, not rivals. Both drive **unmodified vLLM**.
+- **Artifact pinning (so a number reproduces):** every published measurement pins the **weight-blob
+  checksum, vLLM version, and quant recipe** (`awq_marlin` + FP8 KV). A re-run months later must
+  reproduce the figure or the write-up is not evidence.
 
 ### 3.2 Benchmark harness (Layer 0)
 
 - A **thin wrapper over `vllm bench serve`** — not a bespoke load generator.
 - **Workload:** vLLM-native `prefix_repetition` + `--burstiness` (sweep prefix-share % and burst).
-  A real trace is a one-time realism check only, not the primary workload.
+  A real trace is a one-time realism check only, not the primary workload — but the check is
+  **quantified**: run the real trace once and report the **delta %** between it and the synthetic
+  workload's headline numbers, so "we validated realism" becomes a figure, not a claim.
 - **SLO:** **TTFT p95 ≤ 1000 ms, TPOT ≤ 50 ms** — expressed to the harness as
-  `--goodput ttft:1000 tpot:50`.
+  `--goodput ttft:1000 tpot:50`. Report **p99 alongside p95** (spot + batching produce fat tails a
+  p95 hides).
 - **Build only two thin pieces** on top of vLLM flags: a **cost-per-1M-tokens post-processor**
   and a **server-side prefix-cache-hit-rate scraper joined to the client JSON**. Everything else
   is vLLM configuration.
+
+**Measurement discipline** (what keeps the public numbers honest):
+
+- **Segment, don't blend.** Report goodput / TTFT p95 **per concurrency level and per prefix-share
+  bucket**, not one aggregate p95 — a single number hides "meets SLO at 20 seqs, blows it at 55,"
+  which is the story.
+- **Price input and output separately.** Commercial APIs charge output tokens ~3–4× input, so a
+  blended self-hosted $/1M vs blended commercial $/1M lies. Report **$/1M-input and $/1M-output**,
+  or pin the fixed input:output ratio used for the blend.
+- **Cold vs warm cache, both labelled.** Prefix-cache warmth swings throughput hard; a run long
+  enough to warm the cache reports numbers first traffic never sees. Report **cold (empty cache)
+  and steady-state (warm) SLO** — the inference analog of a train/test boundary.
+- **Measure the commercial baseline, don't quote it.** The cost scoreboard's commercial arm is the
+  **same L0 workload fired at the commercial API** and measured (real TTFT/TPOT/cost), never a list
+  price off a docs page. Apples-to-apples or it is not a baseline.
 
 ---
 
@@ -110,6 +131,17 @@ deliverable is that curve, not a single rigged data point.
 Note on L4: vLLM's disaggregation is a **latency/TTFT** play, not a throughput win, and its tail
 latency is governed by KV-cache transport (NIXL/UCCL over EFA/RDMA-capable node pools). Do not
 enable L4 before L1–L3 are saturating a single pool.
+
+Note on failure analysis (every phase): the deliverables are honest about what breaks, not just
+what works.
+- **Cohort the failures.** `generation_failed` is already tagged spot-evict / OOM / timeout —
+  report a **breakdown per phase**: which reason dominates at which concurrency.
+- **Capture a failure, not only the save.** Chaos day captures a surviving stream; also capture the
+  request that **died** (the OOM at max concurrency, the eviction before drain works). The honest
+  failure is the more valuable artifact.
+- **Attribute the tail.** For SLO-missing requests, split latency into **queue-wait vs prefill vs
+  decode vs transport** using the request-ID spine's Sentry spans (§5.1) — this is error analysis,
+  not another metric.
 
 ### 4.1 LMCache placement
 
@@ -148,7 +180,9 @@ depth.
 
 - **Grafana — "is the fleet healthy?"** GPU utilization, KV-cache occupancy,
   `num_requests_waiting`, TTFT p95, Karpenter scaling events, tokens/sec/$. Home of the cost
-  scoreboard and SLO burn-rate alerts.
+  scoreboard and SLO burn-rate alerts. Also a **cost-drift alert**: $/hr over the duty-cycle
+  budget pages — the guard against a forgotten GPU after a failed `make down`, which is the only
+  real-money failure mode here.
 - **Sentry — "what broke, and where in the code path?"** Instrument the router/gateway; trace
   gateway → routing decision → vLLM engine → first token → completion. CUDA OOMs, timeouts, spot
   evictions as fingerprinted issues.
@@ -167,6 +201,14 @@ acceptance bar is that one worked pivot, not four-way completeness.
 - **Deploy → Sentry release marker:** a deploy event creates a Sentry release + commit SHA so a
   p95 regression attributes to the exact rollout. **Deployer-agnostic** — the marker rides
   whatever CD mechanism L2a picks (not assumed to be Argo CD).
+- **Rehearsed rollback:** rollback is a **run deliverable**, not an assertion — deploy a bad config,
+  watch the SLO burn-rate alert fire, revert, confirm recovery. Rides alongside chaos day. Rollback
+  you have not run is not rollback.
+- **Alert → runbook:** each alert names its next step (dashboard → pivot → likely cause). The
+  chaos-day and rollback rehearsals **are** runbook entries one and two — a solo maintainer's
+  durable memory.
+- **Deliberate non-monitors:** no quality drift (no quality eval), no retrieval drift (no RAG), no
+  model drift (fixed model). Stated so absence reads as decision, not omission.
 - **Privacy:** shape-only. `request_id`, token counts, `prefix_hash`, `model_id`. **No raw prompt
   content leaves the cluster, ever.**
 
@@ -186,10 +228,15 @@ PostHog is product analytics, and the platform has no real users — resolved by
 - **Streamlit + `posthog-python`** (server-side, explicit events). Deliberately **not**
   `posthog-js` autocapture — autocapture grabs content/DOM and fights the shape-only privacy
   stance. No auth, no multi-user, no server-side persistence beyond PostHog events.
+- **Ingress boundary:** the gateway the thin client hits is **not publicly exposed** (private VPC /
+  auth in front) — an open GPU endpoint on spot is someone else's free inference. State the
+  boundary explicitly even for a demonstrator.
 - **PostHog's role:** the request-ID join is the anchor; **feature-flag A/B** for serving configs
   (spec-decode on/off, quant variants) rides second. The A/B measures throughput, cost, and
   latency — not output quality (the model is chosen for concurrency headroom, and no quality eval
-  is in scope).
+  is in scope). Note the A/B's flag-driven traffic split **is** the canary/shadow machinery, used
+  for **experiment intent** ("which config is better?"), not as a deploy safety gate ("is the new
+  version not-worse?") — canary/shadow proper are n/a (no live users, single-version demonstrator).
 - **Data source:** both — Danny drives the box by hand for the real qualitative funnel; a **replay
   script wraps the L0 harness workload** (`prefix_repetition` + `--burstiness`) to fire synthetic
   sessions for statistics. One traffic generator, two entry points.
