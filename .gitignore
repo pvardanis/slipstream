@@ -42,3 +42,6 @@ kubeconfig
 
 # Wayfinder scratch (planning lives in GitHub issues)
 .scratch/
+
+# Claude Code local state (agent worktrees, local settings)
+.claude/
