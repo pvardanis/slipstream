@@ -25,6 +25,9 @@ repos:
     hooks:
       - id: terraform_fmt
       - id: terraform_validate
+      - id: terraform_tflint
+        args:
+          - --args=--config=__GIT_WORKING_DIR__/.tflint.hcl
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1

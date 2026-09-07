@@ -4,7 +4,7 @@ A self-hosted LLM inference platform on AWS EKS: open models served on spot GPUs
 with the cluster-level machinery around the model as the focus — autoscaling on
 inference signals, spot-eviction survival mid-stream, cold-start elimination on
 large weight loads, inference-aware routing, and prefill/decode disaggregation.
-`make up` / `make down` conjures and destroys GPU capacity. It runs
+`just up` / `just down` conjures and destroys GPU capacity. It runs
 cost-competitive against commercial APIs and proves it on a live scoreboard.
 
 The name carries the platform's job: a slipstream is the low-drag wake behind a
@@ -19,6 +19,25 @@ Spec landed: [`docs/spec.md`](docs/spec.md) — build-ready, detailed enough to 
 Layer 0. It was charted as a wayfinder map on this repo's issues (label
 `wayfinder:map`); the decision log at the end of the spec traces every choice back to
 its ticket.
+
+## Provisioning
+
+All infrastructure is Terraform; the AWS console is never touched. A `justfile`
+drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles them.
+
+Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
+`AWS_PROFILE` that can create VPC/EKS resources.
+
+```sh
+just bootstrap   # one-time: create the S3 remote-state bucket
+just up          # create the cluster, then `kubectl get nodes`
+just down        # destroy the cluster; spend returns to zero
+```
+
+`just bootstrap` runs once (its state is committed local state). After that,
+`just up` / `just down` are the whole lifecycle. The task-runner and
+state-bootstrap choices are recorded in
+[`docs/adr/0001`](docs/adr/0001-task-runner-and-state-bootstrap.md).
 
 ## Non-goals
 

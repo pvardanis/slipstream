@@ -2,6 +2,9 @@
 **/.terraform/*
 *.tfstate
 *.tfstate.*
+# Bootstrap uses committed local state (it creates the remote state bucket).
+!terraform/bootstrap/terraform.tfstate
+!terraform/bootstrap/terraform.tfstate.backup
 crash.log
 crash.*.log
 *.tfvars

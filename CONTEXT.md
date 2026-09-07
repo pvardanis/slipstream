@@ -14,7 +14,7 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
   tuned replica · L2 platform (autoscaling, cold start, spot handling — the gap) · L3
   inference-aware routing · L4 prefill/decode disaggregation.
 - **Duty-cycle** — the platform does not run 24/7; the GPU budget buys a fraction of the day.
-  `make up`/`make down` fully create and destroy GPU capacity, so idle time costs nothing.
+  `just up`/`just down` fully create and destroy GPU capacity, so idle time costs nothing.
 
 ## Serving
 
