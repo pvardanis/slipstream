@@ -15,8 +15,10 @@ model's slipstream) sit literally inside the word.
 
 ## Status
 
-Being charted. The spec is under construction as a wayfinder map on this repo's
-issues (label `wayfinder:map`). Build starts once the spec lands.
+Spec landed: [`docs/spec.md`](docs/spec.md) — build-ready, detailed enough to start
+Layer 0. It was charted as a wayfinder map on this repo's issues (label
+`wayfinder:map`); the decision log at the end of the spec traces every choice back to
+its ticket.
 
 ## Non-goals
 
