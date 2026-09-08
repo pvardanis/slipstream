@@ -11,7 +11,8 @@ default:
 
 # Create the cluster and point kubectl at it.
 up:
-    terraform -chdir={{ eks_dir }} init
+    terraform -chdir={{ eks_dir }} init \
+      -backend-config="bucket=$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ eks_dir }} apply -auto-approve
     aws eks update-kubeconfig \
       --name $(terraform -chdir={{ eks_dir }} output -raw cluster_name) \

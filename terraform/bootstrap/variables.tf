@@ -5,8 +5,8 @@ variable "region" {
   default     = "eu-west-1"
 }
 
-variable "state_bucket_name" {
-  description = "Name of the S3 bucket that stores remote state for the eks stack. Must match the bucket in terraform/eks/backend.tf."
+variable "state_bucket_prefix" {
+  description = "Prefix for the remote-state bucket; a random suffix is appended for global uniqueness."
   type        = string
   default     = "slipstream-tf-state"
 }
