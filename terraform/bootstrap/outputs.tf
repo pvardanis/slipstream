@@ -1,6 +1,6 @@
 # Outputs from the state-bootstrap stack.
 output "state_bucket_name" {
-  description = "Name of the S3 bucket holding remote state; matches the bucket literal in terraform/eks/backend.tf."
+  description = "Name of the S3 bucket holding remote state; passed to the eks backend via -backend-config at init."
   value       = aws_s3_bucket.state.id
 }
 

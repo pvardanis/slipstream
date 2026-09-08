@@ -5,8 +5,13 @@ provider "aws" {
   region = var.region
 }
 
+# A random suffix keeps the bucket name unique in S3's global namespace.
+resource "random_id" "suffix" {
+  byte_length = 3
+}
+
 resource "aws_s3_bucket" "state" {
-  bucket = var.state_bucket_name
+  bucket = "${var.state_bucket_prefix}-${random_id.suffix.hex}"
 
   # The state store must survive `just down`; destroying it orphans all managed state.
   lifecycle {
