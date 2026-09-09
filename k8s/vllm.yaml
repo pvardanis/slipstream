@@ -16,6 +16,11 @@ metadata:
     app: vllm
 spec:
   replicas: 1
+  # One replica on one capacity-tight node: tear the old pod down before
+  # starting the new one. A rolling update would try to run both at once and
+  # deadlock — the node can't hold two copies' memory requests.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: vllm
@@ -24,6 +29,11 @@ spec:
       labels:
         app: vllm
     spec:
+      # Kubernetes otherwise injects a VLLM_PORT env var (from the Service named
+      # `vllm`) holding a tcp:// URI, which collides with vLLM's own VLLM_PORT
+      # config and crashes the engine. We reach the service by DNS, not these
+      # legacy per-Service env vars, so turn them off.
+      enableServiceLinks: false
       # Only the CPU node group exists today; the selector documents the intent
       # and keeps this pod off any GPU node a later layer adds.
       nodeSelector:
@@ -40,10 +50,20 @@ spec:
             - bfloat16
             - --max-model-len
             - "2048"
+            # Skip torch.compile/graph capture. On a 2-vCPU node that warmup
+            # takes minutes and stalls the first request; eager mode trades
+            # some throughput for a fast, predictable cold start.
+            - --enforce-eager
+            # One curl needs no concurrency; a small batch keeps the CPU
+            # engine's activation buffers from pushing the node into OOM.
+            - --max-num-seqs
+            - "8"
           env:
-            # GiB of host RAM vLLM reserves for the CPU KV cache.
+            # GiB of host RAM vLLM reserves for the CPU KV cache. Kept small:
+            # this only caps concurrency, and the reservation is real RAM that
+            # the tiny node can't spare during model load.
             - name: VLLM_CPU_KVCACHE_SPACE
-              value: "2"
+              value: "1"
           ports:
             - name: http
               containerPort: 8000
@@ -56,7 +76,7 @@ spec:
               cpu: "1500m"
               memory: 4Gi
             limits:
-              memory: 5Gi
+              memory: 6Gi
           volumeMounts:
             # vLLM's CPU backend uses shared memory for inter-op communication.
             - name: dshm
