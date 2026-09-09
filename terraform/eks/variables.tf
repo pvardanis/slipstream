@@ -24,7 +24,7 @@ variable "vpc_cidr" {
 }
 
 variable "node_instance_type" {
-  description = "Instance type for the CPU node group. GPU/spot is a later layer."
+  description = "Instance type for the CPU node group. 8 GiB fits a CPU vLLM replica; GPU/spot is a later layer."
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
 }
