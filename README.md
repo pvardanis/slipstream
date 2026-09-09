@@ -47,7 +47,8 @@ the platform stands up without spending GPU hours. The service is `ClusterIP`
 only — no public endpoint, no cloud load balancer — so `just completion` reaches
 it through `kubectl port-forward`, and `just down` tears the cluster down with
 nothing left behind. `just undeploy` removes the workload without destroying the
-cluster.
+cluster. [`k8s/README.md`](k8s/README.md) explains the manifest and the `kubectl`
+commands field by field.
 
 ## Non-goals
 
