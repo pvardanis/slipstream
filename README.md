@@ -31,13 +31,23 @@ Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with a
 ```sh
 just bootstrap   # one-time: create the S3 remote-state bucket
 just up          # create the cluster, then `kubectl get nodes`
+just deploy      # run the CPU vLLM replica and wait for it to serve
+just completion  # port-forward the service and curl a completion out of it
 just down        # destroy the cluster; spend returns to zero
 ```
 
 `just bootstrap` runs once (its state is committed local state). After that,
-`just up` / `just down` are the whole lifecycle. The task-runner and
+`just up` / `just down` are the cluster lifecycle. The task-runner and
 state-bootstrap choices are recorded in
 [`docs/adr/0001`](docs/adr/0001-task-runner-and-state-bootstrap.md).
+
+`just deploy` applies [`k8s/vllm.yaml`](k8s/vllm.yaml): a single vLLM replica
+serving a tiny CPU model (`Qwen/Qwen2.5-0.5B-Instruct`) over the OpenAI API, so
+the platform stands up without spending GPU hours. The service is `ClusterIP`
+only — no public endpoint, no cloud load balancer — so `just completion` reaches
+it through `kubectl port-forward`, and `just down` tears the cluster down with
+nothing left behind. `just undeploy` removes the workload without destroying the
+cluster.
 
 ## Non-goals
 

@@ -1,0 +1,104 @@
+# A single CPU vLLM replica serving a tiny model over the OpenAI API.
+# The CPU model lets the platform stand up without spending GPU hours (spec §2).
+# Reachable in-cluster as http://vllm.slipstream.svc:8000; curl it via
+# `just completion`, which port-forwards rather than exposing a public endpoint.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slipstream
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: slipstream
+  labels:
+    app: vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      # Only the CPU node group exists today; the selector documents the intent
+      # and keeps this pod off any GPU node a later layer adds.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: vllm
+          # Pinned CPU build matching the x86_64 node group. Pinning the engine
+          # version is a spec requirement so a measurement reproduces (§3.1).
+          image: vllm/vllm-openai-cpu:v0.29.0-x86_64
+          args:
+            - --model
+            - Qwen/Qwen2.5-0.5B-Instruct
+            - --dtype
+            - bfloat16
+            - --max-model-len
+            - "2048"
+          env:
+            # GiB of host RAM vLLM reserves for the CPU KV cache.
+            - name: VLLM_CPU_KVCACHE_SPACE
+              value: "2"
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            capabilities:
+              # vLLM's CPU backend pins worker threads; SYS_NICE lets it.
+              add: ["SYS_NICE"]
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: 4Gi
+            limits:
+              memory: 5Gi
+          volumeMounts:
+            # vLLM's CPU backend uses shared memory for inter-op communication.
+            - name: dshm
+              mountPath: /dev/shm
+          # The model is pulled from Hugging Face on first start; keep the
+          # liveness check from killing the pod until the server is serving.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: slipstream
+  labels:
+    app: vllm
+spec:
+  # ClusterIP only: no cloud load balancer, so teardown leaves nothing behind
+  # and the endpoint is never public. Reach it with `kubectl port-forward`.
+  type: ClusterIP
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
