@@ -26,7 +26,8 @@ All infrastructure is Terraform; the AWS console is never touched. A `justfile`
 drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles them.
 
 Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
-`AWS_PROFILE` that can create VPC/EKS resources.
+`AWS_PROFILE` that can create VPC/EKS resources (see [AWS access](#aws-access)).
+Optional inspection tools: `k9s`, `stern`, `kubens`.
 
 ```sh
 just bootstrap   # one-time: create the S3 remote-state bucket
@@ -48,6 +49,38 @@ only — no public endpoint, no cloud load balancer — so `just completion` rea
 it through `kubectl port-forward`, and `just down` tears the cluster down with
 nothing left behind. `just undeploy` removes the workload without destroying the
 cluster.
+
+### AWS access
+
+Work from a **dedicated IAM user, not the account root**. Root can't be granted
+an EKS access entry, so the console's EKS **Resources** tab shows `Unauthorized`
+for root and the cluster only trusts whoever ran `just up`.
+
+1. As root (one time), create an IAM user (e.g. `slipstream-admin`) with the
+   permissions to manage VPC/EKS, and enable **console access** + MFA for it.
+2. Give it an **access key**, then configure a local profile:
+   ```sh
+   aws configure --profile slipstream-admin   # paste the access key + region (eu-west-1)
+   export AWS_PROFILE=slipstream-admin         # the profile just/terraform/kubectl use
+   ```
+3. Sign in to the AWS console **as that user** (not root) at
+   `https://<account-id>.signin.aws.amazon.com/console` to inspect EKS there.
+
+`just up` grants cluster-admin to this caller automatically
+(`enable_cluster_creator_admin_permissions`), so `kubectl` works immediately.
+
+### Inspecting the cluster
+
+The workload lives in the `slipstream` namespace (created by `just deploy`).
+
+```sh
+kubens slipstream                     # set the default namespace (no more -n flags)
+k9s                                   # live TUI: pods, logs (l), describe (d), events
+stern vllm -n slipstream --tail 50    # tail vLLM logs, follows pod restarts
+```
+
+`k9s` is the fastest way to see pod status and events; `stern` beats
+`kubectl logs` during a crash loop because it re-attaches to each new pod.
 
 ## Non-goals
 
