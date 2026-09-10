@@ -92,6 +92,10 @@ bench *args:
 bench-test:
     bash test/bench_wrapper_test.sh
 
+# Assert the cost post-processor prices bench JSON into $/1M in/out (no cluster).
+cost-test:
+    bash test/cost_postprocessor_test.sh
+
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 obs-test:
     bash test/otel_spine_test.sh
