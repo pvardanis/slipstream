@@ -1,0 +1,92 @@
+# The request-ID spine stub: a minimal OTel Collector in the slipstream cluster.
+# It receives OTLP (gRPC 4317 / HTTP 4318), enforces the shape-only guard, batches,
+# and writes the telemetry — request_id and all — to its stdout as a structured
+# log line readable with `kubectl logs`. The collector config is a separate file
+# (k8s/otel-collector-config.yaml) loaded into a ConfigMap by `just obs-up`, so the
+# same config the local test exercises is what the cluster runs. Reachable
+# in-cluster as otel-collector.slipstream.svc:4317; no public endpoint.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slipstream
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: slipstream
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      # We reach the collector by DNS, not the legacy per-Service env vars
+      # Kubernetes would otherwise inject; keep the container env clean.
+      enableServiceLinks: false
+      # Only the CPU node group exists today; keep this off any GPU node a
+      # later layer adds.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: otel-collector
+          # Contrib distro: the redaction processor that enforces shape-only is
+          # not in the core collector. Pinned so a measurement reproduces.
+          image: otel/opentelemetry-collector-contrib:0.160.0
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib/config.yaml
+              subPath: config.yaml
+              readOnly: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: slipstream
+  labels:
+    app: otel-collector
+spec:
+  # ClusterIP only: OTLP stays inside the cluster, nothing public, teardown
+  # leaves nothing behind.
+  type: ClusterIP
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
