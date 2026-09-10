@@ -5,6 +5,7 @@
 eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
 manifests := "k8s/vllm.yaml"
+bench_client := "k8s/bench-client.yaml"
 model := "Qwen/Qwen2.5-0.5B-Instruct"
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
@@ -49,34 +50,30 @@ completion:
       -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
 
-# Sweep `vllm bench serve` (prefix-share % x burstiness) against the CPU replica.
+# Sweep `vllm bench serve` (prefix-share % x burstiness) from an in-cluster client pod, saving per-cell JSON to bench/results.
 bench *args:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl -n slipstream rollout status deploy/vllm --timeout=600s
-    pf_log="$(mktemp)"
-    kubectl -n slipstream port-forward svc/vllm 8000:8000 >"${pf_log}" 2>&1 &
-    pf_pid=$!
-    trap 'kill "${pf_pid}" 2>/dev/null || true; rm -f "${pf_log}"' EXIT
-    ready=""
-    for _ in $(seq 30); do
-      if ! kill -0 "${pf_pid}" 2>/dev/null; then
-        echo "port-forward to svc/vllm exited early:" >&2
-        cat "${pf_log}" >&2
-        exit 1
-      fi
-      if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
-        ready=1
-        break
-      fi
-      sleep 1
-    done
-    if [[ -z "${ready}" ]]; then
-      echo "port-forward to svc/vllm never became healthy" >&2
-      cat "${pf_log}" >&2
+    # Clear a pod left behind by a prior run that was killed before its cleanup trap
+    # fired, so `kubectl wait` doesn't block for the full timeout on a stale pod.
+    kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found >/dev/null 2>&1 || true
+    kubectl -n slipstream apply -f {{ bench_client }}
+    trap 'kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found 2>/dev/null || true' EXIT
+    if ! kubectl -n slipstream wait --for=condition=Ready pod/bench-client --timeout=180s; then
+      echo "bench-client pod did not become Ready:" >&2
+      kubectl -n slipstream describe pod/bench-client >&2 || true
       exit 1
     fi
-    bash bench/serve_sweep.sh --base-url http://localhost:8000 --model {{ model }} {{ args }}
+    kubectl -n slipstream cp bench/serve_sweep.sh bench-client:/tmp/serve_sweep.sh
+    kubectl -n slipstream exec bench-client -- \
+      bash /tmp/serve_sweep.sh \
+        --base-url http://vllm.slipstream.svc:8000 \
+        --model {{ model }} \
+        --out-dir /tmp/results {{ args }}
+    mkdir -p bench/results
+    kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results . | tar xf - -C bench/results
+    echo "results copied to bench/results/"
 
 # Assert the bench wrapper builds correct vllm commands (dry run, no cluster).
 bench-test:

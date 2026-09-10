@@ -8,8 +8,9 @@
 #
 # Prefix-share % is the knob the L3 routing sweep needs: it splits a fixed token
 # budget between the shared prefix and the per-request suffix, so share 90 means a
-# 900/100 prefix/suffix split of a 1000-token budget. The endpoint defaults to a
-# port-forwarded replica on localhost:8000; `just bench` sets up the forward.
+# 900/100 prefix/suffix split of a 1000-token budget. --base-url defaults to
+# localhost:8000 for a standalone run; `just bench` runs this from an in-cluster
+# client pod and points it at the vLLM service DNS.
 set -euo pipefail
 
 base_url="http://localhost:8000"
