@@ -36,6 +36,9 @@ venv/
 kubeconfig
 *.kubeconfig
 
+# Benchmark result JSON (raw client output, regenerated per run)
+bench/results/
+
 # macOS
 .DS_Store
 
