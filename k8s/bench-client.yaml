@@ -1,0 +1,35 @@
+# Throwaway client pod for the L0 benchmark sweep. `just bench` applies it, copies
+# bench/serve_sweep.sh in, runs the sweep against the in-cluster vLLM service, copies
+# the result JSON back out, then deletes it. Running the load generator in-cluster
+# keeps the measurement off the serving pod and off the developer's laptop, where
+# vLLM isn't installable. Pinned to the same engine build as the server (k8s/vllm.yaml,
+# spec §3.1) so client and server tokenize identically — keep the two image tags in sync.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-client
+  namespace: slipstream
+  labels:
+    app: bench-client
+spec:
+  # A manual harness pod, not a workload: never restart it, and don't let the `vllm`
+  # Service inject a VLLM_PORT tcp:// URI that crashes the engine import (k8s/vllm.yaml).
+  restartPolicy: Never
+  enableServiceLinks: false
+  # Same CPU node group as the server; only amd64 nodes exist today.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+  containers:
+    - name: bench-client
+      image: vllm/vllm-openai-cpu:v0.29.0-x86_64
+      command: ["sleep", "infinity"]
+      # The client only tokenizes prompts and drives async HTTP, spending most of its
+      # time waiting on the server. The CPU request is tiny so it fits the sliver the
+      # server leaves on a single tight node; with no CPU limit it still bursts into
+      # idle capacity while generating load.
+      resources:
+        requests:
+          cpu: "50m"
+          memory: 512Mi
+        limits:
+          memory: 2Gi
