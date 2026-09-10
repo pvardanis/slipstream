@@ -49,6 +49,32 @@ completion:
       -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
 
+# Sweep `vllm bench serve` (prefix-share % x burstiness) against the CPU replica.
+bench *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl -n slipstream rollout status deploy/vllm --timeout=600s
+    kubectl -n slipstream port-forward svc/vllm 8000:8000 >/dev/null 2>&1 &
+    pf_pid=$!
+    trap 'kill "${pf_pid}" 2>/dev/null || true' EXIT
+    ready=""
+    for _ in $(seq 30); do
+      if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ -z "${ready}" ]]; then
+      echo "port-forward to svc/vllm never became healthy" >&2
+      exit 1
+    fi
+    bash bench/serve_sweep.sh --base-url http://localhost:8000 --model {{ model }} {{ args }}
+
+# Assert the bench wrapper builds correct vllm commands (dry run, no cluster).
+bench-test:
+    bash test/bench_wrapper_test.sh
+
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 obs-test:
     bash test/otel_spine_test.sh
