@@ -66,14 +66,27 @@ bench *args:
       exit 1
     fi
     kubectl -n slipstream cp bench/serve_sweep.sh bench-client:/tmp/serve_sweep.sh
+    # serve_sweep.sh writes one JSON per successful cell and only exits non-zero at
+    # the end of the grid, so copy back whatever landed even on a partial failure,
+    # then surface the sweep's own exit code. A dry run writes no results directory,
+    # so the copy-back is skipped.
+    sweep_rc=0
     kubectl -n slipstream exec bench-client -- \
       bash /tmp/serve_sweep.sh \
         --base-url http://vllm.slipstream.svc:8000 \
         --model {{ model }} \
-        --out-dir /tmp/results {{ args }}
-    mkdir -p bench/results
-    kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results . | tar xf - -C bench/results
-    echo "results copied to bench/results/"
+        --out-dir /tmp/results {{ args }} || sweep_rc=$?
+    if kubectl -n slipstream exec bench-client -- test -d /tmp/results; then
+      mkdir -p bench/results
+      kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results . | tar xf - -C bench/results
+      count="$(kubectl -n slipstream exec bench-client -- sh -c 'ls -1 /tmp/results/*.json 2>/dev/null | wc -l' | tr -d ' ')"
+      if [[ "${count}" -eq 0 ]]; then
+        echo "sweep produced no result JSON in the client pod — check the exec output above" >&2
+        exit 1
+      fi
+      echo "results copied to bench/results/ (${count} files)"
+    fi
+    exit "${sweep_rc}"
 
 # Assert the bench wrapper builds correct vllm commands (dry run, no cluster).
 bench-test:
