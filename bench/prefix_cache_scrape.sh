@@ -8,6 +8,8 @@
 # and hands them here with the run's client JSON; this computes
 # (hits_after - hits_before) / (queries_after - queries_before) and joins it onto the
 # client record, carrying a cold/warm label so the two cache regimes are told apart.
+# The run's SLO numbers (TTFT/TPOT p95/p99, throughput, goodput) ride on the record
+# too, so cold and warm are compared against the SLO without reopening the client JSON.
 #
 # Cold vs warm is the caller's doing: reset the prefix cache (POST /reset_prefix_cache)
 # before the cold run, reuse the warmed cache for the warm run, and pass the matching
@@ -169,5 +171,13 @@ jq -n \
     completed: ($client[0].completed),
     prefix_cache_queries: $queries,
     prefix_cache_hits: $hits,
-    prefix_cache_hit_rate: ($hits / $queries)
+    prefix_cache_hit_rate: ($hits / $queries),
+    client_metrics: {
+      request_throughput: ($client[0].request_throughput),
+      request_goodput: ($client[0].request_goodput),
+      p95_ttft_ms: ($client[0].p95_ttft_ms),
+      p99_ttft_ms: ($client[0].p99_ttft_ms),
+      p95_tpot_ms: ($client[0].p95_tpot_ms),
+      p99_tpot_ms: ($client[0].p99_tpot_ms)
+    }
   }'

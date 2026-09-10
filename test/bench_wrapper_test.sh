@@ -77,6 +77,11 @@ assert_count "one invocation per grid cell" "vllm bench serve" 6
 # The SLO reaches the harness verbatim on every invocation (acceptance criterion 3).
 assert_count "goodput on every cell" "--goodput ttft:1000 tpot:50" 6
 
+# A fixed seed on every cell so prefix_repetition replays identical prefixes across
+# invocations — the cold-then-warm prefix-cache scrape depends on the warm run hitting
+# the prefixes the cold run planted.
+assert_count "seed on every cell" "--seed 0" 6
+
 # Prefix-share % splits a fixed token budget into prefix vs suffix. Share 25 of
 # 1000 is a 250/750 split; share 90 is 900/100. This is the sweep's spine.
 assert "share 25 -> prefix 250" "--prefix-repetition-prefix-len 250"
@@ -107,6 +112,10 @@ assert "output len" "--prefix-repetition-output-len 64"
 assert "request rate" "--request-rate 8"
 assert "base url" "--base-url http://localhost:8000"
 
+# --- Seed override: a custom seed reaches every cell --------------------------
+out="$("${wrapper}" --dry-run --seed 123)"
+assert_count "overridden seed on every cell" "--seed 123" 6
+
 # --- Defaults contract: a zero-override dry run emits the documented defaults --
 out="$("${wrapper}" --dry-run)"
 assert_count "default grid is 3 shares x 2 burst" "vllm bench serve" 6
@@ -120,6 +129,7 @@ assert "default num prompts" "--num-prompts 100"
 assert "default num prefixes" "--prefix-repetition-num-prefixes 5"
 assert "default output len" "--prefix-repetition-output-len 128"
 assert "default request rate" "--request-rate 8"
+assert_count "default seed 0 on every cell" "--seed 0" 6
 assert_count "default burst 0.2 on 3 cells" "--burstiness 0.2" 3
 assert_count "default burst 1.0 on 3 cells" "--burstiness 1.0" 3
 
@@ -155,6 +165,8 @@ assert_exit "empty goodput rejected" 2 --dry-run --goodput ""
 assert_stderr "empty goodput diagnosed" "invalid goodput" --dry-run --goodput ""
 assert_exit "non-numeric burstiness rejected" 2 --dry-run --burstiness-values bursty
 assert_exit "non-numeric request-rate rejected" 2 --dry-run --request-rate quick
+assert_exit "non-numeric seed rejected" 2 --dry-run --seed lucky
+assert_stderr "non-numeric seed diagnosed" "invalid --seed" --dry-run --seed lucky
 assert_exit "request-rate inf accepted" 0 --dry-run --request-rate inf
 
 if [[ "${fail}" -ne 0 ]]; then
