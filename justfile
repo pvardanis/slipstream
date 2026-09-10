@@ -54,11 +54,17 @@ bench *args:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl -n slipstream rollout status deploy/vllm --timeout=600s
-    kubectl -n slipstream port-forward svc/vllm 8000:8000 >/dev/null 2>&1 &
+    pf_log="$(mktemp)"
+    kubectl -n slipstream port-forward svc/vllm 8000:8000 >"${pf_log}" 2>&1 &
     pf_pid=$!
-    trap 'kill "${pf_pid}" 2>/dev/null || true' EXIT
+    trap 'kill "${pf_pid}" 2>/dev/null || true; rm -f "${pf_log}"' EXIT
     ready=""
     for _ in $(seq 30); do
+      if ! kill -0 "${pf_pid}" 2>/dev/null; then
+        echo "port-forward to svc/vllm exited early:" >&2
+        cat "${pf_log}" >&2
+        exit 1
+      fi
       if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
         ready=1
         break
@@ -67,6 +73,7 @@ bench *args:
     done
     if [[ -z "${ready}" ]]; then
       echo "port-forward to svc/vllm never became healthy" >&2
+      cat "${pf_log}" >&2
       exit 1
     fi
     bash bench/serve_sweep.sh --base-url http://localhost:8000 --model {{ model }} {{ args }}
