@@ -49,6 +49,10 @@ completion:
       -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
 
+# Assert the pre-PR review guard blocks an unreviewed `gh pr create` (no session).
+guard-test:
+    bash test/pr_review_guard_test.sh
+
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 obs-test:
     bash test/otel_spine_test.sh

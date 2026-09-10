@@ -46,8 +46,11 @@ kubeconfig
 # Wayfinder scratch (planning lives in GitHub issues)
 .scratch/
 
-# Claude Code local state (agent worktrees, local settings)
-.claude/
+# Claude Code local state (agent worktrees, local settings). The shared PR-review
+# guard is tracked; everything else under .claude/ stays local.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # MLSD review scorecard (local artifact, not tracked)
 mlsd-scorecard-slipstream.md
