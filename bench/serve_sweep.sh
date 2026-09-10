@@ -22,6 +22,7 @@ num_prompts=100
 num_prefixes=5
 output_len=128
 request_rate="8"
+seed=0
 out_dir="bench/results"
 goodput=(ttft:1000 tpot:50)
 dry_run=0
@@ -38,6 +39,7 @@ Usage: serve_sweep.sh [options]
   --num-prefixes N           distinct shared prefixes to generate
   --output-len N             output tokens per request
   --request-rate R           requests/sec (or "inf")
+  --seed N                   RNG seed for prompt generation (fixed so runs replay identical prefixes)
   --out-dir DIR              directory for the per-cell result JSON
   --goodput "ttft:MS tpot:MS"  SLO passed to the harness
   --dry-run                  print the vllm commands instead of running them
@@ -80,6 +82,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --request-rate)
     request_rate="$2"
+    shift 2
+    ;;
+  --seed)
+    seed="$2"
     shift 2
     ;;
   --out-dir)
@@ -140,6 +146,13 @@ done
   exit 2
 }
 
+# Seed 0 is valid and is the point (a fixed seed replays identical prefixes), so this
+# is a non-negative-integer check, not require_positive_int.
+[[ "${seed}" =~ ^[0-9]+$ ]] || {
+  echo "invalid --seed: '${seed}' (want a non-negative integer)" >&2
+  exit 2
+}
+
 [[ "${#goodput[@]}" -gt 0 ]] || {
   echo "invalid goodput: empty (want e.g. 'ttft:1000 tpot:50')" >&2
   exit 2
@@ -169,6 +182,7 @@ run_cell() {
     --prefix-repetition-output-len "${output_len}" \
     --num-prompts "${num_prompts}" \
     --request-rate "${request_rate}" \
+    --seed "${seed}" \
     --burstiness "${burst}" \
     --goodput "${goodput[@]}" \
     --percentile-metrics ttft,tpot,itl,e2el \

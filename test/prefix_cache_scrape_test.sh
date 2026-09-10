@@ -27,7 +27,13 @@ cat >"${result}" <<JSON
 {
   "model_id": "${model}",
   "duration": 12.5,
-  "completed": 100
+  "completed": 100,
+  "request_throughput": 8.0,
+  "request_goodput": 7.5,
+  "p95_ttft_ms": 850.0,
+  "p99_ttft_ms": 990.0,
+  "p95_tpot_ms": 42.0,
+  "p99_tpot_ms": 48.0
 }
 JSON
 
@@ -107,10 +113,34 @@ assert_field "cold hits are the window delta" '.prefix_cache_hits' 10
 assert_field "cold hit rate is hits/queries over the window" '.prefix_cache_hit_rate' 0.1
 # Cold vs warm distinguishable: the record carries the label (acceptance criterion 3).
 assert_field "cold label carried" '.cache_state' cold
-# Joined to the client JSON per run (acceptance criterion 2).
+# Joined to the client JSON per run (acceptance criterion 2). The SLO numbers ride on
+# the record so cold and warm are compared against the SLO without reopening the
+# client JSON (spec.md: report cold and steady-state SLO side by side).
 assert_field "client model joined" '.model_id' "${model}"
 assert_field "client completed joined" '.completed' 100
 assert_field "source result recorded" '.source' "${result}"
+# The client's numbers pass through verbatim — the scraper joins them, it does not
+# reformat them, so the literal forms from the result JSON survive unchanged.
+assert_field "ttft p95 joined" '.client_metrics.p95_ttft_ms' 850.0
+assert_field "ttft p99 joined" '.client_metrics.p99_ttft_ms' 990.0
+assert_field "tpot p95 joined" '.client_metrics.p95_tpot_ms' 42.0
+assert_field "tpot p99 joined" '.client_metrics.p99_tpot_ms' 48.0
+assert_field "request throughput joined" '.client_metrics.request_throughput' 8.0
+assert_field "request goodput joined" '.client_metrics.request_goodput' 7.5
+
+# A result missing a field (a run fired without --goodput has no request_goodput)
+# joins as null, never a fabricated number.
+nogood="${work}/nogoodput.json"
+echo "{\"model_id\":\"${model}\",\"completed\":5,\"p95_ttft_ms\":100.0,\"p99_ttft_ms\":200.0,\"p95_tpot_ms\":10.0,\"p99_tpot_ms\":20.0,\"request_throughput\":3.0}" >"${nogood}"
+nogood_out="$(
+  "${scraper}" --cache-state cold \
+    --metrics-before "${cold_before}" --metrics-after "${cold_after}" \
+    --result "${nogood}"
+)"
+if [[ "$(jq -r '.client_metrics.request_goodput' <<<"${nogood_out}")" != "null" ]]; then
+  echo "FAIL: a missing client metric should join as null" >&2
+  fail=1
+fi
 
 # --- Warm run: same window size, higher hit rate, labelled warm -----------------
 cold_out="${out}"

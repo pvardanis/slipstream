@@ -137,9 +137,8 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     scrape >"${out}/cold_after.prom"
     kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results-cold "${cell}" | tar xf - -C "${out}"
     mv "${out}/${cell}" "${out}/cold_${cell}"
-    # Warm: the same prefixes again, cache left populated from the cold run. vllm bench
-    # serve seeds prompt generation from a fixed default (--seed 0, which serve_sweep
-    # does not override), so the second invocation replays the first run's prefixes and
+    # Warm: the same prefixes again, cache left populated from the cold run. serve_sweep
+    # pins a fixed --seed, so the second invocation replays the first run's prefixes and
     # they hit the warmed cache.
     scrape >"${out}/warm_before.prom"
     run_cell /tmp/results-warm
