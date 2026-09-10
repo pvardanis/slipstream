@@ -96,6 +96,63 @@ bench-test:
 cost-test:
     bash test/cost_postprocessor_test.sh
 
+# Assert the prefix-cache scraper computes the per-run delta hit rate and joins it (no cluster).
+prefix-cache-test:
+    bash test/prefix_cache_scrape_test.sh
+
+# Scrape the prefix-cache hit rate for a cold and a warm run of one bench cell and join each to its client JSON (in bench/results/prefix-cache).
+prefix-cache prefix_share="90" burstiness="1.0" *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="http://vllm.slipstream.svc:8000"
+    kubectl -n slipstream rollout status deploy/vllm --timeout=600s
+    # Clear a pod left behind by a prior run that was killed before its cleanup trap
+    # fired, so `kubectl wait` doesn't block for the full timeout on a stale pod.
+    kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found >/dev/null 2>&1 || true
+    kubectl -n slipstream apply -f {{ bench_client }}
+    trap 'kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found 2>/dev/null || true' EXIT
+    if ! kubectl -n slipstream wait --for=condition=Ready pod/bench-client --timeout=180s; then
+      echo "bench-client pod did not become Ready:" >&2
+      kubectl -n slipstream describe pod/bench-client >&2 || true
+      exit 1
+    fi
+    kubectl -n slipstream cp bench/serve_sweep.sh bench-client:/tmp/serve_sweep.sh
+    out="bench/results/prefix-cache"
+    mkdir -p "${out}"
+    # Snapshot the server's cumulative prefix-cache counters; only the delta across a
+    # run window is that run's traffic, so we bracket each run with a snapshot.
+    scrape() { kubectl -n slipstream exec bench-client -- curl -sf "${base}/metrics"; }
+    # One bench cell, a single (prefix-share, burstiness) so the window holds one run.
+    run_cell() {
+      kubectl -n slipstream exec bench-client -- bash /tmp/serve_sweep.sh \
+        --base-url "${base}" --model {{ model }} \
+        --prefix-shares "{{ prefix_share }}" --burstiness-values "{{ burstiness }}" \
+        --out-dir "$1" {{ args }}
+    }
+    cell="pshare{{ prefix_share }}_burst{{ burstiness }}.json"
+    # Cold: reset the prefix cache so the run starts against an empty cache.
+    kubectl -n slipstream exec bench-client -- curl -sf -X POST "${base}/reset_prefix_cache" >/dev/null
+    scrape >"${out}/cold_before.prom"
+    run_cell /tmp/results-cold
+    scrape >"${out}/cold_after.prom"
+    kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results-cold "${cell}" | tar xf - -C "${out}"
+    mv "${out}/${cell}" "${out}/cold_${cell}"
+    # Warm: the same prefixes again, cache left populated from the cold run. vllm bench
+    # serve seeds prompt generation from a fixed default (--seed 0, which serve_sweep
+    # does not override), so the second invocation replays the first run's prefixes and
+    # they hit the warmed cache.
+    scrape >"${out}/warm_before.prom"
+    run_cell /tmp/results-warm
+    scrape >"${out}/warm_after.prom"
+    kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results-warm "${cell}" | tar xf - -C "${out}"
+    mv "${out}/${cell}" "${out}/warm_${cell}"
+    bash bench/prefix_cache_scrape.sh --cache-state cold \
+      --metrics-before "${out}/cold_before.prom" --metrics-after "${out}/cold_after.prom" \
+      --result "${out}/cold_${cell}" | tee "${out}/cold_hit_rate.json"
+    bash bench/prefix_cache_scrape.sh --cache-state warm \
+      --metrics-before "${out}/warm_before.prom" --metrics-after "${out}/warm_after.prom" \
+      --result "${out}/warm_${cell}" | tee "${out}/warm_hit_rate.json"
+
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 obs-test:
     bash test/otel_spine_test.sh
