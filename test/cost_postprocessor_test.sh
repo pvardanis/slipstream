@@ -107,6 +107,26 @@ out="$("${proc}" --price-per-hour 4.00 --output-input-ratio 3 "${pins[@]}" "${sp
 assert_field "input priced at 1x share" '.[0].cost_per_1m_input_usd' 1
 assert_field "output priced at 3x share" '.[0].cost_per_1m_output_usd' 3
 
+# --- Fractional figures: a half-hour at $1.50/hr, non-integer results ---------
+# Prices and durations that don't divide evenly are where an integer-truncation or
+# precision bug would hide. Half an hour at $1.50 is a $0.75 run; 500k input + 250k
+# output at ratio 2 is a 1,000,000 token-equivalent denominator, so $0.75/1M-input
+# and $1.50/1M-output. Every number here is non-integer on purpose.
+frac="${work}/frac.json"
+cat >"${frac}" <<'JSON'
+{
+  "model_id": "m",
+  "duration": 1800.0,
+  "completed": 50,
+  "total_input_tokens": 500000,
+  "total_output_tokens": 250000
+}
+JSON
+out="$("${proc}" --price-per-hour 1.50 --output-input-ratio 2 "${pins[@]}" "${frac}")"
+assert_field "half-hour run costs $0.75" '.[0].run_cost_usd' 0.75
+assert_field "fractional cost per 1M input" '.[0].cost_per_1m_input_usd' 0.75
+assert_field "fractional cost per 1M output" '.[0].cost_per_1m_output_usd' 1.5
+
 # --- Multiple files: one record per file, order preserved --------------------
 out="$("${proc}" --price-per-hour 2.00 --output-input-ratio 1 "${pins[@]}" "${result}" "${split}")"
 assert_field "a record per input file" 'length' 2
@@ -147,6 +167,19 @@ notok="${work}/notok.json"
 echo '{"model_id":"m","duration":3600.0,"completed":1}' >"${notok}"
 assert_exit "missing token metrics rejected" 2 --price-per-hour 2 --output-input-ratio 1 "${pins[@]}" "${notok}"
 assert_stderr "missing metric named" "total_input_tokens" --price-per-hour 2 --output-input-ratio 1 "${pins[@]}" "${notok}"
+
+# A metric present but null passes a bare key check yet jq reads it as 0 — reject it,
+# or the input side is silently dropped and the figure inflates.
+nulltok="${work}/nulltok.json"
+echo '{"model_id":"m","duration":3600.0,"completed":1,"total_input_tokens":null,"total_output_tokens":100}' >"${nulltok}"
+assert_exit "null token metric rejected" 2 --price-per-hour 2 --output-input-ratio 1 "${pins[@]}" "${nulltok}"
+assert_stderr "null metric named" "total_input_tokens" --price-per-hour 2 --output-input-ratio 1 "${pins[@]}" "${nulltok}"
+
+# A non-positive duration prices the whole run at $0 — the same silent-$0 the metrics guard.
+zerodur="${work}/zerodur.json"
+echo '{"model_id":"m","duration":0,"completed":1,"total_input_tokens":1000,"total_output_tokens":10}' >"${zerodur}"
+assert_exit "zero duration rejected" 2 --price-per-hour 2 --output-input-ratio 1 "${pins[@]}" "${zerodur}"
+assert_stderr "zero duration diagnosed" "non-positive duration" --price-per-hour 2 --output-input-ratio 1 "${pins[@]}" "${zerodur}"
 
 # Zero tokens on both sides is a zero denominator, not a $0 figure — reject it.
 zerotok="${work}/zerotok.json"

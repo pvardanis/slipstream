@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # L0 cost post-processor: turns raw `vllm bench serve` client JSON into a $/1M-token
 # figure. It reads the token counts and wall-clock the harness saved (--save-result),
-# multiplies the wall-clock by the GPU hourly price to get the run's cost, then splits
-# that whole machine cost across input and output tokens by a pinned output:input
+# multiplies the wall-clock by the instance hourly price to get the run's cost, then
+# splits that whole machine cost across input and output tokens by a pinned output:input
 # ratio into $/1M-input and $/1M-output reported separately (ratio 1 prices them
 # equally; a commercial-style ratio like 3 weights decode tokens heavier). The figure
 # is only meaningful pinned to the artifact that produced it, so the weight-blob
@@ -24,9 +24,9 @@ files=()
 
 usage() {
   cat <<'USAGE'
-Usage: cost_per_million.sh --price-per-hour P --weight-checksum SHA \
-         --vllm-version V --quant-recipe R [--output-input-ratio r] FILE [FILE...]
-  --price-per-hour P         GPU instance price in USD/hour (the rig's spot rate)
+Usage: cost_per_million.sh --price-per-hour P --output-input-ratio r \
+         --weight-checksum SHA --vllm-version V --quant-recipe R FILE [FILE...]
+  --price-per-hour P         instance price in USD/hour (on-demand or spot)
   --weight-checksum SHA      checksum of the weight blob the run served
   --vllm-version V           vLLM version that produced the result
   --quant-recipe R           quantization recipe (e.g. awq_marlin+fp8-kv)
@@ -120,13 +120,23 @@ price_file() {
     exit 2
   }
 
+  # A metric present but null (or a string) passes a bare has() yet prices as 0 — jq
+  # reads null as 0 in arithmetic — so check the value is actually a number, not just
+  # that the key exists. Otherwise the cost joins on a silent 0.
   local metric
   for metric in duration total_input_tokens total_output_tokens; do
-    [[ "$(jq -r --arg m "${metric}" 'has($m)' "${file}")" == "true" ]] || {
-      echo "result ${file} missing metric ${metric}" >&2
+    [[ "$(jq -r --arg m "${metric}" '(.[$m] | type) == "number"' "${file}")" == "true" ]] || {
+      echo "result ${file} missing or non-numeric metric ${metric}" >&2
       exit 2
     }
   done
+
+  # A non-positive duration prices the whole run at $0, and zero tokens on both sides is
+  # a zero denominator — both are the silent-$0 the token/duration metrics exist to catch.
+  [[ "$(jq -r '.duration > 0' "${file}")" == "true" ]] || {
+    echo "result ${file} has non-positive duration (nothing to price)" >&2
+    exit 2
+  }
 
   [[ "$(jq -r '(.total_input_tokens + .total_output_tokens) > 0' "${file}")" == "true" ]] || {
     echo "result ${file} has zero input and output tokens (nothing to price)" >&2
