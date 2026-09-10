@@ -105,6 +105,45 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Reject a bad arg before it reaches vLLM, where it would fail deep inside the
+# harness with an opaque message (or, for the arithmetic below, silently as 0).
+require_positive_int() {
+  local name="$1" value="$2"
+  [[ "${value}" =~ ^[0-9]+$ && "${value}" -gt 0 ]] || {
+    echo "invalid ${name}: '${value}' (want a positive integer)" >&2
+    exit 2
+  }
+}
+
+require_positive_int --total-len "${total_len}"
+require_positive_int --num-prompts "${num_prompts}"
+require_positive_int --num-prefixes "${num_prefixes}"
+require_positive_int --output-len "${output_len}"
+
+for share in ${prefix_shares}; do
+  [[ "${share}" =~ ^[0-9]+$ && "${share}" -le 100 ]] || {
+    echo "invalid prefix-share: '${share}' (want an integer 0..100)" >&2
+    exit 2
+  }
+done
+
+for burst in ${burstiness_values}; do
+  [[ "${burst}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
+    echo "invalid burstiness: '${burst}' (want a non-negative number)" >&2
+    exit 2
+  }
+done
+
+[[ "${request_rate}" == "inf" || "${request_rate}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
+  echo "invalid request-rate: '${request_rate}' (want a number or 'inf')" >&2
+  exit 2
+}
+
+[[ "${#goodput[@]}" -gt 0 ]] || {
+  echo "invalid goodput: empty (want e.g. 'ttft:1000 tpot:50')" >&2
+  exit 2
+}
+
 [[ "${dry_run}" -eq 1 ]] || mkdir -p "${out_dir}"
 
 # One `vllm bench serve` per (prefix-share, burstiness) cell. --goodput carries the
@@ -145,8 +184,22 @@ run_cell() {
   fi
 }
 
+# A cell failing (a transient vLLM error, say) should not discard the cells still
+# to run: finish the grid, then report the tally and exit non-zero if any failed.
+completed=0
+failed=0
 for share in ${prefix_shares}; do
   for burst in ${burstiness_values}; do
-    run_cell "${share}" "${burst}"
+    if run_cell "${share}" "${burst}"; then
+      completed=$((completed + 1))
+    else
+      failed=$((failed + 1))
+      echo "!! cell prefix-share ${share}% burstiness ${burst} failed" >&2
+    fi
   done
 done
+
+if [[ "${failed}" -gt 0 ]]; then
+  echo "sweep finished: ${completed} cells ok, ${failed} failed" >&2
+  exit 1
+fi
