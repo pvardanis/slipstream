@@ -119,6 +119,11 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     kubectl -n slipstream cp bench/serve_sweep.sh bench-client:/tmp/serve_sweep.sh
     out="bench/results/prefix-cache"
     mkdir -p "${out}"
+    # A seed unique to this invocation makes prefix_repetition emit prefixes the server
+    # has never cached, so the cold run genuinely misses. The cold and warm runs share
+    # it, so the warm run replays the cold run's prefixes against the now-populated
+    # cache. This build exposes no /reset_prefix_cache route to empty the cache instead.
+    seed="$(date +%s)"
     # Snapshot the server's cumulative prefix-cache counters; only the delta across a
     # run window is that run's traffic, so we bracket each run with a snapshot.
     scrape() { kubectl -n slipstream exec bench-client -- curl -sf "${base}/metrics"; }
@@ -127,24 +132,19 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
       kubectl -n slipstream exec bench-client -- bash /tmp/serve_sweep.sh \
         --base-url "${base}" --model {{ model }} \
         --prefix-shares "{{ prefix_share }}" --burstiness-values "{{ burstiness }}" \
-        --out-dir "$1" {{ args }}
+        --seed "${seed}" --out-dir "$1" {{ args }}
     }
     cell="pshare{{ prefix_share }}_burst{{ burstiness }}.json"
-    # Cold: reset the prefix cache so the run starts against an empty cache.
-    kubectl -n slipstream exec bench-client -- curl -sf -X POST "${base}/reset_prefix_cache" >/dev/null
+    # Cold: fresh, never-cached prefixes, so the run misses.
     scrape >"${out}/cold_before.prom"
     run_cell /tmp/results-cold
     scrape >"${out}/cold_after.prom"
-    kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results-cold "${cell}" | tar xf - -C "${out}"
-    mv "${out}/${cell}" "${out}/cold_${cell}"
-    # Warm: the same prefixes again, cache left populated from the cold run. serve_sweep
-    # pins a fixed --seed, so the second invocation replays the first run's prefixes and
-    # they hit the warmed cache.
+    kubectl -n slipstream cp "bench-client:/tmp/results-cold/${cell}" "${out}/cold_${cell}"
+    # Warm: the same seed, so the same prefixes hit the cache the cold run populated.
     scrape >"${out}/warm_before.prom"
     run_cell /tmp/results-warm
     scrape >"${out}/warm_after.prom"
-    kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results-warm "${cell}" | tar xf - -C "${out}"
-    mv "${out}/${cell}" "${out}/warm_${cell}"
+    kubectl -n slipstream cp "bench-client:/tmp/results-warm/${cell}" "${out}/warm_${cell}"
     bash bench/prefix_cache_scrape.sh --cache-state cold \
       --metrics-before "${out}/cold_before.prom" --metrics-after "${out}/cold_after.prom" \
       --result "${out}/cold_${cell}" | tee "${out}/cold_hit_rate.json"
