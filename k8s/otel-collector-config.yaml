@@ -1,8 +1,9 @@
 # Request-ID spine stub: a minimal OTel Collector that receives OTLP, enforces
 # the shape-only privacy stance, batches, and fans out to its sinks (spec §5.1).
-# For the stub the only sink is the debug exporter, whose detailed output is the
-# structured log line the request_id is stamped on; Sentry/PostHog/Loki exporters
-# slot into the same pipeline as later layers wire them up. No tail-sampling.
+# For the stub the only sink is the debug exporter, whose detailed output puts
+# the request_id on the collector's stdout (readable via `kubectl logs`); the
+# real sinks attach as further exporters on this same pipeline at L3. No
+# tail-sampling.
 #
 # This file is the single source of truth for the collector config: the local
 # integration test (test/otel_spine_test.sh) runs the real collector against it,
@@ -23,8 +24,10 @@ receivers:
 processors:
   # Shape-only guard, fail-closed: only these keys survive on a span; every other
   # span attribute (a raw prompt, a completion, anything vLLM or a future gateway
-  # attaches) is dropped before it can reach a sink. "No raw prompt content
-  # leaves the cluster, ever" (spec §5.1) is enforced here, not by convention.
+  # attaches as a span attribute) is dropped before it can reach a sink — the
+  # shape-only privacy stance (spec §5.1), enforced here rather than by convention.
+  # Scope is span attributes: resource attributes and the span name are not
+  # filtered, so shape-only discipline upstream still matters.
   redaction:
     allow_all_keys: false
     allowed_keys:
@@ -41,7 +44,7 @@ processors:
 
 exporters:
   # The stub's sink: detailed telemetry on the collector's stdout, so the
-  # request_id is visible on a structured log line via `kubectl logs`.
+  # request_id is visible via `kubectl logs`.
   debug:
     verbosity: detailed
 
@@ -49,7 +52,7 @@ service:
   extensions: [health_check]
   pipelines:
     # vLLM emits OTel traces (spec §5.1); the request_id rides as a span attribute
-    # and the debug exporter renders it onto the structured log line.
+    # and the debug exporter renders it to the collector's stdout.
     traces:
       receivers: [otlp]
       processors: [redaction, batch]

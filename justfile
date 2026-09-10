@@ -75,11 +75,19 @@ obs-pivot:
     kubectl -n slipstream port-forward svc/otel-collector 4318:4318 >/dev/null 2>&1 &
     pf_pid=$!
     trap 'kill "${pf_pid}" 2>/dev/null || true' EXIT
+    ready=""
     for _ in $(seq 30); do
-      curl -s -o /dev/null -X POST http://localhost:4318/v1/traces \
-        -H 'Content-Type: application/json' -d '{}' && break
+      if curl -s -o /dev/null -X POST http://localhost:4318/v1/traces \
+        -H 'Content-Type: application/json' -d '{}'; then
+        ready=1
+        break
+      fi
       sleep 1
     done
+    if [[ -z "${ready}" ]]; then
+      echo "port-forward to svc/otel-collector never came up" >&2
+      exit 1
+    fi
     curl -sf -X POST http://localhost:4318/v1/traces \
       -H 'Content-Type: application/json' \
       -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"{{ model }}"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
