@@ -13,7 +13,7 @@ metadata:
     app: bench-client
 spec:
   # A manual harness pod, not a workload: never restart it, and don't let the `vllm`
-  # Service inject a VLLM_PORT tcp:// URI that crashes the engine import (k8s/vllm.yaml).
+  # Service inject a VLLM_PORT tcp:// URI that crashes vLLM's config load (k8s/vllm.yaml).
   restartPolicy: Never
   enableServiceLinks: false
   # Same CPU node group as the server; only amd64 nodes exist today.
