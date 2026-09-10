@@ -1,15 +1,14 @@
 # The request-ID spine stub: a minimal OTel Collector in the slipstream cluster.
 # It receives OTLP (gRPC 4317 / HTTP 4318), enforces the shape-only guard, batches,
-# and writes the telemetry — request_id and all — to its stdout as a structured
-# log line readable with `kubectl logs`. The collector config is a separate file
+# and writes the telemetry — request_id and all — to its stdout, readable with
+# `kubectl logs`. The collector config is a separate file
 # (k8s/otel-collector-config.yaml) loaded into a ConfigMap by `just obs-up`, so the
 # same config the local test exercises is what the cluster runs. Reachable
 # in-cluster as otel-collector.slipstream.svc:4317; no public endpoint.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: slipstream
----
+#
+# The slipstream namespace is created by `just obs-up` (and ships with
+# k8s/vllm.yaml); it is deliberately not declared here so `just obs-down`
+# (kubectl delete -f) removes only the collector, never the shared namespace.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,11 +26,12 @@ spec:
       labels:
         app: otel-collector
     spec:
-      # We reach the collector by DNS, not the legacy per-Service env vars
-      # Kubernetes would otherwise inject; keep the container env clean.
+      # We reach the collector by DNS, not the per-Service env vars Kubernetes
+      # would otherwise inject; keep the container env clean.
       enableServiceLinks: false
-      # Only the CPU node group exists today; keep this off any GPU node a
-      # later layer adds.
+      # Pin to the x86_64 node group that exists today; the contrib image tag is
+      # x86_64, so this keeps the pod off any arm64 node a later layer adds. (It
+      # does not exclude GPU nodes — those are amd64 too; that needs a taint.)
       nodeSelector:
         kubernetes.io/arch: amd64
       containers:
