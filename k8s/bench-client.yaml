@@ -1,6 +1,6 @@
-# Throwaway client pod for the L0 benchmark sweep. `just bench` applies it, runs
-# the sweep against the in-cluster vLLM service, copies the result JSON back out,
-# then deletes it. Running the load generator in-cluster keeps the measurement off
+# Throwaway client pod for the L0 benchmark sweep. `just bench` applies it, copies
+# the serve_sweep.sh driver in, runs the sweep against the in-cluster vLLM service,
+# copies the result JSON back out, then deletes it. Running the load generator in-cluster keeps the measurement off
 # the serving pod and off the developer's laptop, where vLLM isn't installable.
 # The image is the baked bench-client image (bench/Dockerfile), built on the same
 # engine build as the server (k8s/vllm.yaml, spec §3.1) so the two tokenize
