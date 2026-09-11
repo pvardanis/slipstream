@@ -3,8 +3,9 @@
 Seeded from the checklist mined off the deleted bash test (ADR-0003): the
 split arithmetic, the ratio weighting, fractional figures, order-preserving
 multi-file output, run-to-run reproducibility, the pinned provenance, and the
-fail-fast guards on price, ratio, missing/null/non-numeric metrics, a
-non-positive duration, and a zero-token denominator.
+fail-fast guards on price, ratio, blank provenance, missing/null/non-numeric/
+non-finite/negative metrics, a non-positive duration, and a zero-token
+denominator.
 """
 
 import json
@@ -182,3 +183,45 @@ def test_zero_token_denominator_is_rejected() -> None:
             "cell.json",
             _inputs(),
         )
+
+
+@pytest.mark.parametrize("metric", ["total_input_tokens", "total_output_tokens"])
+def test_negative_token_count_is_rejected(metric: str) -> None:
+    """A negative token count is physically impossible and inverts the split."""
+    with pytest.raises(CostError, match=metric):
+        price_result(_record(**{metric: -1}), "cell.json", _inputs())
+
+
+@pytest.mark.parametrize("metric", ["duration", "total_input_tokens"])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_metric_is_rejected(metric: str, bad: float) -> None:
+    """NaN/Infinity slip past a bare < 0 or <= 0 check and price as nonsense."""
+    with pytest.raises(CostError, match=metric):
+        price_result(_record(**{metric: bad}), "cell.json", _inputs())
+
+
+def test_output_only_run_prices_a_finite_input_figure() -> None:
+    """Zero input, positive output is a valid r*O denominator, not a rejection."""
+    priced = price_result(
+        _record(total_input_tokens=0, total_output_tokens=1_000_000),
+        "cell.json",
+        _inputs(),
+    )
+
+    assert priced["cost_per_1m_input_usd"] == pytest.approx(2.0)
+
+
+def test_token_counts_are_emitted_as_integers() -> None:
+    """Token counts are counts, echoed as ints, not the float used internally."""
+    priced = price_result(_record(), "cell.json", _inputs())
+
+    assert isinstance(priced["total_input_tokens"], int)
+    assert isinstance(priced["total_output_tokens"], int)
+
+
+@pytest.mark.parametrize("field", ["weight_checksum", "vllm_version", "quant_recipe"])
+def test_empty_provenance_is_rejected(field: str) -> None:
+    """A $/1M figure detached from its artifact is a lie; blank provenance fails."""
+    pins = {**PINS, field: ""}
+    with pytest.raises(CostError, match=field.replace("_", "-")):
+        CostInputs(price_per_hour=2.0, output_input_ratio=1.0, **pins)

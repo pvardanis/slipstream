@@ -15,6 +15,7 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 1e6.
 """
 
+import math
 from dataclasses import dataclass
 
 from slipstream_bench.results import read_result
@@ -60,6 +61,16 @@ class CostInputs:
                 f"invalid output-input-ratio {self.output_input_ratio}: "
                 f"want a positive number"
             )
+        # A cost figure detached from what produced it is a lie waiting to happen:
+        # refuse one without the full provenance triple pinned.
+        provenance = (
+            ("weight-checksum", self.weight_checksum),
+            ("vllm-version", self.vllm_version),
+            ("quant-recipe", self.quant_recipe),
+        )
+        for name, value in provenance:
+            if not value:
+                raise CostError(f"missing {name}: provenance must be pinned")
 
 
 def _numeric_metric(record: dict, source: str, name: str) -> float:
@@ -73,12 +84,21 @@ def _numeric_metric(record: dict, source: str, name: str) -> float:
     :param source: the file the record came from, for the error message.
     :param name: the metric key to read.
     :return: the metric as a float.
-    :raise CostError: when the metric is absent or not a number.
+    :raise CostError: when the metric is absent, not a number, non-finite, or
+        negative.
     """
     value = record.get(name)
     # bool is an int subclass but is never a valid token count or duration.
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise CostError(f"result {source} missing or non-numeric metric {name}")
+    # json.loads reads NaN/Infinity by default; they slip past a < 0 or <= 0 check
+    # and price as a nonsense figure, so reject them before the arithmetic.
+    if not math.isfinite(value):
+        raise CostError(f"result {source} has non-finite metric {name}")
+    # A negative token count or duration is physically impossible and would invert
+    # the split or the run cost.
+    if value < 0:
+        raise CostError(f"result {source} has negative metric {name}")
     return float(value)
 
 
@@ -114,8 +134,8 @@ def price_result(record: dict, source: str, inputs: CostInputs) -> dict:
         "model_id": record.get("model_id"),
         "duration_s": duration,
         "completed": record.get("completed"),
-        "total_input_tokens": input_tokens,
-        "total_output_tokens": output_tokens,
+        "total_input_tokens": int(input_tokens),
+        "total_output_tokens": int(output_tokens),
         "price_per_hour_usd": inputs.price_per_hour,
         "output_input_ratio": inputs.output_input_ratio,
         "run_cost_usd": run_cost,

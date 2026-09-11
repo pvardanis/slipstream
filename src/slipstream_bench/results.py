@@ -26,7 +26,7 @@ def read_result(path: str) -> dict:
     if not file.is_file():
         raise ResultError(f"result file not found: {path}")
     try:
-        data = json.loads(file.read_text())
+        data = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ResultError(f"cannot read result {path}: {error}") from error
     if not isinstance(data, dict):
