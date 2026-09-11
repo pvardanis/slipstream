@@ -47,6 +47,26 @@ class SweepConfig:
     out_dir: str
     goodput: list[str]
 
+    def __post_init__(self) -> None:
+        """Reject a config that would run zero cells or an out-of-range share.
+
+        The CLI already rejects these with friendly messages; this guarantees the
+        same for any other caller, so an empty grid can never report success
+        having measured nothing.
+
+        :raise SweepError: on an empty grid axis, an empty SLO, or a share outside
+            0..100.
+        """
+        if not self.prefix_shares:
+            raise SweepError("no prefix-shares to sweep: the grid would be empty")
+        if not self.burstiness_values:
+            raise SweepError("no burstiness values to sweep: the grid would be empty")
+        if not self.goodput:
+            raise SweepError("no goodput SLO given: want e.g. 'ttft:1000 tpot:50'")
+        for share in self.prefix_shares:
+            if not 0 <= share <= 100:
+                raise SweepError(f"prefix-share {share} is outside 0..100")
+
 
 def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int, int]:
     """Split a token budget into prefix and suffix lengths for one prefix-share.
@@ -95,7 +115,7 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
 
     ``--goodput`` carries the SLO; ``--save-result``/``--save-detailed`` writes the
     raw per-request client JSON; ``--percentile-metrics`` + ``--metric-percentiles``
-    report p95 and p99 side by side on the metrics the SLO is expressed in.
+    report p95 and p99 side by side for ttft, tpot, itl, and e2el.
 
     :param config: the sweep knobs shared across every cell.
     :param share: this cell's prefix-share percentage.
@@ -156,6 +176,7 @@ def run_sweep(
     dry_run: bool,
     runner: CellRunner,
     echo: Echo,
+    warn: Echo,
 ) -> int:
     """Run the grid, one ``vllm bench serve`` per cell, and report the tally.
 
@@ -167,12 +188,19 @@ def run_sweep(
     :param dry_run: when true, echo each command instead of running it.
     :param runner: runs one cell's command and returns its process exit code.
     :param echo: sink for the dry-run commands and the per-cell progress lines.
+    :param warn: sink for the failure and tally lines (stderr, so they survive a
+        stdout redirect meant for the commands or results).
     :return: 0 when every cell succeeded (or dry run), 1 when any cell failed.
     :raise SweepError: when block alignment would erase a prefix (see
-        :func:`split_lengths`).
+        :func:`split_lengths`), or the out-dir cannot be created.
     """
     if not dry_run:
-        Path(config.out_dir).mkdir(parents=True, exist_ok=True)
+        try:
+            Path(config.out_dir).mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise SweepError(
+                f"cannot create out-dir '{config.out_dir}': {error.strerror}"
+            ) from error
 
     completed = 0
     failed = 0
@@ -183,13 +211,17 @@ def run_sweep(
             continue
         result_file = _result_file(config, share, burstiness)
         echo(f"==> prefix-share {share}% burstiness {burstiness} -> {result_file}")
-        if runner(command) == 0:
+        code = runner(command)
+        if code == 0:
             completed += 1
         else:
             failed += 1
-            echo(f"!! cell prefix-share {share}% burstiness {burstiness} failed")
+            warn(
+                f"!! cell prefix-share {share}% burstiness {burstiness} "
+                f"failed (exit {code})"
+            )
 
     if failed > 0:
-        echo(f"sweep finished: {completed} cells ok, {failed} failed")
+        warn(f"sweep finished: {completed} cells ok, {failed} failed")
         return 1
     return 0

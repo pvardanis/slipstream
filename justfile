@@ -120,6 +120,11 @@ bench *args:
       count="$(kubectl -n slipstream exec bench-client -- sh -c 'ls -1 /tmp/results/*.json 2>/dev/null | wc -l' | tr -d ' ')"
       if [[ "${count}" -eq 0 ]]; then
         echo "sweep produced no result JSON in the client pod — check the exec output above" >&2
+        # Preserve a config-error exit (e.g. 2) the sweep already reported; only
+        # synthesize a failure code when the sweep itself claimed success.
+        if [[ "${sweep_rc}" -ne 0 ]]; then
+          exit "${sweep_rc}"
+        fi
         exit 1
       fi
       echo "results copied to bench/results/ (${count} files)"

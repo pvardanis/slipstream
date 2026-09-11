@@ -5,9 +5,11 @@ and pins that a bad argument is rejected with a non-zero exit before any command
 is built.
 """
 
+import pytest
 from typer.testing import CliRunner
 
-from slipstream_bench.cli import app
+from slipstream_bench.cli import _run_cell, app
+from slipstream_bench.serve_sweep import SweepError
 
 runner = CliRunner()
 
@@ -123,6 +125,15 @@ def test_empty_goodput_is_rejected() -> None:
     assert "goodput" in result.output
 
 
+def test_goodput_drops_empty_tokens_and_keeps_the_rest() -> None:
+    """An empty token is filtered out; a non-empty one still reaches the command."""
+    result = _dry_run("--goodput", "", "--goodput", "ttft:1000")
+    assert result.exit_code == 0
+    assert result.stdout.count("--goodput ttft:1000") == 6
+    # The dropped empty token must not leave a dangling separator on the command.
+    assert "--goodput  " not in result.stdout
+
+
 def test_negative_align_blocks_is_rejected() -> None:
     """--align-blocks must be non-negative."""
     result = _dry_run("--align-blocks", "-16")
@@ -164,3 +175,16 @@ def test_negative_request_rate_is_rejected() -> None:
     result = _dry_run("--request-rate", "-8")
     assert result.exit_code == 2
     assert "request-rate" in result.output
+
+
+def test_nan_request_rate_is_rejected() -> None:
+    """A non-finite request rate does not slip through the float coercion."""
+    result = _dry_run("--request-rate", "nan")
+    assert result.exit_code == 2
+    assert "request-rate" in result.output
+
+
+def test_run_cell_reports_a_missing_binary_clearly() -> None:
+    """A missing binary fails fast with an actionable message, not a traceback."""
+    with pytest.raises(SweepError, match="not found on PATH"):
+        _run_cell(["definitely-not-a-real-binary-xyz", "--flag"])

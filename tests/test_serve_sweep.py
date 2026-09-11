@@ -89,6 +89,26 @@ def test_alignment_that_erases_prefix_fails_fast() -> None:
         split_lengths(100, 10, align_blocks=16)
 
 
+# --- SweepConfig invariants: no empty grid, shares in range --------------------
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"prefix_shares": []}, "prefix-shares"),
+        ({"burstiness_values": []}, "burstiness"),
+        ({"goodput": []}, "goodput"),
+        ({"prefix_shares": [150]}, "outside 0..100"),
+    ],
+)
+def test_config_rejects_a_meaningless_sweep(
+    overrides: dict[str, object], match: str
+) -> None:
+    """An empty grid axis, empty SLO, or out-of-range share fails at construction."""
+    with pytest.raises(SweepError, match=match):
+        _config(**overrides)
+
+
 # --- grid: one cell per (share, burstiness) ----------------------------------
 
 
@@ -128,7 +148,7 @@ def test_cell_command_carries_the_split_slo_and_result_file() -> None:
 
 
 def test_cell_command_is_reproducible_for_a_fixed_config() -> None:
-    """The same config builds byte-identical commands, so a run replays exactly."""
+    """The same config builds identical commands, carrying the same fixed seed."""
     cfg = _config()
     first = cell_command(cfg, share=90, burstiness=1.0)
     second = cell_command(cfg, share=90, burstiness=1.0)
@@ -161,6 +181,7 @@ def test_dry_run_prints_every_cell_and_runs_none() -> None:
         dry_run=True,
         runner=lambda cmd: (calls.append(cmd), 0)[1],
         echo=printed.append,
+        warn=printed.append,
     )
 
     assert code == 0
@@ -180,10 +201,27 @@ def test_run_sweep_invokes_the_runner_once_per_cell(tmp_path) -> None:
         dry_run=False,
         runner=lambda cmd: (calls.append(cmd), 0)[1],
         echo=lambda _line: None,
+        warn=lambda _line: None,
     )
 
     assert code == 0
     assert len(calls) == 6
+
+
+def test_run_sweep_creates_a_nested_out_dir(tmp_path) -> None:
+    """A live run creates the out-dir, including missing parents."""
+    out_dir = tmp_path / "results" / "run1"
+    cfg = _config(out_dir=str(out_dir))
+
+    run_sweep(
+        cfg,
+        dry_run=False,
+        runner=lambda _cmd: 0,
+        echo=lambda _line: None,
+        warn=lambda _line: None,
+    )
+
+    assert out_dir.is_dir()
 
 
 def test_failing_cell_does_not_abort_the_grid(tmp_path) -> None:
@@ -193,13 +231,24 @@ def test_failing_cell_does_not_abort_the_grid(tmp_path) -> None:
     )
     attempted: list[str] = []
 
+    warned: list[str] = []
+
     def runner(cmd: list[str]) -> int:
         # The middle cell (share 50) fails; the other two must still be attempted.
         joined = " ".join(cmd)
         attempted.append(joined)
-        return 1 if "pshare50_" in joined else 0
+        return 7 if "pshare50_" in joined else 0
 
-    code = run_sweep(cfg, dry_run=False, runner=runner, echo=lambda _line: None)
+    code = run_sweep(
+        cfg,
+        dry_run=False,
+        runner=runner,
+        echo=lambda _line: None,
+        warn=warned.append,
+    )
 
     assert code == 1
     assert len(attempted) == 3
+    # The failure line names the offending cell and carries its exit code.
+    assert any("burstiness 1.0 failed (exit 7)" in line for line in warned)
+    assert any("2 cells ok, 1 failed" in line for line in warned)
