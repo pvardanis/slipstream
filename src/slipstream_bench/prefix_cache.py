@@ -91,9 +91,9 @@ def _sum_counter(exposition: str, source: str, metric: str, model: str) -> float
             f"metric {metric} not found in {source} for model {model!r} "
             f"(is prefix caching enabled on the server?)"
         )
-    # The exposition format encodes NaN and +Inf/-Inf, which the parser reads as
-    # floats; both slip past the < 0 and == 0 window guards and would yield a silent
-    # NaN hit rate, so reject a non-finite counter before the delta.
+    # NaN and infinities in the exposition parse to floats and would produce a
+    # non-finite (NaN or inf) hit rate the window guards do not reliably catch, so
+    # reject a non-finite counter here, before the delta.
     if not math.isfinite(total):
         raise PrefixCacheError(
             f"metric {metric} has a non-finite value in {source} for model {model!r}"
@@ -153,8 +153,9 @@ def scrape_prefix_cache(
     :return: the joined record: the window deltas, the hit rate, the cold/warm
         label, and the echoed client SLO numbers.
     :raise PrefixCacheError: on a bad cache-state, an absent/disabled metric, a
-        backwards or empty counter window, a missing model selector, a truncated
-        client JSON, or an unreadable snapshot.
+        non-finite, backwards, empty, or hits-exceed-queries counter window, a
+        missing model selector, a truncated or zero-completed client JSON, or an
+        unreadable/unparseable snapshot.
     :raise ResultError: when the result file cannot be read (see
         :func:`slipstream_bench.results.read_result`).
     """
@@ -167,10 +168,16 @@ def scrape_prefix_cache(
 
     record = read_result(result)
     # A per-cell failure can leave a syntactically-valid but empty/stub result JSON;
-    # the join would then emit null model_id/completed behind a real-looking rate.
-    if record.get("model_id") is None or record.get("completed") is None:
+    # the join would then emit null model_id behind a real-looking rate. A run that
+    # completed zero requests measured nothing on the client side, so on a shared
+    # server its non-zero counter deltas must not be dressed up as a run either.
+    if record.get("model_id") is None:
         raise PrefixCacheError(
-            f"result {result} missing model_id/completed (truncated or empty run?)"
+            f"result {result} missing model_id (truncated or empty run?)"
+        )
+    if not record.get("completed"):
+        raise PrefixCacheError(
+            f"result {result} completed no requests (truncated or empty run?)"
         )
 
     # Default the series selector to the model the client ran against, so a
@@ -198,6 +205,16 @@ def scrape_prefix_cache(
     if queries == 0:
         raise PrefixCacheError(
             "no prefix cache queries between the snapshots (nothing to measure)"
+        )
+    # Hits are a subset of queries on a single model, so a hits delta above the
+    # queries delta is impossible for a healthy series: a mid-run counter reset that
+    # touched one series and not the other, or a selector that folded in a foreign
+    # series. Either way the > 1.0 rate would be a lie, so reject it.
+    if hits > queries:
+        raise PrefixCacheError(
+            f"prefix cache hits ({_as_count(hits)}) exceed queries "
+            f"({_as_count(queries)}) over the window for model {selected_model!r} "
+            f"(counter reset mid-run or wrong model selected?)"
         )
 
     return {

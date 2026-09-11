@@ -5,9 +5,10 @@ over the run window rather than the polluted lifetime ratio, the cold/warm label
 the join onto the client JSON with its SLO numbers, per-model_name series
 selection, the _total-suffix rendering prometheus_client emits, large counters
 without precision loss, run-to-run reproducibility, and the fail-fast guards on a
-bad cache-state, an absent/disabled metric, a backwards or asymmetric counter
-window (server restart), an empty query window, a missing model selector, and a
-truncated client JSON.
+bad cache-state, an absent/disabled metric, a non-finite counter, a backwards or
+asymmetric counter window (server restart), an empty query window, a hits-exceed-
+queries window, a missing model selector, a truncated or zero-completed client
+JSON, and an unparseable snapshot.
 """
 
 import json
@@ -356,30 +357,82 @@ def test_empty_query_window_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_hits_exceeding_queries_is_rejected(tmp_path: Path) -> None:
+    """Hits above queries over the window is impossible for a healthy series."""
+    before = _snapshot(tmp_path, "b.prom", 1000.0, 200.0)
+    after = _snapshot(tmp_path, "a.prom", 1100.0, 400.0)
+    with pytest.raises(PrefixCacheError, match="exceed queries"):
+        scrape_prefix_cache(
+            metrics_before=before,
+            metrics_after=after,
+            result=_result(tmp_path),
+            cache_state="cold",
+        )
+
+
 def test_missing_model_selector_is_rejected(tmp_path: Path) -> None:
-    """A result with no model_id and no --model would sum every model's series."""
-    nomodel = tmp_path / "nomodel.json"
-    nomodel.write_text(json.dumps({"completed": 5}))
-    with pytest.raises(PrefixCacheError, match="model"):
+    """A blank model_id with no --model would sum every model's series; reject it."""
+    blank = tmp_path / "blank.json"
+    blank.write_text(json.dumps({"model_id": "", "completed": 5}))
+    with pytest.raises(PrefixCacheError, match="could not determine model"):
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=str(nomodel),
+            result=str(blank),
             cache_state="cold",
         )
 
 
 def test_stub_client_json_is_rejected(tmp_path: Path) -> None:
-    """A truncated run leaves valid JSON with no model_id/completed; reject it."""
+    """A truncated run leaves valid JSON with no model_id; reject it."""
     stub = tmp_path / "stub.json"
     stub.write_text("{}")
-    with pytest.raises(PrefixCacheError, match="model_id"):
+    with pytest.raises(PrefixCacheError, match="missing model_id"):
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=str(stub),
             cache_state="cold",
             model=MODEL,
+        )
+
+
+def test_missing_completed_is_rejected(tmp_path: Path) -> None:
+    """A result with model_id but no completed count is a truncated run."""
+    partial = tmp_path / "partial.json"
+    partial.write_text(json.dumps({"model_id": MODEL}))
+    with pytest.raises(PrefixCacheError, match="completed no requests"):
+        scrape_prefix_cache(
+            metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
+            metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
+            result=str(partial),
+            cache_state="cold",
+        )
+
+
+def test_zero_completed_run_is_rejected(tmp_path: Path) -> None:
+    """A run where every request failed measured nothing; reject completed == 0."""
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"model_id": MODEL, "completed": 0}))
+    with pytest.raises(PrefixCacheError, match="completed no requests"):
+        scrape_prefix_cache(
+            metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
+            metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
+            result=str(empty),
+            cache_state="cold",
+        )
+
+
+def test_malformed_exposition_is_rejected(tmp_path: Path) -> None:
+    """A snapshot the parser cannot read fails with a clear message, not a traceback."""
+    corrupt = tmp_path / "corrupt.prom"
+    corrupt.write_text("vllm:prefix_cache_queries{model_name= 1100.0\n")
+    with pytest.raises(PrefixCacheError, match="cannot parse"):
+        scrape_prefix_cache(
+            metrics_before=str(corrupt),
+            metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
+            result=_result(tmp_path),
+            cache_state="cold",
         )
 
 
