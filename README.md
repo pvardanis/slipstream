@@ -82,6 +82,29 @@ stern vllm -n slipstream --tail 50    # tail vLLM logs, follows pod restarts
 `k9s` is the fastest way to see pod status and events; `stern` beats
 `kubectl logs` during a crash loop because it re-attaches to each new pod.
 
+## Benchmark harness
+
+The L0 benchmark harness ships as `slipstream-bench`, a Python package managed by
+[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches the three benchmark
+tools — `serve-sweep` (fire `vllm bench serve` across a prefix-share x burstiness
+grid), `cost` (price a run into $/1M in/out tokens), and `prefix-cache` (the
+cold/warm hit-rate delta). The rewrite from bash is recorded in
+[`docs/adr/0003`](docs/adr/0003-l0-bench-harness-in-python.md).
+
+Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
+`uv.lock` on first use — no manual `venv` or `pip install`.
+
+```sh
+uv run slipstream-bench --help   # list the three subcommands
+uv run slipstream-bench cost     # (subcommand bodies land in follow-up issues)
+just cli-test                    # run the package test suite (uv run pytest)
+```
+
+Runtime dependencies stay slim (`typer` only); `pytest` and `ruff` are dev-only,
+and the repo's pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
+run inside a baked bench-client image against the in-cluster vLLM service; where
+the load generator runs is orchestration, not tool logic.
+
 ## Non-goals
 
 No fine-tuning or LLM training, no RAG / vector DBs / embeddings, no agent
