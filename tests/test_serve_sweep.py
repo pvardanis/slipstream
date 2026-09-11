@@ -99,6 +99,7 @@ def test_alignment_that_erases_prefix_fails_fast() -> None:
         ({"burstiness_values": []}, "burstiness"),
         ({"goodput": []}, "goodput"),
         ({"prefix_shares": [150]}, "outside 0..100"),
+        ({"num_prompts": 2, "num_prefixes": 5}, "num-prompts"),
     ],
 )
 def test_config_rejects_a_meaningless_sweep(

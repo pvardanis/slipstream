@@ -54,8 +54,8 @@ class SweepConfig:
         same for any other caller, so an empty grid can never report success
         having measured nothing.
 
-        :raise SweepError: on an empty grid axis, an empty SLO, or a share outside
-            0..100.
+        :raise SweepError: on an empty grid axis, an empty SLO, a share outside
+            0..100, or fewer prompts than prefixes.
         """
         if not self.prefix_shares:
             raise SweepError("no prefix-shares to sweep: the grid would be empty")
@@ -66,6 +66,14 @@ class SweepConfig:
         for share in self.prefix_shares:
             if not 0 <= share <= 100:
                 raise SweepError(f"prefix-share {share} is outside 0..100")
+        # vLLM's prefix_repetition workload gives each prefix at least one prompt,
+        # so it rejects a run with more prefixes than prompts. Fail fast here rather
+        # than let every cell die the same way mid-grid.
+        if self.num_prompts < self.num_prefixes:
+            raise SweepError(
+                f"--num-prompts {self.num_prompts} is below --num-prefixes "
+                f"{self.num_prefixes}: raise prompts or lower prefixes"
+            )
 
 
 def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int, int]:
