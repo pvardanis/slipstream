@@ -160,7 +160,7 @@ def cost(
             vllm_version=vllm_version,
             quant_recipe=quant_recipe,
         )
-        records = price_files([str(file) for file in files], inputs)
+        records = price_files(files, inputs)
     except (CostError, ResultError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
@@ -207,9 +207,9 @@ def prefix_cache(
     """Compute the cold/warm prefix-cache hit-rate delta for a bench run."""
     try:
         record = scrape_prefix_cache(
-            metrics_before=str(metrics_before),
-            metrics_after=str(metrics_after),
-            result=str(result),
+            metrics_before=metrics_before,
+            metrics_after=metrics_after,
+            result=result,
             cache_state=cache_state,
             model=model,
         )

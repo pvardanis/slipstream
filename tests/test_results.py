@@ -17,13 +17,13 @@ def test_reads_a_result_object(tmp_path: Path) -> None:
     result = tmp_path / "cell.json"
     result.write_text(json.dumps({"model_id": "m", "duration": 3600.0}))
 
-    assert read_result(str(result)) == {"model_id": "m", "duration": 3600.0}
+    assert read_result(result) == {"model_id": "m", "duration": 3600.0}
 
 
 def test_missing_file_is_rejected(tmp_path: Path) -> None:
     """A path with no file fails fast naming the file."""
     with pytest.raises(ResultError, match="not found"):
-        read_result(str(tmp_path / "nope.json"))
+        read_result(tmp_path / "nope.json")
 
 
 def test_malformed_json_is_rejected(tmp_path: Path) -> None:
@@ -32,7 +32,7 @@ def test_malformed_json_is_rejected(tmp_path: Path) -> None:
     result.write_text("{not json")
 
     with pytest.raises(ResultError, match="cannot read"):
-        read_result(str(result))
+        read_result(result)
 
 
 def test_non_object_top_level_is_rejected(tmp_path: Path) -> None:
@@ -41,4 +41,4 @@ def test_non_object_top_level_is_rejected(tmp_path: Path) -> None:
     result.write_text("[1, 2, 3]")
 
     with pytest.raises(ResultError, match="not a JSON object"):
-        read_result(str(result))
+        read_result(result)

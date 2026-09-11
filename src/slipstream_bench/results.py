@@ -14,7 +14,7 @@ class ResultError(Exception):
     """A result file that cannot be read as the JSON a post-processor joins on."""
 
 
-def read_result(path: str) -> dict:
+def read_result(path: Path) -> dict:
     """Read one result file into its parsed record.
 
     :param path: the result JSON file to read.
@@ -22,11 +22,10 @@ def read_result(path: str) -> dict:
     :raise ResultError: when the file is absent, unreadable, not JSON, or not a
         JSON object.
     """
-    file = Path(path)
-    if not file.is_file():
+    if not path.is_file():
         raise ResultError(f"result file not found: {path}")
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ResultError(f"cannot read result {path}: {error}") from error
     if not isinstance(data, dict):

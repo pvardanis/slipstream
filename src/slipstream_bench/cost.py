@@ -17,6 +17,7 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 from slipstream_bench.results import read_result
 
@@ -73,7 +74,7 @@ class CostInputs:
                 raise CostError(f"missing {name}: provenance must be pinned")
 
 
-def _numeric_metric(record: dict, source: str, name: str) -> float:
+def _numeric_metric(record: dict, source: Path, name: str) -> float:
     """Read one metric as a number, rejecting a missing, null, or non-numeric value.
 
     A metric present but null or a string would price as 0 in bare arithmetic,
@@ -102,7 +103,7 @@ def _numeric_metric(record: dict, source: str, name: str) -> float:
     return float(value)
 
 
-def price_result(record: dict, source: str, inputs: CostInputs) -> dict:
+def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
     """Price one result record into a single cost record.
 
     :param record: the parsed ``vllm bench serve`` result.
@@ -130,7 +131,7 @@ def price_result(record: dict, source: str, inputs: CostInputs) -> dict:
     run_cost = inputs.price_per_hour * duration / _SECONDS_PER_HOUR
     price_in = run_cost / (input_tokens + inputs.output_input_ratio * output_tokens)
     return {
-        "source": source,
+        "source": str(source),
         "model_id": record.get("model_id"),
         "duration_s": duration,
         "completed": record.get("completed"),
@@ -149,7 +150,7 @@ def price_result(record: dict, source: str, inputs: CostInputs) -> dict:
     }
 
 
-def price_files(files: list[str], inputs: CostInputs) -> list[dict]:
+def price_files(files: list[Path], inputs: CostInputs) -> list[dict]:
     """Price each result file into a cost record, order preserved.
 
     :param files: the result JSON files to price, in report order.
