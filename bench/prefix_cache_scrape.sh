@@ -98,9 +98,23 @@ for file in "${metrics_before}" "${metrics_after}" "${result}"; do
   }
 done
 
+# A per-cell failure can leave a syntactically-valid but empty/stub result JSON; the
+# join would then emit null model_id/completed behind a real-looking hit rate. The
+# record is only meaningful keyed to a real run, so require both fields up front.
+[[ "$(jq -r '(.model_id != null) and (.completed != null)' "${result}")" == "true" ]] || {
+  echo "result ${result} missing model_id/completed (truncated or empty run?)" >&2
+  exit 2
+}
+
 # Default the metric-series selector to the model the client ran against, so a
-# multi-model server's other series never fold into this run's counters.
+# multi-model server's other series never fold into this run's counters. An empty
+# selector would sum *every* model's series — a silent cross-model rate — so a result
+# without model_id and no --model is an error, not an all-series sum.
 [[ -n "${model}" ]] || model="$(jq -r '.model_id // empty' "${result}")"
+[[ -n "${model}" ]] || {
+  echo "could not determine model from ${result}: no model_id and no --model given" >&2
+  exit 2
+}
 
 # Sum a counter's value across the series matching the model label, ignoring the
 # HELP/TYPE comment lines that carry the metric name too. A prometheus_client counter
@@ -123,7 +137,10 @@ extract_counter() {
     }
     END {
       if (!found) exit 3
-      printf "%.10g", sum
+      # Integer counters: %g caps at 6 significant digits and %.10g at 10, both of
+      # which round the large cumulative values a long-lived server reaches into
+      # scientific notation and corrupt the delta. %.0f keeps the full integer.
+      printf "%.0f", sum
     }
   ' "${file}"
 }

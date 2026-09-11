@@ -214,6 +214,56 @@ assert_field "_total-suffixed queries read" '.prefix_cache_queries' 100
 assert_field "_total-suffixed hits read" '.prefix_cache_hits' 90
 assert_field "_total-suffixed hit rate computed" '.prefix_cache_hit_rate' 0.9
 
+# --- Model override selects a series the result's model_id would not ------------
+# The client ran against "${model}" but the metric labels it under a different
+# served-model-name; --model reaches past the result's model_id to the right series.
+override_before="${work}/override_before.prom"
+cat >"${override_before}" <<PROM
+# TYPE vllm:prefix_cache_queries counter
+vllm:prefix_cache_queries{model_name="served-name"} 300.0
+vllm:prefix_cache_queries{model_name="${model}"} 1000.0
+vllm:prefix_cache_hits{model_name="served-name"} 100.0
+vllm:prefix_cache_hits{model_name="${model}"} 200.0
+PROM
+override_after="${work}/override_after.prom"
+cat >"${override_after}" <<PROM
+# TYPE vllm:prefix_cache_queries counter
+vllm:prefix_cache_queries{model_name="served-name"} 350.0
+vllm:prefix_cache_queries{model_name="${model}"} 9999.0
+vllm:prefix_cache_hits{model_name="served-name"} 140.0
+vllm:prefix_cache_hits{model_name="${model}"} 8888.0
+PROM
+out="$(
+  "${scraper}" --cache-state cold --model "served-name" \
+    --metrics-before "${override_before}" --metrics-after "${override_after}" \
+    --result "${result}"
+)"
+assert_field "override selects the served-name series" '.prefix_cache_queries' 50
+assert_field "override hits from served-name series" '.prefix_cache_hits' 40
+
+# --- Large counters keep full integer precision (no %g rounding) ----------------
+# A long-lived server's cumulative counters exceed 10 significant digits; the delta
+# must stay exact, not round to scientific notation.
+big_before="${work}/big_before.prom"
+cat >"${big_before}" <<PROM
+# TYPE vllm:prefix_cache_queries counter
+vllm:prefix_cache_queries{model_name="${model}"} 12345678901234
+vllm:prefix_cache_hits{model_name="${model}"} 12345678900000
+PROM
+big_after="${work}/big_after.prom"
+cat >"${big_after}" <<PROM
+# TYPE vllm:prefix_cache_queries counter
+vllm:prefix_cache_queries{model_name="${model}"} 12345678901334
+vllm:prefix_cache_hits{model_name="${model}"} 12345678900050
+PROM
+out="$(
+  "${scraper}" --cache-state warm \
+    --metrics-before "${big_before}" --metrics-after "${big_after}" \
+    --result "${result}"
+)"
+assert_field "large-counter query delta is exact" '.prefix_cache_queries' 100
+assert_field "large-counter hit delta is exact" '.prefix_cache_hits' 50
+
 # --- Reproducibility: same inputs, byte-identical output ------------------------
 run_a="$("${scraper}" --cache-state cold --metrics-before "${cold_before}" --metrics-after "${cold_after}" --result "${result}")"
 run_b="$("${scraper}" --cache-state cold --metrics-before "${cold_before}" --metrics-after "${cold_after}" --result "${result}")"
@@ -260,6 +310,32 @@ assert_stderr "counter reset diagnosed" "backwards" --cache-state cold --metrics
 # run to measure. Reject rather than emit null and pretend.
 assert_exit "empty query window rejected" 2 --cache-state cold --metrics-before "${cold_before}" --metrics-after "${cold_before}" --result "${result}"
 assert_stderr "empty window diagnosed" "no prefix cache queries" --cache-state cold --metrics-before "${cold_before}" --metrics-after "${cold_before}" --result "${result}"
+
+# One counter advancing while the other regresses is still a mid-run restart — the
+# guard must catch it even when only hits (not queries) went backwards.
+skewed="${work}/skewed.prom"
+cat >"${skewed}" <<PROM
+# TYPE vllm:prefix_cache_queries counter
+vllm:prefix_cache_queries{model_name="${model}"} 1200.0
+vllm:prefix_cache_hits{model_name="${model}"} 5.0
+PROM
+assert_exit "asymmetric counter regression rejected" 2 --cache-state cold --metrics-before "${cold_before}" --metrics-after "${skewed}" --result "${result}"
+assert_stderr "asymmetric regression diagnosed" "backwards" --cache-state cold --metrics-before "${cold_before}" --metrics-after "${skewed}" --result "${result}"
+
+# A result JSON with no model_id and no --model would make the parser sum every
+# model's series on the server — a silent cross-model rate. Reject instead.
+nomodel="${work}/nomodel.json"
+echo '{"completed":5}' >"${nomodel}"
+assert_exit "missing model selector rejected" 2 --cache-state cold --metrics-before "${cold_before}" --metrics-after "${cold_after}" --result "${nomodel}"
+assert_stderr "missing model selector diagnosed" "model" --cache-state cold --metrics-before "${cold_before}" --metrics-after "${cold_after}" --result "${nomodel}"
+
+# A truncated/empty client JSON (a per-cell failure can leave a stub) is a valid
+# JSON object but has no model_id/completed — the join would emit null SLO fields
+# behind a real-looking rate. Reject it.
+stub="${work}/stub.json"
+echo '{}' >"${stub}"
+assert_exit "stub client JSON rejected" 2 --cache-state cold --model "${model}" --metrics-before "${cold_before}" --metrics-after "${cold_after}" --result "${stub}"
+assert_stderr "stub client JSON diagnosed" "model_id" --cache-state cold --model "${model}" --metrics-before "${cold_before}" --metrics-after "${cold_after}" --result "${stub}"
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- last output ----" >&2
