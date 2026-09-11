@@ -4,7 +4,9 @@ The commercial arm of the L0 baseline is fired at a per-token API, so it is
 priced from the token counts the run measured (``--save-result``) times the
 provider's quoted $/1M-input and $/1M-output rates — never a run wall-clock,
 which a per-token API does not bill on, and never a figure quoted off a docs
-page without the tokens being real. The rates are the published list numbers;
+page without the tokens being real. The model is a flat per-token list rate:
+provider wrinkles like cached-input discounts, batch rates, or per-request
+minimums are out of scope and would make this figure diverge from an invoice. The rates are the published list numbers;
 what makes the record a baseline rather than a quote is that the token counts
 come from the same workload the self-hosted arm ran, so the two $/1M figures
 compare apples to apples. The quote is only meaningful pinned to who quoted it
@@ -16,6 +18,7 @@ r_out in $/1M: run cost C = (I * r_in + O * r_out) / 1e6; the reported
 $/1M-input and $/1M-output are r_in and r_out unchanged.
 """
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -60,9 +63,11 @@ class CommercialCostInputs:
             ("output-price-per-1m", self.output_price_per_1m),
         )
         for name, value in rates:
-            if value <= 0:
+            # NaN and Infinity slip past a bare <= 0 check (NaN <= 0 is False,
+            # inf <= 0 is False) and would poison every run cost; reject them too.
+            if not math.isfinite(value) or value <= 0:
                 raise CommercialCostError(
-                    f"invalid {name} {value}: want a positive number"
+                    f"invalid {name} {value}: want a positive, finite number"
                 )
         provenance = (
             ("api", self.api),

@@ -221,7 +221,7 @@ def test_resolve_api_key_env_maps_the_named_var_to_openai_api_key(monkeypatch) -
     assert resolve_api_key_env("MY_PROVIDER_KEY") == {"OPENAI_API_KEY": "sk-live-abc"}
 
 
-@pytest.mark.parametrize("value", [None, ""])
+@pytest.mark.parametrize("value", [None, "", "   "])
 def test_resolve_api_key_env_rejects_an_unset_or_empty_var(monkeypatch, value) -> None:
     """An unset or blank key fails fast rather than sending an unauthenticated run."""
     if value is None:
@@ -252,3 +252,41 @@ def test_unset_api_key_env_is_rejected_before_the_sweep(monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "MY_PROVIDER_KEY" in result.output
+
+
+def test_dry_run_with_an_unset_api_key_env_succeeds(monkeypatch) -> None:
+    """A dry run previews a commercial sweep without the key being exported."""
+    monkeypatch.delenv("MY_PROVIDER_KEY", raising=False)
+
+    result = _dry_run("--api-key-env", "MY_PROVIDER_KEY")
+
+    assert result.exit_code == 0
+    assert result.stdout.count("vllm bench serve") == 6
+
+
+def test_live_sweep_threads_the_resolved_key_into_the_runner(monkeypatch) -> None:
+    """A non-dry sweep hands the resolved key to run_cell as extra_env, not argv."""
+    monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-abc")
+    seen: list[dict[str, str] | None] = []
+
+    def stub_run_cell(command, *, extra_env=None):
+        seen.append(extra_env)
+        return 0
+
+    monkeypatch.setattr("slipstream_bench.cli.run_cell", stub_run_cell)
+
+    result = runner.invoke(
+        app,
+        [
+            "serve-sweep",
+            "--api-key-env",
+            "MY_PROVIDER_KEY",
+            "--prefix-share",
+            "50",
+            "--burstiness",
+            "1.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [{"OPENAI_API_KEY": "sk-live-abc"}]

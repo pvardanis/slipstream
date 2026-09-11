@@ -140,6 +140,20 @@ def test_non_positive_output_price_is_rejected() -> None:
         _inputs(output_price_per_1m=-1.0)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_input_price_is_rejected(bad: float) -> None:
+    """NaN/Infinity slip past a bare <= 0 check and poison the cost; reject them."""
+    with pytest.raises(CommercialCostError, match="input-price-per-1m"):
+        _inputs(input_price_per_1m=bad)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_output_price_is_rejected(bad: float) -> None:
+    """NaN/Infinity slip past a bare <= 0 check and poison the cost; reject them."""
+    with pytest.raises(CommercialCostError, match="output-price-per-1m"):
+        _inputs(output_price_per_1m=bad)
+
+
 @pytest.mark.parametrize("field", ["api", "model", "price_quoted_on"])
 def test_empty_quote_provenance_is_rejected(field: str) -> None:
     """A quoted figure detached from provider/model/date is a lie; blank fails."""
@@ -222,3 +236,14 @@ def test_output_only_run_prices_the_output_side() -> None:
     )
 
     assert priced["run_cost_usd"] == pytest.approx(1.5)
+
+
+def test_input_only_run_prices_the_input_side() -> None:
+    """Positive input, zero output is a valid run, priced on the input rate alone."""
+    priced = price_commercial_result(
+        _record(total_input_tokens=1_000_000, total_output_tokens=0),
+        Path("cell.json"),
+        _inputs(),
+    )
+
+    assert priced["run_cost_usd"] == pytest.approx(0.5)
