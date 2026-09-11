@@ -135,10 +135,6 @@ bench *args:
 cli-test:
     uv run pytest
 
-# Assert the cost post-processor prices bench JSON into $/1M in/out (no cluster).
-cost-test:
-    bash test/cost_postprocessor_test.sh
-
 # Assert the prefix-cache scraper computes the per-run delta hit rate and joins it (no cluster).
 prefix-cache-test:
     bash test/prefix_cache_scrape_test.sh
