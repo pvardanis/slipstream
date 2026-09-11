@@ -3,6 +3,8 @@
 Dispatches the serve-sweep, cost, and prefix-cache benchmark subcommands.
 """
 
+import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -16,6 +18,8 @@ from slipstream_bench.cli_helpers import (
     validate_goodput,
     validate_request_rate,
 )
+from slipstream_bench.cost import CostError, CostInputs, price_files
+from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
 
 app = typer.Typer(
@@ -118,9 +122,49 @@ def serve_sweep(
 
 
 @app.command("cost")
-def cost() -> None:
-    """Price a bench result into cost-per-1M input and output tokens."""
-    not_implemented("cost")
+def cost(
+    files: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            help="vllm bench serve --save-result JSON files to price.",
+        ),
+    ],
+    *,
+    price_per_hour: Annotated[
+        float, typer.Option(help="Instance price in USD/hour (on-demand or spot).")
+    ],
+    output_input_ratio: Annotated[
+        float,
+        typer.Option(
+            help="Price weight of an output token vs an input token (1 = equal)."
+        ),
+    ],
+    weight_checksum: Annotated[
+        str, typer.Option(help="Checksum of the weight blob the run served.")
+    ],
+    vllm_version: Annotated[
+        str, typer.Option(help="vLLM version that produced the result.")
+    ],
+    quant_recipe: Annotated[
+        str, typer.Option(help="Quantization recipe (e.g. awq_marlin+fp8-kv).")
+    ],
+) -> None:
+    """Price bench results into cost-per-1M input and output tokens."""
+    try:
+        inputs = CostInputs(
+            price_per_hour=price_per_hour,
+            output_input_ratio=output_input_ratio,
+            weight_checksum=weight_checksum,
+            vllm_version=vllm_version,
+            quant_recipe=quant_recipe,
+        )
+        records = price_files([str(file) for file in files], inputs)
+    except (CostError, ResultError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(json.dumps(records, indent=2))
 
 
 @app.command("prefix-cache")
