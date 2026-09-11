@@ -60,16 +60,18 @@ def resolve_api_key_env(env_var: str) -> dict[str, str]:
 
     The key is kept in the environment, never on the command line, so it survives
     the dry-run echo and process listings without leaking. It is handed to the
-    vLLM client as ``OPENAI_API_KEY``, the variable its OpenAI-compatible backend
-    reads for the ``Authorization: Bearer`` header.
+    child as ``OPENAI_API_KEY``, the variable the ``vllm bench serve`` OpenAI
+    client backend (``--backend openai``) reads for the ``Authorization: Bearer``
+    header.
 
     :param env_var: the environment variable holding the key.
     :return: the child-process env overlay setting ``OPENAI_API_KEY``.
-    :raise SweepError: when the named variable is unset or empty, which would send
-        an unauthenticated run rather than fail.
+    :raise SweepError: when the named variable is unset, empty, or whitespace-only,
+        each of which would send a blank Bearer header on an unauthenticated run
+        rather than fail.
     """
     value = os.environ.get(env_var)
-    if not value:
+    if not value or not value.strip():
         raise SweepError(
             f"--api-key-env {env_var}: environment variable '{env_var}' is unset "
             f"or empty — export the commercial API key before the sweep"

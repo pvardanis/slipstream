@@ -240,6 +240,7 @@ def test_commercial_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
     assert len(records) == 1
     assert records[0]["cost_per_1m_input_usd"] == 0.5
     assert records[0]["cost_per_1m_output_usd"] == 1.5
+    assert records[0]["run_cost_usd"] == 0.5
     assert records[0]["api"] == "openai"
 
 
