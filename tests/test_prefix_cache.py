@@ -22,7 +22,7 @@ from slipstream_bench.results import ResultError
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
-def _result(tmp_path: Path, **extra: object) -> str:
+def _result(tmp_path: Path, **extra: object) -> Path:
     record = {
         "model_id": MODEL,
         "duration": 12.5,
@@ -37,17 +37,17 @@ def _result(tmp_path: Path, **extra: object) -> str:
     record.update(extra)
     path = tmp_path / "cell.json"
     path.write_text(json.dumps(record))
-    return str(path)
+    return path
 
 
-def _snapshot(tmp_path: Path, name: str, queries: object, hits: object) -> str:
+def _snapshot(tmp_path: Path, name: str, queries: object, hits: object) -> Path:
     path = tmp_path / name
     path.write_text(
         "# TYPE vllm:prefix_cache_queries counter\n"
         f'vllm:prefix_cache_queries{{model_name="{MODEL}"}} {queries}\n'
         f'vllm:prefix_cache_hits{{model_name="{MODEL}"}} {hits}\n'
     )
-    return str(path)
+    return path
 
 
 def test_hit_rate_is_the_window_delta_not_the_lifetime_ratio(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ def test_client_json_and_slo_numbers_ride_on_the_record(tmp_path: Path) -> None:
         cache_state="cold",
     )
 
-    assert record["source"] == result
+    assert record["source"] == str(result)
     assert record["model_id"] == MODEL
     assert record["completed"] == 100
     assert record["client_metrics"] == {
@@ -98,7 +98,7 @@ def test_missing_client_metric_joins_as_null(tmp_path: Path) -> None:
     record = scrape_prefix_cache(
         metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-        result=str(result),
+        result=result,
         cache_state="cold",
     )
 
@@ -139,8 +139,8 @@ def test_other_models_series_are_not_folded_in(tmp_path: Path) -> None:
         'vllm:prefix_cache_hits{model_name="other/model"} 8888.0\n'
     )
     record = scrape_prefix_cache(
-        metrics_before=str(before),
-        metrics_after=str(after),
+        metrics_before=before,
+        metrics_after=after,
         result=_result(tmp_path),
         cache_state="cold",
     )
@@ -166,8 +166,8 @@ def test_total_suffix_rendering_is_read(tmp_path: Path) -> None:
         f'vllm:prefix_cache_hits_total{{model_name="{MODEL}"}} 290.0\n'
     )
     record = scrape_prefix_cache(
-        metrics_before=str(before),
-        metrics_after=str(after),
+        metrics_before=before,
+        metrics_after=after,
         result=_result(tmp_path),
         cache_state="warm",
     )
@@ -195,8 +195,8 @@ def test_model_override_selects_a_series_the_model_id_would_not(tmp_path: Path) 
         f'vllm:prefix_cache_hits{{model_name="{MODEL}"}} 8888.0\n'
     )
     record = scrape_prefix_cache(
-        metrics_before=str(before),
-        metrics_after=str(after),
+        metrics_before=before,
+        metrics_after=after,
         result=_result(tmp_path),
         cache_state="cold",
         model="served-name",
@@ -295,7 +295,7 @@ def test_absent_metric_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(PrefixCacheError, match="vllm:prefix_cache_queries"):
         scrape_prefix_cache(
-            metrics_before=str(nocache),
+            metrics_before=nocache,
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
             cache_state="cold",
@@ -312,7 +312,7 @@ def test_metric_present_only_for_another_model_is_rejected(tmp_path: Path) -> No
     )
     with pytest.raises(PrefixCacheError, match="vllm:prefix_cache_queries"):
         scrape_prefix_cache(
-            metrics_before=str(before),
+            metrics_before=before,
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
             cache_state="cold",
@@ -378,7 +378,7 @@ def test_missing_model_selector_is_rejected(tmp_path: Path) -> None:
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=str(blank),
+            result=blank,
             cache_state="cold",
         )
 
@@ -391,7 +391,7 @@ def test_stub_client_json_is_rejected(tmp_path: Path) -> None:
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=str(stub),
+            result=stub,
             cache_state="cold",
             model=MODEL,
         )
@@ -405,7 +405,7 @@ def test_missing_completed_is_rejected(tmp_path: Path) -> None:
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=str(partial),
+            result=partial,
             cache_state="cold",
         )
 
@@ -418,7 +418,7 @@ def test_zero_completed_run_is_rejected(tmp_path: Path) -> None:
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=str(empty),
+            result=empty,
             cache_state="cold",
         )
 
@@ -429,7 +429,7 @@ def test_malformed_exposition_is_rejected(tmp_path: Path) -> None:
     corrupt.write_text("vllm:prefix_cache_queries{model_name= 1100.0\n")
     with pytest.raises(PrefixCacheError, match="cannot parse"):
         scrape_prefix_cache(
-            metrics_before=str(corrupt),
+            metrics_before=corrupt,
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
             cache_state="cold",
@@ -440,7 +440,7 @@ def test_missing_snapshot_file_is_rejected(tmp_path: Path) -> None:
     """A snapshot path that does not exist fails with a clear not-found message."""
     with pytest.raises(PrefixCacheError, match="not found"):
         scrape_prefix_cache(
-            metrics_before=str(tmp_path / "nope.prom"),
+            metrics_before=tmp_path / "nope.prom",
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
             cache_state="cold",
@@ -455,6 +455,6 @@ def test_unreadable_result_raises_result_error(tmp_path: Path) -> None:
         scrape_prefix_cache(
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=str(bad),
+            result=bad,
             cache_state="cold",
         )

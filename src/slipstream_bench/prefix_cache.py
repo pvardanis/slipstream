@@ -40,25 +40,24 @@ class PrefixCacheError(Exception):
     """A prefix-cache input that cannot produce a meaningful hit rate."""
 
 
-def _read_exposition(path: str) -> str:
-    """Read a Prometheus /metrics snapshot file into its text.
+def _read_metrics_snapshot(path: Path) -> str:
+    """Read a vLLM Prometheus /metrics snapshot file into its exposition text.
 
-    :param path: the snapshot file curled off /metrics.
+    :param path: the snapshot file curled off vLLM's /metrics endpoint.
     :return: the exposition text.
     :raise PrefixCacheError: when the file is absent or unreadable.
     """
-    file = Path(path)
-    if not file.is_file():
+    if not path.is_file():
         raise PrefixCacheError(f"metrics snapshot not found: {path}")
     try:
-        return file.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except OSError as error:
         raise PrefixCacheError(
             f"cannot read metrics snapshot {path}: {error}"
         ) from error
 
 
-def _sum_counter(exposition: str, source: str, metric: str, model: str) -> float:
+def _sum_counter(exposition: str, source: Path, metric: str, model: str) -> float:
     """Sum a counter's value across the series carrying the run's model_name.
 
     prometheus_client renders a counter with a _total suffix in the exposition
@@ -101,10 +100,10 @@ def _sum_counter(exposition: str, source: str, metric: str, model: str) -> float
     return total
 
 
-def _window_delta(
+def _get_window_delta(
     before: str,
     after: str,
-    sources: tuple[str, str],
+    sources: tuple[Path, Path],
     metric: str,
     model: str,
 ) -> float:
@@ -136,22 +135,43 @@ def _as_count(value: float) -> int | float:
 
 def scrape_prefix_cache(
     *,
-    metrics_before: str,
-    metrics_after: str,
-    result: str,
+    metrics_before: Path,
+    metrics_after: Path,
+    result: Path,
     cache_state: str,
     model: str | None = None,
 ) -> dict:
     """Compute the per-run prefix-cache hit rate and join it onto the client JSON.
 
-    :param metrics_before: /metrics snapshot captured just before the run.
-    :param metrics_after: /metrics snapshot captured just after the run.
+    :param metrics_before: vLLM Prometheus /metrics snapshot captured just before
+        the run.
+    :param metrics_after: vLLM Prometheus /metrics snapshot captured just after the
+        run.
     :param result: the run's ``vllm bench serve --save-result`` JSON.
     :param cache_state: which cache regime this run measured — ``cold`` or ``warm``.
     :param model: the model_name label to select; defaults to the result's
         model_id when omitted.
-    :return: the joined record: the window deltas, the hit rate, the cold/warm
-        label, and the echoed client SLO numbers.
+    :return: the joined record — the window counter deltas, the hit rate, the
+        cold/warm label, and the echoed client SLO numbers, e.g.::
+
+            {
+              "source": "bench/results/prefix-cache/cold_pshare90_burst1.0.json",
+              "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+              "cache_state": "cold",
+              "completed": 16,
+              "prefix_cache_queries": 4096,
+              "prefix_cache_hits": 0,
+              "prefix_cache_hit_rate": 0.0,
+              "client_metrics": {
+                "request_throughput": 0.116,
+                "request_goodput": 0.0,
+                "p95_ttft_ms": 131084.9,
+                "p99_ttft_ms": 131131.9,
+                "p95_tpot_ms": 8449.7,
+                "p99_tpot_ms": 8619.0
+              }
+            }
+
     :raise PrefixCacheError: on a bad cache-state, an absent/disabled metric, a
         non-finite, backwards, empty, or hits-exceed-queries counter window, a
         missing model selector, a truncated or zero-completed client JSON, or an
@@ -188,11 +208,11 @@ def scrape_prefix_cache(
             f"could not determine model from {result}: no model_id and no model given"
         )
 
-    before = _read_exposition(metrics_before)
-    after = _read_exposition(metrics_after)
+    before = _read_metrics_snapshot(metrics_before)
+    after = _read_metrics_snapshot(metrics_after)
     sources = (metrics_before, metrics_after)
-    queries = _window_delta(before, after, sources, _QUERIES_METRIC, selected_model)
-    hits = _window_delta(before, after, sources, _HITS_METRIC, selected_model)
+    queries = _get_window_delta(before, after, sources, _QUERIES_METRIC, selected_model)
+    hits = _get_window_delta(before, after, sources, _HITS_METRIC, selected_model)
 
     # A counter that shrank over the window means the server restarted (or the cache
     # was reset) mid-run; the delta is meaningless and the rate would be a lie.
@@ -218,12 +238,14 @@ def scrape_prefix_cache(
         )
 
     return {
-        "source": result,
+        "source": str(result),
         "model_id": record.get("model_id"),
         "cache_state": cache_state,
         "completed": record.get("completed"),
         "prefix_cache_queries": _as_count(queries),
         "prefix_cache_hits": _as_count(hits),
+        # The run's hit rate: the fraction of this window's prefix-cache queries
+        # that hit, the whole point of the scrape.
         "prefix_cache_hit_rate": hits / queries,
         "client_metrics": {name: record.get(name) for name in _SLO_METRICS},
     }

@@ -52,7 +52,7 @@ def _record(
 
 def test_run_cost_is_wallclock_times_hourly_price() -> None:
     """One hour at $2/hr is a $2 run; ratio 1, 1M input tokens -> $2/1M input."""
-    priced = price_result(_record(), "cell.json", _inputs())
+    priced = price_result(_record(), Path("cell.json"), _inputs())
 
     assert priced["run_cost_usd"] == pytest.approx(2.0)
     assert priced["cost_per_1m_input_usd"] == pytest.approx(2.0)
@@ -64,7 +64,7 @@ def test_ratio_weights_output_tokens_heavier() -> None:
     """1M in + 1M out, $4/hr, ratio 3: denom 4e6 -> $1/1M in, $3/1M out."""
     priced = price_result(
         _record(total_input_tokens=1_000_000, total_output_tokens=1_000_000),
-        "split.json",
+        Path("split.json"),
         _inputs(price_per_hour=4.0, output_input_ratio=3.0),
     )
 
@@ -78,7 +78,7 @@ def test_fractional_figures_are_exact() -> None:
         _record(
             duration=1800.0, total_input_tokens=500_000, total_output_tokens=250_000
         ),
-        "frac.json",
+        Path("frac.json"),
         _inputs(price_per_hour=1.50, output_input_ratio=2.0),
     )
 
@@ -89,7 +89,7 @@ def test_fractional_figures_are_exact() -> None:
 
 def test_provenance_and_bench_metrics_ride_on_every_record() -> None:
     """The pinned provenance triple and echoed bench metrics are self-describing."""
-    priced = price_result(_record(), "cell.json", _inputs())
+    priced = price_result(_record(), Path("cell.json"), _inputs())
 
     assert priced["weight_checksum"] == "sha256:deadbeef"
     assert priced["vllm_version"] == "0.6.3"
@@ -108,7 +108,7 @@ def test_price_files_emits_one_record_per_file_in_order(tmp_path: Path) -> None:
     first.write_text(json.dumps(_record()))
     second.write_text(json.dumps(_record(total_output_tokens=1_000_000)))
 
-    records = price_files([str(first), str(second)], _inputs())
+    records = price_files([first, second], _inputs())
 
     assert [r["source"] for r in records] == [str(first), str(second)]
 
@@ -118,8 +118,8 @@ def test_same_input_reproduces_identical_output(tmp_path: Path) -> None:
     result = tmp_path / "cell.json"
     result.write_text(json.dumps(_record()))
 
-    run_a = json.dumps(price_files([str(result)], _inputs()))
-    run_b = json.dumps(price_files([str(result)], _inputs()))
+    run_a = json.dumps(price_files([result], _inputs()))
+    run_b = json.dumps(price_files([result], _inputs()))
 
     assert run_a == run_b
 
@@ -145,7 +145,7 @@ def test_missing_metric_is_rejected(metric: str) -> None:
     del record[metric]
 
     with pytest.raises(CostError, match=metric):
-        price_result(record, "cell.json", _inputs())
+        price_result(record, Path("cell.json"), _inputs())
 
 
 @pytest.mark.parametrize(
@@ -154,25 +154,25 @@ def test_missing_metric_is_rejected(metric: str) -> None:
 def test_null_metric_is_rejected(metric: str) -> None:
     """A metric present but null would price as 0 in bare arithmetic; reject it."""
     with pytest.raises(CostError, match=metric):
-        price_result(_record(**{metric: None}), "cell.json", _inputs())
+        price_result(_record(**{metric: None}), Path("cell.json"), _inputs())
 
 
 def test_non_numeric_metric_is_rejected() -> None:
     """A metric present as a string is not the number the cost joins on."""
     with pytest.raises(CostError, match="total_input_tokens"):
-        price_result(_record(total_input_tokens="lots"), "cell.json", _inputs())
+        price_result(_record(total_input_tokens="lots"), Path("cell.json"), _inputs())
 
 
 def test_boolean_metric_is_rejected() -> None:
     """A bool is an int subclass but never a valid token count or duration."""
     with pytest.raises(CostError, match="total_output_tokens"):
-        price_result(_record(total_output_tokens=True), "cell.json", _inputs())
+        price_result(_record(total_output_tokens=True), Path("cell.json"), _inputs())
 
 
 def test_non_positive_duration_is_rejected() -> None:
     """A non-positive duration prices the whole run at $0; reject it."""
     with pytest.raises(CostError, match="non-positive duration"):
-        price_result(_record(duration=0.0), "cell.json", _inputs())
+        price_result(_record(duration=0.0), Path("cell.json"), _inputs())
 
 
 def test_zero_token_denominator_is_rejected() -> None:
@@ -180,7 +180,7 @@ def test_zero_token_denominator_is_rejected() -> None:
     with pytest.raises(CostError, match="zero input and output"):
         price_result(
             _record(total_input_tokens=0, total_output_tokens=0),
-            "cell.json",
+            Path("cell.json"),
             _inputs(),
         )
 
@@ -189,7 +189,7 @@ def test_zero_token_denominator_is_rejected() -> None:
 def test_negative_token_count_is_rejected(metric: str) -> None:
     """A negative token count is physically impossible and inverts the split."""
     with pytest.raises(CostError, match=metric):
-        price_result(_record(**{metric: -1}), "cell.json", _inputs())
+        price_result(_record(**{metric: -1}), Path("cell.json"), _inputs())
 
 
 @pytest.mark.parametrize("metric", ["duration", "total_input_tokens"])
@@ -197,14 +197,14 @@ def test_negative_token_count_is_rejected(metric: str) -> None:
 def test_non_finite_metric_is_rejected(metric: str, bad: float) -> None:
     """NaN/Infinity slip past a bare < 0 or <= 0 check and price as nonsense."""
     with pytest.raises(CostError, match=metric):
-        price_result(_record(**{metric: bad}), "cell.json", _inputs())
+        price_result(_record(**{metric: bad}), Path("cell.json"), _inputs())
 
 
 def test_output_only_run_prices_a_finite_input_figure() -> None:
     """Zero input, positive output is a valid r*O denominator, not a rejection."""
     priced = price_result(
         _record(total_input_tokens=0, total_output_tokens=1_000_000),
-        "cell.json",
+        Path("cell.json"),
         _inputs(),
     )
 
@@ -213,7 +213,7 @@ def test_output_only_run_prices_a_finite_input_figure() -> None:
 
 def test_token_counts_are_emitted_as_integers() -> None:
     """Token counts are counts, echoed as ints, not the float used internally."""
-    priced = price_result(_record(), "cell.json", _inputs())
+    priced = price_result(_record(), Path("cell.json"), _inputs())
 
     assert isinstance(priced["total_input_tokens"], int)
     assert isinstance(priced["total_output_tokens"], int)
