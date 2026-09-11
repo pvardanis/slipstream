@@ -58,11 +58,90 @@ def test_no_args_shows_help() -> None:
     assert "prefix-cache" in result.output
 
 
-def test_prefix_cache_stub_fails_loudly() -> None:
-    """The still-stubbed subcommand exits non-zero with a not-implemented notice."""
-    result = runner.invoke(app, ["prefix-cache"])
-    assert result.exit_code == 1
-    assert "prefix-cache is not implemented yet" in result.output
+def _prefix_cache_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    before = tmp_path / "before.prom"
+    before.write_text(
+        "# TYPE vllm:prefix_cache_queries counter\n"
+        'vllm:prefix_cache_queries{model_name="m"} 1000.0\n'
+        'vllm:prefix_cache_hits{model_name="m"} 200.0\n'
+    )
+    after = tmp_path / "after.prom"
+    after.write_text(
+        "# TYPE vllm:prefix_cache_queries counter\n"
+        'vllm:prefix_cache_queries{model_name="m"} 1100.0\n'
+        'vllm:prefix_cache_hits{model_name="m"} 210.0\n'
+    )
+    return _result_file(tmp_path), before, after
+
+
+def test_prefix_cache_joins_the_delta_rate_to_stdout(tmp_path: Path) -> None:
+    """The prefix-cache command emits the joined record as JSON to stdout."""
+    result, before, after = _prefix_cache_fixture(tmp_path)
+
+    invoked = runner.invoke(
+        app,
+        [
+            "prefix-cache",
+            "--cache-state",
+            "cold",
+            "--metrics-before",
+            str(before),
+            "--metrics-after",
+            str(after),
+            "--result",
+            str(result),
+        ],
+    )
+
+    assert invoked.exit_code == 0, invoked.output
+    record = json.loads(invoked.stdout)
+    assert record["prefix_cache_hit_rate"] == 0.1
+    assert record["cache_state"] == "cold"
+
+
+def test_prefix_cache_rejects_a_bad_cache_state(tmp_path: Path) -> None:
+    """A cache-state outside cold/warm exits 2 with a diagnostic on stderr."""
+    result, before, after = _prefix_cache_fixture(tmp_path)
+
+    invoked = runner.invoke(
+        app,
+        [
+            "prefix-cache",
+            "--cache-state",
+            "lukewarm",
+            "--metrics-before",
+            str(before),
+            "--metrics-after",
+            str(after),
+            "--result",
+            str(result),
+        ],
+    )
+
+    assert invoked.exit_code == 2
+    assert "cache-state" in invoked.output
+
+
+def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
+    """A metrics-before path that does not exist is rejected before any parsing."""
+    result, _, after = _prefix_cache_fixture(tmp_path)
+
+    invoked = runner.invoke(
+        app,
+        [
+            "prefix-cache",
+            "--cache-state",
+            "cold",
+            "--metrics-before",
+            str(tmp_path / "nope.prom"),
+            "--metrics-after",
+            str(after),
+            "--result",
+            str(result),
+        ],
+    )
+
+    assert invoked.exit_code == 2
 
 
 def test_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
