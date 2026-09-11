@@ -103,14 +103,14 @@ bench *args:
       kubectl -n slipstream describe pod/bench-client >&2 || true
       exit 1
     fi
-    kubectl -n slipstream cp bench/serve_sweep.sh bench-client:/tmp/serve_sweep.sh
-    # serve_sweep.sh writes one JSON per successful cell and only exits non-zero at
+    # serve-sweep writes one JSON per successful cell and only exits non-zero at
     # the end of the grid, so copy back whatever landed even on a partial failure,
     # then surface the sweep's own exit code. A dry run writes no results directory,
-    # so the copy-back is skipped.
+    # so the copy-back is skipped. The baked image carries the slipstream-bench
+    # console script, so nothing is copied in.
     sweep_rc=0
     kubectl -n slipstream exec bench-client -- \
-      bash /tmp/serve_sweep.sh \
+      slipstream-bench serve-sweep \
         --base-url http://vllm.slipstream.svc:8000 \
         --model {{ model }} \
         --out-dir /tmp/results {{ args }} || sweep_rc=$?
@@ -129,10 +129,6 @@ bench *args:
 # Run the slipstream-bench Python test suite (no cluster).
 cli-test:
     uv run pytest
-
-# Assert the bench wrapper builds correct vllm commands (dry run, no cluster).
-bench-test:
-    bash test/bench_wrapper_test.sh
 
 # Assert the cost post-processor prices bench JSON into $/1M in/out (no cluster).
 cost-test:
@@ -160,7 +156,6 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
       kubectl -n slipstream describe pod/bench-client >&2 || true
       exit 1
     fi
-    kubectl -n slipstream cp bench/serve_sweep.sh bench-client:/tmp/serve_sweep.sh
     out="bench/results/prefix-cache"
     mkdir -p "${out}"
     # A seed unique to this invocation makes prefix_repetition emit prefixes the server
@@ -181,12 +176,12 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     #   --num-prefixes 16 raises the share of the cold run that is a genuine first
     #     exposure rather than a self-hit on a prefix the run itself just planted,
     #     widening the cold/warm gap (full isolation would need num-prefixes near
-    #     num-prompts, which serve_sweep defaults to 100).
+    #     num-prompts, which serve-sweep defaults to 100).
     # A caller can override either by appending its own flag after `just prefix-cache`.
     run_cell() {
-      kubectl -n slipstream exec bench-client -- bash /tmp/serve_sweep.sh \
+      kubectl -n slipstream exec bench-client -- slipstream-bench serve-sweep \
         --base-url "${base}" --model {{ model }} \
-        --prefix-shares "{{ prefix_share }}" --burstiness-values "{{ burstiness }}" \
+        --prefix-share "{{ prefix_share }}" --burstiness "{{ burstiness }}" \
         --align-blocks 16 --num-prefixes 16 \
         --seed "${seed}" --out-dir "$1" {{ args }}
     }

@@ -3,7 +3,12 @@
 Dispatches the serve-sweep, cost, and prefix-cache benchmark subcommands.
 """
 
+import subprocess
+from typing import Annotated
+
 import typer
+
+from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
 
 app = typer.Typer(
     name="slipstream-bench",
@@ -23,10 +28,136 @@ def _not_implemented(command: str) -> None:
     raise typer.Exit(code=1)
 
 
+# The sweep defaults, named so they read in --help. Immutable so one command's
+# defaults can never leak into the next; typer expands each into a fresh list.
+_DEFAULT_PREFIX_SHARES = (10, 50, 90)
+_DEFAULT_BURSTINESS = (0.2, 1.0)
+_DEFAULT_GOODPUT = ("ttft:1000", "tpot:50")
+
+
+def _validate_request_rate(value: str) -> str:
+    """Reject a request rate that is neither a non-negative number nor 'inf'.
+
+    :param value: the raw ``--request-rate`` argument.
+    :return: the value unchanged when valid.
+    :raise typer.BadParameter: when it is negative, or neither a number nor 'inf'.
+    """
+    if value == "inf":
+        return value
+    try:
+        rate = float(value)
+    except ValueError:
+        raise typer.BadParameter(
+            f"invalid --request-rate '{value}': want a number or 'inf'"
+        ) from None
+    if rate < 0:
+        raise typer.BadParameter(
+            f"invalid --request-rate '{value}': want a non-negative number or 'inf'"
+        )
+    return value
+
+
+def _validate_goodput(values: list[str]) -> list[str]:
+    """Reject an empty SLO so the sweep does not run without goodput tokens.
+
+    :param values: the collected ``--goodput`` tokens (e.g. ``ttft:1000 tpot:50``).
+    :return: the tokens unchanged when non-empty.
+    :raise typer.BadParameter: when no non-empty token is present.
+    """
+    tokens = [token for token in values if token]
+    if not tokens:
+        raise typer.BadParameter("invalid --goodput: want e.g. 'ttft:1000 tpot:50'")
+    return tokens
+
+
 @app.command("serve-sweep")
-def serve_sweep() -> None:
+def serve_sweep(
+    *,
+    base_url: Annotated[
+        str, typer.Option(help="OpenAI-compatible endpoint the sweep targets.")
+    ] = "http://localhost:8000",
+    model: Annotated[str, typer.Option(help="Served model id.")] = (
+        "Qwen/Qwen2.5-0.5B-Instruct"
+    ),
+    prefix_share: Annotated[
+        list[int],
+        typer.Option(
+            min=0, max=100, help="Prefix-share percentage to sweep (repeatable)."
+        ),
+    ] = _DEFAULT_PREFIX_SHARES,
+    burstiness: Annotated[
+        list[float],
+        typer.Option(
+            min=0, help="Burstiness to sweep, low = bursty, 1.0 = Poisson (repeatable)."
+        ),
+    ] = _DEFAULT_BURSTINESS,
+    total_len: Annotated[
+        int,
+        typer.Option(min=1, help="Prefix+suffix token budget, split by prefix-share."),
+    ] = 1000,
+    num_prompts: Annotated[
+        int, typer.Option(min=1, help="Requests per grid cell.")
+    ] = 100,
+    num_prefixes: Annotated[
+        int, typer.Option(min=1, help="Distinct shared prefixes to generate.")
+    ] = 5,
+    output_len: Annotated[
+        int, typer.Option(min=1, help="Output tokens per request.")
+    ] = 128,
+    align_blocks: Annotated[
+        int,
+        typer.Option(
+            min=0, help="Floor the prefix to a multiple of N tokens (0 = off)."
+        ),
+    ] = 0,
+    request_rate: Annotated[
+        str,
+        typer.Option(callback=_validate_request_rate, help="Requests/sec, or 'inf'."),
+    ] = "8",
+    seed: Annotated[
+        int,
+        typer.Option(min=0, help="RNG seed, fixed so runs replay identical prefixes."),
+    ] = 0,
+    out_dir: Annotated[
+        str, typer.Option(help="Directory for the per-cell result JSON.")
+    ] = "bench/results",
+    goodput: Annotated[
+        list[str],
+        typer.Option(
+            callback=_validate_goodput, help="SLO passed to the harness (repeatable)."
+        ),
+    ] = _DEFAULT_GOODPUT,
+    dry_run: Annotated[
+        bool, typer.Option(help="Print the vllm commands instead of running them.")
+    ] = False,
+) -> None:
     """Sweep vllm bench serve across a prefix-share x burstiness grid."""
-    _not_implemented("serve-sweep")
+    config = SweepConfig(
+        base_url=base_url,
+        model=model,
+        prefix_shares=prefix_share,
+        burstiness_values=burstiness,
+        total_len=total_len,
+        num_prompts=num_prompts,
+        num_prefixes=num_prefixes,
+        output_len=output_len,
+        align_blocks=align_blocks,
+        request_rate=request_rate,
+        seed=seed,
+        out_dir=out_dir,
+        goodput=goodput,
+    )
+    try:
+        code = run_sweep(
+            config,
+            dry_run=dry_run,
+            runner=lambda command: subprocess.run(command, check=False).returncode,
+            echo=typer.echo,
+        )
+    except SweepError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    raise typer.Exit(code=code)
 
 
 @app.command("cost")
