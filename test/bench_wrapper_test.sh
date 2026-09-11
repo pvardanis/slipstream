@@ -148,6 +148,35 @@ out="$("${wrapper}" --dry-run --total-len 100 --prefix-shares 33 --burstiness-va
 assert "share 33 of 100 truncates to prefix 33" "--prefix-repetition-prefix-len 33"
 assert "share 33 of 100 truncates to suffix 67" "--prefix-repetition-suffix-len 67"
 
+# --- Block alignment: --align-blocks rounds the prefix down to whole blocks ---
+# vLLM's prefix cache is block-aligned (16-token blocks by default); a prefix whose
+# length isn't a whole number of blocks caches only its whole blocks and recomputes
+# the trailing tokens every time, in both cold and warm regimes. --align-blocks N
+# floors the prefix to a multiple of N so every cached block is whole and cache
+# residency is the only variable in a published cold/warm gap. The suffix is the
+# per-request unique remainder (never cached), so it takes whatever is left.
+out="$("${wrapper}" --dry-run --align-blocks 16 --total-len 1000 --prefix-shares 90 --burstiness-values 1.0)"
+assert "share 90 of 1000 floors 900 to prefix 896" "--prefix-repetition-prefix-len 896"
+assert "aligned prefix 896 leaves suffix 104" "--prefix-repetition-suffix-len 104"
+
+out="$("${wrapper}" --dry-run --align-blocks 16 --total-len 1000 --prefix-shares "10 50" --burstiness-values 1.0)"
+assert "share 10 of 1000 floors 100 to prefix 96" "--prefix-repetition-prefix-len 96"
+assert "share 50 of 1000 floors 500 to prefix 496" "--prefix-repetition-prefix-len 496"
+
+# An already-aligned prefix passes through unchanged.
+out="$("${wrapper}" --dry-run --align-blocks 16 --total-len 512 --prefix-shares 50 --burstiness-values 1.0)"
+assert "aligned prefix 256 unchanged" "--prefix-repetition-prefix-len 256"
+assert "aligned suffix 256 unchanged" "--prefix-repetition-suffix-len 256"
+
+# The floor never lets the prefix exceed the budget, so the suffix stays non-negative.
+out="$("${wrapper}" --dry-run --align-blocks 16 --total-len 1000 --prefix-shares 100 --burstiness-values 1.0)"
+assert "share 100 of 1000 floors 1000 to prefix 992" "--prefix-repetition-prefix-len 992"
+assert "aligned prefix 992 leaves suffix 8" "--prefix-repetition-suffix-len 8"
+
+# Alignment is opt-in: without the flag the prefix keeps the raw split.
+out="$("${wrapper}" --dry-run --total-len 1000 --prefix-shares 90 --burstiness-values 1.0)"
+assert "no alignment leaves prefix 900" "--prefix-repetition-prefix-len 900"
+
 # --- Control-flow branches ---------------------------------------------------
 assert_exit "help exits 0" 0 --help
 assert_exit "unknown option exits 2" 2 --nope
@@ -168,6 +197,10 @@ assert_exit "non-numeric request-rate rejected" 2 --dry-run --request-rate quick
 assert_exit "non-numeric seed rejected" 2 --dry-run --seed lucky
 assert_stderr "non-numeric seed diagnosed" "invalid --seed" --dry-run --seed lucky
 assert_exit "request-rate inf accepted" 0 --dry-run --request-rate inf
+assert_exit "non-numeric align-blocks rejected" 2 --dry-run --align-blocks byte
+assert_stderr "non-numeric align-blocks diagnosed" "invalid --align-blocks" --dry-run --align-blocks byte
+assert_exit "negative-looking align-blocks rejected" 2 --dry-run --align-blocks -16
+assert_exit "align-blocks 0 accepted as off" 0 --dry-run --align-blocks 0
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- last dry-run output ----" >&2
