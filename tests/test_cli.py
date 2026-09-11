@@ -39,13 +39,28 @@ def _result_file(tmp_path: Path) -> Path:
     return result
 
 
-def test_help_lists_the_three_subcommands() -> None:
-    """``--help`` advertises serve-sweep, cost, and prefix-cache."""
+_QUOTE = [
+    "--input-price-per-1m",
+    "0.5",
+    "--output-price-per-1m",
+    "1.5",
+    "--api",
+    "openai",
+    "--model",
+    "gpt-4o-mini",
+    "--price-quoted-on",
+    "2026-09-11",
+]
+
+
+def test_help_lists_the_subcommands() -> None:
+    """``--help`` advertises serve-sweep, cost, commercial-cost, and prefix-cache."""
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "serve-sweep" in result.stdout
     assert "cost" in result.stdout
+    assert "commercial-cost" in result.stdout
     assert "prefix-cache" in result.stdout
 
 
@@ -209,6 +224,42 @@ def test_cost_rejects_a_malformed_result_file(tmp_path: Path) -> None:
             str(result),
         ],
     )
+
+    assert invoked.exit_code == 2
+    assert "cannot read" in invoked.output
+
+
+def test_commercial_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
+    """The commercial-cost command emits a JSON array priced at the quoted rates."""
+    result = _result_file(tmp_path)
+
+    invoked = runner.invoke(app, ["commercial-cost", *_QUOTE, str(result)])
+
+    assert invoked.exit_code == 0, invoked.output
+    records = json.loads(invoked.stdout)
+    assert len(records) == 1
+    assert records[0]["cost_per_1m_input_usd"] == 0.5
+    assert records[0]["cost_per_1m_output_usd"] == 1.5
+    assert records[0]["api"] == "openai"
+
+
+def test_commercial_cost_rejects_a_non_positive_rate(tmp_path: Path) -> None:
+    """A zero input rate exits 2 with a diagnostic, never a free-token figure."""
+    result = _result_file(tmp_path)
+    quote = ["--input-price-per-1m", "0", *_QUOTE[2:]]
+
+    invoked = runner.invoke(app, ["commercial-cost", *quote, str(result)])
+
+    assert invoked.exit_code == 2
+    assert "input-price-per-1m" in invoked.output
+
+
+def test_commercial_cost_rejects_a_malformed_result_file(tmp_path: Path) -> None:
+    """A file that exists but is not JSON hits the ResultError arm: exit 2, stderr."""
+    result = tmp_path / "bad.json"
+    result.write_text("{not json")
+
+    invoked = runner.invoke(app, ["commercial-cost", *_QUOTE, str(result)])
 
     assert invoked.exit_code == 2
     assert "cannot read" in invoked.output

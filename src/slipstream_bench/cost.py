@@ -15,11 +15,10 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 1e6.
 """
 
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from slipstream_bench.results import read_result
+from slipstream_bench.results import numeric_metric, read_result
 
 _SECONDS_PER_HOUR = 3600
 _TOKENS_PER_MILLION = 1_000_000
@@ -74,35 +73,6 @@ class CostInputs:
                 raise CostError(f"missing {name}: provenance must be pinned")
 
 
-def _numeric_metric(record: dict, source: Path, name: str) -> float:
-    """Read one metric as a number, rejecting a missing, null, or non-numeric value.
-
-    A metric present but null or a string would price as 0 in bare arithmetic,
-    silently dropping that side of the cost, so the value's type is checked here
-    rather than trusting the key to exist as a number.
-
-    :param record: the parsed result record.
-    :param source: the file the record came from, for the error message.
-    :param name: the metric key to read.
-    :return: the metric as a float.
-    :raise CostError: when the metric is absent, not a number, non-finite, or
-        negative.
-    """
-    value = record.get(name)
-    # bool is an int subclass but is never a valid token count or duration.
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise CostError(f"result {source} missing or non-numeric metric {name}")
-    # json.loads reads NaN/Infinity by default; they slip past a < 0 or <= 0 check
-    # and price as a nonsense figure, so reject them before the arithmetic.
-    if not math.isfinite(value):
-        raise CostError(f"result {source} has non-finite metric {name}")
-    # A negative token count or duration is physically impossible and would invert
-    # the split or the run cost.
-    if value < 0:
-        raise CostError(f"result {source} has negative metric {name}")
-    return float(value)
-
-
 def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
     """Price one result record into a single cost record.
 
@@ -115,9 +85,13 @@ def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
         duration is non-positive, or both token counts are zero (a zero
         denominator).
     """
-    duration = _numeric_metric(record, source, "duration")
-    input_tokens = _numeric_metric(record, source, "total_input_tokens")
-    output_tokens = _numeric_metric(record, source, "total_output_tokens")
+    duration = numeric_metric(record, source, "duration", error_cls=CostError)
+    input_tokens = numeric_metric(
+        record, source, "total_input_tokens", error_cls=CostError
+    )
+    output_tokens = numeric_metric(
+        record, source, "total_output_tokens", error_cls=CostError
+    )
 
     # A non-positive duration prices the whole run at $0, and zero tokens on both
     # sides is a zero denominator — both are the silent-$0 the metrics guard.

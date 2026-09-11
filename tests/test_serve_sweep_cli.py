@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from slipstream_bench.cli import app
-from slipstream_bench.cli_helpers import run_cell
+from slipstream_bench.cli_helpers import resolve_api_key_env, run_cell
 from slipstream_bench.serve_sweep import SweepError
 
 runner = CliRunner()
@@ -196,3 +196,59 @@ def test_run_cell_reports_a_missing_binary_clearly() -> None:
     """A missing binary fails fast with an actionable message, not a traceback."""
     with pytest.raises(SweepError, match="not found on PATH"):
         run_cell(["definitely-not-a-real-binary-xyz", "--flag"])
+
+
+def test_run_cell_injects_extra_env_into_the_child() -> None:
+    """A resolved key reaches the child process environment, not the command line."""
+    assert (
+        run_cell(
+            ["sh", "-c", 'test "$OPENAI_API_KEY" = secret'],
+            extra_env={"OPENAI_API_KEY": "secret"},
+        )
+        == 0
+    )
+
+
+def test_run_cell_leaves_the_child_env_untouched_without_extra_env() -> None:
+    """With no extra env the child inherits the parent unchanged; the key is absent."""
+    assert run_cell(["sh", "-c", 'test -z "$OPENAI_API_KEY"'], extra_env=None) == 0
+
+
+def test_resolve_api_key_env_maps_the_named_var_to_openai_api_key(monkeypatch) -> None:
+    """The named env var's value is handed to the child as OPENAI_API_KEY."""
+    monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-abc")
+
+    assert resolve_api_key_env("MY_PROVIDER_KEY") == {"OPENAI_API_KEY": "sk-live-abc"}
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_resolve_api_key_env_rejects_an_unset_or_empty_var(monkeypatch, value) -> None:
+    """An unset or blank key fails fast rather than sending an unauthenticated run."""
+    if value is None:
+        monkeypatch.delenv("MY_PROVIDER_KEY", raising=False)
+    else:
+        monkeypatch.setenv("MY_PROVIDER_KEY", value)
+
+    with pytest.raises(SweepError, match="MY_PROVIDER_KEY"):
+        resolve_api_key_env("MY_PROVIDER_KEY")
+
+
+def test_dry_run_never_prints_the_api_key(monkeypatch) -> None:
+    """The key is env-only: --api-key-env leaves no secret in the echoed commands."""
+    monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-should-not-leak")
+
+    result = _dry_run("--api-key-env", "MY_PROVIDER_KEY")
+
+    assert result.exit_code == 0
+    assert "sk-live-should-not-leak" not in result.stdout
+    assert "MY_PROVIDER_KEY" not in result.stdout
+
+
+def test_unset_api_key_env_is_rejected_before_the_sweep(monkeypatch) -> None:
+    """A live run naming an unset key var exits 2 before any cell runs vLLM."""
+    monkeypatch.delenv("MY_PROVIDER_KEY", raising=False)
+
+    result = runner.invoke(app, ["serve-sweep", "--api-key-env", "MY_PROVIDER_KEY"])
+
+    assert result.exit_code == 2
+    assert "MY_PROVIDER_KEY" in result.output
