@@ -61,7 +61,13 @@ completion:
 
 # Print the bench-client image reference (ECR repo URL from `just bootstrap`, plus the tag).
 _bench-image-ref:
-    @echo "$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url):{{ bench_image_tag }}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignment (not `local`/`export`) so `set -e` aborts on a terraform
+    # failure — a missing bootstrap state or AWS auth error surfaces here instead
+    # of collapsing to a bogus `:latest` ref that the caller would apply blindly.
+    repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
+    echo "${repo}:{{ bench_image_tag }}"
 
 # Build the bench-client image and push it to its ECR repo (provisioned by `just bootstrap`).
 bench-image:
@@ -74,7 +80,9 @@ bench-image:
     aws ecr get-login-password --region "${region}" \
       | docker login --username AWS --password-stdin "${registry}"
     # Nodes are amd64; build for that arch regardless of the developer's host.
-    docker build --platform linux/amd64 \
+    # Drive the baked tokenizer from the one `model` var the sweep also uses, so
+    # the two never diverge.
+    docker build --platform linux/amd64 --build-arg MODEL={{ model }} \
       -t "${repo}:{{ bench_image_tag }}" -f {{ bench_dockerfile }} .
     docker push "${repo}:{{ bench_image_tag }}"
 
