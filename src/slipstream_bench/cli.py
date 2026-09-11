@@ -13,9 +13,15 @@ from slipstream_bench.cli_helpers import (
     DEFAULT_BURSTINESS,
     DEFAULT_GOODPUT,
     DEFAULT_PREFIX_SHARES,
+    resolve_api_key_env,
     run_cell,
     validate_goodput,
     validate_request_rate,
+)
+from slipstream_bench.commercial_cost import (
+    CommercialCostError,
+    CommercialCostInputs,
+    price_commercial_files,
 )
 from slipstream_bench.cost import CostError, CostInputs, price_files
 from slipstream_bench.prefix_cache import PrefixCacheError, scrape_prefix_cache
@@ -87,12 +93,24 @@ def serve_sweep(
             callback=validate_goodput, help="SLO passed to the harness (repeatable)."
         ),
     ] = DEFAULT_GOODPUT,
+    api_key_env: Annotated[
+        str | None,
+        typer.Option(
+            help="Env var holding the commercial API key, sent as OPENAI_API_KEY "
+            "(kept off the command line). Omit for an unauthenticated endpoint."
+        ),
+    ] = None,
     dry_run: Annotated[
         bool, typer.Option(help="Print the vllm commands instead of running them.")
     ] = False,
 ) -> None:
     """Sweep vllm bench serve across a prefix-share x burstiness grid."""
     try:
+        # A dry run builds no cells and touches no endpoint, so it does not need
+        # the key resolved — preview a commercial sweep without exporting a secret.
+        extra_env = (
+            resolve_api_key_env(api_key_env) if api_key_env and not dry_run else None
+        )
         config = SweepConfig(
             base_url=base_url,
             model=model,
@@ -111,7 +129,7 @@ def serve_sweep(
         code = run_sweep(
             config,
             dry_run=dry_run,
-            runner=run_cell,
+            runner=lambda command: run_cell(command, extra_env=extra_env),
             echo=typer.echo,
             warn=lambda line: typer.echo(line, err=True),
         )
@@ -162,6 +180,45 @@ def cost(
         )
         records = price_files(files, inputs)
     except (CostError, ResultError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(json.dumps(records, indent=2))
+
+
+@app.command("commercial-cost")
+def commercial_cost(
+    files: Annotated[
+        list[Path],
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            help="vllm bench serve --save-result JSON files to price.",
+        ),
+    ],
+    *,
+    input_price_per_1m: Annotated[
+        float, typer.Option(help="Provider's published $/1M input tokens.")
+    ],
+    output_price_per_1m: Annotated[
+        float, typer.Option(help="Provider's published $/1M output tokens.")
+    ],
+    api: Annotated[str, typer.Option(help="Provider the rate was quoted from.")],
+    model: Annotated[str, typer.Option(help="Provider model the rate applies to.")],
+    price_quoted_on: Annotated[
+        str, typer.Option(help="ISO date the rate was quoted (e.g. 2026-09-11).")
+    ],
+) -> None:
+    """Price bench results at a commercial API's quoted $/1M rates."""
+    try:
+        inputs = CommercialCostInputs(
+            input_price_per_1m=input_price_per_1m,
+            output_price_per_1m=output_price_per_1m,
+            api=api,
+            model=model,
+            price_quoted_on=price_quoted_on,
+        )
+        records = price_commercial_files(files, inputs)
+    except (CommercialCostError, ResultError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     typer.echo(json.dumps(records, indent=2))
