@@ -131,11 +131,13 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # This run is published as a cold/warm comparison, so its workload shape is picked
     # to make cache residency the only variable in the gap:
     #   --align-blocks 16 floors the prefix to whole 16-token blocks (vLLM's prefix
-    #     cache is block-aligned; a ragged tail recomputes every time in both regimes
-    #     and dilutes the gap), and
-    #   --num-prefixes 16 spreads the cold window over many first-exposures, so a
-    #     handful of prefixes can't self-warm the run (each planted by its first
-    #     request, then hit by the rest) and leave cold reading well above zero.
+    #     cache reuses whole blocks only; a ragged tail recomputes every time in both
+    #     regimes and dilutes the gap). 16 is vLLM's default block_size — revisit it
+    #     if the served backend runs a different block size, or the alignment is wrong.
+    #   --num-prefixes 16 raises the share of the cold run that is a genuine first
+    #     exposure rather than a self-hit on a prefix the run itself just planted,
+    #     widening the cold/warm gap (full isolation would need num-prefixes near
+    #     num-prompts, which serve_sweep defaults to 100).
     # A caller can override either by appending its own flag after `just prefix-cache`.
     run_cell() {
       kubectl -n slipstream exec bench-client -- bash /tmp/serve_sweep.sh \
