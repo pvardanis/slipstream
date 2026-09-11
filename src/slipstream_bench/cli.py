@@ -13,22 +13,32 @@ app = typer.Typer(
 )
 
 
+def _not_implemented(command: str) -> None:
+    """Fail with a not-implemented notice on stderr and a non-zero exit.
+
+    :param command: name of the subcommand whose body is still a stub.
+    :raise typer.Exit: always, with exit code 1.
+    """
+    typer.echo(f"{command} is not implemented yet", err=True)
+    raise typer.Exit(code=1)
+
+
 @app.command("serve-sweep")
 def serve_sweep() -> None:
     """Sweep vllm bench serve across a prefix-share x burstiness grid."""
-    typer.echo("serve-sweep is not implemented yet")
+    _not_implemented("serve-sweep")
 
 
 @app.command("cost")
 def cost() -> None:
     """Price a bench result into cost-per-1M input and output tokens."""
-    typer.echo("cost is not implemented yet")
+    _not_implemented("cost")
 
 
 @app.command("prefix-cache")
 def prefix_cache() -> None:
     """Compute the cold/warm prefix-cache hit-rate delta for a bench run."""
-    typer.echo("prefix-cache is not implemented yet")
+    _not_implemented("prefix-cache")
 
 
 if __name__ == "__main__":
