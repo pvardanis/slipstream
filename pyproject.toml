@@ -1,0 +1,27 @@
+[project]
+name = "slipstream-bench"
+version = "0.1.0"
+description = "L0 benchmark harness for the slipstream platform: serve sweeps, cost-per-1M, and prefix-cache hit rates."
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+]
+
+[project.scripts]
+slipstream-bench = "slipstream_bench.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.16.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
