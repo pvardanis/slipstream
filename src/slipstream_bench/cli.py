@@ -3,6 +3,7 @@
 Dispatches the serve-sweep, cost, and prefix-cache benchmark subcommands.
 """
 
+import math
 import subprocess
 from typing import Annotated
 
@@ -29,7 +30,7 @@ def _not_implemented(command: str) -> None:
 
 
 # The sweep defaults, named so they read in --help. Immutable so one command's
-# defaults can never leak into the next; typer expands each into a fresh list.
+# defaults can never leak into the next.
 _DEFAULT_PREFIX_SHARES = (10, 50, 90)
 _DEFAULT_BURSTINESS = (0.2, 1.0)
 _DEFAULT_GOODPUT = ("ttft:1000", "tpot:50")
@@ -50,7 +51,7 @@ def _validate_request_rate(value: str) -> str:
         raise typer.BadParameter(
             f"invalid --request-rate '{value}': want a number or 'inf'"
         ) from None
-    if rate < 0:
+    if not math.isfinite(rate) or rate < 0:
         raise typer.BadParameter(
             f"invalid --request-rate '{value}': want a non-negative number or 'inf'"
         )
@@ -68,6 +69,26 @@ def _validate_goodput(values: list[str]) -> list[str]:
     if not tokens:
         raise typer.BadParameter("invalid --goodput: want e.g. 'ttft:1000 tpot:50'")
     return tokens
+
+
+def _run_cell(command: list[str]) -> int:
+    """Run one cell's command, returning its exit code.
+
+    A missing ``vllm`` binary is not a per-cell transient — every cell would fail
+    the same way — so it fails fast with an actionable message rather than a raw
+    traceback that would abort the grid before the tally.
+
+    :param command: the fully assembled cell command.
+    :return: the process exit code.
+    :raise SweepError: when the command's binary is not on PATH.
+    """
+    try:
+        return subprocess.run(command, check=False).returncode
+    except FileNotFoundError as error:
+        raise SweepError(
+            f"cannot run '{command[0]}': not found on PATH — the sweep runs inside "
+            f"the baked bench-client image where vllm is installed"
+        ) from error
 
 
 @app.command("serve-sweep")
@@ -132,27 +153,28 @@ def serve_sweep(
     ] = False,
 ) -> None:
     """Sweep vllm bench serve across a prefix-share x burstiness grid."""
-    config = SweepConfig(
-        base_url=base_url,
-        model=model,
-        prefix_shares=prefix_share,
-        burstiness_values=burstiness,
-        total_len=total_len,
-        num_prompts=num_prompts,
-        num_prefixes=num_prefixes,
-        output_len=output_len,
-        align_blocks=align_blocks,
-        request_rate=request_rate,
-        seed=seed,
-        out_dir=out_dir,
-        goodput=goodput,
-    )
     try:
+        config = SweepConfig(
+            base_url=base_url,
+            model=model,
+            prefix_shares=prefix_share,
+            burstiness_values=burstiness,
+            total_len=total_len,
+            num_prompts=num_prompts,
+            num_prefixes=num_prefixes,
+            output_len=output_len,
+            align_blocks=align_blocks,
+            request_rate=request_rate,
+            seed=seed,
+            out_dir=out_dir,
+            goodput=goodput,
+        )
         code = run_sweep(
             config,
             dry_run=dry_run,
-            runner=lambda command: subprocess.run(command, check=False).returncode,
+            runner=_run_cell,
             echo=typer.echo,
+            warn=lambda line: typer.echo(line, err=True),
         )
     except SweepError as error:
         typer.echo(str(error), err=True)
