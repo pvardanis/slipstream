@@ -1,8 +1,7 @@
 """Option defaults, input validators, and the cell runner the CLI wires in.
 
 Keeps cli.py to command definitions only: the typer option defaults and
-validators, the subprocess-backed cell runner, and the not-implemented
-responder for the stub subcommands live here.
+validators and the subprocess-backed cell runner live here.
 """
 
 import math
@@ -17,16 +16,6 @@ from slipstream_bench.serve_sweep import SweepError
 DEFAULT_PREFIX_SHARES = (10, 50, 90)
 DEFAULT_BURSTINESS = (0.2, 1.0)
 DEFAULT_GOODPUT = ("ttft:1000", "tpot:50")
-
-
-def not_implemented(command: str) -> None:
-    """Fail with a not-implemented notice on stderr and a non-zero exit.
-
-    :param command: name of the subcommand whose body is still a stub.
-    :raise typer.Exit: always, with exit code 1.
-    """
-    typer.echo(f"{command} is not implemented yet", err=True)
-    raise typer.Exit(code=1)
 
 
 def validate_request_rate(value: str) -> str:

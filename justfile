@@ -135,10 +135,6 @@ bench *args:
 cli-test:
     uv run pytest
 
-# Assert the prefix-cache scraper computes the per-run delta hit rate and joins it (no cluster).
-prefix-cache-test:
-    bash test/prefix_cache_scrape_test.sh
-
 # Scrape the prefix-cache hit rate for a cold and a warm run of one bench cell and join each to its client JSON (in bench/results/prefix-cache).
 prefix-cache prefix_share="90" burstiness="1.0" *args="":
     #!/usr/bin/env bash
@@ -197,10 +193,10 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     run_cell /tmp/results-warm
     scrape >"${out}/warm_after.prom"
     kubectl -n slipstream cp "bench-client:/tmp/results-warm/${cell}" "${out}/warm_${cell}"
-    bash bench/prefix_cache_scrape.sh --cache-state cold \
+    uv run slipstream-bench prefix-cache --cache-state cold \
       --metrics-before "${out}/cold_before.prom" --metrics-after "${out}/cold_after.prom" \
       --result "${out}/cold_${cell}" | tee "${out}/cold_hit_rate.json"
-    bash bench/prefix_cache_scrape.sh --cache-state warm \
+    uv run slipstream-bench prefix-cache --cache-state warm \
       --metrics-before "${out}/warm_before.prom" --metrics-after "${out}/warm_after.prom" \
       --result "${out}/warm_${cell}" | tee "${out}/warm_hit_rate.json"
 

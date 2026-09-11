@@ -13,12 +13,12 @@ from slipstream_bench.cli_helpers import (
     DEFAULT_BURSTINESS,
     DEFAULT_GOODPUT,
     DEFAULT_PREFIX_SHARES,
-    not_implemented,
     run_cell,
     validate_goodput,
     validate_request_rate,
 )
 from slipstream_bench.cost import CostError, CostInputs, price_files
+from slipstream_bench.prefix_cache import PrefixCacheError, scrape_prefix_cache
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
 
@@ -168,9 +168,55 @@ def cost(
 
 
 @app.command("prefix-cache")
-def prefix_cache() -> None:
+def prefix_cache(
+    *,
+    cache_state: Annotated[
+        str, typer.Option(help="Which cache regime this run measured: cold or warm.")
+    ],
+    metrics_before: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="/metrics text captured just before the run.",
+        ),
+    ],
+    metrics_after: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="/metrics text captured just after the run.",
+        ),
+    ],
+    result: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="The run's vllm bench serve --save-result JSON.",
+        ),
+    ],
+    model: Annotated[
+        str | None,
+        typer.Option(
+            help="model_name label to select (default: the result's model_id)."
+        ),
+    ] = None,
+) -> None:
     """Compute the cold/warm prefix-cache hit-rate delta for a bench run."""
-    not_implemented("prefix-cache")
+    try:
+        record = scrape_prefix_cache(
+            metrics_before=str(metrics_before),
+            metrics_after=str(metrics_after),
+            result=str(result),
+            cache_state=cache_state,
+            model=model,
+        )
+    except (PrefixCacheError, ResultError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(json.dumps(record, indent=2))
 
 
 if __name__ == "__main__":

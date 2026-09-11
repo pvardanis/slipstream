@@ -98,11 +98,11 @@ Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
 
 ```sh
 uv run slipstream-bench --help   # list the three subcommands
-uv run slipstream-bench cost     # (subcommand bodies land in follow-up issues)
+uv run slipstream-bench cost --help
 just cli-test                    # run the package test suite (uv run pytest)
 ```
 
-Runtime dependencies stay slim (`typer` only); `pytest` and `ruff` are dev-only,
+Runtime dependencies stay slim (`typer` and `prometheus-client`); `pytest` and `ruff` are dev-only,
 and the repo's pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
 run inside a baked bench-client image against the in-cluster vLLM service; where
 the load generator runs is orchestration, not tool logic.
