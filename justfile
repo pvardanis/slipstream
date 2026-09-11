@@ -24,6 +24,12 @@ up:
       --region $(terraform -chdir={{ eks_dir }} output -raw region)
     kubectl get nodes
 
+# Show the cluster changes `just up` would apply, without provisioning anything.
+plan:
+    terraform -chdir={{ eks_dir }} init \
+      -backend-config="bucket=$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    terraform -chdir={{ eks_dir }} plan
+
 # Deploy the CPU vLLM replica and wait for it to serve.
 deploy:
     kubectl apply -f {{ manifests }}
