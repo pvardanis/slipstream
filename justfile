@@ -6,6 +6,9 @@ eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
 manifests := "k8s/vllm.yaml"
 bench_client := "k8s/bench-client.yaml"
+bench_dockerfile := "bench/Dockerfile"
+# Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
+bench_image_tag := "latest"
 model := "Qwen/Qwen2.5-0.5B-Instruct"
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
@@ -56,6 +59,25 @@ completion:
       -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
 
+# Print the bench-client image reference (ECR repo URL from `just bootstrap`, plus the tag).
+_bench-image-ref:
+    @echo "$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url):{{ bench_image_tag }}"
+
+# Build the bench-client image and push it to its ECR repo (provisioned by `just bootstrap`).
+bench-image:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
+    region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
+    # The registry host is the repo URL without its trailing repository path.
+    registry="${repo%%/*}"
+    aws ecr get-login-password --region "${region}" \
+      | docker login --username AWS --password-stdin "${registry}"
+    # Nodes are amd64; build for that arch regardless of the developer's host.
+    docker build --platform linux/amd64 \
+      -t "${repo}:{{ bench_image_tag }}" -f {{ bench_dockerfile }} .
+    docker push "${repo}:{{ bench_image_tag }}"
+
 # Sweep `vllm bench serve` (prefix-share % x burstiness) from an in-cluster client pod, saving per-cell JSON to bench/results.
 bench *args:
     #!/usr/bin/env bash
@@ -64,7 +86,9 @@ bench *args:
     # Clear a pod left behind by a prior run that was killed before its cleanup trap
     # fired, so `kubectl wait` doesn't block for the full timeout on a stale pod.
     kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found >/dev/null 2>&1 || true
-    kubectl -n slipstream apply -f {{ bench_client }}
+    BENCH_IMAGE="$(just _bench-image-ref)"
+    export BENCH_IMAGE
+    envsubst '${BENCH_IMAGE}' <{{ bench_client }} | kubectl -n slipstream apply -f -
     trap 'kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found 2>/dev/null || true' EXIT
     if ! kubectl -n slipstream wait --for=condition=Ready pod/bench-client --timeout=180s; then
       echo "bench-client pod did not become Ready:" >&2
@@ -119,7 +143,9 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # Clear a pod left behind by a prior run that was killed before its cleanup trap
     # fired, so `kubectl wait` doesn't block for the full timeout on a stale pod.
     kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found >/dev/null 2>&1 || true
-    kubectl -n slipstream apply -f {{ bench_client }}
+    BENCH_IMAGE="$(just _bench-image-ref)"
+    export BENCH_IMAGE
+    envsubst '${BENCH_IMAGE}' <{{ bench_client }} | kubectl -n slipstream apply -f -
     trap 'kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found 2>/dev/null || true' EXIT
     if ! kubectl -n slipstream wait --for=condition=Ready pod/bench-client --timeout=180s; then
       echo "bench-client pod did not become Ready:" >&2

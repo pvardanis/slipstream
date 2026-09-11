@@ -1,4 +1,6 @@
-# Creates the S3 bucket that holds remote state for the eks stack.
+# One-time, durable infrastructure that must exist before the eks stack and
+# outlive `just down`: the S3 bucket holding the eks stack's remote state, and
+# the ECR repository for the bench-client image (see ecr.tf).
 # Applied once with local state (committed to git); the native S3 lockfile
 # means no DynamoDB table is needed. Credentials come from the caller's AWS_PROFILE.
 provider "aws" {

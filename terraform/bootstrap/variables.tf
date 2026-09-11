@@ -10,3 +10,9 @@ variable "state_bucket_prefix" {
   type        = string
   default     = "slipstream-tf-state"
 }
+
+variable "bench_image_repo_name" {
+  description = "Name of the ECR repository holding the bench-client image."
+  type        = string
+  default     = "slipstream/bench-client"
+}

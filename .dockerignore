@@ -1,0 +1,6 @@
+# The bench image build (bench/Dockerfile) needs only pyproject.toml and src/.
+# Everything else — terraform state, the cluster manifests, docs, git, caches,
+# results — stays out of the build context so it can't bloat or leak into a layer.
+*
+!pyproject.toml
+!src

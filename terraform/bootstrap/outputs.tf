@@ -8,3 +8,8 @@ output "region" {
   description = "Region the state bucket lives in."
   value       = var.region
 }
+
+output "bench_image_repo_url" {
+  description = "Registry URL of the bench-client ECR repository; the base for `docker push` and the pod image reference."
+  value       = aws_ecr_repository.bench_client.repository_url
+}

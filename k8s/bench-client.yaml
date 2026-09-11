@@ -1,9 +1,11 @@
-# Throwaway client pod for the L0 benchmark sweep. `just bench` applies it, copies
-# bench/serve_sweep.sh in, runs the sweep against the in-cluster vLLM service, copies
-# the result JSON back out, then deletes it. Running the load generator in-cluster
-# keeps the measurement off the serving pod and off the developer's laptop, where
-# vLLM isn't installable. Pinned to the same engine build as the server (k8s/vllm.yaml,
-# spec §3.1) so client and server tokenize identically — keep the two image tags in sync.
+# Throwaway client pod for the L0 benchmark sweep. `just bench` applies it, runs
+# the sweep against the in-cluster vLLM service, copies the result JSON back out,
+# then deletes it. Running the load generator in-cluster keeps the measurement off
+# the serving pod and off the developer's laptop, where vLLM isn't installable.
+# The image is the baked bench-client image (bench/Dockerfile), built on the same
+# engine build as the server (k8s/vllm.yaml, spec §3.1) so the two tokenize
+# identically. ${BENCH_IMAGE} is rendered from the ECR repo URL by the just
+# recipe (envsubst) before apply; nodes pull it via their ECR node IAM role.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -21,7 +23,10 @@ spec:
     kubernetes.io/arch: amd64
   containers:
     - name: bench-client
-      image: vllm/vllm-openai-cpu:v0.29.0-x86_64
+      image: ${BENCH_IMAGE}
+      # The tag is reused across dev-loop rebuilds, so always re-pull to pick up
+      # the latest push rather than a node's cached layer.
+      imagePullPolicy: Always
       command: ["sleep", "infinity"]
       # The client only tokenizes prompts and drives async HTTP, spending most of its
       # time waiting on the server. The CPU request is tiny so it fits the sliver the
