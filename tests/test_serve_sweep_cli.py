@@ -8,7 +8,8 @@ is built.
 import pytest
 from typer.testing import CliRunner
 
-from slipstream_bench.cli import _run_cell, app
+from slipstream_bench.cli import app
+from slipstream_bench.cli_helpers import run_cell
 from slipstream_bench.serve_sweep import SweepError
 
 runner = CliRunner()
@@ -187,4 +188,4 @@ def test_nan_request_rate_is_rejected() -> None:
 def test_run_cell_reports_a_missing_binary_clearly() -> None:
     """A missing binary fails fast with an actionable message, not a traceback."""
     with pytest.raises(SweepError, match="not found on PATH"):
-        _run_cell(["definitely-not-a-real-binary-xyz", "--flag"])
+        run_cell(["definitely-not-a-real-binary-xyz", "--flag"])
