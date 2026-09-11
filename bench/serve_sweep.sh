@@ -40,7 +40,7 @@ Usage: serve_sweep.sh [options]
   --num-prefixes N           distinct shared prefixes to generate
   --output-len N             output tokens per request
   --align-blocks N           floor the prefix to a multiple of N tokens (0 = off) so
-                             every cached block is whole (vLLM's KV cache is block-aligned)
+                             every cached block is whole (vLLM's prefix cache reuses whole blocks only)
   --request-rate R           requests/sec (or "inf")
   --seed N                   RNG seed for prompt generation (fixed so runs replay identical prefixes)
   --out-dir DIR              directory for the per-cell result JSON
@@ -161,7 +161,9 @@ done
 }
 
 # 0 disables alignment, so this is a non-negative-integer check, not require_positive_int.
-[[ "${align_blocks}" =~ ^[0-9]+$ ]] || {
+# Leading zeros are rejected because align_blocks feeds the arithmetic below, where bash
+# reads a leading-zero literal as octal (016 -> 14) and silently aligns to the wrong size.
+[[ "${align_blocks}" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "invalid --align-blocks: '${align_blocks}' (want a non-negative integer, 0 = off)" >&2
   exit 2
 }
@@ -178,15 +180,22 @@ done
 # --percentile-metrics + --metric-percentiles report p95 and p99 side by side on
 # the metrics the SLO is expressed in.
 run_cell() {
-  local share="$1" burst="$2" prefix_len suffix_len result_file
+  local share="$1" burst="$2" prefix_len suffix_len aligned result_file
   prefix_len=$((total_len * share / 100))
   # Floor the prefix to a whole number of blocks. vLLM's prefix cache hashes the
-  # prompt in fixed-size blocks (16 tokens by default), so only whole blocks cache;
-  # a ragged tail recomputes every time in both cold and warm runs and dilutes the
+  # prompt in fixed-size blocks (16 tokens by default) and reuses whole blocks only,
+  # so a ragged tail recomputes every time in both cold and warm runs and dilutes the
   # gap. Flooring (never rounding up) keeps the prefix within the token budget, so
-  # the suffix stays non-negative.
-  if [[ "${align_blocks}" -gt 0 ]]; then
-    prefix_len=$((prefix_len / align_blocks * align_blocks))
+  # the suffix stays non-negative. A share of 0 asks for no prefix, which floors to 0
+  # legitimately; a non-empty prefix flooring to 0 would erase the shared prefix the
+  # run exists to measure, so that fails fast instead.
+  if [[ "${align_blocks}" -gt 0 && "${prefix_len}" -gt 0 ]]; then
+    aligned=$((prefix_len / align_blocks * align_blocks))
+    [[ "${aligned}" -gt 0 ]] || {
+      echo "invalid --align-blocks ${align_blocks}: floors prefix ${prefix_len} (share ${share}% of ${total_len}) to 0 — raise --total-len or --prefix-shares, or lower --align-blocks" >&2
+      exit 2
+    }
+    prefix_len="${aligned}"
   fi
   suffix_len=$((total_len - prefix_len))
   result_file="${out_dir}/pshare${share}_burst${burst}.json"

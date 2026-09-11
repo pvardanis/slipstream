@@ -173,9 +173,17 @@ out="$("${wrapper}" --dry-run --align-blocks 16 --total-len 1000 --prefix-shares
 assert "share 100 of 1000 floors 1000 to prefix 992" "--prefix-repetition-prefix-len 992"
 assert "aligned prefix 992 leaves suffix 8" "--prefix-repetition-suffix-len 8"
 
-# Alignment is opt-in: without the flag the prefix keeps the raw split.
+# Alignment is opt-in: without the flag the prefix keeps the raw split, and
+# --align-blocks 0 is the same opt-out reached through the flag.
 out="$("${wrapper}" --dry-run --total-len 1000 --prefix-shares 90 --burstiness-values 1.0)"
 assert "no alignment leaves prefix 900" "--prefix-repetition-prefix-len 900"
+out="$("${wrapper}" --dry-run --align-blocks 0 --total-len 1000 --prefix-shares 90 --burstiness-values 1.0)"
+assert "align-blocks 0 leaves prefix 900" "--prefix-repetition-prefix-len 900"
+
+# Share 0 is a legitimately empty prefix (the workload is all unique suffix), so
+# flooring it to 0 is correct and must not be mistaken for the collapse below.
+out="$("${wrapper}" --dry-run --align-blocks 16 --total-len 1000 --prefix-shares 0 --burstiness-values 1.0)"
+assert "share 0 stays prefix 0 under alignment" "--prefix-repetition-prefix-len 0"
 
 # --- Control-flow branches ---------------------------------------------------
 assert_exit "help exits 0" 0 --help
@@ -201,6 +209,17 @@ assert_exit "non-numeric align-blocks rejected" 2 --dry-run --align-blocks byte
 assert_stderr "non-numeric align-blocks diagnosed" "invalid --align-blocks" --dry-run --align-blocks byte
 assert_exit "negative-looking align-blocks rejected" 2 --dry-run --align-blocks -16
 assert_exit "align-blocks 0 accepted as off" 0 --dry-run --align-blocks 0
+# A leading zero would be read as octal by the arithmetic below (016 -> 14), so the
+# validator rejects it rather than silently align to the wrong block size.
+assert_exit "leading-zero align-blocks rejected" 2 --dry-run --align-blocks 016
+assert_stderr "leading-zero align-blocks diagnosed" "invalid --align-blocks" --dry-run --align-blocks 016
+assert_exit "leading-zero octal-invalid align-blocks rejected" 2 --dry-run --align-blocks 08
+# Alignment that would floor a non-empty prefix to zero erases the shared prefix
+# entirely — the run would measure nothing — so it fails fast instead.
+assert_exit "prefix floored to zero rejected" 2 \
+  --dry-run --align-blocks 16 --total-len 100 --prefix-shares 10 --burstiness-values 1.0
+assert_stderr "prefix floored to zero diagnosed" "floors prefix" \
+  --dry-run --align-blocks 16 --total-len 100 --prefix-shares 10 --burstiness-values 1.0
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- last dry-run output ----" >&2
