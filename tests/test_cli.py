@@ -88,6 +88,53 @@ def test_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
     assert records[0]["cost_per_1m_input_usd"] == 2.0
 
 
+def test_cost_prices_multiple_files_as_an_ordered_array(tmp_path: Path) -> None:
+    """Two files yield a two-element array in the order given."""
+    first = _result_file(tmp_path)
+    second = tmp_path / "other.json"
+    second.write_text(first.read_text())
+
+    invoked = runner.invoke(
+        app,
+        [
+            "cost",
+            "--price-per-hour",
+            "2.0",
+            "--output-input-ratio",
+            "1",
+            *_PINS,
+            str(first),
+            str(second),
+        ],
+    )
+
+    assert invoked.exit_code == 0, invoked.output
+    records = json.loads(invoked.stdout)
+    assert [r["source"] for r in records] == [str(first), str(second)]
+
+
+def test_cost_rejects_a_malformed_result_file(tmp_path: Path) -> None:
+    """A file that exists but is not JSON hits the ResultError arm: exit 2, stderr."""
+    result = tmp_path / "bad.json"
+    result.write_text("{not json")
+
+    invoked = runner.invoke(
+        app,
+        [
+            "cost",
+            "--price-per-hour",
+            "2.0",
+            "--output-input-ratio",
+            "1",
+            *_PINS,
+            str(result),
+        ],
+    )
+
+    assert invoked.exit_code == 2
+    assert "cannot read" in invoked.output
+
+
 def test_cost_rejects_a_non_positive_price(tmp_path: Path) -> None:
     """A zero price exits 2 with a diagnostic, never a $0 figure."""
     result = _result_file(tmp_path)
