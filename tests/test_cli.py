@@ -21,8 +21,18 @@ def test_help_lists_the_three_subcommands() -> None:
     assert "prefix-cache" in result.stdout
 
 
-def test_each_subcommand_is_invokable() -> None:
-    """Every stub subcommand runs and exits cleanly."""
+def test_no_args_shows_help() -> None:
+    """Invoking the app with no subcommand renders help rather than erroring blankly."""
+    result = runner.invoke(app, [])
+
+    assert "serve-sweep" in result.output
+    assert "cost" in result.output
+    assert "prefix-cache" in result.output
+
+
+def test_each_unimplemented_subcommand_fails_loudly() -> None:
+    """Every stub subcommand exits non-zero with a not-implemented notice."""
     for command in ("serve-sweep", "cost", "prefix-cache"):
         result = runner.invoke(app, [command])
-        assert result.exit_code == 0, f"{command} exited {result.exit_code}"
+        assert result.exit_code == 1, f"{command} exited {result.exit_code}"
+        assert f"{command} is not implemented yet" in result.output
