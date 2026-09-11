@@ -185,6 +185,13 @@ def test_nan_request_rate_is_rejected() -> None:
     assert "request-rate" in result.output
 
 
+def test_fewer_prompts_than_prefixes_is_rejected() -> None:
+    """Fewer prompts than prefixes fails fast before any cell runs vLLM."""
+    result = _dry_run("--num-prompts", "2", "--num-prefixes", "5")
+    assert result.exit_code == 2
+    assert "num-prompts" in result.output
+
+
 def test_run_cell_reports_a_missing_binary_clearly() -> None:
     """A missing binary fails fast with an actionable message, not a traceback."""
     with pytest.raises(SweepError, match="not found on PATH"):
