@@ -27,7 +27,9 @@ drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles 
 
 Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
 `AWS_PROFILE` that can create VPC/EKS resources (see [AWS access](#aws-access)).
-Optional inspection tools: `k9s`, `stern`, `kubens`.
+The benchmark recipes also need `docker` (to build the bench-client image) and
+`envsubst` (from GNU gettext, to render its image reference into the pod
+manifest). Optional inspection tools: `k9s`, `stern`, `kubens`.
 
 ```sh
 just bootstrap   # one-time: create the S3 remote-state bucket
@@ -104,6 +106,19 @@ Runtime dependencies stay slim (`typer` only); `pytest` and `ruff` are dev-only,
 and the repo's pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
 run inside a baked bench-client image against the in-cluster vLLM service; where
 the load generator runs is orchestration, not tool logic.
+
+The bench-client image (`bench/Dockerfile`) layers the package and the model
+tokenizer onto the same pinned vLLM engine build the server runs, so the two
+tokenize identically. It is pushed to an ECR repository provisioned by
+`just bootstrap`; in-cluster nodes pull it via their ECR node IAM role. Build and
+push it before a sweep (rebuild after changing the package or the base engine):
+
+```sh
+just bench-image                 # docker build + push to ECR
+```
+
+`just bench` / `just prefix-cache` then launch the pod on that image, rendering
+its ECR reference into `k8s/bench-client.yaml` at apply time.
 
 ## Non-goals
 
