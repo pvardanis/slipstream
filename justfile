@@ -89,7 +89,7 @@ bench *args:
     exit "${sweep_rc}"
 
 # Run the slipstream-bench Python test suite (no cluster).
-bench-py-test:
+cli-test:
     uv run pytest
 
 # Assert the bench wrapper builds correct vllm commands (dry run, no cluster).
