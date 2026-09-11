@@ -21,6 +21,7 @@ total_len=1000
 num_prompts=100
 num_prefixes=5
 output_len=128
+align_blocks=0
 request_rate="8"
 seed=0
 out_dir="bench/results"
@@ -38,6 +39,8 @@ Usage: serve_sweep.sh [options]
   --num-prompts N            requests per grid cell
   --num-prefixes N           distinct shared prefixes to generate
   --output-len N             output tokens per request
+  --align-blocks N           floor the prefix to a multiple of N tokens (0 = off) so
+                             every cached block is whole (vLLM's KV cache is block-aligned)
   --request-rate R           requests/sec (or "inf")
   --seed N                   RNG seed for prompt generation (fixed so runs replay identical prefixes)
   --out-dir DIR              directory for the per-cell result JSON
@@ -78,6 +81,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   --output-len)
     output_len="$2"
+    shift 2
+    ;;
+  --align-blocks)
+    align_blocks="$2"
     shift 2
     ;;
   --request-rate)
@@ -153,6 +160,12 @@ done
   exit 2
 }
 
+# 0 disables alignment, so this is a non-negative-integer check, not require_positive_int.
+[[ "${align_blocks}" =~ ^[0-9]+$ ]] || {
+  echo "invalid --align-blocks: '${align_blocks}' (want a non-negative integer, 0 = off)" >&2
+  exit 2
+}
+
 [[ "${#goodput[@]}" -gt 0 ]] || {
   echo "invalid goodput: empty (want e.g. 'ttft:1000 tpot:50')" >&2
   exit 2
@@ -167,6 +180,14 @@ done
 run_cell() {
   local share="$1" burst="$2" prefix_len suffix_len result_file
   prefix_len=$((total_len * share / 100))
+  # Floor the prefix to a whole number of blocks. vLLM's prefix cache hashes the
+  # prompt in fixed-size blocks (16 tokens by default), so only whole blocks cache;
+  # a ragged tail recomputes every time in both cold and warm runs and dilutes the
+  # gap. Flooring (never rounding up) keeps the prefix within the token budget, so
+  # the suffix stays non-negative.
+  if [[ "${align_blocks}" -gt 0 ]]; then
+    prefix_len=$((prefix_len / align_blocks * align_blocks))
+  fi
   suffix_len=$((total_len - prefix_len))
   result_file="${out_dir}/pshare${share}_burst${burst}.json"
 

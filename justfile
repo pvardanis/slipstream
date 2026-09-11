@@ -128,10 +128,20 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # run window is that run's traffic, so we bracket each run with a snapshot.
     scrape() { kubectl -n slipstream exec bench-client -- curl -sf "${base}/metrics"; }
     # One bench cell, a single (prefix-share, burstiness) so the window holds one run.
+    # This run is published as a cold/warm comparison, so its workload shape is picked
+    # to make cache residency the only variable in the gap:
+    #   --align-blocks 16 floors the prefix to whole 16-token blocks (vLLM's prefix
+    #     cache is block-aligned; a ragged tail recomputes every time in both regimes
+    #     and dilutes the gap), and
+    #   --num-prefixes 16 spreads the cold window over many first-exposures, so a
+    #     handful of prefixes can't self-warm the run (each planted by its first
+    #     request, then hit by the rest) and leave cold reading well above zero.
+    # A caller can override either by appending its own flag after `just prefix-cache`.
     run_cell() {
       kubectl -n slipstream exec bench-client -- bash /tmp/serve_sweep.sh \
         --base-url "${base}" --model {{ model }} \
         --prefix-shares "{{ prefix_share }}" --burstiness-values "{{ burstiness }}" \
+        --align-blocks 16 --num-prefixes 16 \
         --seed "${seed}" --out-dir "$1" {{ args }}
     }
     cell="pshare{{ prefix_share }}_burst{{ burstiness }}.json"
