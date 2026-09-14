@@ -45,6 +45,13 @@ def serve_sweep(
     model: Annotated[str, typer.Option(help="Served model id.")] = (
         "Qwen/Qwen2.5-0.5B-Instruct"
     ),
+    tokenizer: Annotated[
+        str | None,
+        typer.Option(
+            help="Local tokenizer for prompt synthesis (defaults to --model). "
+            "Required with --api-key-env: a provider --model will not resolve."
+        ),
+    ] = None,
     prefix_share: Annotated[
         list[int],
         typer.Option(
@@ -125,6 +132,8 @@ def serve_sweep(
             seed=seed,
             out_dir=out_dir,
             goodput=goodput,
+            tokenizer=tokenizer,
+            commercial=api_key_env is not None,
         )
         code = run_sweep(
             config,

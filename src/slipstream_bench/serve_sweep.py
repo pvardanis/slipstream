@@ -46,6 +46,8 @@ class SweepConfig:
     seed: int
     out_dir: str
     goodput: list[str]
+    tokenizer: str | None = None
+    commercial: bool = False
 
     def __post_init__(self) -> None:
         """Reject a config that would run zero cells or an out-of-range share.
@@ -55,7 +57,8 @@ class SweepConfig:
         having measured nothing.
 
         :raise SweepError: on an empty grid axis, an empty SLO, a share outside
-            0..100, or fewer prompts than prefixes.
+            0..100, fewer prompts than prefixes, or a commercial run without a
+            local tokenizer.
         """
         if not self.prefix_shares:
             raise SweepError("no prefix-shares to sweep: the grid would be empty")
@@ -73,6 +76,23 @@ class SweepConfig:
             raise SweepError(
                 f"--num-prompts {self.num_prompts} is below --num-prefixes "
                 f"{self.num_prefixes}: raise prompts or lower prefixes"
+            )
+        self._require_tokenizer_when_commercial()
+
+    def _require_tokenizer_when_commercial(self) -> None:
+        """Reject a commercial sweep that has no local tokenizer for synthesis.
+
+        A commercial ``--model`` is a provider id (e.g. gpt-4o-mini) vLLM cannot
+        load as an HF tokenizer, so prompt synthesis needs an explicit local one.
+        The provider bills on its own tokenizer regardless; this only fixes the
+        workload text, and every cell would die the same way without it.
+
+        :raise SweepError: on a commercial run with no ``tokenizer`` set.
+        """
+        if self.commercial and not self.tokenizer:
+            raise SweepError(
+                "a commercial sweep (--api-key-env) needs --tokenizer: the provider "
+                "--model will not resolve as a local tokenizer for prompt synthesis"
             )
 
 
@@ -135,6 +155,12 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
     prefix_len, suffix_len = split_lengths(
         config.total_len, share, align_blocks=config.align_blocks
     )
+    # A local tokenizer for prompt synthesis; vLLM defaults it to --model when
+    # omitted, which only works for the self-hosted arm's HF model id. The
+    # commercial arm's billed token counts still come from the provider's usage
+    # block, which vLLM v0.29.0 requests unconditionally (stream_options
+    # include_usage), so no flag forces it here.
+    tokenizer_args = ["--tokenizer", config.tokenizer] if config.tokenizer else []
     return [
         "vllm",
         "bench",
@@ -145,6 +171,7 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
         config.base_url,
         "--model",
         config.model,
+        *tokenizer_args,
         "--endpoint",
         "/v1/completions",
         "--dataset-name",

@@ -93,6 +93,22 @@ def test_seed_override_reaches_every_cell() -> None:
     assert result.stdout.count("--seed 123") == 6
 
 
+def test_tokenizer_reaches_every_cell() -> None:
+    """--tokenizer is emitted on every command so vLLM synthesises against it."""
+    result = _dry_run("--tokenizer", "Qwen/Qwen2.5-0.5B-Instruct")
+
+    assert result.exit_code == 0
+    assert result.stdout.count("--tokenizer Qwen/Qwen2.5-0.5B-Instruct") == 6
+
+
+def test_commercial_sweep_without_a_tokenizer_is_rejected() -> None:
+    """--api-key-env without --tokenizer fails fast before any cell runs vLLM."""
+    result = _dry_run("--api-key-env", "MY_PROVIDER_KEY")
+
+    assert result.exit_code == 2
+    assert "tokenizer" in result.output
+
+
 def test_non_numeric_total_len_is_rejected() -> None:
     """A non-integer --total-len is rejected before any command is built."""
     result = _dry_run("--total-len", "foo")
@@ -237,7 +253,9 @@ def test_dry_run_never_prints_the_api_key(monkeypatch) -> None:
     """The key is env-only: --api-key-env leaves no secret in the echoed commands."""
     monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-should-not-leak")
 
-    result = _dry_run("--api-key-env", "MY_PROVIDER_KEY")
+    result = _dry_run(
+        "--api-key-env", "MY_PROVIDER_KEY", "--tokenizer", "Qwen/Qwen2.5-0.5B-Instruct"
+    )
 
     assert result.exit_code == 0
     assert "sk-live-should-not-leak" not in result.stdout
@@ -258,7 +276,9 @@ def test_dry_run_with_an_unset_api_key_env_succeeds(monkeypatch) -> None:
     """A dry run previews a commercial sweep without the key being exported."""
     monkeypatch.delenv("MY_PROVIDER_KEY", raising=False)
 
-    result = _dry_run("--api-key-env", "MY_PROVIDER_KEY")
+    result = _dry_run(
+        "--api-key-env", "MY_PROVIDER_KEY", "--tokenizer", "Qwen/Qwen2.5-0.5B-Instruct"
+    )
 
     assert result.exit_code == 0
     assert result.stdout.count("vllm bench serve") == 6
@@ -281,6 +301,8 @@ def test_live_sweep_threads_the_resolved_key_into_the_runner(monkeypatch) -> Non
             "serve-sweep",
             "--api-key-env",
             "MY_PROVIDER_KEY",
+            "--tokenizer",
+            "Qwen/Qwen2.5-0.5B-Instruct",
             "--prefix-share",
             "50",
             "--burstiness",
