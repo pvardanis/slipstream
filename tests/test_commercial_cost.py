@@ -100,6 +100,24 @@ def test_quote_provenance_and_bench_metrics_ride_on_every_record() -> None:
     assert priced["source"] == "cell.json"
 
 
+def test_segment_keys_ride_on_every_record_for_the_report_join() -> None:
+    """request_rate and prefix_share ride on so the report joins the arms by segment."""
+    priced = price_commercial_result(
+        _record(request_rate=8.0, prefix_share=90), Path("cell.json"), _inputs()
+    )
+
+    assert priced["request_rate"] == 8.0
+    assert priced["prefix_share"] == 90
+
+
+def test_absent_segment_keys_ride_as_null() -> None:
+    """A raw result without our injected prefix_share echoes it as null."""
+    priced = price_commercial_result(_record(), Path("cell.json"), _inputs())
+
+    assert priced["request_rate"] is None
+    assert priced["prefix_share"] is None
+
+
 def test_tokenizer_id_rides_on_every_record_as_count_provenance() -> None:
     """The tokenizer the counts were measured on is echoed so a local ruler is detectable."""
     priced = price_commercial_result(_record(), Path("cell.json"), _inputs())

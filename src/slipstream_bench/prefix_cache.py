@@ -241,6 +241,11 @@ def scrape_prefix_cache(
         "source": str(result),
         "model_id": record.get("model_id"),
         "cache_state": cache_state,
+        # The segment keys the baseline report groups on: request_rate is the L0
+        # concurrency proxy (vLLM-native), prefix_share is injected by the sweep.
+        # A raw result missing either joins it as null; the report guards presence.
+        "request_rate": record.get("request_rate"),
+        "prefix_share": record.get("prefix_share"),
         "completed": record.get("completed"),
         "prefix_cache_queries": _as_count(queries),
         "prefix_cache_hits": _as_count(hits),
