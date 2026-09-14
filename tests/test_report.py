@@ -142,6 +142,28 @@ def test_missing_segment_key_is_rejected() -> None:
         )
 
 
+def test_unlabelled_cache_state_is_rejected() -> None:
+    """The cold/warm label the report exists to carry cannot be absent — fail fast."""
+    source = "bench/results/prefix-cache/pshare90.json"
+    with pytest.raises(ReportError, match="cache_state"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial()],
+            prefix_cache=[_prefix_cache(source=source, cache_state="lukewarm")],
+        )
+
+
+def test_joined_record_missing_a_cost_field_is_rejected() -> None:
+    """A matched cost record lacking its $/1M figure fails with context, not KeyError."""
+    source = "bench/results/prefix-cache/cold_pshare90_burst1.0.json"
+    with pytest.raises(ReportError, match="cost_per_1m_output_usd"):
+        build_report(
+            self_hosted_cost=[{"source": source, "cost_per_1m_input_usd": 0.12}],
+            commercial_cost=[_commercial()],
+            prefix_cache=[_prefix_cache(source=source)],
+        )
+
+
 def test_unjoinable_commercial_arm_is_rejected() -> None:
     """A segment with no commercial record is not a baseline — fail fast."""
     source = "bench/results/prefix-cache/cold_pshare90_burst1.0.json"
