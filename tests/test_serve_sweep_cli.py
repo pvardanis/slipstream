@@ -312,3 +312,20 @@ def test_live_sweep_threads_the_resolved_key_into_the_runner(monkeypatch) -> Non
 
     assert result.exit_code == 0, result.output
     assert seen == [{"OPENAI_API_KEY": "sk-live-abc"}]
+
+
+def test_live_commercial_sweep_without_a_tokenizer_is_rejected(monkeypatch) -> None:
+    """On the live path the key resolves first; the tokenizer guard must still fire, no cell run."""
+    monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-abc")
+
+    def stub_run_cell(command, *, extra_env=None):
+        raise AssertionError(
+            "no cell should run when the tokenizer guard rejects the sweep"
+        )
+
+    monkeypatch.setattr("slipstream_bench.cli.run_cell", stub_run_cell)
+
+    result = runner.invoke(app, ["serve-sweep", "--api-key-env", "MY_PROVIDER_KEY"])
+
+    assert result.exit_code == 2
+    assert "tokenizer" in result.output

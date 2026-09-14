@@ -125,6 +125,13 @@ def test_commercial_sweep_with_a_tokenizer_is_valid() -> None:
     _config(commercial=True, tokenizer="Qwen/Qwen2.5-0.5B-Instruct")
 
 
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_commercial_sweep_rejects_a_blank_tokenizer(blank: str) -> None:
+    """A whitespace-only tokenizer pins no real ruler and dies in every cell; reject upfront."""
+    with pytest.raises(SweepError, match="tokenizer"):
+        _config(commercial=True, tokenizer=blank)
+
+
 def test_cell_command_carries_the_tokenizer_when_set() -> None:
     """A configured tokenizer reaches the command so vLLM synthesises against it."""
     cfg = _config(tokenizer="Qwen/Qwen2.5-0.5B-Instruct")

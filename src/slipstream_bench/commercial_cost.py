@@ -116,8 +116,8 @@ def _read_tokenizer_id(record: dict, source: Path) -> str:
     value = record.get("tokenizer_id")
     if not isinstance(value, str) or not value.strip():
         raise CommercialCostError(
-            f"result {source} missing or blank tokenizer_id: the ruler the token "
-            f"counts were measured on is the provenance this arm cannot omit"
+            f"result {source} missing or blank tokenizer_id: the local tokenizer "
+            f"this arm pins as provenance is the field it cannot omit"
         )
     return value
 
@@ -131,10 +131,10 @@ def price_commercial_result(
     :param source: the file the record came from, echoed onto the cost record.
     :param inputs: the quoted rates and the provenance the figure is pinned to.
     :return: the cost record: the reported $/1M rates, the run cost, the echoed
-        token counts, the count-source tokenizer, and the pinned quote provenance.
+        token counts, the pinned local tokenizer, and the pinned quote provenance.
     :raise CommercialCostError: when a joined-on token count is missing or
         non-numeric, both token counts are zero (a $0 run with nothing to price),
-        or the count-source tokenizer is unrecorded.
+        or the local tokenizer is unrecorded.
     """
     tokenizer_id = _read_tokenizer_id(record, source)
 
