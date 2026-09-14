@@ -2,9 +2,6 @@
 **/.terraform/*
 *.tfstate
 *.tfstate.*
-# Bootstrap uses committed local state (it creates the remote state bucket).
-# The .backup is a transient prior-state snapshot; git history is the rollback.
-!terraform/bootstrap/terraform.tfstate
 crash.log
 crash.*.log
 *.tfvars
