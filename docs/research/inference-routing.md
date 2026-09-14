@@ -22,6 +22,13 @@ LoRA adapters on one base model), this pairing gives us: precise prefix-cache ro
 queue-depth / prefix-affinity scoring, and cache-aware LoRA routing — all against unmodified vLLM
 on EKS.
 
+**No prior-art template for this.** The aws-samples EKS repo
+([`llm-inference-on-eks-prior-art.md`](llm-inference-on-eks-prior-art.md)) routes only inside PD
+disaggregation via `sglang-router` — it uses neither IGW nor llm-d, so L3 is built from the
+sources above, not from that repo. Its one transferable finding backs the crossover caution below:
+cache benefit is full when the working set fits the KV pool and zero once it doesn't (LRU evicts),
+which is the mechanism that makes a `prefix_repetition` workload "win by construction."
+
 **Caveat / assumption to flag:** IGW is GA, but llm-d itself is still pre-1.0 (v0.8/v0.9 series
 as of 2026) and some IGW sub-APIs (`InferenceObjective`, adapter-rollout pipeline) are still
 alpha/roadmap. The precise-prefix and LoRA-routing paths are usable today but should be treated
