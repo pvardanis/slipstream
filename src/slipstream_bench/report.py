@@ -1,7 +1,7 @@
-"""Join the L0 harness's three arms into the baseline $/1M-at-SLO report.
+"""Join the benchmark harness's three arms into the baseline $/1M-at-SLO report.
 
-The report is the L0 deliverable: self-hosted $/1M vs commercial $/1M for one
-config, segmented per concurrency level (the run's request_rate is the L0
+The report is the baseline deliverable: self-hosted $/1M vs commercial $/1M for
+one config, segmented per concurrency level (the run's request_rate is the
 concurrency proxy) and prefix-share bucket, with cold and warm cache both
 labelled and TTFT/TPOT p95 and p99 both reported — never one blended number.
 
@@ -34,17 +34,17 @@ class ReportError(Exception):
 class Segment:
     """The (concurrency, prefix-share) pair the two priced arms are joined on.
 
-    A run's segment is its request_rate (the L0 concurrency proxy) and its
+    A run's segment is its request_rate (the concurrency proxy) and its
     prefix-share. Both must be present to place the run in a bucket, so binding
-    them into one value object keeps the join key from travelling as two loose,
-    same-typed values a caller could transpose.
+    them into one value object keeps the join key from travelling as two loose
+    values a caller could transpose.
     """
 
-    request_rate: object
-    prefix_share: object
+    request_rate: float
+    prefix_share: int
 
     @classmethod
-    def of(cls, record: dict, source: object) -> "Segment":
+    def from_record(cls, record: dict, source: object) -> "Segment":
         """Read a run's segment off its record, rejecting an absent key.
 
         :param record: the prefix-cache record the segment is read from.
@@ -182,7 +182,7 @@ def _build_row(
     """
     cache_state = record.get("cache_state")
     source = record.get("source")
-    segment = Segment.of(record, source)
+    segment = Segment.from_record(record, source)
     # The cold/warm label is the whole point of the report; an unlabelled run
     # would render and sort as a nothing, so reject it rather than pass it through.
     if cache_state not in _CACHE_ORDER:
