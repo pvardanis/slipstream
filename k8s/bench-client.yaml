@@ -28,6 +28,16 @@ spec:
       # the latest push rather than a node's cached layer.
       imagePullPolicy: Always
       command: ["sleep", "infinity"]
+      # vLLM enforces an api-key on every request; serve-sweep's openai backend
+      # sends OPENAI_API_KEY as the bearer token. Reading it from the Secret here
+      # keeps the key off any command line. The commercial arm overrides this
+      # with its own provider key via serve-sweep --api-key-env.
+      env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vllm-api-key
+              key: api-key
       # The client only tokenizes prompts and drives async HTTP, spending most of its
       # time waiting on the server. The CPU request is tiny so it fits the sliver the
       # server leaves on a single tight node; with no CPU limit it still bursts into
