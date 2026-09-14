@@ -24,18 +24,26 @@ _bootstrap-init:
 
 # Create the cluster and point kubectl at it.
 up: _bootstrap-init
-    terraform -chdir={{ eks_dir }} init \
-      -backend-config="bucket=$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignments so a failed `terraform output` aborts the recipe instead of
+    # collapsing to an empty backend/name the next command would use blindly.
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ eks_dir }} apply -auto-approve
-    aws eks update-kubeconfig \
-      --name $(terraform -chdir={{ eks_dir }} output -raw cluster_name) \
-      --region $(terraform -chdir={{ eks_dir }} output -raw region)
+    name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
+    region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    aws eks update-kubeconfig --name "${name}" --region "${region}"
     kubectl get nodes
 
 # Show the cluster changes `just up` would apply, without provisioning anything.
 plan: _bootstrap-init
-    terraform -chdir={{ eks_dir }} init \
-      -backend-config="bucket=$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignment so a failed `terraform output` aborts instead of passing an
+    # empty bucket into the eks backend (see `up`).
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ eks_dir }} plan
 
 # Deploy the CPU vLLM replica and wait for it to serve.

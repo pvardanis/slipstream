@@ -35,17 +35,20 @@ The committed `terraform.tfstate` is removed from git and the tree-wide
 `*.tfstate` ignore (the `!terraform/bootstrap/terraform.tfstate` exception is
 dropped). No state is tracked in git anywhere.
 
-**Migrating the existing environment** (bucket already exists) is one command:
+**The existing environment was cut over once** (bucket already existed):
 
 ```bash
 AWS_PROFILE=<profile> terraform -chdir=terraform/bootstrap init -migrate-state
 ```
 
-Terraform copies the committed local state into S3; `terraform plan` afterwards
-reports no changes.
+Terraform copied the committed local state into S3 and `terraform plan` then
+reported no changes. This ran once, against the committed local state this ADR
+removes; it is not repeatable from a fresh clone — there is no local state to
+migrate, and `terraform init` alone connects to the state already in S3.
 
 **Bootstrapping a brand-new environment** (bucket does not exist yet) is a
-one-time two-step, because `init` cannot reach a bucket that is not there:
+one-time, three-command sequence, because `init` cannot reach a bucket that is
+not there:
 
 ```bash
 terraform -chdir=terraform/bootstrap init -backend=false   # providers only, local state
@@ -61,7 +64,7 @@ two-step is run by hand.
 - Infra operations no longer dirty the working tree; there is no committed state to
   diff, and no state in git history going forward.
 - The eks stack still resolves the bucket name from the bootstrap output
-  (`terraform -chdir=bootstrap output -raw state_bucket_name`), which now requires
+  (`terraform -chdir=terraform/bootstrap output -raw state_bucket_name`), which now requires
   bootstrap to be initialised against its remote backend. `up`, `plan`, and the
   image recipes gain a `_bootstrap-init` dependency so a fresh checkout can read
   those outputs.
@@ -71,5 +74,5 @@ two-step is run by hand.
   greenfield two-step against the existing bucket — cheap, because bootstrap
   manages only the bucket and the ECR repo — but it is a real reduction in
   clone-and-go reproducibility, accepted to keep state out of git.
-- Greenfield bootstrap is now a documented manual two-step rather than a single
+- Greenfield bootstrap is now a documented manual sequence rather than a single
   `just bootstrap`. Acceptable: it happens once per AWS account.
