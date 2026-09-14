@@ -4,6 +4,7 @@
 
 eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
+baseline_dir := "terraform/baseline"
 manifests := "k8s/vllm.yaml"
 bench_client := "k8s/bench-client.yaml"
 bench_dockerfile := "bench/Dockerfile"
@@ -46,8 +47,21 @@ plan: _bootstrap-init
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ eks_dir }} plan
 
+# Ensure the vLLM api-key Secret exists. Generated once and left stable across
+# deploys: vLLM enforces it on every request, and the baseline stack reads the
+# same value into Secrets Manager for the bench client. Regenerating it would
+# lock out an api-key already published to a running baseline.
+_ensure-api-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl create namespace slipstream --dry-run=client -o yaml | kubectl apply -f -
+    if ! kubectl -n slipstream get secret vllm-api-key >/dev/null 2>&1; then
+      kubectl -n slipstream create secret generic vllm-api-key \
+        --from-literal=api-key="$(openssl rand -hex 32)"
+    fi
+
 # Deploy the CPU vLLM replica and wait for it to serve.
-deploy:
+deploy: _ensure-api-key
     kubectl apply -f {{ manifests }}
     kubectl -n slipstream rollout status deploy/vllm --timeout=600s
 
@@ -67,8 +81,11 @@ completion:
       curl -sf http://localhost:8000/health >/dev/null 2>&1 && break
       sleep 1
     done
+    # vLLM now enforces the api-key on every request; read it from the Secret.
+    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
     curl -sf http://localhost:8000/v1/completions \
       -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer ${key}" \
       -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
 
@@ -261,6 +278,41 @@ obs-pivot:
 # Destroy the cluster (the bootstrap state bucket is left intact).
 down:
     terraform -chdir={{ eks_dir }} destroy -auto-approve
+
+# Stand up the ephemeral public baseline endpoint: a mutual-TLS load balancer
+# fronting vLLM, so both arms can be measured from one host outside the cluster.
+# It exists only for the run; `baseline-down` tears it down. Requires the cluster
+# up and vLLM deployed (`just up && just deploy`).
+baseline-up: _bootstrap-init _ensure-api-key
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignments so a failed lookup aborts rather than feeding empty values
+    # into terraform (see `up`).
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
+    # Restrict the load balancer to this host as a cheap extra layer; mutual TLS
+    # is the real gate.
+    cidr="$(curl -sf https://checkip.amazonaws.com)/32"
+    terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
+    terraform -chdir={{ baseline_dir }} apply -auto-approve \
+      -var="state_bucket=${bucket}" \
+      -var="operator_cidr=${cidr}" \
+      -var="vllm_api_key=${key}"
+    terraform -chdir={{ baseline_dir }} output
+
+# Destroy the ephemeral baseline endpoint (load balancer, trust store, certs,
+# client secret). The cluster and its vLLM workload stay up.
+baseline-down: _bootstrap-init
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
+    cidr="$(curl -sf https://checkip.amazonaws.com)/32"
+    terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
+    terraform -chdir={{ baseline_dir }} destroy -auto-approve \
+      -var="state_bucket=${bucket}" \
+      -var="operator_cidr=${cidr}" \
+      -var="vllm_api_key=${key}"
 
 # Apply the state-bootstrap stack once, before the first `just up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new
