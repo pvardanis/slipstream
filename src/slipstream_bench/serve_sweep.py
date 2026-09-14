@@ -89,7 +89,7 @@ class SweepConfig:
 
         :raise SweepError: on a commercial run with no ``tokenizer`` set.
         """
-        if self.commercial and not self.tokenizer:
+        if self.commercial and not (self.tokenizer and self.tokenizer.strip()):
             raise SweepError(
                 "a commercial sweep (--api-key-env) needs --tokenizer: the provider "
                 "--model will not resolve as a local tokenizer for prompt synthesis"
@@ -157,10 +157,15 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
     )
     # A local tokenizer for prompt synthesis; vLLM defaults it to --model when
     # omitted, which only works for the self-hosted arm's HF model id. The
-    # commercial arm's billed token counts still come from the provider's usage
-    # block, which vLLM v0.29.0 requests unconditionally (stream_options
-    # include_usage), so no flag forces it here.
-    tokenizer_args = ["--tokenizer", config.tokenizer] if config.tokenizer else []
+    # commercial arm's billed token counts come from the provider's usage block
+    # when the provider returns one, which vLLM v0.29.0 always requests
+    # (stream_options include_usage), so no flag forces it here; on a missing
+    # usage block vLLM silently retokenizes locally (see commercial_cost).
+    tokenizer_args = (
+        ["--tokenizer", config.tokenizer]
+        if config.tokenizer and config.tokenizer.strip()
+        else []
+    )
     return [
         "vllm",
         "bench",
