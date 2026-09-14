@@ -331,7 +331,7 @@ def report(
         typer.Option("--format", help="Emit the report as JSON or a Markdown table."),
     ] = ReportFormat.json,
 ) -> None:
-    """Join the three arms into the L0 baseline $/1M-at-SLO report."""
+    """Join the three arms into the baseline $/1M-at-SLO report."""
     try:
         prefix_cache_records = [
             record for path in prefix_cache for record in load_records(path)

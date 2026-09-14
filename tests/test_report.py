@@ -1,4 +1,4 @@
-"""Tests for the L0 baseline report: self-hosted vs commercial $/1M at SLO.
+"""Tests for the baseline report: self-hosted vs commercial $/1M at SLO.
 
 Covers the join/segment spine (prefix-cache records carry cache_state + the
 segment keys; self-hosted cost joins by shared source; commercial joins by
