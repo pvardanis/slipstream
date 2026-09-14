@@ -100,6 +100,7 @@ def test_alignment_that_erases_prefix_fails_fast() -> None:
         ({"goodput": []}, "goodput"),
         ({"prefix_shares": [150]}, "outside 0..100"),
         ({"num_prompts": 2, "num_prefixes": 5}, "num-prompts"),
+        ({"commercial": True}, "tokenizer"),
     ],
 )
 def test_config_rejects_a_meaningless_sweep(
@@ -108,6 +109,33 @@ def test_config_rejects_a_meaningless_sweep(
     """An empty grid axis, empty SLO, or out-of-range share fails at construction."""
     with pytest.raises(SweepError, match=match):
         _config(**overrides)
+
+
+# --- commercial arm: a local tokenizer, not the provider model id ------------
+
+
+def test_commercial_sweep_requires_a_tokenizer() -> None:
+    """A commercial run cannot resolve --model as an HF tokenizer; --tokenizer is required."""
+    with pytest.raises(SweepError, match="tokenizer"):
+        _config(commercial=True)
+
+
+def test_commercial_sweep_with_a_tokenizer_is_valid() -> None:
+    """A commercial run pinned to a local tokenizer constructs without error."""
+    _config(commercial=True, tokenizer="Qwen/Qwen2.5-0.5B-Instruct")
+
+
+def test_cell_command_carries_the_tokenizer_when_set() -> None:
+    """A configured tokenizer reaches the command so vLLM synthesises against it."""
+    cfg = _config(tokenizer="Qwen/Qwen2.5-0.5B-Instruct")
+    joined = " ".join(cell_command(cfg, share=90, burstiness=1.0))
+    assert "--tokenizer Qwen/Qwen2.5-0.5B-Instruct" in joined
+
+
+def test_cell_command_omits_the_tokenizer_when_unset() -> None:
+    """The self-hosted arm leaves --tokenizer off; vLLM defaults it to --model."""
+    joined = " ".join(cell_command(_config(), share=90, burstiness=1.0))
+    assert "--tokenizer" not in joined
 
 
 # --- grid: one cell per (share, burstiness) ----------------------------------

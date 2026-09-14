@@ -11,7 +11,14 @@ what makes the record a baseline rather than a quote is that the token counts
 come from the same workload the self-hosted arm ran, so the two $/1M figures
 compare apples to apples. The quote is only meaningful pinned to who quoted it
 and when, so the provider, model, and quote date ride on every record. The
-output is a pure function of its inputs — a re-run reproduces it.
+tokenizer vLLM synthesised the workload with rides too: it is the ruler any
+locally-counted tokens are on, and on a commercial run it is never the provider's.
+vLLM's result JSON records no flag for whether a run's counts came from the
+provider's ``usage`` block or a local retokenization fallback, so pinning this
+ruler on every record does not by itself prove which source a figure used — it
+makes the ruler explicit rather than absent, so a mismatch with the provider's is
+at least visible instead of silently assumed away. The output is a pure function
+of its inputs — a re-run reproduces it.
 
 Input token count I, output token count O, input rate r_in and output rate
 r_out in $/1M: run cost C = (I * r_in + O * r_out) / 1e6; the reported
@@ -88,6 +95,33 @@ class CommercialCostInputs:
             ) from error
 
 
+def _read_tokenizer_id(record: dict, source: Path) -> str:
+    """Read the tokenizer vLLM synthesised the run's workload with.
+
+    ``vllm bench serve`` writes ``tokenizer_id`` (``--tokenizer`` or, defaulted,
+    the model id) into every ``--save-result`` file. It is the ruler any
+    locally-counted tokens are on; on a commercial run it is never the provider's.
+    vLLM records no flag for whether a run's counts came from the provider
+    ``usage`` block or a local retokenization fallback, so this does not prove
+    which source priced a figure — it pins the local ruler so a mismatch with the
+    provider's is visible rather than absent. An unrecorded tokenizer erases even
+    that, so it fails fast.
+
+    :param record: the parsed result record.
+    :param source: the file the record came from, for the error message.
+    :return: the recorded tokenizer id.
+    :raise CommercialCostError: when ``tokenizer_id`` is absent, null, non-string,
+        or blank.
+    """
+    value = record.get("tokenizer_id")
+    if not isinstance(value, str) or not value.strip():
+        raise CommercialCostError(
+            f"result {source} missing or blank tokenizer_id: the ruler the token "
+            f"counts were measured on is the provenance this arm cannot omit"
+        )
+    return value
+
+
 def price_commercial_result(
     record: dict, source: Path, inputs: CommercialCostInputs
 ) -> dict:
@@ -97,11 +131,13 @@ def price_commercial_result(
     :param source: the file the record came from, echoed onto the cost record.
     :param inputs: the quoted rates and the provenance the figure is pinned to.
     :return: the cost record: the reported $/1M rates, the run cost, the echoed
-        token counts, and the pinned quote provenance.
+        token counts, the count-source tokenizer, and the pinned quote provenance.
     :raise CommercialCostError: when a joined-on token count is missing or
-        non-numeric, or both token counts are zero (a $0 run with nothing to
-        price).
+        non-numeric, both token counts are zero (a $0 run with nothing to price),
+        or the count-source tokenizer is unrecorded.
     """
+    tokenizer_id = _read_tokenizer_id(record, source)
+
     input_tokens = to_numeric_metric(
         record, source, "total_input_tokens", error_cls=CommercialCostError
     )
@@ -123,6 +159,7 @@ def price_commercial_result(
     return {
         "source": str(source),
         "model_id": record.get("model_id"),
+        "tokenizer_id": tokenizer_id,
         "completed": record.get("completed"),
         "total_input_tokens": int(input_tokens),
         "total_output_tokens": int(output_tokens),

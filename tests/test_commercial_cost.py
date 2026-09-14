@@ -5,9 +5,10 @@ run measured, multiplied by the provider's published $/1M rates — never a run
 wall-clock, which a per-token API does not bill on. Seeded from the same
 checklist as the self-hosted cost tests: the split arithmetic, fractional
 figures, order-preserving multi-file output, run-to-run reproducibility, the
-pinned quote provenance, and the fail-fast guards on price, blank/ill-formed
-provenance, missing/null/non-numeric/non-finite/negative token counts, and a
-zero-token denominator. Unlike the self-hosted arm, no duration is read.
+pinned quote provenance, the count-source tokenizer echoed as provenance, and the
+fail-fast guards on price, blank/ill-formed provenance, missing/null/non-numeric/
+non-finite/negative token counts, a missing/blank tokenizer, and a zero-token
+denominator. Unlike the self-hosted arm, no duration is read.
 """
 
 import json
@@ -43,10 +44,12 @@ def _record(
     *,
     total_input_tokens: object = 1_000_000,
     total_output_tokens: object = 1_000_000,
+    tokenizer_id: object = "Qwen/Qwen2.5-0.5B-Instruct",
     **extra: object,
 ) -> dict:
     record = {
         "model_id": "gpt-4o-mini",
+        "tokenizer_id": tokenizer_id,
         "completed": 100,
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
@@ -95,6 +98,29 @@ def test_quote_provenance_and_bench_metrics_ride_on_every_record() -> None:
     assert priced["model_id"] == "gpt-4o-mini"
     assert priced["total_input_tokens"] == 1_000_000
     assert priced["source"] == "cell.json"
+
+
+def test_tokenizer_id_rides_on_every_record_as_count_provenance() -> None:
+    """The tokenizer the counts were measured on is echoed so a local ruler is detectable."""
+    priced = price_commercial_result(_record(), Path("cell.json"), _inputs())
+
+    assert priced["tokenizer_id"] == "Qwen/Qwen2.5-0.5B-Instruct"
+
+
+def test_missing_tokenizer_id_is_rejected() -> None:
+    """A record whose count-source tokenizer is unknown cannot be trusted; reject it."""
+    record = _record()
+    del record["tokenizer_id"]
+
+    with pytest.raises(CommercialCostError, match="tokenizer_id"):
+        price_commercial_result(record, Path("cell.json"), _inputs())
+
+
+@pytest.mark.parametrize("bad", [None, "", "   ", 123])
+def test_blank_or_non_string_tokenizer_id_is_rejected(bad: object) -> None:
+    """A null, blank, or non-string tokenizer_id pins no real ruler; reject it."""
+    with pytest.raises(CommercialCostError, match="tokenizer_id"):
+        price_commercial_result(_record(tokenizer_id=bad), Path("cell.json"), _inputs())
 
 
 def test_token_counts_are_emitted_as_integers() -> None:

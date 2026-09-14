@@ -29,6 +29,7 @@ def _result_file(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "model_id": "m",
+                "tokenizer_id": "Qwen/Qwen2.5-0.5B-Instruct",
                 "duration": 3600.0,
                 "completed": 100,
                 "total_input_tokens": 1_000_000,
