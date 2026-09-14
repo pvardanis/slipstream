@@ -4,6 +4,7 @@ Dispatches the serve-sweep, cost, and prefix-cache benchmark subcommands.
 """
 
 import json
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -25,6 +26,12 @@ from slipstream_bench.commercial_cost import (
 )
 from slipstream_bench.cost import CostError, CostInputs, price_files
 from slipstream_bench.prefix_cache import PrefixCacheError, scrape_prefix_cache
+from slipstream_bench.report import (
+    ReportError,
+    build_report,
+    load_records,
+    render_markdown,
+)
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
 
@@ -283,6 +290,64 @@ def prefix_cache(
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     typer.echo(json.dumps(record, indent=2))
+
+
+class ReportFormat(str, Enum):
+    """The render the baseline report is emitted in."""
+
+    json = "json"
+    markdown = "markdown"
+
+
+@app.command("report")
+def report(
+    *,
+    self_hosted_cost: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="The `cost` tool's JSON output for the self-hosted arm.",
+        ),
+    ],
+    commercial_cost: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="The `commercial-cost` tool's JSON output for the commercial arm.",
+        ),
+    ],
+    prefix_cache: Annotated[
+        list[Path],
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="A `prefix-cache` tool JSON record (repeat for cold and warm).",
+        ),
+    ],
+    output_format: Annotated[
+        ReportFormat,
+        typer.Option("--format", help="Emit the report as JSON or a Markdown table."),
+    ] = ReportFormat.json,
+) -> None:
+    """Join the three arms into the L0 baseline $/1M-at-SLO report."""
+    try:
+        prefix_cache_records = [
+            record for path in prefix_cache for record in load_records(path)
+        ]
+        rows = build_report(
+            self_hosted_cost=load_records(self_hosted_cost),
+            commercial_cost=load_records(commercial_cost),
+            prefix_cache=prefix_cache_records,
+        )
+    except ReportError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    if output_format is ReportFormat.markdown:
+        typer.echo(render_markdown(rows))
+    else:
+        typer.echo(json.dumps(rows, indent=2))
 
 
 if __name__ == "__main__":

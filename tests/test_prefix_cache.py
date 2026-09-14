@@ -91,6 +91,33 @@ def test_client_json_and_slo_numbers_ride_on_the_record(tmp_path: Path) -> None:
     }
 
 
+def test_join_carries_the_segment_keys_the_report_groups_on(tmp_path: Path) -> None:
+    """The run's request_rate and prefix_share ride onto the record for the report."""
+    result = _result(tmp_path, request_rate=8.0, prefix_share=90)
+    record = scrape_prefix_cache(
+        metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
+        metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
+        result=result,
+        cache_state="cold",
+    )
+
+    assert record["request_rate"] == 8.0
+    assert record["prefix_share"] == 90
+
+
+def test_absent_segment_keys_join_as_null(tmp_path: Path) -> None:
+    """A raw vLLM result without our injected prefix_share joins it as null."""
+    record = scrape_prefix_cache(
+        metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
+        metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
+        result=_result(tmp_path),
+        cache_state="cold",
+    )
+
+    assert record["prefix_share"] is None
+    assert record["request_rate"] is None
+
+
 def test_missing_client_metric_joins_as_null(tmp_path: Path) -> None:
     """A run fired without --goodput has no request_goodput; it joins as null."""
     result = tmp_path / "nogood.json"

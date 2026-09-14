@@ -9,10 +9,13 @@ scraper — joins on that JSON.
 
 Prefix-share % is the knob the routing sweep needs: it splits a fixed token
 budget between the shared prefix and the per-request suffix, so share 90 means a
-900/100 prefix/suffix split of a 1000-token budget. Where the sweep runs and
+900/100 prefix/suffix split of a 1000-token budget. vLLM records the split
+lengths but not the share, so each successful cell's share is stamped onto its
+result JSON, the key the baseline report segments on. Where the sweep runs and
 what ``--base-url`` it targets is orchestration, not tool logic.
 """
 
+import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from itertools import product
@@ -210,6 +213,36 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
     ]
 
 
+def _annotate_prefix_share(result_file: str, share: int, warn: Echo) -> None:
+    """Inject a cell's prefix-share into the result JSON vLLM wrote.
+
+    vLLM's ``--save-result`` records the run's request_rate but not the
+    prefix-share (it takes prefix/suffix lengths, not a share), so the baseline
+    report has no way to segment by share unless the sweep stamps it on. This is
+    best-effort enrichment of an already-successful cell: a missing or unreadable
+    result file warns rather than failing the run, and the report's own guard
+    catches a run that reached it without a share.
+
+    :param result_file: the cell's ``--result-filename`` path.
+    :param share: this cell's prefix-share percentage to stamp on.
+    :param warn: sink for the best-effort failure line.
+    """
+    path = Path(result_file)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        warn(f"!! could not read {result_file} to inject prefix-share: {error}")
+        return
+    if not isinstance(record, dict):
+        warn(f"!! {result_file} is not a JSON object; prefix-share not injected")
+        return
+    record["prefix_share"] = share
+    try:
+        path.write_text(json.dumps(record), encoding="utf-8")
+    except OSError as error:
+        warn(f"!! could not write prefix-share into {result_file}: {error}")
+
+
 def run_sweep(
     config: SweepConfig,
     *,
@@ -254,6 +287,7 @@ def run_sweep(
         code = runner(command)
         if code == 0:
             completed += 1
+            _annotate_prefix_share(result_file, share, warn)
         else:
             failed += 1
             warn(

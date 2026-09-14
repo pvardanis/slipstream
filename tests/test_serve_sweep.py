@@ -7,6 +7,9 @@ partial-failure survival. The command-assembly seam is driven through the pure
 builder functions, with no vLLM server.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
 from slipstream_bench.serve_sweep import (
@@ -242,6 +245,52 @@ def test_run_sweep_invokes_the_runner_once_per_cell(tmp_path) -> None:
 
     assert code == 0
     assert len(calls) == 6
+
+
+def _result_filename(command: list[str]) -> str:
+    """Pull the --result-filename a cell command writes to, as vLLM would."""
+    return command[command.index("--result-filename") + 1]
+
+
+def test_successful_cell_gets_its_prefix_share_injected(tmp_path) -> None:
+    """After a cell writes its result JSON, the sweep injects that cell's share."""
+    cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
+
+    def runner(command: list[str]) -> int:
+        # Stand in for vLLM: write the raw client JSON the flag names, no share.
+        Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
+    code = run_sweep(
+        cfg,
+        dry_run=False,
+        runner=runner,
+        echo=lambda _line: None,
+        warn=lambda _line: None,
+    )
+
+    assert code == 0
+    written = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert written["prefix_share"] == 90
+    # The metric vLLM wrote survives the injection.
+    assert written["model_id"] == "m"
+
+
+def test_missing_result_file_warns_but_does_not_fail_the_cell(tmp_path) -> None:
+    """A successful cell that wrote no file is enriched best-effort: warn, stay ok."""
+    cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
+    warned: list[str] = []
+
+    code = run_sweep(
+        cfg,
+        dry_run=False,
+        runner=lambda _cmd: 0,
+        echo=lambda _line: None,
+        warn=warned.append,
+    )
+
+    assert code == 0
+    assert any("prefix-share" in line for line in warned)
 
 
 def test_run_sweep_creates_a_nested_out_dir(tmp_path) -> None:
