@@ -15,7 +15,7 @@ class ResultError(Exception):
     """A result file that cannot be read as the JSON a post-processor joins on."""
 
 
-def numeric_metric(
+def to_numeric_metric(
     record: dict, source: Path, name: str, *, error_cls: type[Exception]
 ) -> float:
     """Read one metric as a number, rejecting a missing, null, or non-numeric value.

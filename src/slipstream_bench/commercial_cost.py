@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from slipstream_bench.results import numeric_metric, read_result
+from slipstream_bench.results import read_result, to_numeric_metric
 
 _TOKENS_PER_MILLION = 1_000_000
 
@@ -102,10 +102,10 @@ def price_commercial_result(
         non-numeric, or both token counts are zero (a $0 run with nothing to
         price).
     """
-    input_tokens = numeric_metric(
+    input_tokens = to_numeric_metric(
         record, source, "total_input_tokens", error_cls=CommercialCostError
     )
-    output_tokens = numeric_metric(
+    output_tokens = to_numeric_metric(
         record, source, "total_output_tokens", error_cls=CommercialCostError
     )
 

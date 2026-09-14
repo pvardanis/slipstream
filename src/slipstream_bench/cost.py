@@ -18,7 +18,7 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 from dataclasses import dataclass
 from pathlib import Path
 
-from slipstream_bench.results import numeric_metric, read_result
+from slipstream_bench.results import read_result, to_numeric_metric
 
 _SECONDS_PER_HOUR = 3600
 _TOKENS_PER_MILLION = 1_000_000
@@ -85,11 +85,11 @@ def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
         duration is non-positive, or both token counts are zero (a zero
         denominator).
     """
-    duration = numeric_metric(record, source, "duration", error_cls=CostError)
-    input_tokens = numeric_metric(
+    duration = to_numeric_metric(record, source, "duration", error_cls=CostError)
+    input_tokens = to_numeric_metric(
         record, source, "total_input_tokens", error_cls=CostError
     )
-    output_tokens = numeric_metric(
+    output_tokens = to_numeric_metric(
         record, source, "total_output_tokens", error_cls=CostError
     )
 
