@@ -53,16 +53,65 @@ run "exposure_invariants" {
     condition     = one(aws_lb_listener.https.mutual_authentication).mode == "verify"
     error_message = "Listener must enforce mutual TLS in verify mode; passthrough does not authenticate the client."
   }
+  assert {
+    condition     = aws_lb_listener.https.ssl_policy == "ELBSecurityPolicy-TLS13-1-2-2021-06"
+    error_message = "Listener must pin the TLS 1.3 policy so a weaker policy can't slip onto a public endpoint."
+  }
 
-  # The target group forwards to the vLLM NodePort on the node group.
+  # The trust store points at the CA bundle object; verify mode is meaningless if
+  # it verifies against the wrong (or empty) bundle.
+  assert {
+    condition     = aws_lb_trust_store.mtls.ca_certificates_bundle_s3_key == aws_s3_object.ca_bundle.key
+    error_message = "Trust store must reference the uploaded CA bundle object."
+  }
+
+  # The target group forwards to the vLLM NodePort on the node group over plain
+  # HTTP (TLS is already terminated at the listener) and health-checks /health.
   assert {
     condition     = aws_lb_target_group.vllm.port == var.vllm_nodeport
     error_message = "Target group must forward to the vLLM NodePort."
   }
-
-  # The load balancer's security group admits only the operator CIDR on 443.
   assert {
-    condition     = alltrue([for r in aws_security_group.alb.ingress : contains(r.cidr_blocks, var.operator_cidr) && r.from_port == 443])
-    error_message = "ALB security group must admit only the operator CIDR on 443."
+    condition     = aws_lb_target_group.vllm.protocol == "HTTP"
+    error_message = "Target group must forward plain HTTP; the ALB already terminated TLS at the listener."
+  }
+  assert {
+    condition     = one(aws_lb_target_group.vllm.health_check).path == "/health"
+    error_message = "Target group must health-check /health, which vLLM leaves unauthenticated."
+  }
+
+  # The node group's instances are registered as targets via the autoscaling
+  # attachment; without it the ALB has no backends and every request 503s.
+  assert {
+    condition     = aws_autoscaling_attachment.vllm["slipstream-cpu"].autoscaling_group_name == "slipstream-cpu"
+    error_message = "The node autoscaling group must be attached to the target group."
+  }
+
+  # The ALB security group admits exactly one ingress: the operator CIDR on 443.
+  # An exact match, not `contains`, so widening the rule (e.g. adding 0.0.0.0/0)
+  # fails the test rather than passing because the operator CIDR is still present.
+  assert {
+    condition     = length(aws_security_group.alb.ingress) == 1
+    error_message = "ALB security group must have exactly one ingress rule."
+  }
+  assert {
+    condition     = one(aws_security_group.alb.ingress).cidr_blocks == tolist([var.operator_cidr])
+    error_message = "ALB security group must admit only the operator CIDR."
+  }
+  assert {
+    condition     = one(aws_security_group.alb.ingress).from_port == 443 && one(aws_security_group.alb.ingress).to_port == 443 && one(aws_security_group.alb.ingress).protocol == "tcp"
+    error_message = "ALB security group ingress must be TCP 443 only."
+  }
+
+  # The node security group admits the NodePort on TCP only, on the eks-owned SG.
+  # This is the other half of the network lock ("only the load balancer reaches
+  # the port"); a regression widening the port or target SG must fail here.
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.node_from_alb.security_group_id == "sg-nodes"
+    error_message = "NodePort ingress rule must be attached to the eks node security group."
+  }
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.node_from_alb.from_port == var.vllm_nodeport && aws_vpc_security_group_ingress_rule.node_from_alb.to_port == var.vllm_nodeport && aws_vpc_security_group_ingress_rule.node_from_alb.ip_protocol == "tcp"
+    error_message = "NodePort ingress rule must admit only TCP on the vLLM NodePort."
   }
 }

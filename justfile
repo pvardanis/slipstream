@@ -48,17 +48,34 @@ plan: _bootstrap-init
     terraform -chdir={{ eks_dir }} plan
 
 # Ensure the vLLM api-key Secret exists. Generated once and left stable across
-# deploys: vLLM enforces it on every request, and the baseline stack reads the
+# deploys: vLLM enforces it on its API routes, and the baseline stack reads the
 # same value into Secrets Manager for the bench client. Regenerating it would
 # lock out an api-key already published to a running baseline.
 _ensure-api-key:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl create namespace slipstream --dry-run=client -o yaml | kubectl apply -f -
-    if ! kubectl -n slipstream get secret vllm-api-key >/dev/null 2>&1; then
-      kubectl -n slipstream create secret generic vllm-api-key \
-        --from-literal=api-key="$(openssl rand -hex 32)"
+    # `--ignore-not-found` prints nothing when the Secret is absent but still errors
+    # on a real failure (unreachable API server, wrong context, RBAC), so a
+    # connection problem can't masquerade as "absent" and mint a fresh key against
+    # the wrong cluster — diverging from a key already published to a baseline.
+    if [[ -z "$(kubectl -n slipstream get secret vllm-api-key --ignore-not-found -o name)" ]]; then
+      # Bare assignment so a failed openssl aborts: in argument position a failed
+      # $(...) does not trip set -e, which would create a Secret with an empty key.
+      key="$(openssl rand -hex 32)"
+      [[ -n "${key}" ]] || { echo "openssl produced no api-key" >&2; exit 1; }
+      kubectl -n slipstream create secret generic vllm-api-key --from-literal=api-key="${key}"
     fi
+
+# Read the vLLM api-key out of the cluster Secret, failing loudly if the Secret
+# exists but carries no api-key value rather than emitting an empty credential
+# (an empty key would then authenticate nothing and be published to a baseline).
+_read-api-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
+    [[ -n "${key}" ]] || { echo "vllm-api-key Secret has no api-key value" >&2; exit 1; }
+    printf '%s' "${key}"
 
 # Deploy the CPU vLLM replica and wait for it to serve.
 deploy: _ensure-api-key
@@ -81,8 +98,8 @@ completion:
       curl -sf http://localhost:8000/health >/dev/null 2>&1 && break
       sleep 1
     done
-    # vLLM now enforces the api-key on every request; read it from the Secret.
-    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
+    # vLLM enforces the api-key on its API routes; read it from the Secret.
+    key="$(just _read-api-key)"
     curl -sf http://localhost:8000/v1/completions \
       -H 'Content-Type: application/json' \
       -H "Authorization: Bearer ${key}" \
@@ -289,15 +306,20 @@ baseline-up: _bootstrap-init _ensure-api-key
     # Bare assignments so a failed lookup aborts rather than feeding empty values
     # into terraform (see `up`).
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
-    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
+    # Pass the api-key through the environment, not `-var`, so the secret never
+    # lands in the terraform process argv (visible via `ps`) or shell history.
+    TF_VAR_vllm_api_key="$(just _read-api-key)"
+    export TF_VAR_vllm_api_key
     # Restrict the load balancer to this host as a cheap extra layer; mutual TLS
     # is the real gate.
-    cidr="$(curl -sf https://checkip.amazonaws.com)/32"
+    cidr="$(curl -sf https://checkip.amazonaws.com)" \
+      || { echo "could not determine operator IP from checkip.amazonaws.com" >&2; exit 1; }
+    cidr="${cidr}/32"
+    [[ "${cidr}" =~ ^[0-9.]+/32$ ]] || { echo "unexpected operator IP from checkip: ${cidr}" >&2; exit 1; }
     terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ baseline_dir }} apply -auto-approve \
       -var="state_bucket=${bucket}" \
-      -var="operator_cidr=${cidr}" \
-      -var="vllm_api_key=${key}"
+      -var="operator_cidr=${cidr}"
     terraform -chdir={{ baseline_dir }} output
 
 # Destroy the ephemeral baseline endpoint (load balancer, trust store, certs,
@@ -306,13 +328,15 @@ baseline-down: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
-    key="$(kubectl -n slipstream get secret vllm-api-key -o jsonpath='{.data.api-key}' | base64 -d)"
-    cidr="$(curl -sf https://checkip.amazonaws.com)/32"
     terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ baseline_dir }} destroy -auto-approve \
+    # Destroy needs no live cluster or IP lookup: the api-key and operator CIDR only
+    # shape resources being torn down. Placeholders keep teardown of a public
+    # endpoint from being blocked by an already-deleted Secret or an offline network,
+    # which would otherwise orphan an internet-facing load balancer.
+    TF_VAR_vllm_api_key="unused" \
+      terraform -chdir={{ baseline_dir }} destroy -auto-approve \
       -var="state_bucket=${bucket}" \
-      -var="operator_cidr=${cidr}" \
-      -var="vllm_api_key=${key}"
+      -var="operator_cidr=0.0.0.0/32"
 
 # Apply the state-bootstrap stack once, before the first `just up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new
