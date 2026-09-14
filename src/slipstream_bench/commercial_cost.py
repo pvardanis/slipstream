@@ -161,7 +161,8 @@ def price_commercial_result(
         "model_id": record.get("model_id"),
         "tokenizer_id": tokenizer_id,
         # The segment keys the baseline report joins the arms on (see report.py); a
-        # raw result missing either echoes null and the report guards presence.
+        # raw result missing either echoes null, which no spine segment matches, so
+        # the report fails the join rather than pricing it silently.
         "request_rate": record.get("request_rate"),
         "prefix_share": record.get("prefix_share"),
         "completed": record.get("completed"),

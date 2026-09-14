@@ -242,7 +242,8 @@ def scrape_prefix_cache(
         "model_id": record.get("model_id"),
         "cache_state": cache_state,
         # The segment keys the baseline report groups on (see report.py); a raw
-        # result missing either joins it as null and the report guards presence.
+        # result missing either echoes null, and the report rejects a spine record
+        # that reaches it without both.
         "request_rate": record.get("request_rate"),
         "prefix_share": record.get("prefix_share"),
         "completed": record.get("completed"),

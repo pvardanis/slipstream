@@ -5,6 +5,9 @@ and pins that a bad argument is rejected with a non-zero exit before any command
 is built.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -284,13 +287,18 @@ def test_dry_run_with_an_unset_api_key_env_succeeds(monkeypatch) -> None:
     assert result.stdout.count("vllm bench serve") == 6
 
 
-def test_live_sweep_threads_the_resolved_key_into_the_runner(monkeypatch) -> None:
+def test_live_sweep_threads_the_resolved_key_into_the_runner(
+    monkeypatch, tmp_path
+) -> None:
     """A non-dry sweep hands the resolved key to run_cell as extra_env, not argv."""
     monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-abc")
     seen: list[dict[str, str] | None] = []
 
     def stub_run_cell(command, *, extra_env=None):
         seen.append(extra_env)
+        # A clean cell writes a stampable result file, as vLLM would.
+        result_file = command[command.index("--result-filename") + 1]
+        Path(result_file).write_text(json.dumps({"model_id": "m"}))
         return 0
 
     monkeypatch.setattr("slipstream_bench.cli.run_cell", stub_run_cell)
@@ -307,6 +315,8 @@ def test_live_sweep_threads_the_resolved_key_into_the_runner(monkeypatch) -> Non
             "50",
             "--burstiness",
             "1.0",
+            "--out-dir",
+            str(tmp_path),
         ],
     )
 

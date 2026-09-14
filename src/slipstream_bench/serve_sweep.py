@@ -213,34 +213,37 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
     ]
 
 
-def _annotate_prefix_share(result_file: str, share: int, warn: Echo) -> None:
+def _annotate_prefix_share(result_file: str, share: int, warn: Echo) -> bool:
     """Inject a cell's prefix-share into the result JSON vLLM wrote.
 
     vLLM's ``--save-result`` records the run's request_rate but not the
     prefix-share (it takes prefix/suffix lengths, not a share), so the baseline
-    report has no way to segment by share unless the sweep stamps it on. This is
-    best-effort enrichment of an already-successful cell: a missing or unreadable
-    result file warns rather than failing the run, and the report's own guard
-    catches a run that reached it without a share.
+    report has no way to segment by share unless the sweep stamps it on. A cell
+    that ran but cannot be stamped produces a result the report will later reject,
+    so the stamp failing is reported back to the tally rather than swallowed —
+    the cell is not a clean success.
 
     :param result_file: the cell's ``--result-filename`` path.
     :param share: this cell's prefix-share percentage to stamp on.
-    :param warn: sink for the best-effort failure line.
+    :param warn: sink for the failure line.
+    :return: True when the share was stamped, False when it could not be.
     """
     path = Path(result_file)
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         warn(f"!! could not read {result_file} to inject prefix-share: {error}")
-        return
+        return False
     if not isinstance(record, dict):
         warn(f"!! {result_file} is not a JSON object; prefix-share not injected")
-        return
+        return False
     record["prefix_share"] = share
     try:
         path.write_text(json.dumps(record), encoding="utf-8")
     except OSError as error:
         warn(f"!! could not write prefix-share into {result_file}: {error}")
+        return False
+    return True
 
 
 def run_sweep(
@@ -263,7 +266,8 @@ def run_sweep(
     :param echo: sink for the dry-run commands and the per-cell progress lines.
     :param warn: sink for the failure and tally lines (stderr, so they survive a
         stdout redirect meant for the commands or results).
-    :return: 0 when every cell succeeded (or dry run), 1 when any cell failed.
+    :return: 0 when every cell ran and was stamped (or dry run), 1 when any cell
+        failed to run or could not be stamped with its prefix-share.
     :raise SweepError: when block alignment would erase a prefix (see
         :func:`split_lengths`), or the out-dir cannot be created.
     """
@@ -277,6 +281,7 @@ def run_sweep(
 
     completed = 0
     failed = 0
+    unannotated = 0
     for share, burstiness in grid(config):
         command = cell_command(config, share=share, burstiness=burstiness)
         if dry_run:
@@ -285,17 +290,23 @@ def run_sweep(
         result_file = _result_file(config, share, burstiness)
         echo(f"==> prefix-share {share}% burstiness {burstiness} -> {result_file}")
         code = runner(command)
-        if code == 0:
-            completed += 1
-            _annotate_prefix_share(result_file, share, warn)
-        else:
+        if code != 0:
             failed += 1
             warn(
                 f"!! cell prefix-share {share}% burstiness {burstiness} "
                 f"failed (exit {code})"
             )
+            continue
+        completed += 1
+        # A cell that ran but cannot be stamped yields a result the report will
+        # reject, so it is not a clean success — tally it and fail the sweep.
+        if not _annotate_prefix_share(result_file, share, warn):
+            unannotated += 1
 
-    if failed > 0:
-        warn(f"sweep finished: {completed} cells ok, {failed} failed")
+    if failed > 0 or unannotated > 0:
+        warn(
+            f"sweep finished: {completed} cells ok, {failed} failed, "
+            f"{unannotated} un-annotated"
+        )
         return 1
     return 0
