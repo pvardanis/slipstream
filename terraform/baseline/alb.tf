@@ -1,8 +1,8 @@
 # The public application load balancer that fronts vLLM for one baseline run.
 # It terminates mutual TLS (the ALB is the only AWS load balancer that can),
 # verifying the client certificate against a trust store, then forwards plain
-# HTTP to the vLLM NodePort inside the VPC. vLLM's --api-key is the second lock
-# behind the connection-level mTLS gate.
+# HTTP to the vLLM NodePort inside the VPC. The mTLS verify is the complete,
+# connection-level gate; vLLM's api-key is a second lock on its API routes.
 
 provider "aws" {
   region = var.region

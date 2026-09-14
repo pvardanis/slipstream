@@ -2,8 +2,10 @@
 # The CPU model lets the platform stand up without spending GPU hours (spec §2).
 # Reachable in-cluster as http://vllm.slipstream.svc:8000, and on a NodePort so
 # an ephemeral baseline load balancer can front it from outside the cluster.
-# Every request carries an api-key (VLLM_API_KEY, from the vllm-api-key Secret);
-# the baseline load balancer adds mutual TLS as a second, connection-level lock.
+# vLLM enforces an api-key (VLLM_API_KEY, from the vllm-api-key Secret) on its API
+# routes; /health and /metrics stay open so probes and the load balancer health
+# check reach them. The baseline load balancer's mutual TLS is the complete,
+# connection-level gate; the api-key is a second lock on the API routes.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -66,10 +68,11 @@ spec:
             # the tiny node can't spare during model load.
             - name: VLLM_CPU_KVCACHE_SPACE
               value: "1"
-            # vLLM enforces this key on every request. It guards the NodePort and
-            # the in-cluster path alike, independent of the baseline load
-            # balancer's mutual TLS. Generated once and stored in the cluster; the
-            # baseline stack reads the same value into Secrets Manager.
+            # vLLM enforces this key on its API routes (/v1); /health and /metrics
+            # stay open. It guards the NodePort and the in-cluster path alike,
+            # independent of the baseline load balancer's mutual TLS. Generated once
+            # and stored in the cluster; the baseline stack reads the same value
+            # into Secrets Manager.
             - name: VLLM_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -127,7 +130,7 @@ spec:
   # NodePort so an ephemeral baseline load balancer, provisioned outside the
   # cluster, can reach vLLM through the node group. The port is fixed so the
   # baseline target group can target it; only the load balancer's security group
-  # is allowed to reach it, and every request still needs the api-key. No cloud
+  # is allowed to reach it, and API-route requests still need the api-key. No cloud
   # load balancer is created here, so `just down` leaves nothing behind.
   type: NodePort
   selector:
