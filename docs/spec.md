@@ -122,6 +122,13 @@ independently.
 | **L3** — routing + obs spine | IGW + llm-d Router/EPP; prefix-cache-aware routing vs round-robin **across a prefix-share sweep**; request-ID join spine live | the sweep reports a crossover point, pivot demo works | **"Prefix-cache-aware routing vs round-robin"** write-up (a curve, not a point — where cache-aware routing wins, and where it stops) + the cross-tool pivot demo |
 | **L4** — P/D disaggregation | separate prefill/decode node pools; **LMCache KV transfer** between them; measured vs colocated | disagg runs and is measured | **P/D disaggregation result**, including an honest "where it didn't pay" |
 
+Note on prior art (L0–L4): a production build of this same roadmap — EKS + Karpenter GPU pools,
+vLLM, PD-over-EFA — is distilled per layer in
+[`docs/research/llm-inference-on-eks-prior-art.md`](research/llm-inference-on-eks-prior-art.md).
+Consult it when building a layer: it maps each of their decisions to align / differ / gap, flags
+the GPU-bring-up traps (GPU quota `0` silent-fail, `nodeRepair` killing nodes mid-load), and — for
+L0 — carries the benchmark-methodology discipline every published number here has to clear.
+
 Note on L3: the routing eval must not win by construction. A workload built from
 `prefix_repetition` makes cache-aware routing beat round-robin almost tautologically, so L3
 **sweeps prefix-share % and reports the crossover** — the point below which cache-aware routing
@@ -130,7 +137,10 @@ deliverable is that curve, not a single rigged data point.
 
 Note on L4: vLLM's disaggregation is a **latency/TTFT** play, not a throughput win, and its tail
 latency is governed by KV-cache transport (NIXL/UCCL over EFA/RDMA-capable node pools). Do not
-enable L4 before L1–L3 are saturating a single pool.
+enable L4 before L1–L3 are saturating a single pool. The aws-samples repo (prior-art note above)
+**withdrew** its "PD loses on prefill-heavy traffic" conclusion — it was inferred from two n=1
+throughput numbers with no per-node telemetry — so the "where it didn't pay" verdict here needs
+per-node utilisation/queue data and repeat runs, not a throughput gap.
 
 Note on failure analysis (every phase): the deliverables are honest about what breaks, not just
 what works.
