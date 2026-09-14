@@ -17,8 +17,13 @@ otel_config := "k8s/otel-collector-config.yaml"
 default:
     @just --list
 
+# Connect the bootstrap stack to its remote state (idempotent) so its outputs are
+# readable — needed on a fresh checkout, where no local .terraform exists yet.
+_bootstrap-init:
+    terraform -chdir={{ bootstrap_dir }} init -input=false
+
 # Create the cluster and point kubectl at it.
-up:
+up: _bootstrap-init
     terraform -chdir={{ eks_dir }} init \
       -backend-config="bucket=$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ eks_dir }} apply -auto-approve
@@ -28,7 +33,7 @@ up:
     kubectl get nodes
 
 # Show the cluster changes `just up` would apply, without provisioning anything.
-plan:
+plan: _bootstrap-init
     terraform -chdir={{ eks_dir }} init \
       -backend-config="bucket=$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ eks_dir }} plan
@@ -60,7 +65,7 @@ completion:
     echo
 
 # Print the bench-client image reference (ECR repo URL from `just bootstrap`, plus the tag).
-_bench-image-ref:
+_bench-image-ref: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignment (not `local`/`export`) so `set -e` aborts on a terraform
@@ -70,7 +75,7 @@ _bench-image-ref:
     echo "${repo}:{{ bench_image_tag }}"
 
 # Build the bench-client image and push it to its ECR repo (provisioned by `just bootstrap`).
-bench-image:
+bench-image: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
@@ -249,7 +254,9 @@ obs-pivot:
 down:
     terraform -chdir={{ eks_dir }} destroy -auto-approve
 
-# Apply the state-bootstrap stack once, before the first `just up`.
+# Apply the state-bootstrap stack once, before the first `just up`. Assumes the
+# state bucket already exists (state lives in it, see backend.tf). A brand-new
+# environment bootstraps the bucket first with the two-step in ADR-0005.
 bootstrap:
-    terraform -chdir={{ bootstrap_dir }} init
+    terraform -chdir={{ bootstrap_dir }} init -input=false
     terraform -chdir={{ bootstrap_dir }} apply -auto-approve

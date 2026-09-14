@@ -2,7 +2,7 @@
 
 # ADR-0001: `just` task runner and a separate state-bootstrap stack
 
-- Status: Accepted
+- Status: Accepted (state-storage decision superseded by [ADR-0005](0005-bootstrap-remote-state.md))
 - Date: 2026-09-07
 
 ## Context
