@@ -82,13 +82,30 @@ _CACHE_ORDER = ("cold", "warm")
 
 def _sort_key(row: dict) -> tuple:
     """Order rows by concurrency, then prefix-share, then cold before warm."""
-    cache_state = row["cache_state"]
-    cache_rank = (
-        _CACHE_ORDER.index(cache_state)
-        if cache_state in _CACHE_ORDER
-        else len(_CACHE_ORDER)
+    return (
+        row["concurrency"],
+        row["prefix_share"],
+        _CACHE_ORDER.index(row["cache_state"]),
     )
-    return (row["concurrency"], row["prefix_share"], cache_rank)
+
+
+def _require(record: dict, key: str, arm: str, source: object) -> object:
+    """Read a field a joined record must carry, or fail with context.
+
+    The arms are matched by source or segment, but a matched record can still
+    lack the figure the row needs (a truncated tool output). A bare KeyError
+    would hide which arm and run; this names both, as the file's other guards do.
+
+    :param record: the joined arm record.
+    :param key: the field the row needs from it.
+    :param arm: which arm the record is, for the message.
+    :param source: the run the row is being built for, for the message.
+    :return: the field value.
+    :raise ReportError: when the field is absent.
+    """
+    if key not in record:
+        raise ReportError(f"{arm} record for {source!r} is missing {key}")
+    return record[key]
 
 
 def _build_row(
@@ -97,6 +114,7 @@ def _build_row(
     """Join one prefix-cache record to its self-hosted and commercial arms."""
     request_rate = record.get("request_rate")
     prefix_share = record.get("prefix_share")
+    cache_state = record.get("cache_state")
     source = record.get("source")
     # Both segment keys must ride on the record; without them the run cannot be
     # placed in a concurrency/prefix-share segment and the report would blend it.
@@ -104,6 +122,13 @@ def _build_row(
         raise ReportError(f"prefix-cache record {source!r} has no request_rate")
     if prefix_share is None:
         raise ReportError(f"prefix-cache record {source!r} has no prefix_share")
+    # The cold/warm label is the whole point of the report; an unlabelled run
+    # would render and sort as a nothing, so reject it rather than pass it through.
+    if cache_state not in _CACHE_ORDER:
+        raise ReportError(
+            f"prefix-cache record {source!r} has invalid cache_state "
+            f"{cache_state!r}: want one of {_CACHE_ORDER}"
+        )
 
     self_hosted = _match_by_source(self_hosted_cost, source)
     commercial = _match_by_segment(commercial_cost, request_rate, prefix_share)
@@ -111,17 +136,25 @@ def _build_row(
     return {
         "concurrency": request_rate,
         "prefix_share": prefix_share,
-        "cache_state": record.get("cache_state"),
+        "cache_state": cache_state,
         "slo": {key: client_metrics.get(key) for key in _SLO_KEYS},
         "self_hosted_usd_per_1m": {
-            "input": self_hosted["cost_per_1m_input_usd"],
-            "output": self_hosted["cost_per_1m_output_usd"],
+            "input": _require(
+                self_hosted, "cost_per_1m_input_usd", "self-hosted", source
+            ),
+            "output": _require(
+                self_hosted, "cost_per_1m_output_usd", "self-hosted", source
+            ),
         },
         "commercial_usd_per_1m": {
-            "input": commercial["cost_per_1m_input_usd"],
-            "output": commercial["cost_per_1m_output_usd"],
-            "api": commercial["api"],
-            "model": commercial["model"],
+            "input": _require(
+                commercial, "cost_per_1m_input_usd", "commercial", source
+            ),
+            "output": _require(
+                commercial, "cost_per_1m_output_usd", "commercial", source
+            ),
+            "api": _require(commercial, "api", "commercial", source),
+            "model": _require(commercial, "model", "commercial", source),
         },
     }
 
@@ -167,7 +200,7 @@ _COLUMNS = (
 
 
 def _usd(value: object) -> str:
-    """Render a $/1M figure to cents, or a dash when the arm is absent."""
+    """Render a $/1M figure to cents, or a dash when the figure is null."""
     return f"{value:.2f}" if isinstance(value, (int, float)) else "-"
 
 

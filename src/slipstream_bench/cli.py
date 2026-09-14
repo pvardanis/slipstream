@@ -293,7 +293,7 @@ def prefix_cache(
 
 
 class ReportFormat(str, Enum):
-    """The render the baseline report is emitted in."""
+    """The format the baseline report is emitted in."""
 
     json = "json"
     markdown = "markdown"
