@@ -235,10 +235,16 @@ def test_run_sweep_invokes_the_runner_once_per_cell(tmp_path) -> None:
     cfg = _config(out_dir=str(tmp_path))
     calls: list[list[str]] = []
 
+    def runner(command: list[str]) -> int:
+        calls.append(command)
+        # A clean success writes a stampable result file, as vLLM would.
+        Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
     code = run_sweep(
         cfg,
         dry_run=False,
-        runner=lambda cmd: (calls.append(cmd), 0)[1],
+        runner=runner,
         echo=lambda _line: None,
         warn=lambda _line: None,
     )
@@ -276,21 +282,44 @@ def test_successful_cell_gets_its_prefix_share_injected(tmp_path) -> None:
     assert written["model_id"] == "m"
 
 
-def test_missing_result_file_warns_but_does_not_fail_the_cell(tmp_path) -> None:
-    """A successful cell that wrote no file is enriched best-effort: warn, stay ok."""
+def test_unannotatable_cell_warns_and_fails_the_sweep(tmp_path) -> None:
+    """A cell that ran but could not be stamped is not a clean success: warn + fail."""
     cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
     warned: list[str] = []
 
     code = run_sweep(
         cfg,
         dry_run=False,
-        runner=lambda _cmd: 0,
+        runner=lambda _cmd: 0,  # ran ok but wrote no result file to stamp
         echo=lambda _line: None,
         warn=warned.append,
     )
 
-    assert code == 0
+    assert code == 1
     assert any("prefix-share" in line for line in warned)
+    # The tally is printed even though every runner exited 0.
+    assert any("un-annotated" in line for line in warned)
+
+
+def test_non_object_result_file_is_not_annotated(tmp_path) -> None:
+    """A result file that is a JSON array, not an object, warns and fails the sweep."""
+    cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
+    warned: list[str] = []
+
+    def runner(command: list[str]) -> int:
+        Path(_result_filename(command)).write_text(json.dumps([1, 2, 3]))
+        return 0
+
+    code = run_sweep(
+        cfg,
+        dry_run=False,
+        runner=runner,
+        echo=lambda _line: None,
+        warn=warned.append,
+    )
+
+    assert code == 1
+    assert any("not a JSON object" in line for line in warned)
 
 
 def test_run_sweep_creates_a_nested_out_dir(tmp_path) -> None:

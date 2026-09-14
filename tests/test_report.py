@@ -3,9 +3,10 @@
 Covers the join/segment spine (prefix-cache records carry cache_state + the
 segment keys; self-hosted cost joins by shared source; commercial joins by
 segment), the segmentation per concurrency (request_rate proxy) and prefix-share
-bucket with cold/warm labelled and p95/p99 both reported, deterministic ordering,
-the markdown rendering, and the fail-fast guards on a missing segment key, an
-unjoinable self-hosted or commercial arm, and an empty spine.
+bucket with cold/warm labelled and p95/p99 both reported, deterministic ordering
+(concurrency the primary key, cold before warm), the markdown rendering, and the
+fail-fast guards on a missing segment key, an unlabelled cache state, an absent
+or null SLO tail, an unjoinable or null-priced arm, and an empty spine.
 """
 
 import json
@@ -131,7 +132,26 @@ def test_rows_sorted_by_concurrency_then_share_then_cold_before_warm() -> None:
     ]
 
 
-def test_missing_segment_key_is_rejected() -> None:
+def test_concurrency_is_the_primary_sort_key() -> None:
+    """A lower request_rate sorts ahead of a higher one, before prefix-share."""
+    lo = "bench/results/prefix-cache/cold_rate4_pshare90.json"
+    hi = "bench/results/prefix-cache/cold_rate8_pshare10.json"
+    rows = build_report(
+        self_hosted_cost=[_self_hosted(source=lo), _self_hosted(source=hi)],
+        commercial_cost=[
+            _commercial(request_rate=4.0, prefix_share=90),
+            _commercial(request_rate=8.0, prefix_share=10),
+        ],
+        prefix_cache=[
+            _prefix_cache(source=hi, request_rate=8.0, prefix_share=10),
+            _prefix_cache(source=lo, request_rate=4.0, prefix_share=90),
+        ],
+    )
+
+    assert [r["concurrency"] for r in rows] == [4.0, 8.0]
+
+
+def test_missing_prefix_share_is_rejected() -> None:
     """A spine record with no prefix_share cannot be segmented — fail fast."""
     source = "bench/results/prefix-cache/cold_pshareNONE.json"
     with pytest.raises(ReportError, match="prefix_share"):
@@ -139,6 +159,60 @@ def test_missing_segment_key_is_rejected() -> None:
             self_hosted_cost=[_self_hosted(source=source)],
             commercial_cost=[_commercial()],
             prefix_cache=[_prefix_cache(source=source, prefix_share=None)],
+        )
+
+
+def test_missing_request_rate_is_rejected() -> None:
+    """A spine record with no request_rate cannot be placed in a concurrency bucket."""
+    source = "bench/results/prefix-cache/cold_rateNONE.json"
+    with pytest.raises(ReportError, match="request_rate"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial()],
+            prefix_cache=[_prefix_cache(source=source, request_rate=None)],
+        )
+
+
+def test_missing_slo_block_is_rejected() -> None:
+    """A baseline-at-SLO row with no SLO tail is not a baseline row — fail fast."""
+    source = "bench/results/prefix-cache/cold_noslo.json"
+    record = _prefix_cache(source=source)
+    del record["client_metrics"]
+    with pytest.raises(ReportError, match="client_metrics"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial()],
+            prefix_cache=[record],
+        )
+
+
+def test_null_slo_metric_is_rejected() -> None:
+    """A run fired without --goodput has a null goodput; it is not a baseline row."""
+    source = "bench/results/prefix-cache/cold_nogoodput.json"
+    record = _prefix_cache(source=source)
+    record["client_metrics"]["request_goodput"] = None
+    with pytest.raises(ReportError, match="request_goodput"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial()],
+            prefix_cache=[record],
+        )
+
+
+def test_present_but_null_cost_field_is_rejected() -> None:
+    """A priced figure present as null is as unusable as absent — fail fast."""
+    source = "bench/results/prefix-cache/cold_pshare90_burst1.0.json"
+    with pytest.raises(ReportError, match="cost_per_1m_input_usd"):
+        build_report(
+            self_hosted_cost=[
+                {
+                    "source": source,
+                    "cost_per_1m_input_usd": None,
+                    "cost_per_1m_output_usd": 0.36,
+                }
+            ],
+            commercial_cost=[_commercial()],
+            prefix_cache=[_prefix_cache(source=source)],
         )
 
 
@@ -215,6 +289,24 @@ def test_markdown_renders_a_labelled_segmented_table() -> None:
     assert "90" in row
     assert "0.12" in row and "0.36" in row
     assert "0.15" in row and "0.60" in row
+
+
+def test_markdown_renders_a_row_per_segment_in_sorted_order() -> None:
+    """A cold+warm report renders three lines: cold body row before warm."""
+    cold = "bench/results/prefix-cache/cold_pshare90_burst1.0.json"
+    warm = "bench/results/prefix-cache/warm_pshare90_burst1.0.json"
+    rows = build_report(
+        self_hosted_cost=[_self_hosted(source=cold), _self_hosted(source=warm)],
+        commercial_cost=[_commercial()],
+        prefix_cache=[
+            _prefix_cache(source=warm, cache_state="warm"),
+            _prefix_cache(source=cold, cache_state="cold"),
+        ],
+    )
+
+    body = render_markdown(rows).splitlines()[2:]
+    assert len(body) == 2
+    assert "cold" in body[0] and "warm" in body[1]
 
 
 def test_load_records_reads_a_json_array(tmp_path: Path) -> None:

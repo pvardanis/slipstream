@@ -14,6 +14,7 @@ API with no result-file in common. The output is a pure function of its inputs.
 """
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 _SLO_KEYS = (
@@ -27,6 +28,39 @@ _SLO_KEYS = (
 
 class ReportError(Exception):
     """A report input that cannot be joined into a baseline row."""
+
+
+@dataclass(frozen=True)
+class Segment:
+    """The (concurrency, prefix-share) pair the two priced arms are joined on.
+
+    A run's segment is its request_rate (the L0 concurrency proxy) and its
+    prefix-share. Both must be present to place the run in a bucket, so binding
+    them into one value object keeps the join key from travelling as two loose,
+    same-typed values a caller could transpose.
+    """
+
+    request_rate: object
+    prefix_share: object
+
+    @classmethod
+    def of(cls, record: dict, source: object) -> "Segment":
+        """Read a run's segment off its record, rejecting an absent key.
+
+        :param record: the prefix-cache record the segment is read from.
+        :param source: the run's result-file, for the error message.
+        :return: the run's segment.
+        :raise ReportError: when request_rate or prefix_share is absent — the run
+            cannot be placed in a concurrency/prefix-share bucket and the report
+            would blend it.
+        """
+        request_rate = record.get("request_rate")
+        prefix_share = record.get("prefix_share")
+        if request_rate is None:
+            raise ReportError(f"prefix-cache record {source!r} has no request_rate")
+        if prefix_share is None:
+            raise ReportError(f"prefix-cache record {source!r} has no prefix_share")
+        return cls(request_rate, prefix_share)
 
 
 def load_records(path: Path) -> list[dict]:
@@ -66,7 +100,10 @@ def build_report(
         the (request_rate, prefix_share) segment.
     :param prefix_cache: the ``prefix-cache`` tool's records — the spine that
         carries the cold/warm label, the segment keys, and the SLO tail.
-    :return: one row per prefix-cache record.
+    :return: one row per prefix-cache record, sorted by concurrency, then
+        prefix-share, then cold before warm.
+    :raise ReportError: when the spine is empty, a spine record lacks a segment
+        key, the cold/warm label, or its SLO tail, or a joined arm is missing.
     """
     if not prefix_cache:
         raise ReportError("no prefix-cache records: nothing to report")
@@ -95,33 +132,57 @@ def _require(record: dict, key: str, arm: str, source: object) -> object:
     The arms are matched by source or segment, but a matched record can still
     lack the figure the row needs (a truncated tool output). A bare KeyError
     would hide which arm and run; this names both, as the file's other guards do.
+    A present-but-null value is as unusable as an absent one, so both fail here.
 
     :param record: the joined arm record.
     :param key: the field the row needs from it.
     :param arm: which arm the record is, for the message.
     :param source: the run the row is being built for, for the message.
     :return: the field value.
-    :raise ReportError: when the field is absent.
+    :raise ReportError: when the field is absent or null.
     """
-    if key not in record:
+    if record.get(key) is None:
         raise ReportError(f"{arm} record for {source!r} is missing {key}")
     return record[key]
+
+
+def _slo_tail(record: dict, source: object) -> dict:
+    """Read the SLO tail off a spine record, rejecting an absent or null figure.
+
+    A ``$/1M at SLO`` row with no SLO is not a baseline row, so a missing
+    ``client_metrics`` block or a null p95/p99/goodput fails here rather than
+    rendering a row of dashes that reads as measured-and-fine.
+
+    :param record: the prefix-cache spine record.
+    :param source: the run's result-file, for the error message.
+    :return: the SLO metrics keyed by :data:`_SLO_KEYS`.
+    :raise ReportError: when the SLO block or any of its figures is absent or null.
+    """
+    client_metrics = record.get("client_metrics")
+    if not isinstance(client_metrics, dict):
+        raise ReportError(f"prefix-cache record {source!r} has no client_metrics block")
+    tail = {key: client_metrics.get(key) for key in _SLO_KEYS}
+    for key, value in tail.items():
+        if value is None:
+            raise ReportError(f"prefix-cache record {source!r} has no SLO {key}")
+    return tail
 
 
 def _build_row(
     record: dict, self_hosted_cost: list[dict], commercial_cost: list[dict]
 ) -> dict:
-    """Join one prefix-cache record to its self-hosted and commercial arms."""
-    request_rate = record.get("request_rate")
-    prefix_share = record.get("prefix_share")
+    """Join one prefix-cache record to its self-hosted and commercial arms.
+
+    :param record: the prefix-cache spine record for one run.
+    :param self_hosted_cost: the self-hosted cost records, matched by ``source``.
+    :param commercial_cost: the commercial cost records, matched by segment.
+    :return: the baseline row for the run.
+    :raise ReportError: when the run lacks a segment key, the cold/warm label, or
+        its SLO tail, or either priced arm cannot be matched.
+    """
     cache_state = record.get("cache_state")
     source = record.get("source")
-    # Both segment keys must ride on the record; without them the run cannot be
-    # placed in a concurrency/prefix-share segment and the report would blend it.
-    if request_rate is None:
-        raise ReportError(f"prefix-cache record {source!r} has no request_rate")
-    if prefix_share is None:
-        raise ReportError(f"prefix-cache record {source!r} has no prefix_share")
+    segment = Segment.of(record, source)
     # The cold/warm label is the whole point of the report; an unlabelled run
     # would render and sort as a nothing, so reject it rather than pass it through.
     if cache_state not in _CACHE_ORDER:
@@ -131,13 +192,12 @@ def _build_row(
         )
 
     self_hosted = _match_by_source(self_hosted_cost, source)
-    commercial = _match_by_segment(commercial_cost, request_rate, prefix_share)
-    client_metrics = record.get("client_metrics") or {}
+    commercial = _match_by_segment(commercial_cost, segment)
     return {
-        "concurrency": request_rate,
-        "prefix_share": prefix_share,
+        "concurrency": segment.request_rate,
+        "prefix_share": segment.prefix_share,
         "cache_state": cache_state,
-        "slo": {key: client_metrics.get(key) for key in _SLO_KEYS},
+        "slo": _slo_tail(record, source),
         "self_hosted_usd_per_1m": {
             "input": _require(
                 self_hosted, "cost_per_1m_input_usd", "self-hosted", source
@@ -160,26 +220,35 @@ def _build_row(
 
 
 def _match_by_source(records: list[dict], source: object) -> dict:
-    """Find the one cost record sharing this run's result-file source."""
+    """Find the one cost record sharing this run's result-file source.
+
+    :param records: the self-hosted cost records.
+    :param source: the run's result-file to match on.
+    :return: the matching cost record.
+    :raise ReportError: when no record shares the source.
+    """
     for candidate in records:
         if candidate.get("source") == source:
             return candidate
     raise ReportError(f"no self-hosted cost record for source {source!r}")
 
 
-def _match_by_segment(
-    records: list[dict], request_rate: object, prefix_share: object
-) -> dict:
-    """Find the commercial record for this run's (request_rate, prefix_share)."""
+def _match_by_segment(records: list[dict], segment: Segment) -> dict:
+    """Find the commercial record for this run's segment.
+
+    :param records: the commercial cost records.
+    :param segment: the run's (request_rate, prefix_share) join key.
+    :return: the matching commercial record.
+    :raise ReportError: when no record shares the segment.
+    """
     for candidate in records:
-        if (
-            candidate.get("request_rate") == request_rate
-            and candidate.get("prefix_share") == prefix_share
+        if Segment(candidate.get("request_rate"), candidate.get("prefix_share")) == (
+            segment
         ):
             return candidate
     raise ReportError(
         f"no commercial cost record for segment "
-        f"request_rate={request_rate!r} prefix_share={prefix_share!r}"
+        f"request_rate={segment.request_rate!r} prefix_share={segment.prefix_share!r}"
     )
 
 
@@ -200,7 +269,7 @@ _COLUMNS = (
 
 
 def _usd(value: object) -> str:
-    """Render a $/1M figure to cents, or a dash when the figure is null."""
+    """Render a $/1M figure to cents, or a dash for a non-numeric figure."""
     return f"{value:.2f}" if isinstance(value, (int, float)) else "-"
 
 
