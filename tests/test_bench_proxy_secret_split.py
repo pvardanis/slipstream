@@ -13,7 +13,7 @@ SCRIPT = (
     Path(__file__).resolve().parents[1]
     / "terraform"
     / "baseline"
-    / "bench-proxy-secret-split.py"
+    / "bench_proxy_secret_split.py"
 )
 
 

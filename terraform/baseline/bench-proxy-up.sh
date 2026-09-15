@@ -34,7 +34,7 @@ install -d -m 0700 "${cert_dir}"
 # The splitter reads the JSON from $SECRET_JSON (off argv, off the process list) and
 # writes each PEM field 0600; it fails with a named message when a field or the whole
 # SecretString is absent.
-python3 /usr/local/bin/bench-proxy-secret-split.py \
+python3 /usr/local/bin/bench_proxy_secret_split.py \
   "${client_cert}" "${client_key}" "${ca_cert}"
 
 echo "proxy-up: starting nginx" >&2
