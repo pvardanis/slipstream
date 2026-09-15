@@ -45,9 +45,9 @@ targets = (
     (sys.argv[3], "ca_cert_pem"),
 )
 for path, field in targets:
-    value = data[field]
+    value = data.get(field)
     if not value:
-        raise SystemExit(f"bench-client secret field {field} is empty")
+        raise SystemExit(f"bench-client secret field {field} is missing or empty")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(value)
 PY
