@@ -259,6 +259,84 @@ run "bench_host_invariants" {
   }
 }
 
+# The host runs an L4 nginx stream proxy so the sweep can speak plain HTTP to
+# localhost while mutual TLS to the ALB happens in the proxy. These assertions
+# check the boot install and the rendered proxy config's shape offline; the real
+# proof that the handshake completes is the hand-run sweep's smoke step.
+run "bench_proxy_config" {
+  command = apply
+
+  # The boot script installs nginx and the stream module (not built into the base
+  # nginx package on AL2023) and drops the rendered proxy config and up-script.
+  assert {
+    condition     = strcontains(local.bench_user_data, "nginx")
+    error_message = "Boot script must install nginx for the mTLS proxy."
+  }
+  assert {
+    condition     = strcontains(local.bench_user_data, "nginx-mod-stream")
+    error_message = "Boot script must install the nginx stream module; the base nginx package omits it."
+  }
+  assert {
+    condition     = strcontains(local.bench_user_data, local.bench_proxy_conf)
+    error_message = "Boot script must write the rendered proxy config to the host."
+  }
+  assert {
+    condition     = strcontains(local.bench_user_data, "bench-proxy-up.sh")
+    error_message = "Boot script must install the proxy up-script the sweep drives."
+  }
+
+  # The proxy listens on loopback only: it must never be reachable off the host,
+  # so the client cert never leaves as an open relay.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "listen 127.0.0.1:${local.bench_proxy_port}")
+    error_message = "Proxy must listen on loopback only."
+  }
+  # It is an L4 stream proxy, not an http{} proxy, so nothing buffers or re-chunks
+  # the token stream the latency metrics are measured from.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "stream {")
+    error_message = "Proxy must be an L4 stream proxy so it does not buffer the token stream."
+  }
+  # It forwards to the ALB DNS name on 443, terminating mutual TLS upstream.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "proxy_pass ${aws_lb.baseline.dns_name}:443")
+    error_message = "Proxy must forward to the ALB DNS name on 443."
+  }
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "proxy_ssl on")
+    error_message = "Proxy must speak TLS upstream to the ALB."
+  }
+
+  # It presents the bench client's identity so the verify-mode listener admits it.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "proxy_ssl_certificate ") && strcontains(local.bench_proxy_conf, "proxy_ssl_certificate_key ")
+    error_message = "Proxy must present the bench client certificate and key."
+  }
+  # It verifies the ALB's server certificate against the CA, under the name the
+  # cert was issued for (the ALB DNS name the self-signed cert cannot cover).
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "proxy_ssl_trusted_certificate ")
+    error_message = "Proxy must verify the ALB certificate against the bench CA."
+  }
+  assert {
+    condition     = can(regex("proxy_ssl_verify\\s+on", local.bench_proxy_conf))
+    error_message = "Proxy must verify the ALB certificate (proxy_ssl_verify on)."
+  }
+  assert {
+    condition     = can(regex("proxy_ssl_server_name\\s+on", local.bench_proxy_conf))
+    error_message = "Proxy must send SNI so the ALB serves the matching certificate."
+  }
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, var.server_dns_name)
+    error_message = "Proxy must verify against the issued server name (proxy_ssl_name)."
+  }
+  # TLS 1.3 is pinned upstream, matching the listener's ssl_policy on the ALB.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "TLSv1.3")
+    error_message = "Proxy must pin TLS 1.3 to the ALB."
+  }
+}
+
 # A burstable instance type is rejected at plan: its CPU credits would add
 # variance to the latency measurement the whole vantage exists to take.
 run "rejects_burstable_instance_type" {

@@ -1,0 +1,48 @@
+# Rendered by Terraform (host.tf) and written over /etc/nginx/nginx.conf on the
+# ephemeral bench host. This host runs nginx for one job — an L4 client-side
+# mutual-TLS proxy — so it owns the whole file rather than threading a stream{}
+# include into the distro config (a stream block cannot live under conf.d, which
+# is http context).
+#
+# The sweep container speaks plain HTTP to 127.0.0.1:${listen_port}; this stream
+# server wraps that byte stream in mutual TLS to the public ALB. It is L4 (not an
+# http{} proxy) on purpose: a raw pipe never buffers or re-chunks the token
+# stream, so TTFT and ITL are measured through it undistorted. The client
+# certificate, its key and the CA are written next to this file by
+# bench-proxy-up.sh from the bench-client secret; they are not rendered here.
+
+# Load the stream module (packaged separately as nginx-mod-stream on AL2023).
+include /usr/share/nginx/modules/*.conf;
+
+events {}
+
+stream {
+    server {
+        # Loopback only: the proxy holds the client identity and must never be an
+        # open relay reachable off the host.
+        listen 127.0.0.1:${listen_port};
+
+        proxy_pass ${alb_dns_name}:443;
+        proxy_ssl on;
+
+        # Present the bench client's identity so the ALB's verify-mode listener
+        # admits the connection.
+        proxy_ssl_certificate     ${client_cert_path};
+        proxy_ssl_certificate_key ${client_key_path};
+
+        # Verify the ALB's server certificate against the same private CA, under
+        # the name the cert was issued for — the ALB's own DNS name is not on the
+        # self-signed cert, so SNI and verification use ${server_dns_name}.
+        proxy_ssl_trusted_certificate ${ca_cert_path};
+        proxy_ssl_verify        on;
+        proxy_ssl_verify_depth  2;
+        proxy_ssl_name          ${server_dns_name};
+        proxy_ssl_server_name   on;
+
+        # Pin TLS 1.3, matching the listener ssl_policy on the ALB, and offer only
+        # HTTP/1.1 over ALPN so the L4 pipe never carries an h2-negotiated stream
+        # the plain-HTTP client cannot speak.
+        proxy_ssl_protocols TLSv1.3;
+        proxy_ssl_alpn      "http/1.1";
+    }
+}

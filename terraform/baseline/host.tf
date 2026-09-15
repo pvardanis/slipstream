@@ -43,13 +43,38 @@ locals {
   # the first slash (account.dkr.ecr.<region>.amazonaws.com).
   ecr_registry = split("/", data.terraform_remote_state.bootstrap.outputs.bench_image_repo_url)[0]
 
+  # Loopback port the mutual-TLS proxy listens on: the sweep container drives plain
+  # HTTP here and the proxy speaks mTLS to the ALB. Shared between the rendered
+  # nginx config and the proxy.env the up-script reads.
+  bench_proxy_port     = 8000
+  bench_proxy_cert_dir = "/etc/bench-proxy"
+
+  # Rendered nginx stream config for the client-side mTLS proxy. A local so a test
+  # can assert its shape (loopback listen, proxy_ssl to the ALB DNS name, verify
+  # against the CA under the issued server name) offline.
+  bench_proxy_conf = templatefile("${path.module}/bench-proxy.conf.tftpl", {
+    listen_port      = local.bench_proxy_port
+    alb_dns_name     = aws_lb.baseline.dns_name
+    server_dns_name  = var.server_dns_name
+    client_cert_path = "${local.bench_proxy_cert_dir}/client.crt"
+    client_key_path  = "${local.bench_proxy_cert_dir}/client.key"
+    ca_cert_path     = "${local.bench_proxy_cert_dir}/ca.crt"
+  })
+
   # Rendered boot script. A local (not inline on the instance) so a test can
-  # assert the right bucket, registry and image reference were templated in.
+  # assert the right bucket, registry and image reference were templated in. It
+  # also installs and drops the mTLS proxy (config + up-script + env) but does not
+  # start it: the client cert lives in Secrets Manager and the ALB targets are not
+  # healthy at boot, so the up-script starts nginx and smokes /health at sweep time.
   bench_user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    region         = var.region
-    ecr_registry   = local.ecr_registry
-    image_ref      = local.bench_image_ref
-    results_bucket = aws_s3_bucket.results.id
+    region          = var.region
+    ecr_registry    = local.ecr_registry
+    image_ref       = local.bench_image_ref
+    results_bucket  = aws_s3_bucket.results.id
+    proxy_conf      = local.bench_proxy_conf
+    proxy_up_script = file("${path.module}/bench-proxy-up.sh")
+    proxy_env       = "SECRET_ARN=${aws_secretsmanager_secret.bench_client.arn}\nREGION=${var.region}\nPROXY_PORT=${local.bench_proxy_port}\n"
+    proxy_cert_dir  = local.bench_proxy_cert_dir
   })
 }
 
