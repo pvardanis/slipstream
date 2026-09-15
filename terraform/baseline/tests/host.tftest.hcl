@@ -146,6 +146,14 @@ run "bench_host_invariants" {
     condition     = strcontains(local.bench_user_data, local.bench_secret_field)
     error_message = "Boot script must embed the rendered bench secret field reader."
   }
+  # The boot script embeds the rendered prefix-cache script the SSM command runs: it
+  # drives a cold and a warm cell against the loopback proxy, brackets each with a
+  # /metrics snapshot, and copies results to S3. Assert the content is present, not
+  # merely the path, so an empty render fails here.
+  assert {
+    condition     = strcontains(local.bench_user_data, local.bench_prefix_cache_script)
+    error_message = "Boot script must embed the rendered prefix-cache script the SSM command runs."
+  }
 
   # The host security group admits nothing: access is via SSM (an outbound
   # session), not SSH, so there is no inbound attack surface at all.
