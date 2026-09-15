@@ -8,8 +8,9 @@
 # server wraps that byte stream in mutual TLS to the public ALB. It is L4 (not an
 # http{} proxy) on purpose: a raw pipe never buffers or re-chunks the token
 # stream, so TTFT and ITL are measured through it undistorted. The client
-# certificate, its key and the CA are written next to this file by
-# bench-proxy-up.sh from the bench-client secret; they are not rendered here.
+# certificate, its key and the CA are written into /etc/bench-proxy (the cert
+# paths below) by bench-proxy-up.sh from the bench-client secret; they are not
+# rendered here.
 
 # Load the stream module (packaged separately as nginx-mod-stream on AL2023).
 include /usr/share/nginx/modules/*.conf;
@@ -39,9 +40,9 @@ stream {
         proxy_ssl_name          ${server_dns_name};
         proxy_ssl_server_name   on;
 
-        # Pin TLS 1.3, matching the listener ssl_policy on the ALB, and offer only
-        # HTTP/1.1 over ALPN so the L4 pipe never carries an h2-negotiated stream
-        # the plain-HTTP client cannot speak.
+        # Pin TLS 1.3, the top of the ALB listener's TLS13-1-2 policy, and offer
+        # only HTTP/1.1 over ALPN so the L4 pipe never carries an h2-negotiated
+        # stream the plain-HTTP client cannot speak.
         proxy_ssl_protocols TLSv1.3;
         proxy_ssl_alpn      "http/1.1";
     }

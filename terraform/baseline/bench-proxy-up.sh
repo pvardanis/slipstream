@@ -4,9 +4,10 @@
 # config) and /etc/bench-proxy/proxy.env, but does not start nginx: the client
 # certificate lives in Secrets Manager and the ALB targets are not healthy at boot
 # yet. The sweep orchestration runs this over SSM just before the sweep. It fetches
-# the bench-client secret, writes the cert, key and CA next to the config, starts
-# nginx, and smokes /health through the proxy so a broken handshake fails here
-# rather than mid-sweep. Idempotent: safe to re-run.
+# the bench-client secret, writes the cert, key and CA into the proxy dir
+# (/etc/bench-proxy, the paths the nginx config references), starts nginx, and
+# smokes /health through the proxy so a broken handshake fails here rather than
+# mid-sweep. Idempotent: safe to re-run.
 set -euo pipefail
 
 # Config the boot script rendered from Terraform: the secret ARN, its region, and
@@ -38,7 +39,13 @@ import json
 import os
 import sys
 
-data = json.loads(os.environ["SECRET_JSON"])
+# --query SecretString --output text prints the literal "None" when the secret
+# holds a binary value instead of a string; guard it so the failure is an
+# actionable message rather than a raw JSONDecodeError traceback.
+raw = os.environ["SECRET_JSON"]
+if raw in ("", "None"):
+    raise SystemExit("bench-client secret has no SecretString value")
+data = json.loads(raw)
 targets = (
     (sys.argv[1], "client_cert_pem"),
     (sys.argv[2], "client_key_pem"),
@@ -65,7 +72,11 @@ echo "proxy-up: smoking /health through the proxy" >&2
 # The ALB targets can lag behind boot, so retry rather than fail on the first miss.
 status=""
 for _ in $(seq 30); do
-  status="$(curl -s -o /dev/null -w '%{http_code}' \
+  # Bound each probe: an L4 proxy can accept the loopback TCP connection and then
+  # hang on a stalled upstream handshake (unreachable target, black-holed packets),
+  # which without a ceiling would freeze the retry loop until the outer SSM command
+  # times out minutes later instead of failing here with a clear message.
+  status="$(curl -s --connect-timeout 3 --max-time 5 -o /dev/null -w '%{http_code}' \
     "http://127.0.0.1:${PROXY_PORT}/health" || true)"
   if [[ "${status}" == "200" ]]; then
     echo "proxy-up: ok (proxy handshake and /health verified)" >&2
