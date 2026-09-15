@@ -293,6 +293,12 @@ run "bench_proxy_config" {
     condition     = strcontains(local.bench_user_data, local.bench_proxy_env)
     error_message = "Boot script must embed the rendered proxy env (secret ARN, region, port)."
   }
+  # The up-script runs the secret splitter by path; the boot script must embed its
+  # rendered content so the host has the file when the sweep runs it over SSM.
+  assert {
+    condition     = strcontains(local.bench_user_data, local.bench_proxy_secret_split)
+    error_message = "Boot script must embed the rendered proxy secret splitter."
+  }
 
   # The proxy listens on loopback only: it must never be reachable off the host,
   # so the client cert never leaves as an open relay.

@@ -66,20 +66,25 @@ locals {
   bench_proxy_up_script = file("${path.module}/bench-proxy-up.sh")
   bench_proxy_env       = "SECRET_ARN=${aws_secretsmanager_secret.bench_client.arn}\nREGION=${var.region}\nPROXY_PORT=${local.bench_proxy_port}\n"
 
+  # The secret splitter the up-script runs, as a local so a test can assert it is
+  # dropped on the host rather than merely referenced by path.
+  bench_proxy_secret_split = file("${path.module}/bench-proxy-secret-split.py")
+
   # Rendered boot script. A local (not inline on the instance) so a test can
   # assert the right bucket, registry and image reference were templated in. It
   # also installs and drops the mTLS proxy (config + up-script + env) but does not
   # start it: the client cert lives in Secrets Manager and the ALB targets are not
   # healthy at boot, so the up-script starts nginx and smokes /health at sweep time.
   bench_user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    region          = var.region
-    ecr_registry    = local.ecr_registry
-    image_ref       = local.bench_image_ref
-    results_bucket  = aws_s3_bucket.results.id
-    proxy_conf      = local.bench_proxy_conf
-    proxy_up_script = local.bench_proxy_up_script
-    proxy_env       = local.bench_proxy_env
-    proxy_cert_dir  = local.bench_proxy_cert_dir
+    region             = var.region
+    ecr_registry       = local.ecr_registry
+    image_ref          = local.bench_image_ref
+    results_bucket     = aws_s3_bucket.results.id
+    proxy_conf         = local.bench_proxy_conf
+    proxy_up_script    = local.bench_proxy_up_script
+    proxy_env          = local.bench_proxy_env
+    proxy_cert_dir     = local.bench_proxy_cert_dir
+    proxy_secret_split = local.bench_proxy_secret_split
   })
 }
 
