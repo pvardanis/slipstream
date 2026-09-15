@@ -80,6 +80,10 @@ ${proxy_up_script}
 PROXY_UP_EOF
 chmod +x /usr/local/bin/bench-proxy-up.sh || fail "chmod proxy up-script"
 
+cat >/usr/local/bin/bench_secret_field.py <<'SECRET_FIELD_EOF' || fail "write secret field reader"
+${secret_field}
+SECRET_FIELD_EOF
+
 cat >/usr/local/bin/bench-sweep.sh <<'SWEEP_EOF' || fail "write sweep script"
 ${sweep_script}
 SWEEP_EOF

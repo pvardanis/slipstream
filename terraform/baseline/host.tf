@@ -74,6 +74,10 @@ locals {
   # is embedded in the boot script rather than merely referenced by path.
   bench_sweep_script = file("${path.module}/bench-sweep.sh")
 
+  # The secret field reader the sweep script runs to pull the api-key, as a local so a
+  # test can assert it is dropped on the host rather than merely referenced by path.
+  bench_secret_field = file("${path.module}/bench_secret_field.py")
+
   # Rendered boot script. A local (not inline on the instance) so a test can
   # assert the right bucket, registry and image reference were templated in. It
   # also installs and drops the mTLS proxy (config + up-script + env) but does not
@@ -90,6 +94,7 @@ locals {
     proxy_cert_dir     = local.bench_proxy_cert_dir
     proxy_secret_split = local.bench_proxy_secret_split
     sweep_script       = local.bench_sweep_script
+    secret_field       = local.bench_secret_field
   })
 }
 
@@ -227,7 +232,10 @@ resource "aws_instance" "bench_host" {
     http_tokens   = "required"
   }
 
-  user_data                   = local.bench_user_data
+  # gzip the boot script: it embeds the proxy config and four host scripts, which
+  # together exceed EC2's 16 KB user-data limit uncompressed. cloud-init detects the
+  # gzip magic bytes and decompresses before running it.
+  user_data_base64            = base64gzip(local.bench_user_data)
   user_data_replace_on_change = true
 
   tags = merge(local.tags, { Name = "${local.name}-host" })
