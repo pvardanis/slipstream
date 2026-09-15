@@ -4,9 +4,9 @@
 # than an in-cluster ClusterIP hop. It boots, pulls the baked bench-client image
 # from ECR, and idles; the sweep itself is driven over an SSM session (a later
 # layer), which is also how the operator reaches the host — there is no inbound
-# SSH and the security group admits nothing. It reads its client certificate,
-# key, CA and api-key from the bench-client secret at run time, never from a
-# command line, and writes results to the results bucket so they outlive it.
+# SSH and the security group admits nothing. At sweep time it will read its
+# client certificate, key, CA and api-key from the bench-client secret rather
+# than a command line, and write results to the results bucket so they outlive it.
 
 variable "bench_image_tag" {
   description = "Tag of the bench-client image the host pulls from ECR. Matches the tag `just bench-image` pushes (reused across dev-loop rebuilds)."
@@ -53,8 +53,10 @@ resource "aws_security_group" "bench_host" {
   tags = local.tags
 }
 
-# Instance role, assumable only by EC2. Every grant below is a separate inline
-# policy scoped to one resource, so least privilege is legible one grant at a time.
+# Instance role, assumable only by EC2. The secrets, results, and ECR-pull grants
+# below are each a separate inline policy scoped to a single resource, so least
+# privilege is legible one grant at a time. SSM access is an AWS-managed
+# attachment, and ECR GetAuthorizationToken must be registry-wide (see below).
 resource "aws_iam_role" "bench_host" {
   name_prefix = "${local.name}-host-"
 
@@ -148,19 +150,47 @@ resource "aws_iam_instance_profile" "bench_host" {
 }
 
 resource "aws_instance" "bench_host" {
-  ami                         = data.aws_ssm_parameter.al2023.value
-  instance_type               = var.bench_host_instance_type
+  ami           = data.aws_ssm_parameter.al2023.value
+  instance_type = var.bench_host_instance_type
+  # First eks public subnet: the host needs its IGW route so the public IP can
+  # reach ECR, Secrets Manager, SSM, S3 and the internet-facing ALB. This trusts
+  # the eks stack to keep those subnets internet-routable.
   subnet_id                   = local.eks.public_subnets[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.bench_host.id]
   iam_instance_profile        = aws_iam_instance_profile.bench_host.name
 
+  # Require IMDSv2: the host is public and carries role credentials that read the
+  # bench-client secret, so a token-less IMDSv1 endpoint would be an SSRF path to
+  # those credentials.
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
+
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    region       = var.region
-    ecr_registry = local.ecr_registry
-    image_ref    = local.bench_image_ref
+    region         = var.region
+    ecr_registry   = local.ecr_registry
+    image_ref      = local.bench_image_ref
+    results_bucket = aws_s3_bucket.results.id
   })
   user_data_replace_on_change = true
 
   tags = merge(local.tags, { Name = "${local.name}-host" })
+}
+
+# The host reaches the internet-facing ALB by its public IP over the IGW hairpin,
+# so it arrives at the ALB as a public source address, not a VPC-internal one — a
+# security-group reference would never match it. Admit exactly the host's public
+# /32 on 443 alongside the operator (security.tf). mTLS stays the real gate; this
+# is the CIDR pinhole the operator rule already models, extended to the host.
+resource "aws_vpc_security_group_ingress_rule" "alb_from_host" {
+  security_group_id = aws_security_group.alb.id
+  cidr_ipv4         = "${aws_instance.bench_host.public_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  description       = "Bench host to the mutual-TLS listener"
+
+  tags = local.tags
 }

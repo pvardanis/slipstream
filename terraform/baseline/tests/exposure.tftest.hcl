@@ -31,8 +31,8 @@ run "exposure_invariants" {
   }
 
   # The bootstrap read feeds the bench host, not the exposure resources, but it is
-  # part of the stack now, so it must be overridden here too or the test reaches
-  # for real remote state.
+  # part of the stack, so it must be overridden here too or the test reaches for
+  # real remote state.
   override_data {
     target = data.terraform_remote_state.bootstrap
     values = {
