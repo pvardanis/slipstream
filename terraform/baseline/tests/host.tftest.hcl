@@ -140,6 +140,12 @@ run "bench_host_invariants" {
     condition     = strcontains(local.bench_user_data, local.bench_sweep_script)
     error_message = "Boot script must embed the rendered bench sweep script the SSM command runs."
   }
+  # The sweep script runs the secret field reader by path to pull the api-key; the boot
+  # script must embed its rendered content so the host has the file when the sweep runs.
+  assert {
+    condition     = strcontains(local.bench_user_data, local.bench_secret_field)
+    error_message = "Boot script must embed the rendered bench secret field reader."
+  }
 
   # The host security group admits nothing: access is via SSM (an outbound
   # session), not SSH, so there is no inbound attack surface at all.

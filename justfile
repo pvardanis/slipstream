@@ -152,32 +152,50 @@ bench *args:
     # so concurrent or repeated runs never overwrite each other.
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 
-    # Send one shell command to the host and wait for it to finish, streaming its
-    # output. The command string is JSON-escaped by python so quoting in the sweep
-    # args cannot break the parameters document. Returns the host command's status.
+    # Run one shell command on the host: send it, poll until it finishes, then surface
+    # its stderr (stdout is not retrieved — bench-sweep.sh logs progress to stderr and
+    # real results go to S3). The command string is JSON-escaped by python so it cannot
+    # break the parameters document. Returns 0 if the host command succeeded, non-zero
+    # otherwise (send/poll failure, a terminal non-Success status, or the wait ceiling).
     run_on_host() {
       local label=$1 command=$2 timeout=$3 cid status
       local params
       params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]]}))' "${command}")"
-      cid="$(aws ssm send-command --region "${region}" \
+      # Capture send-command explicitly. This function is called as `... || rc=$?`,
+      # which suspends set -e for its whole body, so an unchecked send failure would
+      # leave cid empty and spin the poll loop to the deadline instead of failing fast.
+      if ! cid="$(aws ssm send-command --region "${region}" \
         --instance-ids "${instance}" \
         --document-name AWS-RunShellScript \
         --comment "${label}" \
         --parameters "${params}" \
-        --query Command.CommandId --output text)"
+        --query Command.CommandId --output text)"; then
+        echo "${label}: ssm send-command failed" >&2
+        return 1
+      fi
       local deadline=$((SECONDS + timeout))
       while ((SECONDS < deadline)); do
-        # get-command-invocation 404s for a moment after send; treat that as Pending.
-        status="$(aws ssm get-command-invocation --region "${region}" \
+        # get-command-invocation 404s for a moment right after send; tolerate only that
+        # InvocationDoesNotExist race as Pending. Any other error (credentials expiring
+        # mid-sweep, throttling, wrong region) stops the wait with its message rather
+        # than being swallowed as Pending and spinning to the deadline.
+        if ! status="$(aws ssm get-command-invocation --region "${region}" \
           --command-id "${cid}" --instance-id "${instance}" \
-          --query Status --output text 2>/dev/null || echo Pending)"
+          --query Status --output text 2>&1)"; then
+          if [[ "${status}" == *InvocationDoesNotExist* ]]; then
+            status="Pending"
+          else
+            echo "${label}: polling failed: ${status}" >&2
+            return 1
+          fi
+        fi
         case "${status}" in
         Success)
           aws ssm get-command-invocation --region "${region}" --command-id "${cid}" \
             --instance-id "${instance}" --query StandardErrorContent --output text >&2 || true
           return 0
           ;;
-        Failed | Cancelled | TimedOut)
+        Failed | Cancelled | TimedOut | Undeliverable | Terminated)
           echo "${label}: ${status}" >&2
           aws ssm get-command-invocation --region "${region}" --command-id "${cid}" \
             --instance-id "${instance}" --query StandardErrorContent --output text >&2 || true
@@ -191,22 +209,28 @@ bench *args:
     }
 
     # The proxy must be listening before the sweep runs; a failed handshake here is a
-    # hard stop, not a partial result to salvage.
-    run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 180
+    # hard stop, not a partial result to salvage. The ceiling sits above the up-script's
+    # own ~210s smoke-retry budget so its clear failure message wins over a generic wait.
+    run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
 
-    # Pass the per-run values as environment for the host sweep script; the api-key is
-    # fetched host-side from Secrets Manager, never sent from here. serve-sweep only
-    # exits non-zero at the end of the grid, so a partial failure still leaves cells
-    # worth keeping: sync whatever landed regardless, then surface the sweep's status.
-    sweep_env="IMAGE_REF=$(printf %q "${image}") RESULTS_BUCKET=$(printf %q "${bucket}")"
-    sweep_env="${sweep_env} MODEL=$(printf %q '{{ model }}') RUN_ID=$(printf %q "${run_id}")"
-    sweep_env="${sweep_env} SWEEP_ARGS=$(printf %q '{{ args }}')"
+    # Pass the per-run values as environment prefixed to the host command. The plain
+    # values carry no shell-special characters, so single-quoting suffices; the free-form
+    # extra flags are base64-encoded so they cross the SSM command line without quoting
+    # the host shell (not necessarily bash) could misparse. The api-key is fetched
+    # host-side from Secrets Manager, never sent from here. serve-sweep only exits
+    # non-zero at the end of the grid, so a partial failure still leaves cells worth
+    # keeping: sync whatever landed regardless, then surface the sweep's status.
+    args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
+    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ model }}'"
+    sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_ARGS_B64='${args_b64}'"
     sweep_rc=0
     run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
 
-    mkdir -p bench/results
-    aws s3 sync "s3://${bucket}/sweeps/${run_id}" bench/results --region "${region}"
-    echo "results synced to bench/results/ (run ${run_id})"
+    # Sync just this run's objects into a per-run subdir so repeated runs never clobber
+    # each other locally, matching the bucket's per-run prefix and bench-results-sync.
+    mkdir -p "bench/results/${run_id}"
+    aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
+    echo "results synced to bench/results/${run_id}/"
     exit "${sweep_rc}"
 
 # Sync every sweep's results from the baseline results bucket to bench/results for local reporting; use to pull runs made from another machine.

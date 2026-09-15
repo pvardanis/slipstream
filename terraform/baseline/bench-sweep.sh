@@ -4,9 +4,10 @@
 # drives the baked bench-client image against that proxy (which speaks mTLS to the
 # ALB), so the latency it records is what an off-cluster client sees, then copies the
 # result JSON to the results bucket where it outlives the host. The recipe passes the
-# per-run values (image, bucket, model, run id, extra flags) as SSM parameters; the
-# secret ARN, region and loopback port come from the proxy env the boot script drops.
-# Idempotent per RUN_ID: re-running overwrites that run's prefix in the bucket.
+# per-run values (image, bucket, model, run id, extra flags) as environment
+# assignments prefixed to the SSM command; the secret ARN, region and loopback port
+# come from the proxy env the boot script drops. Re-running a RUN_ID overwrites each
+# cell's object under that prefix (stale objects from a different grid are not purged).
 set -euo pipefail
 
 # Secret ARN, region and the loopback port the proxy listens on, dropped at boot.
@@ -17,30 +18,36 @@ source /etc/bench-proxy/proxy.env
 : "${RESULTS_BUCKET:?bench sweep needs RESULTS_BUCKET (where results are copied)}"
 : "${MODEL:?bench sweep needs MODEL (the served model id to sweep)}"
 : "${RUN_ID:?bench sweep needs RUN_ID (the results-bucket prefix for this run)}"
-# SWEEP_ARGS is optional: extra serve-sweep flags the caller appended to `just bench`.
-sweep_args_raw="${SWEEP_ARGS:-}"
+# SWEEP_ARGS_B64 is optional: extra serve-sweep flags the caller appended to
+# `just bench`, base64-encoded so they cross the SSM command line without any quoting
+# that the host shell (not necessarily bash) would misparse.
+sweep_args_b64="${SWEEP_ARGS_B64:-}"
 
 echo "bench-sweep: fetching the vLLM api-key" >&2
 # vLLM enforces an api-key on /v1; serve-sweep's openai backend sends it as the bearer
 # token via OPENAI_API_KEY. Export it so `docker run -e OPENAI_API_KEY` passes it by
 # name — the value stays out of docker's argv (it still shows in `docker inspect` on
 # this single-tenant throwaway host, an accepted tradeoff for an env-based client).
+# The reader takes the secret JSON on stdin (off argv) and names the missing field
+# rather than dying on a raw traceback when the secret lacks an api_key.
 OPENAI_API_KEY="$(aws secretsmanager get-secret-value \
   --secret-id "${SECRET_ARN}" --region "${REGION}" \
   --query SecretString --output text |
-  python3 -c 'import json,sys; print(json.load(sys.stdin)["api_key"])')"
+  python3 /usr/local/bin/bench_secret_field.py api_key)"
 export OPENAI_API_KEY
 
 # serve-sweep writes one JSON per successful cell into the results dir and only exits
 # non-zero at the end of the grid, so a partial failure still leaves cells worth
-# keeping. Bind-mount a host dir as the run's output and run the container as the host
-# user so the JSON is host-owned and the copy-up below can read it.
+# keeping. Bind-mount a host dir as the run's output; run the container as the invoking
+# user so the JSON is not root-owned if this is ever run as non-root (it runs as root
+# under SSM today, where id -u is 0 and the mapping is a no-op).
 results_dir="/tmp/bench-results/${RUN_ID}"
 rm -rf "${results_dir}"
 mkdir -p "${results_dir}"
 
-# Split optional flags on whitespace into an array; serve-sweep flags carry no spaces.
-read -ra sweep_args <<<"${sweep_args_raw}"
+# Decode the optional flags and split on whitespace into an array; serve-sweep flags
+# carry no spaces, so word-splitting the decoded string reconstructs them.
+read -ra sweep_args <<<"$(printf '%s' "${sweep_args_b64}" | base64 -d)"
 
 echo "bench-sweep: running the sweep against the loopback proxy" >&2
 # --network host so the container reaches the proxy on 127.0.0.1; --rm for a one-shot.
@@ -54,11 +61,16 @@ docker run --rm --network host --user "$(id -u):$(id -g)" \
   --model "${MODEL}" \
   --out-dir /out "${sweep_args[@]}" || sweep_rc=$?
 
-# A dry run (or a sweep that failed before any cell) writes no JSON, so there is
-# nothing to copy; surface the sweep's own exit code without an empty upload.
+# No JSON landed: either a clean dry run (sweep exited 0) or a real failure before any
+# cell — a failed image pull, a daemon-down docker (125/126/127), or an early sweep
+# error. Distinguish them so a docker/sweep failure is not misread as a benign dry run.
 count="$(find "${results_dir}" -maxdepth 1 -name '*.json' | wc -l | tr -d ' ')"
 if [[ "${count}" -eq 0 ]]; then
-  echo "bench-sweep: no result JSON produced (dry run or early failure)" >&2
+  if [[ "${sweep_rc}" -eq 0 ]]; then
+    echo "bench-sweep: no result JSON produced (dry run)" >&2
+  else
+    echo "bench-sweep: no result JSON produced; sweep/docker failed (exit ${sweep_rc})" >&2
+  fi
   exit "${sweep_rc}"
 fi
 
