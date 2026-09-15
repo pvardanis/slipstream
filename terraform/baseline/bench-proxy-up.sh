@@ -31,33 +31,11 @@ export SECRET_JSON
 
 echo "proxy-up: writing certificate material" >&2
 install -d -m 0700 "${cert_dir}"
-# umask so the private key and cert land 0600; python writes them from the one
-# secret JSON, splitting the three PEM fields into the files nginx reads.
-umask 077
-python3 - "${client_cert}" "${client_key}" "${ca_cert}" <<'PY'
-import json
-import os
-import sys
-
-# --query SecretString --output text prints the literal "None" when the secret
-# holds a binary value instead of a string; guard it so the failure is an
-# actionable message rather than a raw JSONDecodeError traceback.
-raw = os.environ["SECRET_JSON"]
-if raw in ("", "None"):
-    raise SystemExit("bench-client secret has no SecretString value")
-data = json.loads(raw)
-targets = (
-    (sys.argv[1], "client_cert_pem"),
-    (sys.argv[2], "client_key_pem"),
-    (sys.argv[3], "ca_cert_pem"),
-)
-for path, field in targets:
-    value = data.get(field)
-    if not value:
-        raise SystemExit(f"bench-client secret field {field} is missing or empty")
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(value)
-PY
+# The splitter reads the JSON from $SECRET_JSON (off argv, off the process list) and
+# writes each PEM field 0600; it fails with a named message when a field or the whole
+# SecretString is absent.
+python3 /usr/local/bin/bench-proxy-secret-split.py \
+  "${client_cert}" "${client_key}" "${ca_cert}"
 
 echo "proxy-up: starting nginx" >&2
 # nginx.conf is already the rendered stream config; validate it before (re)start so
