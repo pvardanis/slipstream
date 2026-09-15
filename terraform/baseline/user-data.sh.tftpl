@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Boot script for the ephemeral bench host. Installs Docker, logs in to ECR, and
+# pulls the baked bench-client image so it is resident before any sweep runs. The
+# sweep itself is driven later over an SSM session; this script only readies the
+# host. Rendered by Terraform (host.tf) with the region, ECR registry and image
+# reference; do not run it directly.
+set -euo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+aws ecr get-login-password --region "${region}" |
+  docker login --username AWS --password-stdin "${ecr_registry}"
+
+docker pull "${image_ref}"

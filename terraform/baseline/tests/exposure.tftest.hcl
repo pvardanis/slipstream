@@ -30,6 +30,20 @@ run "exposure_invariants" {
     }
   }
 
+  # The bootstrap read feeds the bench host, not the exposure resources, but it is
+  # part of the stack now, so it must be overridden here too or the test reaches
+  # for real remote state.
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        bench_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
+        bench_image_repo_arn = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
+        region               = "eu-west-1"
+      }
+    }
+  }
+
   # The load balancer is public and an ALB (only the ALB terminates mutual TLS).
   assert {
     condition     = aws_lb.baseline.internal == false

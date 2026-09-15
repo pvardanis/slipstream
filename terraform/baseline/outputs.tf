@@ -13,3 +13,13 @@ output "bench_client_secret_arn" {
   description = "Secrets Manager ARN holding the bench client certificate, key, CA, and vLLM api-key. The ephemeral bench host reads this at launch."
   value       = aws_secretsmanager_secret.bench_client.arn
 }
+
+output "bench_host_instance_id" {
+  description = "Instance id of the ephemeral bench host. Used to open an SSM session to drive the sweep from the external vantage."
+  value       = aws_instance.bench_host.id
+}
+
+output "results_bucket" {
+  description = "Name of the S3 bucket the bench host writes measurement JSON to. Results outlive the host here until baseline-down removes the bucket."
+  value       = aws_s3_bucket.results.id
+}
