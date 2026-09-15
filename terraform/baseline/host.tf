@@ -68,7 +68,7 @@ locals {
 
   # The secret splitter the up-script runs, as a local so a test can assert it is
   # dropped on the host rather than merely referenced by path.
-  bench_proxy_secret_split = file("${path.module}/bench-proxy-secret-split.py")
+  bench_proxy_secret_split = file("${path.module}/bench_proxy_secret_split.py")
 
   # Rendered boot script. A local (not inline on the instance) so a test can
   # assert the right bucket, registry and image reference were templated in. It

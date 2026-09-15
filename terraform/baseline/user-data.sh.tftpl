@@ -71,7 +71,7 @@ cat >"${proxy_cert_dir}/proxy.env" <<'PROXY_ENV_EOF' || fail "write proxy env"
 ${proxy_env}
 PROXY_ENV_EOF
 
-cat >/usr/local/bin/bench-proxy-secret-split.py <<'PROXY_SPLIT_EOF' || fail "write proxy secret splitter"
+cat >/usr/local/bin/bench_proxy_secret_split.py <<'PROXY_SPLIT_EOF' || fail "write proxy secret splitter"
 ${proxy_secret_split}
 PROXY_SPLIT_EOF
 
