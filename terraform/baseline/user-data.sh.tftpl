@@ -54,5 +54,27 @@ docker pull "${image_ref}" || fail "image pull for ${image_ref}"
 docker image inspect "${image_ref}" >/dev/null ||
   fail "image ${image_ref} not resident after pull; did 'just bench-image' push this tag?"
 
+echo "bench-host boot: installing the mutual-TLS proxy" >&2
+# nginx and its stream module (a separate package) terminate plain HTTP on
+# loopback and speak mutual TLS to the ALB. nginx is not started here: the client
+# certificate lives in Secrets Manager and the ALB targets are not healthy at
+# boot, so bench-proxy-up.sh writes the certs, starts nginx and smokes /health at
+# sweep time. This step only drops the config, its env, and the up-script.
+dnf install -y nginx nginx-mod-stream || fail "nginx install"
+install -d -m 0700 "${proxy_cert_dir}" || fail "proxy dir create"
+
+cat >/etc/nginx/nginx.conf <<'PROXY_CONF_EOF' || fail "write proxy config"
+${proxy_conf}
+PROXY_CONF_EOF
+
+cat >"${proxy_cert_dir}/proxy.env" <<'PROXY_ENV_EOF' || fail "write proxy env"
+${proxy_env}
+PROXY_ENV_EOF
+
+cat >/usr/local/bin/bench-proxy-up.sh <<'PROXY_UP_EOF' || fail "write proxy up-script"
+${proxy_up_script}
+PROXY_UP_EOF
+chmod +x /usr/local/bin/bench-proxy-up.sh || fail "chmod proxy up-script"
+
 echo "bench-host boot: ok" >&2
 report ok
