@@ -61,6 +61,11 @@ locals {
     ca_cert_path     = "${local.bench_proxy_cert_dir}/ca.crt"
   })
 
+  # The proxy up-script and its env, as locals so a test can assert the rendered
+  # content is embedded in the boot script (not merely that the path is mentioned).
+  bench_proxy_up_script = file("${path.module}/bench-proxy-up.sh")
+  bench_proxy_env       = "SECRET_ARN=${aws_secretsmanager_secret.bench_client.arn}\nREGION=${var.region}\nPROXY_PORT=${local.bench_proxy_port}\n"
+
   # Rendered boot script. A local (not inline on the instance) so a test can
   # assert the right bucket, registry and image reference were templated in. It
   # also installs and drops the mTLS proxy (config + up-script + env) but does not
@@ -72,8 +77,8 @@ locals {
     image_ref       = local.bench_image_ref
     results_bucket  = aws_s3_bucket.results.id
     proxy_conf      = local.bench_proxy_conf
-    proxy_up_script = file("${path.module}/bench-proxy-up.sh")
-    proxy_env       = "SECRET_ARN=${aws_secretsmanager_secret.bench_client.arn}\nREGION=${var.region}\nPROXY_PORT=${local.bench_proxy_port}\n"
+    proxy_up_script = local.bench_proxy_up_script
+    proxy_env       = local.bench_proxy_env
     proxy_cert_dir  = local.bench_proxy_cert_dir
   })
 }

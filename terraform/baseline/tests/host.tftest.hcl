@@ -280,9 +280,18 @@ run "bench_proxy_config" {
     condition     = strcontains(local.bench_user_data, local.bench_proxy_conf)
     error_message = "Boot script must write the rendered proxy config to the host."
   }
+  # Assert the rendered up-script content is embedded, not merely that the path is
+  # named: the path already appears in comments and the cat/chmod lines, so a
+  # path-only check would pass even if the script rendered empty.
   assert {
-    condition     = strcontains(local.bench_user_data, "bench-proxy-up.sh")
-    error_message = "Boot script must install the proxy up-script the sweep drives."
+    condition     = strcontains(local.bench_user_data, local.bench_proxy_up_script)
+    error_message = "Boot script must embed the rendered proxy up-script the sweep drives."
+  }
+  # The up-script sources proxy.env for the secret ARN, region and loopback port;
+  # an empty or malformed env aborts it at sweep time on an unbound variable.
+  assert {
+    condition     = strcontains(local.bench_user_data, local.bench_proxy_env)
+    error_message = "Boot script must embed the rendered proxy env (secret ARN, region, port)."
   }
 
   # The proxy listens on loopback only: it must never be reachable off the host,
@@ -330,10 +339,16 @@ run "bench_proxy_config" {
     condition     = strcontains(local.bench_proxy_conf, var.server_dns_name)
     error_message = "Proxy must verify against the issued server name (proxy_ssl_name)."
   }
-  # TLS 1.3 is pinned upstream, matching the listener's ssl_policy on the ALB.
+  # TLS 1.3 is pinned upstream, the top of the ALB listener's TLS13-1-2 policy.
   assert {
     condition     = strcontains(local.bench_proxy_conf, "TLSv1.3")
     error_message = "Proxy must pin TLS 1.3 to the ALB."
+  }
+  # ALPN is pinned to HTTP/1.1: without it the L4 pipe could carry an h2-negotiated
+  # stream the plain-HTTP sweep client cannot speak — a silent, mid-sweep failure.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "proxy_ssl_alpn") && strcontains(local.bench_proxy_conf, "http/1.1")
+    error_message = "Proxy must pin ALPN to http/1.1 so it never negotiates h2 upstream."
   }
 }
 
