@@ -4,26 +4,34 @@
 # admitting the load balancer on the vLLM NodePort, so only the ALB, not the
 # open VPC, can reach the port.
 
+# The ALB security group carries no inline rules: its rules are standalone rule
+# resources (below, plus alb_from_host in host.tf). Mixing inline blocks with
+# standalone rules on one security group makes the provider revoke the standalone
+# rules on every apply, so the group is kept rule-free and all rules stand alone.
 resource "aws_security_group" "alb" {
   name_prefix = "${local.name}-alb-"
   description = "Ingress to the baseline load balancer"
   vpc_id      = local.eks.vpc_id
 
-  ingress {
-    description = "Operator access to the mutual-TLS listener"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.operator_cidr]
-  }
+  tags = local.tags
+}
 
-  egress {
-    description = "Forward to the node group"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+resource "aws_vpc_security_group_ingress_rule" "alb_operator" {
+  security_group_id = aws_security_group.alb.id
+  cidr_ipv4         = var.operator_cidr
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  description       = "Operator access to the mutual-TLS listener"
+
+  tags = local.tags
+}
+
+resource "aws_vpc_security_group_egress_rule" "alb_to_nodes" {
+  security_group_id = aws_security_group.alb.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+  description       = "Forward to the node group"
 
   tags = local.tags
 }

@@ -8,41 +8,51 @@
 # cloud-init runs this after the instance is already "running", so a failure here
 # does not fail the instance: the host would come up healthy-looking but unable
 # to run the sweep. To make that loud, the boot outcome is written to the results
-# bucket (boot-status/<instance-id>) — ok on success, failed with the log tail on
-# error — so the operator can check readiness before opening a session.
+# bucket (boot-status/<instance-id>) — "ok" on success, or the failing step and a
+# pointer to /var/log/cloud-init-output.log on error — so the operator can check
+# readiness before opening a session. Each known-failure step reports explicitly
+# rather than trusting the ERR trap, whose interaction with `exit` is unreliable.
 set -euo pipefail
 
-token="$(curl -sX PUT http://169.254.169.254/latest/api/token \
-  -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')"
-instance_id="$(curl -s -H "X-aws-ec2-metadata-token: $token" \
-  http://169.254.169.254/latest/meta-data/instance-id)"
-status_key="boot-status/$instance_id"
+# Set before the first fetch so a failure there still reports to a findable key.
+instance_id="unknown"
 
 report() {
   local state=$1
-  aws s3 cp - "s3://${results_bucket}/$status_key" \
-    --region "${region}" --content-type text/plain <<<"$state" || true
+  aws s3 cp - "s3://${results_bucket}/boot-status/$instance_id" \
+    --region "${region}" --content-type text/plain <<<"$state" ||
+    echo "BOOT SENTINEL WRITE FAILED: could not record '$state' to the results bucket" >&2
 }
 
-on_error() {
-  local line=$1
-  echo "bench-host boot failed at line $line (image=${image_ref})" >&2
-  report "failed at line $line; see /var/log/cloud-init-output.log on $instance_id"
+fail() {
+  local step=$1
+  echo "bench-host boot failed: $step" >&2
+  report "failed: $step; see /var/log/cloud-init-output.log on $instance_id"
+  exit 1
 }
-trap 'on_error $LINENO' ERR
+trap 'fail "aborted (unhandled error)"' ERR
+
+# IMDSv2 token and instance id. -sf so an HTTP error (bad/expired token) is a
+# non-zero exit rather than an empty body that would misdirect every sentinel.
+token="$(curl -sf -X PUT http://169.254.169.254/latest/api/token \
+  -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')" || fail "IMDSv2 token request"
+fetched_id="$(curl -sf -H "X-aws-ec2-metadata-token: $token" \
+  http://169.254.169.254/latest/meta-data/instance-id)" || fail "instance-id lookup"
+[[ "$fetched_id" =~ ^i- ]] || fail "unexpected instance-id '$fetched_id'"
+instance_id="$fetched_id"
 
 echo "bench-host boot: installing docker" >&2
-dnf install -y docker
-systemctl enable --now docker
+dnf install -y docker || fail "docker install"
+systemctl enable --now docker || fail "docker service start"
 
 echo "bench-host boot: logging in to ECR" >&2
 aws ecr get-login-password --region "${region}" |
-  docker login --username AWS --password-stdin "${ecr_registry}"
+  docker login --username AWS --password-stdin "${ecr_registry}" || fail "ECR login"
 
 echo "bench-host boot: pulling ${image_ref}" >&2
-docker pull "${image_ref}"
+docker pull "${image_ref}" || fail "image pull for ${image_ref}"
 docker image inspect "${image_ref}" >/dev/null ||
-  { echo "image ${image_ref} not resident after pull; did 'just bench-image' push this tag?" >&2; exit 1; }
+  fail "image ${image_ref} not resident after pull; did 'just bench-image' push this tag?"
 
 echo "bench-host boot: ok" >&2
 report ok

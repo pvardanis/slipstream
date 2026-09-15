@@ -39,7 +39,6 @@ run "exposure_invariants" {
       outputs = {
         bench_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
         bench_image_repo_arn = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
-        region               = "eu-west-1"
       }
     }
   }
@@ -101,20 +100,22 @@ run "exposure_invariants" {
     error_message = "The node autoscaling group must be attached to the target group."
   }
 
-  # The ALB security group admits exactly one ingress: the operator CIDR on 443.
-  # An exact match, not `contains`, so widening the rule (e.g. adding 0.0.0.0/0)
-  # fails the test rather than passing because the operator CIDR is still present.
+  # The ALB security group's rules are standalone rule resources (alb_operator
+  # here, alb_from_host in host.tf), never inline blocks: mixing inline blocks
+  # with standalone rules on one group makes the provider revoke the standalone
+  # rules on every apply. The inline set is computed and unknown at plan, so the
+  # "no inline rules" property is a structural guarantee (see security.tf); what
+  # is asserted here is the standalone operator rule's shape.
+
+  # The operator ingress rule admits exactly the operator CIDR on TCP 443. Exact
+  # match on cidr_ipv4, so widening it (e.g. to 0.0.0.0/0) fails the test.
   assert {
-    condition     = length(aws_security_group.alb.ingress) == 1
-    error_message = "ALB security group must have exactly one ingress rule."
+    condition     = aws_vpc_security_group_ingress_rule.alb_operator.cidr_ipv4 == var.operator_cidr
+    error_message = "ALB operator ingress rule must admit only the operator CIDR."
   }
   assert {
-    condition     = one(aws_security_group.alb.ingress).cidr_blocks == tolist([var.operator_cidr])
-    error_message = "ALB security group must admit only the operator CIDR."
-  }
-  assert {
-    condition     = one(aws_security_group.alb.ingress).from_port == 443 && one(aws_security_group.alb.ingress).to_port == 443 && one(aws_security_group.alb.ingress).protocol == "tcp"
-    error_message = "ALB security group ingress must be TCP 443 only."
+    condition     = aws_vpc_security_group_ingress_rule.alb_operator.from_port == 443 && aws_vpc_security_group_ingress_rule.alb_operator.to_port == 443 && aws_vpc_security_group_ingress_rule.alb_operator.ip_protocol == "tcp"
+    error_message = "ALB operator ingress rule must be TCP 443 only."
   }
 
   # The node security group admits the NodePort on TCP only, on the eks-owned SG.
