@@ -89,5 +89,10 @@ ${sweep_script}
 SWEEP_EOF
 chmod +x /usr/local/bin/bench-sweep.sh || fail "chmod sweep script"
 
+cat >/usr/local/bin/bench-prefix-cache.sh <<'PREFIX_CACHE_EOF' || fail "write prefix-cache script"
+${prefix_cache_script}
+PREFIX_CACHE_EOF
+chmod +x /usr/local/bin/bench-prefix-cache.sh || fail "chmod prefix-cache script"
+
 echo "bench-host boot: ok" >&2
 report ok

@@ -6,7 +6,6 @@ eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
 baseline_dir := "terraform/baseline"
 manifests := "k8s/vllm.yaml"
-bench_client := "k8s/bench-client.yaml"
 bench_dockerfile := "bench/Dockerfile"
 # Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
 bench_image_tag := "latest"
@@ -152,61 +151,9 @@ bench *args:
     # so concurrent or repeated runs never overwrite each other.
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 
-    # Run one shell command on the host: send it, poll until it finishes, then surface
-    # its stderr (stdout is not retrieved — bench-sweep.sh logs progress to stderr and
-    # real results go to S3). The command string is JSON-escaped by python so it cannot
-    # break the parameters document. Returns 0 if the host command succeeded, non-zero
-    # otherwise (send/poll failure, a terminal non-Success status, or the wait ceiling).
-    run_on_host() {
-      local label=$1 command=$2 timeout=$3 cid status
-      local params
-      params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]]}))' "${command}")"
-      # Capture send-command explicitly. This function is called as `... || rc=$?`,
-      # which suspends set -e for its whole body, so an unchecked send failure would
-      # leave cid empty and spin the poll loop to the deadline instead of failing fast.
-      if ! cid="$(aws ssm send-command --region "${region}" \
-        --instance-ids "${instance}" \
-        --document-name AWS-RunShellScript \
-        --comment "${label}" \
-        --parameters "${params}" \
-        --query Command.CommandId --output text)"; then
-        echo "${label}: ssm send-command failed" >&2
-        return 1
-      fi
-      local deadline=$((SECONDS + timeout))
-      while ((SECONDS < deadline)); do
-        # get-command-invocation 404s for a moment right after send; tolerate only that
-        # InvocationDoesNotExist race as Pending. Any other error (credentials expiring
-        # mid-sweep, throttling, wrong region) stops the wait with its message rather
-        # than being swallowed as Pending and spinning to the deadline.
-        if ! status="$(aws ssm get-command-invocation --region "${region}" \
-          --command-id "${cid}" --instance-id "${instance}" \
-          --query Status --output text 2>&1)"; then
-          if [[ "${status}" == *InvocationDoesNotExist* ]]; then
-            status="Pending"
-          else
-            echo "${label}: polling failed: ${status}" >&2
-            return 1
-          fi
-        fi
-        case "${status}" in
-        Success)
-          aws ssm get-command-invocation --region "${region}" --command-id "${cid}" \
-            --instance-id "${instance}" --query StandardErrorContent --output text >&2 || true
-          return 0
-          ;;
-        Failed | Cancelled | TimedOut | Undeliverable | Terminated)
-          echo "${label}: ${status}" >&2
-          aws ssm get-command-invocation --region "${region}" --command-id "${cid}" \
-            --instance-id "${instance}" --query StandardErrorContent --output text >&2 || true
-          return 1
-          ;;
-        esac
-        sleep 5
-      done
-      echo "${label}: did not finish within ${timeout}s (last status ${status})" >&2
-      return 1
-    }
+    # run_on_host sends one command to the host over SSM, polls to completion and
+    # surfaces its stderr; it reads the region and instance set above.
+    source bench/run-on-host.sh
 
     # The proxy must be listening before the sweep runs; a failed handshake here is a
     # hard stop, not a partial result to salvage. The ceiling sits above the up-script's
@@ -233,84 +180,76 @@ bench *args:
     echo "results synced to bench/results/${run_id}/"
     exit "${sweep_rc}"
 
-# Sync every sweep's results from the baseline results bucket to bench/results for local reporting; use to pull runs made from another machine.
+# Sync every sweep and prefix-cache run's results from the baseline results bucket to bench/results for local reporting; use to pull runs made from another machine.
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
-    mkdir -p bench/results
+    mkdir -p bench/results/prefix-cache
     aws s3 sync "s3://${bucket}/sweeps" bench/results --region "${region}"
-    echo "synced sweep results to bench/results/"
+    aws s3 sync "s3://${bucket}/prefix-cache" bench/results/prefix-cache --region "${region}"
+    echo "synced sweep and prefix-cache results to bench/results/"
 
 # Run the slipstream-bench Python test suite (no cluster).
 cli-test:
     uv run pytest
 
-# Scrape the prefix-cache hit rate for a cold and a warm run of one bench cell and join each to its client JSON (in bench/results/prefix-cache).
+# Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live baseline (`just baseline-up`).
 prefix-cache prefix_share="90" burstiness="1.0" *args="":
     #!/usr/bin/env bash
     set -euo pipefail
-    base="http://vllm.slipstream.svc:8000"
-    kubectl -n slipstream rollout status deploy/vllm --timeout=600s
-    # Clear a pod left behind by a prior run that was killed before its cleanup trap
-    # fired, so `kubectl wait` doesn't block for the full timeout on a stale pod.
-    kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found >/dev/null 2>&1 || true
-    BENCH_IMAGE="$(just _bench-image-ref)"
-    export BENCH_IMAGE
-    envsubst '${BENCH_IMAGE}' <{{ bench_client }} | kubectl -n slipstream apply -f -
-    trap 'kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found 2>/dev/null || true' EXIT
-    if ! kubectl -n slipstream wait --for=condition=Ready pod/bench-client --timeout=180s; then
-      echo "bench-client pod did not become Ready:" >&2
-      kubectl -n slipstream describe pod/bench-client >&2 || true
-      exit 1
-    fi
-    out="bench/results/prefix-cache"
+    # The host runs the cold and warm cells over SSM against the loopback mTLS proxy,
+    # bracketing each with a /metrics snapshot, so the hit rate is measured on the same
+    # off-cluster path `just bench` uses. The snapshots and cell JSON outlive the host
+    # in the results bucket; the join runs here against the synced files.
+    #
+    # Bare assignments so a failed output lookup aborts rather than driving SSM at an
+    # empty instance id or copying from an empty bucket (see `up`).
+    region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
+    bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    image="$(just _bench-image-ref)"
+    # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
+    # so concurrent or repeated runs never overwrite each other.
+    run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+
+    # run_on_host sends one command to the host over SSM, polls to completion and
+    # surfaces its stderr; it reads the region and instance set above.
+    source bench/run-on-host.sh
+
+    # The proxy must be listening before the cells run; a failed handshake is a hard
+    # stop, not a partial result. The ceiling sits above the up-script's own retry
+    # budget so its clear failure message wins over a generic wait.
+    run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
+
+    # Pass the per-run values as environment prefixed to the host command. The plain
+    # values carry no shell-special characters, so single-quoting suffices; the free-form
+    # extra flags are base64-encoded so they cross the SSM command line without quoting
+    # the host shell (not necessarily bash) could misparse. The api-key is fetched
+    # host-side from Secrets Manager, never sent from here. A cold/warm comparison needs
+    # both cells, so the host script hard-fails on a cell failure rather than leaving a
+    # half result — a non-zero here means nothing worth joining was produced.
+    args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
+    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ model }}'"
+    prefix_env="${prefix_env} RUN_ID='${run_id}' PREFIX_SHARE='{{ prefix_share }}'"
+    prefix_env="${prefix_env} BURSTINESS='{{ burstiness }}' PREFIX_ARGS_B64='${args_b64}'"
+    run_on_host "prefix-cache" "${prefix_env} /usr/local/bin/bench-prefix-cache.sh" 3600
+
+    # Sync just this run's objects into a per-run subdir, then join locally. The join is
+    # a pure function of the synced snapshots and cell JSON (slipstream_bench.prefix_cache).
+    out="bench/results/prefix-cache/${run_id}"
     mkdir -p "${out}"
-    # A seed unique to this invocation makes prefix_repetition emit prefixes the server
-    # has never cached, so the cold run genuinely misses. The cold and warm runs share
-    # it, so the warm run replays the cold run's prefixes against the now-populated
-    # cache. This build exposes no /reset_prefix_cache route to empty the cache instead.
-    seed="$(date +%s)"
-    # Snapshot the server's cumulative prefix-cache counters; only the delta across a
-    # run window is that run's traffic, so we bracket each run with a snapshot.
-    scrape() { kubectl -n slipstream exec bench-client -- curl -sf "${base}/metrics"; }
-    # One bench cell, a single (prefix-share, burstiness) so the window holds one run.
-    # This run is published as a cold/warm comparison, so its workload shape is picked
-    # to make cache residency the only variable in the gap:
-    #   --align-blocks 16 floors the prefix to whole 16-token blocks (vLLM's prefix
-    #     cache reuses whole blocks only; a ragged tail recomputes every time in both
-    #     regimes and dilutes the gap). 16 is vLLM's default block_size — revisit it
-    #     if the served backend runs a different block size, or the alignment is wrong.
-    #   --num-prefixes 16 raises the share of the cold run that is a genuine first
-    #     exposure rather than a self-hit on a prefix the run itself just planted,
-    #     widening the cold/warm gap (full isolation would need num-prefixes near
-    #     num-prompts, which serve-sweep defaults to 100).
-    # A caller can override either by appending its own flag after `just prefix-cache`.
-    run_cell() {
-      kubectl -n slipstream exec bench-client -- slipstream-bench serve-sweep \
-        --base-url "${base}" --model {{ model }} \
-        --prefix-share "{{ prefix_share }}" --burstiness "{{ burstiness }}" \
-        --align-blocks 16 --num-prefixes 16 \
-        --seed "${seed}" --out-dir "$1" {{ args }}
-    }
+    aws s3 sync "s3://${bucket}/prefix-cache/${run_id}" "${out}" --region "${region}"
+
     cell="pshare{{ prefix_share }}_burst{{ burstiness }}.json"
-    # Cold: fresh, never-cached prefixes, so the run misses.
-    scrape >"${out}/cold_before.prom"
-    run_cell /tmp/results-cold
-    scrape >"${out}/cold_after.prom"
-    kubectl -n slipstream cp "bench-client:/tmp/results-cold/${cell}" "${out}/cold_${cell}"
-    # Warm: the same seed, so the same prefixes hit the cache the cold run populated.
-    scrape >"${out}/warm_before.prom"
-    run_cell /tmp/results-warm
-    scrape >"${out}/warm_after.prom"
-    kubectl -n slipstream cp "bench-client:/tmp/results-warm/${cell}" "${out}/warm_${cell}"
     uv run slipstream-bench prefix-cache --cache-state cold \
       --metrics-before "${out}/cold_before.prom" --metrics-after "${out}/cold_after.prom" \
       --result "${out}/cold_${cell}" | tee "${out}/cold_hit_rate.json"
     uv run slipstream-bench prefix-cache --cache-state warm \
       --metrics-before "${out}/warm_before.prom" --metrics-after "${out}/warm_after.prom" \
       --result "${out}/warm_${cell}" | tee "${out}/warm_hit_rate.json"
+    echo "prefix-cache results in ${out}/"
 
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 obs-test:
