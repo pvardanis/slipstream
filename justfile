@@ -133,50 +133,91 @@ bench-image: _bootstrap-init
       -t "${repo}:{{ bench_image_tag }}" -f {{ bench_dockerfile }} .
     docker push "${repo}:{{ bench_image_tag }}"
 
-# Sweep `vllm bench serve` (prefix-share % x burstiness) from an in-cluster client pod, saving per-cell JSON to bench/results.
+# Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live baseline (`just baseline-up`).
 bench *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl -n slipstream rollout status deploy/vllm --timeout=600s
-    # Clear a pod left behind by a prior run that was killed before its cleanup trap
-    # fired, so `kubectl wait` doesn't block for the full timeout on a stale pod.
-    kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found >/dev/null 2>&1 || true
-    BENCH_IMAGE="$(just _bench-image-ref)"
-    export BENCH_IMAGE
-    envsubst '${BENCH_IMAGE}' <{{ bench_client }} | kubectl -n slipstream apply -f -
-    trap 'kubectl -n slipstream delete -f {{ bench_client }} --ignore-not-found 2>/dev/null || true' EXIT
-    if ! kubectl -n slipstream wait --for=condition=Ready pod/bench-client --timeout=180s; then
-      echo "bench-client pod did not become Ready:" >&2
-      kubectl -n slipstream describe pod/bench-client >&2 || true
-      exit 1
-    fi
-    # serve-sweep writes one JSON per successful cell and only exits non-zero at
-    # the end of the grid, so copy back whatever landed even on a partial failure,
-    # then surface the sweep's own exit code. A dry run writes no results directory,
-    # so the copy-back is skipped. The baked image carries the slipstream-bench
-    # console script, so nothing is copied in.
+    # The host drives the sweep over SSM, which starts the loopback mTLS proxy then
+    # runs the sweep against it, so the latency recorded is what an off-cluster client
+    # sees rather than an in-cluster hop. Results outlive the host in the results
+    # bucket and are synced back here at the end.
+    #
+    # Bare assignments so a failed output lookup aborts rather than driving SSM at an
+    # empty instance id or copying from an empty bucket (see `up`).
+    region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
+    bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    image="$(just _bench-image-ref)"
+    # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
+    # so concurrent or repeated runs never overwrite each other.
+    run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+
+    # Send one shell command to the host and wait for it to finish, streaming its
+    # output. The command string is JSON-escaped by python so quoting in the sweep
+    # args cannot break the parameters document. Returns the host command's status.
+    run_on_host() {
+      local label=$1 command=$2 timeout=$3 cid status
+      local params
+      params="$(python3 -c 'import json,sys; print(json.dumps({"commands":[sys.argv[1]]}))' "${command}")"
+      cid="$(aws ssm send-command --region "${region}" \
+        --instance-ids "${instance}" \
+        --document-name AWS-RunShellScript \
+        --comment "${label}" \
+        --parameters "${params}" \
+        --query Command.CommandId --output text)"
+      local deadline=$((SECONDS + timeout))
+      while ((SECONDS < deadline)); do
+        # get-command-invocation 404s for a moment after send; treat that as Pending.
+        status="$(aws ssm get-command-invocation --region "${region}" \
+          --command-id "${cid}" --instance-id "${instance}" \
+          --query Status --output text 2>/dev/null || echo Pending)"
+        case "${status}" in
+        Success)
+          aws ssm get-command-invocation --region "${region}" --command-id "${cid}" \
+            --instance-id "${instance}" --query StandardErrorContent --output text >&2 || true
+          return 0
+          ;;
+        Failed | Cancelled | TimedOut)
+          echo "${label}: ${status}" >&2
+          aws ssm get-command-invocation --region "${region}" --command-id "${cid}" \
+            --instance-id "${instance}" --query StandardErrorContent --output text >&2 || true
+          return 1
+          ;;
+        esac
+        sleep 5
+      done
+      echo "${label}: did not finish within ${timeout}s (last status ${status})" >&2
+      return 1
+    }
+
+    # The proxy must be listening before the sweep runs; a failed handshake here is a
+    # hard stop, not a partial result to salvage.
+    run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 180
+
+    # Pass the per-run values as environment for the host sweep script; the api-key is
+    # fetched host-side from Secrets Manager, never sent from here. serve-sweep only
+    # exits non-zero at the end of the grid, so a partial failure still leaves cells
+    # worth keeping: sync whatever landed regardless, then surface the sweep's status.
+    sweep_env="IMAGE_REF=$(printf %q "${image}") RESULTS_BUCKET=$(printf %q "${bucket}")"
+    sweep_env="${sweep_env} MODEL=$(printf %q '{{ model }}') RUN_ID=$(printf %q "${run_id}")"
+    sweep_env="${sweep_env} SWEEP_ARGS=$(printf %q '{{ args }}')"
     sweep_rc=0
-    kubectl -n slipstream exec bench-client -- \
-      slipstream-bench serve-sweep \
-        --base-url http://vllm.slipstream.svc:8000 \
-        --model {{ model }} \
-        --out-dir /tmp/results {{ args }} || sweep_rc=$?
-    if kubectl -n slipstream exec bench-client -- test -d /tmp/results; then
-      mkdir -p bench/results
-      kubectl -n slipstream exec bench-client -- tar cf - -C /tmp/results . | tar xf - -C bench/results
-      count="$(kubectl -n slipstream exec bench-client -- sh -c 'ls -1 /tmp/results/*.json 2>/dev/null | wc -l' | tr -d ' ')"
-      if [[ "${count}" -eq 0 ]]; then
-        echo "sweep produced no result JSON in the client pod — check the exec output above" >&2
-        # Preserve a config-error exit (e.g. 2) the sweep already reported; only
-        # synthesize a failure code when the sweep itself claimed success.
-        if [[ "${sweep_rc}" -ne 0 ]]; then
-          exit "${sweep_rc}"
-        fi
-        exit 1
-      fi
-      echo "results copied to bench/results/ (${count} files)"
-    fi
+    run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
+
+    mkdir -p bench/results
+    aws s3 sync "s3://${bucket}/sweeps/${run_id}" bench/results --region "${region}"
+    echo "results synced to bench/results/ (run ${run_id})"
     exit "${sweep_rc}"
+
+# Sync every sweep's results from the baseline results bucket to bench/results for local reporting; use to pull runs made from another machine.
+bench-results-sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    mkdir -p bench/results
+    aws s3 sync "s3://${bucket}/sweeps" bench/results --region "${region}"
+    echo "synced sweep results to bench/results/"
 
 # Run the slipstream-bench Python test suite (no cluster).
 cli-test:

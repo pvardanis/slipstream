@@ -70,6 +70,10 @@ locals {
   # dropped on the host rather than merely referenced by path.
   bench_proxy_secret_split = file("${path.module}/bench_proxy_secret_split.py")
 
+  # The sweep script `just bench` runs over SSM, as a local so a test can assert it
+  # is embedded in the boot script rather than merely referenced by path.
+  bench_sweep_script = file("${path.module}/bench-sweep.sh")
+
   # Rendered boot script. A local (not inline on the instance) so a test can
   # assert the right bucket, registry and image reference were templated in. It
   # also installs and drops the mTLS proxy (config + up-script + env) but does not
@@ -85,6 +89,7 @@ locals {
     proxy_env          = local.bench_proxy_env
     proxy_cert_dir     = local.bench_proxy_cert_dir
     proxy_secret_split = local.bench_proxy_secret_split
+    sweep_script       = local.bench_sweep_script
   })
 }
 

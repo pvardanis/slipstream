@@ -80,5 +80,10 @@ ${proxy_up_script}
 PROXY_UP_EOF
 chmod +x /usr/local/bin/bench-proxy-up.sh || fail "chmod proxy up-script"
 
+cat >/usr/local/bin/bench-sweep.sh <<'SWEEP_EOF' || fail "write sweep script"
+${sweep_script}
+SWEEP_EOF
+chmod +x /usr/local/bin/bench-sweep.sh || fail "chmod sweep script"
+
 echo "bench-host boot: ok" >&2
 report ok

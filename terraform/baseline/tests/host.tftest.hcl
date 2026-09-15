@@ -126,6 +126,21 @@ run "bench_host_invariants" {
     error_message = "Rendered boot script must carry the bench image reference."
   }
 
+  # The instance id is exposed as an output so `just bench` targets the host over
+  # SSM by id, not a tag lookup that could match a stale host from a prior run.
+  assert {
+    condition     = output.bench_host_instance_id == aws_instance.bench_host.id
+    error_message = "Module must output the bench host instance id for the sweep to target over SSM."
+  }
+
+  # The boot script embeds the rendered sweep script the SSM command runs: it drives
+  # docker run against the loopback proxy and copies results to S3. Assert the
+  # rendered content is present, not merely the path, so an empty render fails here.
+  assert {
+    condition     = strcontains(local.bench_user_data, local.bench_sweep_script)
+    error_message = "Boot script must embed the rendered bench sweep script the SSM command runs."
+  }
+
   # The host security group admits nothing: access is via SSM (an outbound
   # session), not SSH, so there is no inbound attack surface at all.
   assert {
