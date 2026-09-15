@@ -13,3 +13,8 @@ output "bench_image_repo_url" {
   description = "Registry URL of the bench-client ECR repository; the base for `docker push` and the pod image reference."
   value       = aws_ecr_repository.bench_client.repository_url
 }
+
+output "bench_image_repo_arn" {
+  description = "ARN of the bench-client ECR repository. The baseline bench host's IAM policy scopes image pulls to this repository rather than granting pull on every repo."
+  value       = aws_ecr_repository.bench_client.arn
+}
