@@ -1,0 +1,79 @@
+# No-cloud CI gate (ADR 0002 tier 1): lint/format/validate, Python tests, and
+# offline terraform tests. Runs on PRs and pushes to main with no AWS credentials.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint & format (prek)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.11.4"
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+      - name: Install tflint plugins
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: tflint --init --config="${GITHUB_WORKSPACE}/.tflint.hcl"
+      - name: Install prek
+        run: uv tool install prek
+      - name: Run prek
+        run: prek run --all-files --show-diff-on-failure --color=always
+
+  python:
+    name: python tests (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Run pytest
+        run: uv run pytest
+
+  terraform:
+    name: terraform tests (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: terraform/baseline
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.11.4"
+          terraform_wrapper: false
+      - name: terraform init (no backend)
+        run: terraform init -backend=false
+      - name: terraform test
+        run: terraform test
