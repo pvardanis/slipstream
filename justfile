@@ -19,8 +19,10 @@ default:
 
 # Connect the bootstrap stack to its remote state (idempotent) so its outputs are
 # readable — needed on a fresh checkout, where no local .terraform exists yet.
+# Init progress goes to stderr so a recipe that captures a dependent's stdout
+# (e.g. `image="$(just _bench-image-ref)"`) gets only the value, not this banner.
 _bootstrap-init:
-    terraform -chdir={{ bootstrap_dir }} init -input=false
+    terraform -chdir={{ bootstrap_dir }} init -input=false >&2
 
 # Create the cluster and point kubectl at it.
 up: _bootstrap-init
