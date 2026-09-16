@@ -40,10 +40,12 @@ stream {
         proxy_ssl_name          ${server_dns_name};
         proxy_ssl_server_name   on;
 
-        # Pin TLS 1.3, the top of the ALB listener's TLS13-1-2 policy, and offer
-        # only HTTP/1.1 over ALPN so the L4 pipe never carries an h2-negotiated
-        # stream the plain-HTTP client cannot speak.
+        # Pin TLS 1.3, the top of the ALB listener's TLS13-1-2 policy. The proxy
+        # advertises no ALPN upstream: HTTP/2 over TLS requires an ALPN negotiation,
+        # so offering none makes the ALB fall back to HTTP/1.1 — the protocol the
+        # plain-HTTP sweep client speaks — with no extra directive (open-source nginx
+        # has none for setting stream upstream ALPN, and rejects the config if given
+        # one).
         proxy_ssl_protocols TLSv1.3;
-        proxy_ssl_alpn      "http/1.1";
     }
 }
