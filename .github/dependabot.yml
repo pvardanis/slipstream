@@ -1,0 +1,37 @@
+# Dependabot: weekly update PRs for GitHub Actions, uv (Python), and Terraform
+# providers, grouped per ecosystem with a 7-day cooldown before a release is bumped.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directories:
+      - /terraform/bootstrap
+      - /terraform/baseline
+      - /terraform/eks
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      terraform:
+        patterns: ["*"]
