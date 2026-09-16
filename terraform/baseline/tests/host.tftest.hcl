@@ -108,6 +108,15 @@ run "bench_host_invariants" {
     error_message = "Bench host must set user_data_replace_on_change so a script change replaces the host."
   }
 
+  # The bench-client image layers onto the full vLLM engine build, so its extracted
+  # layers overflow the AMI's 8 GB default root volume ("no space left on device" at
+  # pull time, before any host script is dropped). Provision a root volume with
+  # headroom so the image lands and boot reaches the script drops.
+  assert {
+    condition     = one(aws_instance.bench_host.root_block_device).volume_size >= 30
+    error_message = "Bench host root volume must have headroom for the bench-client image; the AMI's 8 GB default overflows at pull time."
+  }
+
   # The registry host is the repo URL up to the first slash; a bad split would
   # send docker login to the wrong registry and fail every pull at boot.
   assert {
