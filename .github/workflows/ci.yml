@@ -76,4 +76,11 @@ jobs:
       - name: terraform init (no backend)
         run: terraform init -backend=false
       - name: terraform test
-        run: terraform test
+        run: |
+          shopt -s nullglob
+          files=(tests/*.tftest.hcl)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no *.tftest.hcl files found — terraform test would pass vacuously" >&2
+            exit 1
+          fi
+          terraform test
