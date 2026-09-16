@@ -86,12 +86,15 @@ scrape() {
 # A caller can override either by appending its own flag after `just prefix-cache`.
 # --network host so the container reaches the proxy on 127.0.0.1; --rm for a one-shot;
 # run as the invoking user so the JSON is not root-owned (a no-op under SSM's root).
+# --entrypoint slipstream-bench overrides the base image's `vllm serve` entrypoint so
+# the container runs the bench harness, not the server; serve-sweep is then its arg.
 run_cell() {
   docker run --rm --network host --user "$(id -u):$(id -g)" \
+    --entrypoint slipstream-bench \
     -e OPENAI_API_KEY \
     -v "${results_dir}:/out" \
     "${IMAGE_REF}" \
-    slipstream-bench serve-sweep \
+    serve-sweep \
     --base-url "${base_url}" --model "${MODEL}" \
     --prefix-share "${PREFIX_SHARE}" --burstiness "${BURSTINESS}" \
     --align-blocks 16 --num-prefixes 16 \
