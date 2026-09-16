@@ -51,12 +51,15 @@ read -ra sweep_args <<<"$(printf '%s' "${sweep_args_b64}" | base64 -d)"
 
 echo "bench-sweep: running the sweep against the loopback proxy" >&2
 # --network host so the container reaches the proxy on 127.0.0.1; --rm for a one-shot.
+# --entrypoint slipstream-bench overrides the base image's `vllm serve` entrypoint so
+# the container runs the bench harness, not the server; serve-sweep is then its arg.
 sweep_rc=0
 docker run --rm --network host --user "$(id -u):$(id -g)" \
+  --entrypoint slipstream-bench \
   -e OPENAI_API_KEY \
   -v "${results_dir}:/out" \
   "${IMAGE_REF}" \
-  slipstream-bench serve-sweep \
+  serve-sweep \
   --base-url "http://127.0.0.1:${PROXY_PORT}" \
   --model "${MODEL}" \
   --out-dir /out "${sweep_args[@]}" || sweep_rc=$?
