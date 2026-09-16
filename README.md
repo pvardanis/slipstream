@@ -104,21 +104,55 @@ just cli-test                    # run the package test suite (uv run pytest)
 
 Runtime dependencies stay slim (`typer` and `prometheus-client`); `pytest` and `ruff` are dev-only,
 and the repo's pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
-run inside a baked bench-client image against the in-cluster vLLM service; where
-the load generator runs is orchestration, not tool logic.
+run inside a baked bench-client image on an external EC2 bench host, which drives
+them against vLLM through an ephemeral public mutual-TLS load balancer, so the
+latency recorded is what an off-cluster client sees. That measurement path is
+recorded in [`docs/adr/0004`](docs/adr/0004-bench-vantage-external-path.md).
 
 The bench-client image (`bench/Dockerfile`) layers the package and the model
 tokenizer onto the same pinned vLLM engine build the server runs, so the two
 tokenize identically. It is pushed to an ECR repository provisioned by
-`just bootstrap`; in-cluster nodes pull it via their ECR node IAM role. Build and
-push it before a sweep (rebuild after changing the package or the base engine):
+`just bootstrap`; the bench host pulls it with the host IAM role. Build and push
+it before a sweep (rebuild after changing the package or the base engine):
 
 ```sh
 just bench-image                 # docker build + push to ECR
 ```
 
-`just bench` / `just prefix-cache` then launch the pod on that image, rendering
-its ECR reference into `k8s/bench-client.yaml` at apply time.
+### Baseline runbook
+
+A benchmark run stands up an ephemeral, internet-facing endpoint and an EC2 host,
+then tears them down. The sequence, from a cold checkout:
+
+```sh
+just bootstrap        # once per environment: ECR repo + shared state (see ADR-0005)
+just up               # create the cluster, point kubectl at it
+just deploy           # roll out the CPU vLLM replica, wait for it to serve
+just bench-image      # build + push the bench-client image to ECR
+
+just baseline-up      # stand up the mutual-TLS load balancer + bench host
+just bench                             # sweep the prefix-share x burstiness grid
+just prefix-cache 90 1.0               # cold/warm hit-rate for one cell
+just baseline-down    # tear down the endpoint, host, certs and client secret
+```
+
+`just baseline-up` reads the operator's public IP from `checkip.amazonaws.com` and
+pins the load balancer's security group to that `/32`; mutual TLS is the real gate,
+the `/32` a second lock. `just bench` and `just prefix-cache` drive the host over
+SSM Run Command — the host has no inbound access — and sync each run's results under
+`bench/results/` (`bench/results/<run-id>/` for `just bench`,
+`bench/results/prefix-cache/<run-id>/` for `just prefix-cache`; pull runs made from
+another machine with `just bench-results-sync`). Both recipes require a live baseline.
+
+The endpoint is public and billed while up: **run `just baseline-down` as soon as a
+run finishes.** `baseline-down` leaves the cluster and vLLM running; `just down`
+destroys the cluster. Neither touches the bootstrap state bucket or the ECR repo.
+
+Region is not a per-run flag: the benchmark recipes read it from the Terraform
+outputs (`terraform output -raw region`), so the cluster, the baseline stack and
+the AWS CLI all act in one region. Set it once via `AWS_PROFILE` / `aws configure`; a
+profile pointing at a different region than the state was created in will not find
+these resources.
 
 ## Non-goals
 
