@@ -388,11 +388,15 @@ run "bench_proxy_config" {
     condition     = strcontains(local.bench_proxy_conf, "TLSv1.3")
     error_message = "Proxy must pin TLS 1.3 to the ALB."
   }
-  # ALPN is pinned to HTTP/1.1: without it the L4 pipe could carry an h2-negotiated
-  # stream the plain-HTTP sweep client cannot speak — a silent, mid-sweep failure.
+  # The proxy must not carry an h2-negotiated stream the plain-HTTP sweep client
+  # cannot speak. Open-source nginx has no directive to set stream upstream ALPN and
+  # rejects the config outright if one is given (nginx -t fails at proxy-up), so the
+  # guarantee is the absence of that advertisement: with no ALPN offered, HTTP/2
+  # (which needs an ALPN negotiation) cannot be selected and the ALB falls to
+  # HTTP/1.1. Guard against the unsupported directive being reintroduced.
   assert {
-    condition     = strcontains(local.bench_proxy_conf, "proxy_ssl_alpn") && strcontains(local.bench_proxy_conf, "http/1.1")
-    error_message = "Proxy must pin ALPN to http/1.1 so it never negotiates h2 upstream."
+    condition     = !strcontains(local.bench_proxy_conf, "proxy_ssl_alpn")
+    error_message = "Proxy config must not use proxy_ssl_alpn; open-source nginx rejects it, and offering no ALPN keeps the pipe on HTTP/1.1."
   }
 }
 
