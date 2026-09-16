@@ -13,12 +13,8 @@ offload, cold-start removal, prefill/decode split — so more tokens travel per
 dollar. Token streaming and speculative decoding (a draft model riding the big
 model's slipstream) sit literally inside the word.
 
-## Status
-
-Spec landed: [`docs/spec.md`](docs/spec.md) — build-ready, detailed enough to start
-Layer 0. It was charted as a wayfinder map on this repo's issues (label
-`wayfinder:map`); the decision log at the end of the spec traces every choice back to
-its ticket.
+The build spec is [`docs/spec.md`](docs/spec.md); the decision log at its end
+traces every choice back to its ticket.
 
 ## Provisioning
 
@@ -27,9 +23,9 @@ drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles 
 
 Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
 `AWS_PROFILE` that can create VPC/EKS resources (see [AWS access](#aws-access)).
-The benchmark recipes also need `docker` (to build the bench-client image) and
-`envsubst` (from GNU gettext, to render its image reference into the pod
-manifest). Optional inspection tools: `k9s`, `stern`, `kubens`.
+The benchmark recipes also need `docker` (to build the bench-client image); the
+bench host is driven over SSM, so no SSH client is required. Optional inspection
+tools: `k9s`, `stern`, `kubens`.
 
 ```sh
 just bootstrap   # one-time: create the S3 remote-state bucket
@@ -87,19 +83,37 @@ stern vllm -n slipstream --tail 50    # tail vLLM logs, follows pod restarts
 ## Benchmark harness
 
 The L0 benchmark harness ships as `slipstream-bench`, a Python package managed by
-[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches the three benchmark
-tools — `serve-sweep` (fire `vllm bench serve` across a prefix-share x burstiness
-grid), `cost` (price a run into $/1M in/out tokens), and `prefix-cache` (the
-cold/warm hit-rate delta). The rewrite from bash is recorded in
+[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches five subcommands.
+The rewrite from bash is recorded in
 [`docs/adr/0003`](docs/adr/0003-l0-bench-harness-in-python.md).
 
+- **`serve-sweep`** — fire `vllm bench serve` across a prefix-share × burstiness
+  grid, writing one result JSON per cell. The grid is set by repeatable
+  `--prefix-share` (default `10 50 90`) and `--burstiness` (default `0.2 1.0`,
+  where `1.0` is Poisson and lower is burstier); `--num-prompts`, `--num-prefixes`,
+  `--total-len` and `--output-len` shape each cell, `--seed` fixes prompt
+  synthesis so runs replay identically, and `--dry-run` prints the `vllm` commands
+  without running them. This is the recipe `just bench` drives on the bench host.
+- **`cost`** — price a `serve-sweep` result JSON into $/1M input and output tokens
+  from an instance's `--price-per-hour`, tagging the output with the weight
+  checksum, vLLM version and quantization recipe that produced the run.
+- **`commercial-cost`** — price the same tokens at a commercial API's quoted
+  `--input-price-per-1m` / `--output-price-per-1m`, the comparison arm for the
+  scoreboard.
+- **`prefix-cache`** — compute one run's cold/warm prefix-cache hit-rate delta from
+  the `/metrics` snapshots bracketing each run and the cell JSON. This is the join
+  `just prefix-cache` runs locally after the host produces the snapshots.
+- **`report`** — join the three arms (latency, cost, commercial) into the baseline
+  $/1M-at-SLO report, emitted as JSON or a Markdown table (`--format`).
+
 Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
-`uv.lock` on first use — no manual `venv` or `pip install`.
+`uv.lock` on first use — no manual `venv` or `pip install`. Every subcommand takes
+`--help` for its full option list.
 
 ```sh
-uv run slipstream-bench --help   # list the three subcommands
-uv run slipstream-bench cost --help
-just cli-test                    # run the package test suite (uv run pytest)
+uv run slipstream-bench --help              # list the five subcommands
+uv run slipstream-bench serve-sweep --help  # options for one subcommand
+just cli-test                               # run the package test suite (uv run pytest)
 ```
 
 Runtime dependencies stay slim (`typer` and `prometheus-client`); `pytest` and `ruff` are dev-only,
