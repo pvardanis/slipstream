@@ -237,6 +237,17 @@ resource "aws_instance" "bench_host" {
     http_tokens   = "required"
   }
 
+  # The AMI's 8 GB default root volume cannot hold the bench-client image: it layers
+  # onto the full vLLM engine build (CUDA/triton libraries included, though this host
+  # runs CPU-only), whose extracted layers overflow the disk at pull time with "no
+  # space left on device" — before the boot script drops any host script. 30 GB fits
+  # the base OS, the image, docker overhead and the run's result scratch with room.
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp3"
+    encrypted   = true
+  }
+
   # gzip the boot script: it embeds the proxy config and four host scripts, which
   # together exceed EC2's 16 KB user-data limit uncompressed. cloud-init detects the
   # gzip magic bytes and decompresses before running it.
