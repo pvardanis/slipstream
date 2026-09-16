@@ -6,6 +6,7 @@ is built.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,18 @@ from slipstream_bench.cli_helpers import resolve_api_key_env, run_cell
 from slipstream_bench.serve_sweep import SweepError
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(result) -> str:
+    """CLI output with terminal styling stripped.
+
+    Typer renders errors through Rich, which wraps option names in ANSI style
+    spans when the host forces color (CI runners do). Stripping the styling lets
+    a content assertion match the message text on any terminal.
+    """
+    return _ANSI.sub("", result.output)
 
 
 def _dry_run(*args: str):
@@ -109,7 +122,7 @@ def test_commercial_sweep_without_a_tokenizer_is_rejected() -> None:
     result = _dry_run("--api-key-env", "MY_PROVIDER_KEY")
 
     assert result.exit_code == 2
-    assert "tokenizer" in result.output
+    assert "tokenizer" in plain(result)
 
 
 def test_non_numeric_total_len_is_rejected() -> None:
@@ -122,14 +135,14 @@ def test_zero_total_len_is_rejected() -> None:
     """--total-len must be a positive integer."""
     result = _dry_run("--total-len", "0")
     assert result.exit_code == 2
-    assert "--total-len" in result.output
+    assert "--total-len" in plain(result)
 
 
 def test_share_above_100_is_rejected() -> None:
     """A prefix-share outside 0..100 is rejected with a diagnostic."""
     result = _dry_run("--prefix-share", "150")
     assert result.exit_code == 2
-    assert "prefix-share" in result.output
+    assert "prefix-share" in plain(result)
 
 
 def test_negative_share_is_rejected() -> None:
@@ -142,7 +155,7 @@ def test_empty_goodput_is_rejected() -> None:
     """An empty SLO is rejected."""
     result = _dry_run("--goodput", "")
     assert result.exit_code == 2
-    assert "goodput" in result.output
+    assert "goodput" in plain(result)
 
 
 def test_goodput_drops_empty_tokens_and_keeps_the_rest() -> None:
@@ -173,7 +186,7 @@ def test_alignment_that_erases_prefix_is_rejected() -> None:
         "1.0",
     )
     assert result.exit_code == 2
-    assert "floors prefix" in result.output
+    assert "floors prefix" in plain(result)
 
 
 def test_request_rate_inf_is_accepted() -> None:
@@ -187,28 +200,28 @@ def test_non_numeric_request_rate_is_rejected() -> None:
     """A request rate that is neither a number nor 'inf' is rejected."""
     result = _dry_run("--request-rate", "quick")
     assert result.exit_code == 2
-    assert "request-rate" in result.output
+    assert "request-rate" in plain(result)
 
 
 def test_negative_request_rate_is_rejected() -> None:
     """A negative request rate is meaningless and is rejected before vLLM sees it."""
     result = _dry_run("--request-rate", "-8")
     assert result.exit_code == 2
-    assert "request-rate" in result.output
+    assert "request-rate" in plain(result)
 
 
 def test_nan_request_rate_is_rejected() -> None:
     """A non-finite request rate does not slip through the float coercion."""
     result = _dry_run("--request-rate", "nan")
     assert result.exit_code == 2
-    assert "request-rate" in result.output
+    assert "request-rate" in plain(result)
 
 
 def test_fewer_prompts_than_prefixes_is_rejected() -> None:
     """Fewer prompts than prefixes fails fast before any cell runs vLLM."""
     result = _dry_run("--num-prompts", "2", "--num-prefixes", "5")
     assert result.exit_code == 2
-    assert "num-prompts" in result.output
+    assert "num-prompts" in plain(result)
 
 
 def test_run_cell_reports_a_missing_binary_clearly() -> None:
@@ -272,7 +285,7 @@ def test_unset_api_key_env_is_rejected_before_the_sweep(monkeypatch) -> None:
     result = runner.invoke(app, ["serve-sweep", "--api-key-env", "MY_PROVIDER_KEY"])
 
     assert result.exit_code == 2
-    assert "MY_PROVIDER_KEY" in result.output
+    assert "MY_PROVIDER_KEY" in plain(result)
 
 
 def test_dry_run_with_an_unset_api_key_env_succeeds(monkeypatch) -> None:
@@ -338,4 +351,4 @@ def test_live_commercial_sweep_without_a_tokenizer_is_rejected(monkeypatch) -> N
     result = runner.invoke(app, ["serve-sweep", "--api-key-env", "MY_PROVIDER_KEY"])
 
     assert result.exit_code == 2
-    assert "tokenizer" in result.output
+    assert "tokenizer" in plain(result)
