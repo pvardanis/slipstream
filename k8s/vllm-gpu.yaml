@@ -1,0 +1,168 @@
+# The GPU vLLM replica: Qwen3-8B AWQ-INT4 with an FP8 KV cache on a single A10G,
+# the rig the platform is measured against (spec §3.1, ADR-0006). It is the
+# counterpart to the CPU replica in vllm.yaml — same engine version, different
+# image, model, and hardware — and the two are deployed one at a time, never both
+# (`just deploy` = CPU, `just gpu-deploy` = GPU). This replica takes over the
+# baseline path by claiming the fixed NodePort 30800 with selector app=vllm-gpu.
+#
+# The pod lands on the Karpenter GPU node pool (k8s/gpu-node-pool.yaml): it
+# tolerates the nvidia.com/gpu taint and requests one nvidia.com/gpu, which is what
+# makes Karpenter provision the g5.xlarge. Scaling to zero (`just gpu-down`) empties
+# the node so Karpenter reaps it and GPU spend returns to zero (ADR-0006).
+#
+# vLLM enforces the api-key (VLLM_API_KEY, from the vllm-api-key Secret) on its API
+# routes; /health and /metrics stay open so probes and the baseline load balancer
+# health check reach them. The api-key is the same value the CPU replica uses — the
+# baseline stack reads it from the one Secret regardless of which replica is exposed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: slipstream
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-gpu
+  namespace: slipstream
+  labels:
+    app: vllm-gpu
+spec:
+  replicas: 1
+  # One replica on one GPU node: tear the old pod down before starting the new one.
+  # A rolling update would try to run both at once and deadlock — a single A10G
+  # holds one copy of the weights, and the node pool is capped at one GPU.
+  strategy:
+    type: Recreate
+  # A cold spot g5 must be provisioned by Karpenter, then pull the ~10 GB image and
+  # load the ~6 GB AWQ weights before the pod goes ready. Give the rollout room to
+  # clear that cold start instead of failing the Deployment as stalled.
+  progressDeadlineSeconds: 1200
+  selector:
+    matchLabels:
+      app: vllm-gpu
+  template:
+    metadata:
+      labels:
+        app: vllm-gpu
+    spec:
+      # Kubernetes otherwise injects a VLLM_PORT env var (from any Service named
+      # `vllm`) holding a tcp:// URI, which collides with vLLM's own VLLM_PORT
+      # config and crashes the engine. We reach services by DNS, not these legacy
+      # per-Service env vars, so turn them off.
+      enableServiceLinks: false
+      # Land only on the Karpenter GPU pool. The pool stamps this label on its nodes
+      # (k8s/gpu-node-pool.yaml); without the match the pod could schedule onto the
+      # CPU node group, which has no card and would leave it Pending on a missing
+      # nvidia.com/gpu resource forever.
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      # Tolerate the GPU node's taint. Only pods that carry this toleration land on
+      # the expensive card; the taint keeps everything else off it.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          # Pinned GPU build matching the CPU replica's v0.29.0 so the engine
+          # version is one number across both. Pinning the engine version is a spec
+          # requirement so a measurement reproduces (§3.1).
+          image: vllm/vllm-openai:v0.29.0
+          args:
+            - --model
+            - Qwen/Qwen3-8B-AWQ
+            # Pin the weights by Hugging Face commit SHA, not a floating branch: a
+            # moving `main` could silently re-quantize the weights out from under a
+            # re-run and break reproducibility (spec §3.1, ADR-0006).
+            - --revision
+            - 4da05a8edb55c6046cce958586c33b61da07bb79
+            # The checkpoint's config.json already declares quant_method: awq, so
+            # vLLM would auto-select the Marlin kernel; pass it explicitly anyway to
+            # pin the recipe rather than depend on auto-detection (ADR-0006).
+            - --quantization
+            - awq_marlin
+            # FP8 KV cache. A10G/Ampere has no hardware FP8 for weights (hence INT4
+            # AWQ for those), but the KV cache still uses FP8, roughly doubling
+            # concurrent-sequence capacity (spec §3.1).
+            - --kv-cache-dtype
+            - fp8
+            # No tensor parallelism — the 8B model fits one A10G. Stated explicitly
+            # (it is also the default) to make "no TP" unambiguous (spec §3.1).
+            - --tensor-parallel-size
+            - "1"
+            # Starting values, NOT tuned. The concurrency ceiling
+            # (max-num-seqs / gpu-memory-utilization / max-model-len) is found by the
+            # knob sweep in #33; treating these as measured settings would be wrong.
+            - --max-model-len
+            - "4096"
+            - --gpu-memory-utilization
+            - "0.90"
+            - --max-num-seqs
+            - "16"
+          env:
+            # vLLM enforces this key on its API routes (/v1); /health and /metrics
+            # stay open. Same Secret and value the CPU replica uses, so the baseline
+            # stack's published api-key works against whichever replica is exposed.
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-api-key
+                  key: api-key
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              # No CPU limit: throttling a slow-cold-starting engine hurts more than
+              # it helps. Memory limit equals the request so the pod has a
+              # predictable OOM boundary and cannot overcommit the node's host RAM.
+              cpu: "2"
+              memory: 8Gi
+            limits:
+              memory: 8Gi
+              # The countable GPU resource the NVIDIA device plugin advertises.
+              # Requesting it is what pulls the pod onto — and provisions — the g5.
+              nvidia.com/gpu: 1
+          # The image and weights are pulled on first start and the AWQ model loads
+          # onto the card before the server serves; keep liveness and readiness from
+          # acting until then. failureThreshold × periodSeconds (80 × 15 = 20 min)
+          # covers a cold spot node's image pull plus weight load.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 80
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-gpu
+  namespace: slipstream
+  labels:
+    app: vllm-gpu
+spec:
+  # NodePort so the ephemeral baseline load balancer, provisioned outside the
+  # cluster, can reach vLLM through the node group. This claims the same fixed
+  # nodePort 30800 the CPU replica's Service uses, so the GPU replica takes over the
+  # baseline target group unchanged — the two are exposed one at a time, never both.
+  # No cloud load balancer is created here, so `just down` leaves nothing behind.
+  type: NodePort
+  selector:
+    app: vllm-gpu
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      nodePort: 30800

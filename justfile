@@ -7,6 +7,7 @@ bootstrap_dir := "terraform/bootstrap"
 baseline_dir := "terraform/baseline"
 manifests := "k8s/vllm.yaml"
 gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
+gpu_manifests := "k8s/vllm-gpu.yaml"
 bench_dockerfile := "bench/Dockerfile"
 # Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
 bench_image_tag := "latest"
@@ -119,6 +120,25 @@ gpu-pool-up:
 # blocks on eks state being reachable.
 gpu-pool-down:
     kubectl delete -f {{ gpu_pool_manifests }} --ignore-not-found
+
+# Deploy the GPU vLLM replica and wait for it to serve. Karpenter provisions the
+# g5 on demand once the pod requests a GPU, so the wait covers node bring-up, the
+# ~10 GB image pull, and the AWQ weight load — hence the long timeout. Reuses the
+# vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses.
+gpu-deploy: _ensure-api-key
+    kubectl apply -f {{ gpu_manifests }}
+    kubectl -n slipstream rollout status deploy/vllm-gpu --timeout=1200s
+
+# Scale the GPU replica up to one and wait for it to serve. Karpenter brings a g5
+# node up to place it.
+gpu-up:
+    kubectl -n slipstream scale deploy/vllm-gpu --replicas=1
+    kubectl -n slipstream rollout status deploy/vllm-gpu --timeout=1200s
+
+# Scale the GPU replica to zero. The g5 node goes empty and Karpenter reaps it
+# after its consolidation window, returning GPU spend to zero (ADR-0006).
+gpu-down:
+    kubectl -n slipstream scale deploy/vllm-gpu --replicas=0
 
 # Port-forward the service and curl a completion out of it.
 completion:
