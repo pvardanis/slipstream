@@ -100,7 +100,9 @@ Engine configuration (confirmed against vLLM v0.29.0):
 - Image `vllm/vllm-openai:v0.29.0`, matching the CPU replica's pinned
   `v0.29.0-x86_64` so the engine version is one number across both.
 - `--model Qwen/Qwen3-8B-AWQ` — the official Qwen AWQ-INT4 checkpoint (public,
-  Apache-2.0, ~6.1 GB). Its `config.json` declares `quant_method: awq`, so vLLM would
+  Apache-2.0, ~6.1 GB measured — spec §3.1 and the feasibility research quote ~5.5 GB as
+  a pre-build estimate; the checkpoint's actual safetensors are the ~6.1 GB used for the
+  disk sizing above). Its `config.json` declares `quant_method: awq`, so vLLM would
   auto-select the Marlin kernel; `--quantization awq_marlin` is passed **explicitly
   anyway** to pin the recipe (spec §3.1) rather than depend on auto-detection.
 - `--kv-cache-dtype fp8` — the FP8 KV cache (A10G/Ampere has no hardware FP8 for
@@ -123,9 +125,9 @@ silently re-quantize the weights out from under a re-run.
 Returning GPU spend to zero (issue #32 AC) is, at this layer, node-level and manual:
 `just gpu-down` sets the GPU Deployment to `replicas: 0`, the g5 node goes empty, and
 Karpenter's `consolidateAfter` reaps it. `just gpu-up` scales back to one.
-Autoscaling to and from zero on inference signals (KEDA/HPA on
-`num_requests_waiting`) is explicitly L2a (spec §4, later issues); adding it here
-would pull that scope into the bring-up and break the depth-first rule.
+Autoscaling on inference signals (KEDA/HPA on `num_requests_waiting`) is L2a/L2b (spec
+§4 — scale-up-from-zero under load at L2a, scale-to-zero + wake at L2b, later issues);
+adding it here would pull that scope into the bring-up and break the depth-first rule.
 
 ### Harness path — reuse the baseline, GPU Service takes nodePort 30800
 
