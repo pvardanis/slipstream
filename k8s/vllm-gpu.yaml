@@ -6,8 +6,9 @@
 # baseline path by claiming the fixed NodePort 30800 with selector app=vllm-gpu.
 #
 # The pod lands on the Karpenter GPU node pool (k8s/gpu-node-pool.yaml): it
-# tolerates the nvidia.com/gpu taint and requests one nvidia.com/gpu, which is what
-# makes Karpenter provision the g5.xlarge. Scaling to zero (`just gpu-down`) empties
+# tolerates the nvidia.com/gpu taint and asks for one nvidia.com/gpu (declared under
+# limits, which Kubernetes mirrors into requests), which is what makes Karpenter
+# provision the g5.xlarge. Scaling to zero (`just gpu-down`) empties
 # the node so Karpenter reaps it and GPU spend returns to zero (ADR-0006).
 #
 # vLLM enforces the api-key (VLLM_API_KEY, from the vllm-api-key Secret) on its API
@@ -50,10 +51,11 @@ spec:
       # config and crashes the engine. We reach services by DNS, not these legacy
       # per-Service env vars, so turn them off.
       enableServiceLinks: false
-      # Land only on the Karpenter GPU pool. The pool stamps this label on its nodes
-      # (k8s/gpu-node-pool.yaml); without the match the pod could schedule onto the
-      # CPU node group, which has no card and would leave it Pending on a missing
-      # nvidia.com/gpu resource forever.
+      # Steer the pod onto the Karpenter GPU pool, which stamps this label on its
+      # nodes (k8s/gpu-node-pool.yaml). The nvidia.com/gpu request below already bars
+      # the CPU node group (no card, so the pod is never eligible there); this
+      # selector points Karpenter at the pool to provision rather than leaving the
+      # target to chance.
       nodeSelector:
         nvidia.com/gpu: "true"
       # Tolerate the GPU node's taint. Only pods that carry this toleration land on
