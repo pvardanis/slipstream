@@ -90,7 +90,8 @@ spec:
 ---
 # The NVIDIA device plugin (github.com/NVIDIA/k8s-device-plugin). Registers each
 # node's GPU as the countable nvidia.com/gpu resource the scheduler needs before
-# it will place the GPU replica. Pinned to a release tag for a reproducible build.
+# it will place the GPU replica. Pinned to a release tag so the plugin version
+# does not drift between applies.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
