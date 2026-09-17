@@ -22,6 +22,11 @@ locals {
   # against (#90). It goes on the private subnets and the node security group;
   # each is owned by exactly one module input below, never also set inline.
   karpenter_discovery_tags = { "karpenter.sh/discovery" = var.cluster_name }
+
+  # The private subnets keep their internal-elb role tag and gain the discovery
+  # tag. Lifted into a local so the merge is a seam the plan-test can read back:
+  # dropping either tag is then visible, not silent.
+  private_subnet_tags = merge({ "kubernetes.io/role/internal-elb" = 1 }, local.karpenter_discovery_tags)
 }
 
 module "vpc" {
@@ -43,7 +48,7 @@ module "vpc" {
   # Karpenter provisions its GPU nodes into the private subnets, so they also carry
   # the karpenter.sh/discovery tag its EC2NodeClass selects on.
   public_subnet_tags  = { "kubernetes.io/role/elb" = 1 }
-  private_subnet_tags = merge({ "kubernetes.io/role/internal-elb" = 1 }, local.karpenter_discovery_tags)
+  private_subnet_tags = local.private_subnet_tags
 
   tags = local.tags
 }

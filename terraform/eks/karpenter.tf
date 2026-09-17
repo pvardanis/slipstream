@@ -4,7 +4,7 @@
 # NodePool and EC2NodeClass are raw manifests applied separately (#90); this file
 # is only the install (ADR-0006).
 
-# Public ECR (where the Karpenter chart lives) issues auth tokens only from
+# Public ECR (where the Karpenter chart lives) serves its auth-token API from
 # us-east-1, so the token is read through a second, region-pinned aws provider.
 provider "aws" {
   alias  = "virginia"
@@ -51,10 +51,13 @@ locals {
   # Helm values as a map so the test can read the wiring back; encoded to YAML for
   # the release below. serviceAccount.name must match the Pod Identity association
   # the module created, or the controller has no AWS permissions.
-  karpenter_helm_settings = {
-    clusterName       = module.eks.cluster_name
-    clusterEndpoint   = module.eks.cluster_endpoint
-    interruptionQueue = module.karpenter.queue_name
+  karpenter_helm_values = {
+    serviceAccount = { name = module.karpenter.service_account }
+    settings = {
+      clusterName       = module.eks.cluster_name
+      clusterEndpoint   = module.eks.cluster_endpoint
+      interruptionQueue = module.karpenter.queue_name
+    }
   }
 }
 
@@ -68,14 +71,12 @@ resource "helm_release" "karpenter" {
   chart               = "karpenter"
   version             = var.karpenter_chart_version
 
-  # The CRDs the release installs settle asynchronously; not waiting keeps apply
-  # from blocking on a controller that has no NodePool to act on yet (#90).
-  wait = false
+  # Block apply until the controller Deployment is Ready, so a broken install — a
+  # bad image pull, a Pod Identity association mismatch, a crashloop — fails the
+  # apply loudly instead of surfacing later as a GPU pod stuck Pending. The
+  # controller reaches Ready without a NodePool (it idles), so waiting here does
+  # not depend on #90.
+  wait = true
 
-  values = [
-    yamlencode({
-      serviceAccount = { name = module.karpenter.service_account }
-      settings       = local.karpenter_helm_settings
-    })
-  ]
+  values = [yamlencode(local.karpenter_helm_values)]
 }
