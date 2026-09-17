@@ -17,6 +17,11 @@ locals {
     Project   = "slipstream"
     ManagedBy = "terraform"
   }
+
+  # The tag Karpenter's EC2NodeClass subnet and security-group selectors resolve
+  # against (#90). It goes on the private subnets and the node security group;
+  # each is owned by exactly one module input below, never also set inline.
+  karpenter_discovery_tags = { "karpenter.sh/discovery" = var.cluster_name }
 }
 
 module "vpc" {
@@ -35,8 +40,10 @@ module "vpc" {
   single_nat_gateway = true
 
   # Tags the EKS control plane and load balancers look for during subnet discovery.
+  # Karpenter provisions its GPU nodes into the private subnets, so they also carry
+  # the karpenter.sh/discovery tag its EC2NodeClass selects on.
   public_subnet_tags  = { "kubernetes.io/role/elb" = 1 }
-  private_subnet_tags = { "kubernetes.io/role/internal-elb" = 1 }
+  private_subnet_tags = merge({ "kubernetes.io/role/internal-elb" = 1 }, local.karpenter_discovery_tags)
 
   tags = local.tags
 }
@@ -64,6 +71,10 @@ module "eks" {
   vpc_id                   = module.vpc.vpc_id
   subnet_ids               = module.vpc.private_subnets
   control_plane_subnet_ids = module.vpc.private_subnets
+
+  # Karpenter-launched nodes attach this security group, so it carries the
+  # discovery tag its EC2NodeClass securityGroupSelectorTerms resolve against.
+  node_security_group_tags = local.karpenter_discovery_tags
 
   eks_managed_node_groups = {
     cpu = {

@@ -8,5 +8,11 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    # Installs the Karpenter controller chart; v3 for the nested `kubernetes = {}`
+    # provider config the eks module's Karpenter path expects.
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 3.0"
+    }
   }
 }
