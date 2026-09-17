@@ -1,0 +1,143 @@
+# The GPU node pool and the NVIDIA device plugin that makes its card schedulable.
+#
+# Karpenter *install* is Terraform (terraform/eks/karpenter.tf, #89); this is the
+# GPU *config*, shipped as raw manifests so the CRDs need not exist at Terraform
+# plan time (ADR-0006). `just gpu-pool-up` substitutes the cluster name and the
+# Karpenter node IAM role (both eks-stack outputs) and applies the file.
+#
+# The AL2023 NVIDIA AMI ships the GPU driver but does not advertise nvidia.com/gpu
+# to Kubernetes on its own; without the device-plugin DaemonSet the GPU replica
+# stays Pending forever. NodePool + EC2NodeClass bring the g5 node up, the
+# DaemonSet exposes its card.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu
+spec:
+  # The IAM role Karpenter attaches to the nodes it launches, created by the eks
+  # module's Karpenter submodule and surfaced as the karpenter_node_iam_role_name
+  # output (#89). Substituted by `just gpu-pool-up`; the module names it with a
+  # random suffix, so it cannot be hard-coded here.
+  role: ${KARPENTER_NODE_ROLE}
+  # The EKS-optimised AL2023 AMI. For a GPU instance type (g5) Karpenter resolves
+  # the NVIDIA-accelerated variant of this alias automatically, so the node boots
+  # with the driver baked in. `@latest` tracks the control-plane version to avoid
+  # a version skew; the reproducible artefact is the vLLM image and model
+  # revision (ADR-0006), not the node AMI.
+  amiSelectorTerms:
+    - alias: al2023@latest
+  # Discover the private subnets and node security group the eks stack tags with
+  # karpenter.sh/discovery=<cluster_name> (terraform/eks/main.tf).
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${CLUSTER_NAME}
+  # The g5.xlarge's ~20 GB default root cannot hold the vLLM GPU image (~10 GB),
+  # the AWQ weights (~6 GB), and the CUDA/compile cache. Size a 100 GB gp3 root;
+  # the model store lives here, not on the instance's ephemeral local NVMe.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 100Gi
+        volumeType: gp3
+        encrypted: true
+        deleteOnTermination: true
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu
+spec:
+  template:
+    metadata:
+      # Karpenter stamps this label on the nodes it launches from this pool; the
+      # device-plugin DaemonSet's nodeSelector matches it so the plugin lands only
+      # on GPU nodes.
+      labels:
+        nvidia.com/gpu: "true"
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu
+      # Only pods that tolerate this taint (the GPU replica) land on the node, so
+      # nothing else drifts onto the expensive card.
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+      requirements:
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["g5.xlarge"]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot"]
+  # Cap the pool at a single GPU. The rig is one A10G replica (CONTEXT.md); a hard
+  # ceiling here keeps a mistake in a higher layer from provisioning a second
+  # $/hr node behind our back (money-safety, ADR-0002).
+  limits:
+    nvidia.com/gpu: "1"
+  # When the replica scales to zero the node goes empty and Karpenter reaps it
+  # after the window, returning GPU spend to zero (the duty-cycle requirement,
+  # ADR-0006). Underutilised consolidation cannot disrupt the single running
+  # replica — there is no cheaper node to move it to.
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m
+---
+# The NVIDIA device plugin (github.com/NVIDIA/k8s-device-plugin). Registers each
+# node's GPU as the countable nvidia.com/gpu resource the scheduler needs before
+# it will place the GPU replica. Pinned to a release tag for a reproducible build.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+    spec:
+      # Land only on the GPU nodes this pool launches; the CPU node group has no
+      # card for the plugin to expose.
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      # Tolerate the GPU taint above, or the plugin could never schedule onto the
+      # very nodes it exists to serve.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      priorityClassName: "system-node-critical"
+      containers:
+        - name: nvidia-device-plugin-ctr
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.20.0
+          env: []
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 30Mi
+            limits:
+              cpu: 100m
+              memory: 100Mi
+          volumeMounts:
+            - name: kubelet-device-plugins-dir
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: kubelet-device-plugins-dir
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+            type: Directory
