@@ -31,6 +31,11 @@ output "node_security_group_id" {
   value       = module.eks.node_security_group_id
 }
 
+output "karpenter_node_iam_role_name" {
+  description = "IAM role Karpenter attaches to the nodes it launches; the GPU EC2NodeClass (#90) names it under spec.role."
+  value       = module.karpenter.node_iam_role_name
+}
+
 output "node_autoscaling_groups" {
   description = "Autoscaling group names backing the managed node groups; a load balancer target group attaches to these to register node instances."
   value       = flatten([for ng in module.eks.eks_managed_node_groups : ng.node_group_autoscaling_group_names])
