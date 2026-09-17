@@ -94,12 +94,16 @@ undeploy:
 gpu-pool-up:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Bare assignments so a failed `terraform output` aborts instead of applying
-    # an EC2NodeClass with an empty role or discovery tag — which would silently
-    # match no subnet/security group and never provision (see `up`). The eks stack
-    # is already initialised by `just up`.
+    command -v envsubst >/dev/null || { echo "envsubst required (brew install gettext)" >&2; exit 1; }
+    # Bare assignments so a failed `terraform output` aborts the recipe (see `up`);
+    # `terraform output -raw` exits 0 with empty stdout when an output resolves to
+    # nothing, so the non-empty checks catch that separately — otherwise an empty
+    # role and discovery tag would apply an EC2NodeClass that matches no subnet or
+    # security group and never provisions. The eks stack is initialised by `just up`.
     cluster_name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
+    [[ -n "${cluster_name}" ]] || { echo "eks output cluster_name is empty" >&2; exit 1; }
     node_role="$(terraform -chdir={{ eks_dir }} output -raw karpenter_node_iam_role_name)"
+    [[ -n "${node_role}" ]] || { echo "eks output karpenter_node_iam_role_name is empty" >&2; exit 1; }
     # Substitute only the two known placeholders, so nothing else in the manifest
     # (e.g. a shell-like token in an image tag) is touched.
     CLUSTER_NAME="${cluster_name}" KARPENTER_NODE_ROLE="${node_role}" \
@@ -107,16 +111,14 @@ gpu-pool-up:
       | kubectl apply -f -
     kubectl -n kube-system rollout status ds/nvidia-device-plugin-daemonset --timeout=120s
 
-# Remove the GPU node pool and device plugin. Karpenter drains and reaps any GPU
-# node the pool launched; `just down` destroys the cluster regardless.
+# Remove the GPU node pool and device plugin. Deleting the NodePool makes Karpenter
+# drain and terminate any GPU instance it launched — instances that live outside
+# Terraform state, so reaping them here keeps `just down` from racing the controller
+# and orphaning a billing g5. Objects delete by name, so the manifest's unsubstituted
+# placeholders are irrelevant and no terraform lookup is needed — teardown never
+# blocks on eks state being reachable.
 gpu-pool-down:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cluster_name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
-    node_role="$(terraform -chdir={{ eks_dir }} output -raw karpenter_node_iam_role_name)"
-    CLUSTER_NAME="${cluster_name}" KARPENTER_NODE_ROLE="${node_role}" \
-      envsubst '${CLUSTER_NAME} ${KARPENTER_NODE_ROLE}' <{{ gpu_pool_manifests }} \
-      | kubectl delete --ignore-not-found -f -
+    kubectl delete -f {{ gpu_pool_manifests }} --ignore-not-found
 
 # Port-forward the service and curl a completion out of it.
 completion:
