@@ -6,6 +6,7 @@ eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
 baseline_dir := "terraform/baseline"
 manifests := "k8s/vllm.yaml"
+gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
 bench_dockerfile := "bench/Dockerfile"
 # Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
 bench_image_tag := "latest"
@@ -86,6 +87,36 @@ deploy: _ensure-api-key
 # Remove the vLLM workload (leaves the cluster running).
 undeploy:
     kubectl delete -f {{ manifests }} --ignore-not-found
+
+# Apply the GPU node pool (NodePool + EC2NodeClass) and the NVIDIA device plugin.
+# Karpenter provisions no node until a pod tolerates the GPU taint and requests
+# nvidia.com/gpu — the GPU replica (`just gpu-deploy`, #91) does that.
+gpu-pool-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignments so a failed `terraform output` aborts instead of applying
+    # an EC2NodeClass with an empty role or discovery tag — which would silently
+    # match no subnet/security group and never provision (see `up`). The eks stack
+    # is already initialised by `just up`.
+    cluster_name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
+    node_role="$(terraform -chdir={{ eks_dir }} output -raw karpenter_node_iam_role_name)"
+    # Substitute only the two known placeholders, so nothing else in the manifest
+    # (e.g. a shell-like token in an image tag) is touched.
+    CLUSTER_NAME="${cluster_name}" KARPENTER_NODE_ROLE="${node_role}" \
+      envsubst '${CLUSTER_NAME} ${KARPENTER_NODE_ROLE}' <{{ gpu_pool_manifests }} \
+      | kubectl apply -f -
+    kubectl -n kube-system rollout status ds/nvidia-device-plugin-daemonset --timeout=120s
+
+# Remove the GPU node pool and device plugin. Karpenter drains and reaps any GPU
+# node the pool launched; `just down` destroys the cluster regardless.
+gpu-pool-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cluster_name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
+    node_role="$(terraform -chdir={{ eks_dir }} output -raw karpenter_node_iam_role_name)"
+    CLUSTER_NAME="${cluster_name}" KARPENTER_NODE_ROLE="${node_role}" \
+      envsubst '${CLUSTER_NAME} ${KARPENTER_NODE_ROLE}' <{{ gpu_pool_manifests }} \
+      | kubectl delete --ignore-not-found -f -
 
 # Port-forward the service and curl a completion out of it.
 completion:
