@@ -32,5 +32,5 @@ variable "node_instance_type" {
 variable "karpenter_chart_version" {
   description = "Pinned Karpenter Helm chart version (matches the karpenter-provider-aws release), from the oci://public.ecr.aws/karpenter registry."
   type        = string
-  default     = "1.8.0"
+  default     = "1.8.8"
 }
