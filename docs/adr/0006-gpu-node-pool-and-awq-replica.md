@@ -60,9 +60,13 @@ same conftest policy set. This also draws a clean line: Karpenter *install* is
 Terraform (#89), Karpenter *config* is manifests (#90).
 
 The GPU `NodePool` is restricted to `g5.xlarge`, `karpenter.sh/capacity-type In
-["spot"]`, and carries a taint `nvidia.com/gpu=true:NoSchedule` so only pods that
-tolerate it (the GPU replica) land there — nothing else drifts onto the expensive
-card. Its `disruption` block uses `consolidationPolicy: WhenEmptyOrUnderutilized`
+["spot", "on-demand"]`, and carries a taint `nvidia.com/gpu=true:NoSchedule` so only
+pods that tolerate it (the GPU replica) land there — nothing else drifts onto the
+expensive card. Karpenter provisions the cheapest offering, so spot is used whenever
+the region has g5.xlarge spot capacity; on-demand is the fallback for when spot is
+unfulfillable, so a spot shortage still brings the rig up (at the higher price)
+rather than leaving the pod Pending. The single-GPU `limits` cap bounds the spend
+either way. Its `disruption` block uses `consolidationPolicy: WhenEmptyOrUnderutilized`
 with a `consolidateAfter` window, which is what returns spend to zero: when the GPU
 replica scales to zero the node goes empty and Karpenter reaps it.
 
