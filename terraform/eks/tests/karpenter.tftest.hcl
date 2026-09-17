@@ -93,6 +93,15 @@ run "karpenter_install_shape" {
     error_message = "Helm values must set the service account bound to the Pod Identity association, or the controller has no AWS permissions."
   }
 
+  # One controller pod. The chart's default of two carries a required hostname
+  # anti-affinity, but the bootstrap node group runs a single node, so a second
+  # replica stays Pending and the wait=true release never reaches Ready. Lock the
+  # override so restoring the default can't silently deadlock the apply.
+  assert {
+    condition     = local.karpenter_helm_values.replicas == 1
+    error_message = "Karpenter must run one controller replica to fit the single-node bootstrap group."
+  }
+
   # The discovery tag is the contract the EC2NodeClass subnet/security-group
   # selectors resolve against in #90: change the key or value and node provisioning
   # silently finds nothing. Lock the key/value, and that the merge onto the private

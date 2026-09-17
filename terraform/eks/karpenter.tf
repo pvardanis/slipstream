@@ -52,6 +52,11 @@ locals {
   # the release below. serviceAccount.name must match the Pod Identity association
   # the module created, or the controller has no AWS permissions.
   karpenter_helm_values = {
+    # One controller pod. The chart defaults to two with a required
+    # anti-affinity on hostname, but the bootstrap node group runs a single
+    # node, so the second replica stays Pending and the wait=true release below
+    # never reaches Ready. HA needs a second node this cluster does not have.
+    replicas       = 1
     serviceAccount = { name = module.karpenter.service_account }
     settings = {
       clusterName       = module.eks.cluster_name
