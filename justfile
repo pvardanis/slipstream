@@ -11,7 +11,7 @@ gpu_manifests := "k8s/vllm-gpu.yaml"
 bench_dockerfile := "bench/Dockerfile"
 # Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
 bench_image_tag := "latest"
-model := "Qwen/Qwen2.5-0.5B-Instruct"
+cpu_model := "Qwen/Qwen2.5-0.5B-Instruct"
 # The model id the GPU replica serves (k8s/vllm-gpu.yaml --model); the gpu-completion
 # smoke sends it as the request's model field.
 gpu_model := "Qwen/Qwen3-8B-AWQ"
@@ -44,7 +44,7 @@ cluster-up: _bootstrap-init
     kubectl get nodes
 
 # Show the cluster changes `just cluster-up` would apply, without provisioning anything.
-plan: _bootstrap-init
+cluster-plan: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignment so a failed `terraform output` aborts instead of passing an
@@ -144,16 +144,33 @@ gpu-down:
     kubectl -n slipstream scale deploy/vllm-gpu --replicas=0
 
 # Bring the whole benchmark stack up and leave it running: cluster, GPU node pool,
-# GPU replica, and the ephemeral mTLS baseline endpoint. Everything `just bench`
+# GPU replica, and the ephemeral mTLS bench endpoint. Everything `just bench`
 # and `just prefix-cache` need — run them against it as often as you like, then
 # `just stack-down` at the end of the day to return spend to zero.
-stack-up: cluster-up gpu-pool-up gpu-deploy baseline-up
+stack-up: cluster-up gpu-pool-up gpu-deploy bench-endpoint-up
 
-# Tear the whole benchmark stack down, returning GPU and cluster spend to zero.
-# Bootstrap state and the ECR repo survive (see `just cluster-down`). Order matters: drop
-# the baseline endpoint and scale the GPU replica to zero, then delete the NodePool
-# so Karpenter reaps the g5 before `just cluster-down` destroys the VPC it lives in.
-stack-down: baseline-down gpu-down gpu-pool-down cluster-down
+# Tear the whole benchmark stack down, returning GPU and cluster spend to zero,
+# then sweep AWS to confirm nothing tagged Project=slipstream is still billing.
+# Bootstrap state and the ECR repo survive (see `just cluster-down`). Order matters:
+# drop the bench endpoint and scale the GPU replica to zero, then delete the
+# NodePool so Karpenter reaps the g5 before `just cluster-down` destroys the VPC it
+# lives in. Every teardown step is tolerated so a stuck one never skips the steps
+# after it or the leak sweep — the same money-safety discipline as `cloud-verify`.
+stack-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    overall=0
+    # Capture the region while the eks stack still has outputs; `cluster-down`
+    # destroys them, and the sweep needs a region to target afterwards.
+    region="$(terraform -chdir={{ eks_dir }} output -raw region 2>/dev/null || true)"
+    just bench-endpoint-down || true
+    just gpu-down || true
+    just gpu-pool-down || true
+    # A failed cluster-down is escalated — it means resources may remain billing
+    # for the sweep to catch.
+    if ! just cluster-down; then overall=1; fi
+    if ! just _zero-leak-sweep "${region}"; then overall=1; fi
+    exit "${overall}"
 
 # Port-forward the service and curl a completion out of it.
 cpu-completion:
@@ -172,7 +189,7 @@ cpu-completion:
     curl -sf http://localhost:8000/v1/completions \
       -H 'Content-Type: application/json' \
       -H "Authorization: Bearer ${key}" \
-      -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
+      -d '{"model":"{{ cpu_model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
 
 # Smoke the GPU replica: assert HTTP 200 and a well-formed, non-empty completion
@@ -230,11 +247,11 @@ bench-image: _bootstrap-init
     # Nodes are amd64; build for that arch regardless of the developer's host.
     # Drive the baked tokenizer from the one `model` var the sweep also uses, so
     # the two never diverge.
-    docker build --platform linux/amd64 --build-arg MODEL={{ model }} \
+    docker build --platform linux/amd64 --build-arg MODEL={{ cpu_model }} \
       -t "${repo}:{{ bench_image_tag }}" -f {{ bench_dockerfile }} .
     docker push "${repo}:{{ bench_image_tag }}"
 
-# Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live baseline (`just baseline-up`).
+# Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
 bench *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -270,7 +287,7 @@ bench *args:
     # non-zero at the end of the grid, so a partial failure still leaves cells worth
     # keeping: sync whatever landed regardless, then surface the sweep's status.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ model }}'"
+    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ cpu_model }}'"
     sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_ARGS_B64='${args_b64}'"
     sweep_rc=0
     run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
@@ -297,7 +314,7 @@ bench-results-sync:
 cli-test:
     uv run pytest
 
-# Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live baseline (`just baseline-up`).
+# Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).
 prefix-cache prefix_share="90" burstiness="1.0" *args="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -333,7 +350,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # both cells, so the host script hard-fails on a cell failure rather than leaving a
     # half result — a non-zero here means nothing worth joining was produced.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ model }}'"
+    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ cpu_model }}'"
     prefix_env="${prefix_env} RUN_ID='${run_id}' PREFIX_SHARE='{{ prefix_share }}'"
     prefix_env="${prefix_env} BURSTINESS='{{ burstiness }}' PREFIX_ARGS_B64='${args_b64}'"
     run_on_host "prefix-cache" "${prefix_env} /usr/local/bin/bench-prefix-cache.sh" 3600
@@ -394,13 +411,28 @@ obs-pivot:
     fi
     curl -sf -X POST http://localhost:4318/v1/traces \
       -H 'Content-Type: application/json' \
-      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"{{ model }}"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
+      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"{{ cpu_model }}"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
     sleep 3
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
 # Destroy the cluster (the bootstrap state bucket is left intact).
 cluster-down:
     terraform -chdir={{ eks_dir }} destroy -auto-approve
+
+# Sweep AWS for a Project=slipstream instance or volume still billing after a
+# teardown and exit non-zero if any survives (test/zero-leak-sweep.sh, classified
+# by `slipstream-bench zero-leak`). The caller passes the region it captured
+# before `cluster-down`, since the eks stack has no outputs left to read it from
+# afterwards; an empty region is a hard stop, since the sweep cannot be targeted.
+_zero-leak-sweep region:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    region="{{ region }}"
+    if [[ -z "${region}" ]]; then
+      echo "region unavailable; cannot confirm zero leftovers" >&2
+      exit 1
+    fi
+    {{ justfile_directory() }}/test/zero-leak-sweep.sh "${region}"
 
 # End-to-end cloud verification of the GPU path (ADR-0002 item 4, #92). Real GPU
 # spend, hand-triggered. Brings the cluster and GPU replica up, asserts the engine
@@ -447,20 +479,15 @@ cloud-verify:
     if ! just cluster-down; then overall=1; fi
 
     # Money-safety backstop: assert no tagged resource outlived the teardown.
-    if [[ -z "${region}" ]]; then
-      echo "region unavailable; cannot confirm zero leftovers" >&2
-      overall=1
-    elif ! {{ justfile_directory() }}/test/zero-leak-sweep.sh "${region}"; then
-      overall=1
-    fi
+    if ! just _zero-leak-sweep "${region}"; then overall=1; fi
 
     exit "${overall}"
 
-# Stand up the ephemeral public baseline endpoint: a mutual-TLS load balancer
+# Stand up the ephemeral public bench endpoint: a mutual-TLS load balancer
 # fronting vLLM, so both arms can be measured from one host outside the cluster.
-# It exists only for the run; `baseline-down` tears it down. Requires the cluster
+# It exists only for the run; `bench-endpoint-down` tears it down. Requires the cluster
 # up and vLLM deployed (`just cluster-up && just cpu-deploy`).
-baseline-up: _bootstrap-init _ensure-api-key
+bench-endpoint-up: _bootstrap-init _ensure-api-key
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed lookup aborts rather than feeding empty values
@@ -515,9 +542,9 @@ baseline-up: _bootstrap-init _ensure-api-key
       sleep 5
     done
 
-# Destroy the ephemeral baseline endpoint (load balancer, trust store, certs,
+# Destroy the ephemeral bench endpoint (load balancer, trust store, certs,
 # client secret). The cluster and its vLLM workload stay up.
-baseline-down: _bootstrap-init
+bench-endpoint-down: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"

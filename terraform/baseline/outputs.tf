@@ -20,6 +20,6 @@ output "bench_host_instance_id" {
 }
 
 output "results_bucket_name" {
-  description = "Name of the S3 bucket the bench host writes measurement JSON to. Results outlive the host here until baseline-down removes the bucket."
+  description = "Name of the S3 bucket the bench host writes measurement JSON to. Results outlive the host here until bench-endpoint-down removes the bucket."
   value       = aws_s3_bucket.results.id
 }

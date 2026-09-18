@@ -22,7 +22,7 @@ resource "aws_acm_certificate" "server" {
 }
 
 # The trust store needs the CA bundle in S3. A dedicated, force-destroyed bucket
-# keeps it out of the long-lived state bucket and lets baseline-down remove it
+# keeps it out of the long-lived state bucket and lets bench-endpoint-down remove it
 # cleanly with the rest of the stack.
 resource "aws_s3_bucket" "trust_store" {
   bucket_prefix = "${local.name}-truststore-"
