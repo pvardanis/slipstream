@@ -72,13 +72,14 @@ spec:
         - key: node.kubernetes.io/instance-type
           operator: In
           values: ["g5.xlarge"]
-        # Prefer spot for cost, but allow on-demand so the pool still launches when
-        # g5.xlarge spot capacity is unfulfillable in the region (Karpenter picks
-        # the cheapest offering, so spot wins whenever it has capacity and only
-        # falls back to on-demand when it does not).
+        # On-demand only. The rig is brought up on demand for a bench sweep, so a
+        # deterministic ~90s launch matters more than the spot discount. Allowing
+        # spot made Karpenter prefer it every round and back off ~3min per failed
+        # CreateFleet, so a spot-starved region cost ~15min of launch thrash before
+        # on-demand won. The single-GPU limits cap below bounds the on-demand spend.
         - key: karpenter.sh/capacity-type
           operator: In
-          values: ["spot", "on-demand"]
+          values: ["on-demand"]
   # Cap the pool at a single GPU. The rig is one A10G replica (CONTEXT.md); a hard
   # ceiling here keeps a mistake in a higher layer from provisioning a second
   # $/hr node behind our back (money-safety, ADR-0002).
