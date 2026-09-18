@@ -56,6 +56,72 @@ def test_available_volume_is_a_leak() -> None:
     ]
 
 
+def test_stopping_instance_is_a_leak() -> None:
+    """A stopping instance holds its billable EBS root — a leak until fully gone."""
+    doc = _instances(
+        {
+            "InstanceId": "i-stopping",
+            "State": {"Name": "stopping"},
+            "InstanceType": "g5.xlarge",
+        }
+    )
+
+    assert find_leaks(doc, _volumes()) == [
+        Leak(kind="ec2-instance", identifier="i-stopping", detail="g5.xlarge stopping")
+    ]
+
+
+def test_unknown_instance_state_is_a_leak() -> None:
+    """A state not on the terminal deny-list must flag, not read as clean."""
+    doc = _instances(
+        {
+            "InstanceId": "i-weird",
+            "State": {"Name": "some-future-state"},
+            "InstanceType": "g5.xlarge",
+        }
+    )
+
+    assert [leak.identifier for leak in find_leaks(doc, _volumes())] == ["i-weird"]
+
+
+def test_creating_volume_is_a_leak() -> None:
+    """A volume still being created already bills allocated storage — a leak."""
+    doc = _volumes({"VolumeId": "vol-new", "State": "creating", "Size": 100})
+
+    assert find_leaks(_instances(), doc) == [
+        Leak(kind="ebs-volume", identifier="vol-new", detail="100GiB creating")
+    ]
+
+
+def test_error_volume_is_a_leak() -> None:
+    """An error-state volume still exists and bills storage — the deny-list flags it."""
+    doc = _volumes({"VolumeId": "vol-err", "State": "error", "Size": 100})
+
+    assert find_leaks(_instances(), doc) == [
+        Leak(kind="ebs-volume", identifier="vol-err", detail="100GiB error")
+    ]
+
+
+def test_shutting_down_instance_is_not_a_leak() -> None:
+    """A shutting-down instance bills nothing on its way to terminated."""
+    doc = _instances(
+        {
+            "InstanceId": "i-going",
+            "State": {"Name": "shutting-down"},
+            "InstanceType": "g5.xlarge",
+        }
+    )
+
+    assert find_leaks(doc, _volumes()) == []
+
+
+def test_deleted_volume_is_not_a_leak() -> None:
+    """A deleted volume is gone and bills nothing."""
+    doc = _volumes({"VolumeId": "vol-gone", "State": "deleted", "Size": 100})
+
+    assert find_leaks(_instances(), doc) == []
+
+
 def test_terminated_instance_is_not_a_leak() -> None:
     """A terminated instance bills nothing, so it is not a leak."""
     doc = _instances(
@@ -165,6 +231,36 @@ def test_volume_missing_state_fails_loud() -> None:
     """A volume without a readable state cannot be judged safe — fail loud."""
     with pytest.raises(LeakError, match="state"):
         find_leaks(_instances(), _volumes({"VolumeId": "vol-x", "Size": 100}))
+
+
+def test_instance_state_wrong_type_fails_loud() -> None:
+    """A present-but-non-dict State cannot be judged safe — fail loud."""
+    with pytest.raises(LeakError, match="state"):
+        find_leaks(_instances({"InstanceId": "i-x", "State": "running"}), _volumes())
+
+
+def test_billing_instance_without_id_fails_loud() -> None:
+    """A still-billing instance with no InstanceId is malformed, not a nameless leak."""
+    with pytest.raises(LeakError, match="no InstanceId"):
+        find_leaks(_instances({"State": {"Name": "running"}}), _volumes())
+
+
+def test_billing_volume_without_id_fails_loud() -> None:
+    """A still-billing volume with no VolumeId is malformed, not a nameless leak."""
+    with pytest.raises(LeakError, match="no VolumeId"):
+        find_leaks(_instances(), _volumes({"State": "available", "Size": 100}))
+
+
+def test_non_object_volumes_document_fails_loud() -> None:
+    """The volumes-side shape guard fails loud, same as the instances side."""
+    with pytest.raises(LeakError, match="not a JSON object"):
+        find_leaks(_instances(), [])
+
+
+def test_volumes_not_a_list_fails_loud() -> None:
+    """A malformed Volumes shape fails rather than silently scanning nothing."""
+    with pytest.raises(LeakError, match="Volumes"):
+        find_leaks(_instances(), {"Volumes": {}})
 
 
 def test_read_aws_json_reads_a_document(tmp_path: Path) -> None:

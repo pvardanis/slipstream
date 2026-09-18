@@ -206,7 +206,10 @@ It runs the full path and asserts two things:
    outside Terraform state, so `just cluster-down` never sees them; the `EC2NodeClass` tags
    them with the same `Project` tag the Terraform stacks carry so the sweep
    (`test/zero-leak-sweep.sh`, classified by `slipstream-bench zero-leak`) can find
-   a leaked node the destroy missed.
+   a leaked node the destroy missed. The sweep covers EC2 instances and EBS volumes
+   only — the Karpenter g5 and its gp3 root are the resources that live outside
+   Terraform state; `cluster-down` (`terraform destroy`) owns everything else. A
+   future out-of-state resource of another kind would need adding to the sweep.
 
 Teardown and the sweep run **even if the smoke fails**, so a failed check never
 leaves a live `g5` billing. The recipe exits non-zero if the smoke failed, a

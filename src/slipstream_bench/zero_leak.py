@@ -5,22 +5,27 @@ or EBS volume that survives is a still-billing leak — the money-safety failure
 ADR-0002 ranks first, and one that lives outside Terraform state (Karpenter
 launches the g5 through an in-cluster controller). This reads the two
 Project-tag-filtered ``aws ec2 describe-*`` documents the sweep collects and
-names anything in a still-billing state — so the billing-state set lives here
-alone, not also in the sweep's query. Malformed input raises rather than reading
-as "clean", so a broken query can never green-light a running g5.
+names anything not in a known-terminal state — a deny-list, so an ``error`` volume
+or a state AWS adds later reads as a leak, never silently as clean. The state sets
+live here alone, not also in the sweep's query. Malformed input raises rather than
+reading as "clean", so a broken query can never green-light a running g5.
 """
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
-# Instance states that still bill: compute while pending/running/stopping, and
-# the backing EBS while stopped. terminated and shutting-down bill nothing and
-# are on their way out, so they are not leaks.
-_ACTIVE_INSTANCE_STATES = frozenset({"pending", "running", "stopping", "stopped"})
+# Instance states that bill nothing and are on their way out. The classifier flags
+# anything NOT listed here: running bills compute, pending is about to, and
+# stopping/stopped still hold the billable EBS root — plus any state AWS adds later.
+# A deny-list fails toward flagging: an unrecognized state must read as a leak,
+# never silently as clean. Assumes standard on-demand billing (no hibernation).
+_TERMINAL_INSTANCE_STATES = frozenset({"shutting-down", "terminated"})
 
-# Volume states that still bill storage. deleting/deleted are on their way out.
-_ACTIVE_VOLUME_STATES = frozenset({"creating", "available", "in-use"})
+# Volume states that bill nothing (on their way out). Everything else is a leak —
+# creating, available, in-use, and error (a failed volume still bills for its
+# allocated storage). Deny-list for the same fail-toward-flagging reason as instances.
+_GONE_VOLUME_STATES = frozenset({"deleting", "deleted"})
 
 
 class LeakError(Exception):
@@ -65,11 +70,16 @@ def _instance_leaks(instances_doc: dict) -> list[Leak]:
                 raise LeakError(
                     f"instance {instance.get('InstanceId')} has no readable state"
                 )
-            if name in _ACTIVE_INSTANCE_STATES:
+            if name not in _TERMINAL_INSTANCE_STATES:
+                instance_id = instance.get("InstanceId")
+                if not isinstance(instance_id, str):
+                    raise LeakError(
+                        f"still-billing instance in state {name!r} has no InstanceId"
+                    )
                 leaks.append(
                     Leak(
                         kind="ec2-instance",
-                        identifier=str(instance.get("InstanceId")),
+                        identifier=instance_id,
                         detail=f"{instance.get('InstanceType', 'unknown')} {name}",
                     )
                 )
@@ -84,11 +94,16 @@ def _volume_leaks(volumes_doc: dict) -> list[Leak]:
         state = volume.get("State")
         if not isinstance(state, str):
             raise LeakError(f"volume {volume.get('VolumeId')} has no readable state")
-        if state in _ACTIVE_VOLUME_STATES:
+        if state not in _GONE_VOLUME_STATES:
+            volume_id = volume.get("VolumeId")
+            if not isinstance(volume_id, str):
+                raise LeakError(
+                    f"still-billing volume in state {state!r} has no VolumeId"
+                )
             leaks.append(
                 Leak(
                     kind="ebs-volume",
-                    identifier=str(volume.get("VolumeId")),
+                    identifier=volume_id,
                     detail=f"{volume.get('Size', 'unknown')}GiB {state}",
                 )
             )
