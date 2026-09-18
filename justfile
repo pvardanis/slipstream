@@ -380,6 +380,39 @@ baseline-up: _bootstrap-init _ensure-api-key
       -var="state_bucket=${bucket}" \
       -var="operator_cidr=${cidr}"
     terraform -chdir={{ baseline_dir }} output
+    # cloud-init runs asynchronously after `apply` returns — installing Docker,
+    # pulling the bench image from ECR, writing the proxy scripts — so the host is
+    # not ready the instant terraform finishes. Block on the boot sentinel the host
+    # writes to the results bucket (boot-status/<instance-id>: "ok" on success, or
+    # "failed: <step>") so a following `just bench`/`prefix-cache` cannot race a host
+    # whose /usr/local/bin scripts are not written yet (exit 127 on proxy-up).
+    region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
+    results_bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
+    key="s3://${results_bucket}/boot-status/${instance}"
+    echo "waiting for bench host ${instance} to finish boot..." >&2
+    deadline=$((SECONDS + 420))
+    while :; do
+      # Missing key (boot not far enough to report) is a not-ready, not an error:
+      # swallow the copy failure and keep polling until "ok", a "failed:" report, or
+      # the ceiling. A "failed:" sentinel is a hard stop with the host's failing step.
+      status="$(aws s3 cp "${key}" - --region "${region}" 2>/dev/null || true)"
+      case "${status}" in
+      ok)
+        echo "bench host boot: ok" >&2
+        break
+        ;;
+      failed:*)
+        echo "bench host boot ${status}" >&2
+        exit 1
+        ;;
+      esac
+      ((SECONDS < deadline)) || {
+        echo "bench host ${instance} did not report ready within 420s (last: '${status:-<no sentinel yet>}')" >&2
+        exit 1
+      }
+      sleep 5
+    done
 
 # Destroy the ephemeral baseline endpoint (load balancer, trust store, certs,
 # client secret). The cluster and its vLLM workload stay up.
