@@ -83,7 +83,8 @@ stern vllm -n slipstream --tail 50    # tail vLLM logs, follows pod restarts
 ## Benchmark harness
 
 The L0 benchmark harness ships as `slipstream-bench`, a Python package managed by
-[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches five subcommands.
+[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches five benchmark
+subcommands (plus `zero-leak`, the teardown sweep `just cloud-verify` classifies with).
 The rewrite from bash is recorded in
 [`docs/adr/0003`](docs/adr/0003-l0-bench-harness-in-python.md).
 
@@ -111,7 +112,7 @@ Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
 `--help` for its full option list.
 
 ```sh
-uv run slipstream-bench --help              # list the five subcommands
+uv run slipstream-bench --help              # list the subcommands
 uv run slipstream-bench serve-sweep --help  # options for one subcommand
 just cli-test                               # run the package test suite (uv run pytest)
 ```
@@ -167,6 +168,50 @@ outputs (`terraform output -raw region`), so the cluster, the baseline stack and
 the AWS CLI all act in one region. Set it once via `AWS_PROFILE` / `aws configure`; a
 profile pointing at a different region than the state was created in will not find
 these resources.
+
+For a run against the GPU rig rather than the CPU replica, swap `just deploy` for
+`just gpu-pool-up && just gpu-deploy` (Karpenter brings up the `g5.xlarge`). The
+whole stack — cluster, GPU pool, GPU replica, baseline endpoint — comes up with one
+recipe and tears down with another, for when you want it live to run sweeps against
+through the day:
+
+```sh
+just stack-up         # up + gpu-pool-up + gpu-deploy + baseline-up
+just bench                             # run sweeps against the live rig, any time
+just stack-down       # baseline-down + gpu-down + gpu-pool-down + down (spend → 0)
+```
+
+`stack-down` returns all GPU and cluster spend to zero; only the bootstrap state
+bucket and ECR repo survive.
+
+### Cloud verify runbook
+
+`just cloud-verify` is the money-safety backstop for the GPU path (ADR-0002 item 4):
+one hand-triggered, real-GPU-spend end-to-end check that the rig serves and that
+teardown returns spend to zero. It costs real money, so a human triggers it — there
+is no automatic cloud run (ADR-0002).
+
+```sh
+just cloud-verify     # up → gpu-pool-up → gpu-deploy → smoke → teardown → sweep
+```
+
+It runs the full path and asserts two things:
+
+1. **Harness green** — the GPU replica answers `/v1/completions` with HTTP 200 and a
+   well-formed, non-empty completion (`just gpu-completion`). This proves the deploy
+   → service → engine → token path; it does not judge answer quality (spec §5).
+2. **Zero-leak** — after tearing the path down (`gpu-down` → `gpu-pool-down` →
+   `down`), it sweeps EC2 for any `Project=slipstream` instance or volume still in a
+   billing state and asserts none remain. Karpenter's `g5` and its `gp3` root live
+   outside Terraform state, so `just down` never sees them; the `EC2NodeClass` tags
+   them with the same `Project` tag the Terraform stacks carry so the sweep
+   (`test/zero-leak-sweep.sh`, classified by `slipstream-bench zero-leak`) can find
+   a leaked node the destroy missed.
+
+Teardown and the sweep run **even if the smoke fails**, so a failed check never
+leaves a live `g5` billing. The recipe exits non-zero if the smoke failed, a
+teardown step failed, or a tagged resource survived — a green exit means the rig
+served and spend is back at zero.
 
 ## Non-goals
 
