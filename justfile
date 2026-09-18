@@ -12,6 +12,9 @@ bench_dockerfile := "bench/Dockerfile"
 # Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
 bench_image_tag := "latest"
 model := "Qwen/Qwen2.5-0.5B-Instruct"
+# The model id the GPU replica serves (k8s/vllm-gpu.yaml --model); the gpu-completion
+# smoke sends it as the request's model field.
+gpu_model := "Qwen/Qwen3-8B-AWQ"
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
 
@@ -140,6 +143,18 @@ gpu-up:
 gpu-down:
     kubectl -n slipstream scale deploy/vllm-gpu --replicas=0
 
+# Bring the whole benchmark stack up and leave it running: cluster, GPU node pool,
+# GPU replica, and the ephemeral mTLS baseline endpoint. Everything `just bench`
+# and `just prefix-cache` need — run them against it as often as you like, then
+# `just stack-down` at the end of the day to return spend to zero.
+stack-up: up gpu-pool-up gpu-deploy baseline-up
+
+# Tear the whole benchmark stack down, returning GPU and cluster spend to zero.
+# Bootstrap state and the ECR repo survive (see `just down`). Order matters: drop
+# the baseline endpoint and scale the GPU replica to zero, then delete the NodePool
+# so Karpenter reaps the g5 before `just down` destroys the VPC it lives in.
+stack-down: baseline-down gpu-down gpu-pool-down down
+
 # Port-forward the service and curl a completion out of it.
 completion:
     #!/usr/bin/env bash
@@ -159,6 +174,38 @@ completion:
       -H "Authorization: Bearer ${key}" \
       -d '{"model":"{{ model }}","prompt":"The slipstream platform serves","max_tokens":32}'
     echo
+
+# Smoke the GPU replica: assert HTTP 200 and a well-formed, non-empty completion
+# from the live engine (ADR-0002 item 5, for the GPU path). Proves the deploy →
+# service → engine → token path end-to-end; it does not judge answer quality
+# (out of scope, spec §5). This is the "harness green" step of `just cloud-verify`.
+gpu-completion:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl -n slipstream rollout status deploy/vllm-gpu --timeout=1200s
+    kubectl -n slipstream port-forward svc/vllm-gpu 8000:8000 >/dev/null 2>&1 &
+    pf_pid=$!
+    trap 'kill "${pf_pid}" 2>/dev/null || true' EXIT
+    ready=""
+    for _ in $(seq 60); do
+      curl -sf http://localhost:8000/health >/dev/null 2>&1 && { ready=1; break; }
+      sleep 1
+    done
+    [[ -n "${ready}" ]] || { echo "vllm-gpu /health never came up" >&2; exit 1; }
+    # vLLM enforces the api-key on its API routes; read it from the Secret.
+    key="$(just _read-api-key)"
+    body="$(mktemp)"
+    trap 'kill "${pf_pid}" 2>/dev/null || true; rm -f "${body}"' EXIT
+    code="$(curl -s -o "${body}" -w '%{http_code}' http://localhost:8000/v1/completions \
+      -H 'Content-Type: application/json' \
+      -H "Authorization: Bearer ${key}" \
+      -d '{"model":"{{ gpu_model }}","prompt":"The slipstream platform serves","max_tokens":32}')"
+    [[ "${code}" == "200" ]] || { echo "completion returned HTTP ${code}:" >&2; cat "${body}" >&2; exit 1; }
+    # Assert the body carries a non-empty completion — shape and liveness, not
+    # answer quality. A 200 with an empty choices/text still means the engine
+    # served nothing, so it must fail here.
+    uv run python -c 'import json,sys; d=json.load(open(sys.argv[1])); c=d.get("choices") or []; t=(c[0].get("text","") if c else ""); sys.exit(0 if t.strip() else "completion had no non-empty text: "+json.dumps(d))' "${body}"
+    echo "gpu completion ok"
 
 # Print the bench-client image reference (ECR repo URL from `just bootstrap`, plus the tag).
 _bench-image-ref: _bootstrap-init
@@ -354,6 +401,52 @@ obs-pivot:
 # Destroy the cluster (the bootstrap state bucket is left intact).
 down:
     terraform -chdir={{ eks_dir }} destroy -auto-approve
+
+# End-to-end cloud verification of the GPU path (ADR-0002 item 4, #92). Real GPU
+# spend, hand-triggered. Brings the cluster and GPU replica up, asserts the engine
+# serves a well-formed completion, then tears everything down and sweeps AWS for a
+# Project=slipstream instance or volume still billing — asserting zero. Teardown
+# and the sweep run even when the smoke fails, so a failed check never orbits a
+# live g5. Exits non-zero if the smoke failed, teardown failed, or a leftover
+# survived. Every fallible step is guarded so `set -e` cannot skip the teardown.
+cloud-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    overall=0
+    region=""
+
+    # Bring the path up. On any failure, stop climbing but still fall through to the
+    # teardown + sweep below — a partial apply may already be billing.
+    if ! just up; then overall=1; fi
+    # Capture the region while the eks stack still has outputs; after `just down`
+    # they are gone. Fall back to the caller's configured region so the sweep can
+    # still run if `up` failed before exposing the output.
+    region="$(terraform -chdir={{ eks_dir }} output -raw region 2>/dev/null || true)"
+    region="${region:-${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+    if [[ "${overall}" -eq 0 ]] && ! just gpu-pool-up; then overall=1; fi
+    if [[ "${overall}" -eq 0 ]] && ! just gpu-deploy; then overall=1; fi
+    if [[ "${overall}" -eq 0 ]] && ! just gpu-completion; then
+      echo "gpu smoke failed" >&2
+      overall=1
+    fi
+
+    # Teardown always runs, in reaping order. Scale the replica to zero and delete
+    # the NodePool (Karpenter reaps the g5) before destroying the VPC it sits in;
+    # tolerate the scale/pool steps failing so `down` still runs. A failed `down`
+    # is escalated — it means resources may remain for the sweep to catch.
+    just gpu-down || true
+    just gpu-pool-down || true
+    if ! just down; then overall=1; fi
+
+    # Money-safety backstop: assert no tagged resource outlived the teardown.
+    if [[ -z "${region}" ]]; then
+      echo "region unavailable; cannot confirm zero leftovers" >&2
+      overall=1
+    elif ! {{ justfile_directory() }}/test/zero-leak-sweep.sh "${region}"; then
+      overall=1
+    fi
+
+    exit "${overall}"
 
 # Stand up the ephemeral public baseline endpoint: a mutual-TLS load balancer
 # fronting vLLM, so both arms can be measured from one host outside the cluster.
