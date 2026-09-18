@@ -17,10 +17,10 @@ testing is for:
    silently regressed decision (someone flips a Service to `LoadBalancer`,
    un-pins an image tag) erodes the thing being demonstrated.
 2. **The only real-money failure is a botched teardown.** The GPU budget is a
-   duty-cycle budget (spec §2); `just down` returning spend to zero is a design
+   duty-cycle budget (spec §2); `just cluster-down` returning spend to zero is a design
    requirement. The mechanical failure is concrete: a `Service type=LoadBalancer`
    or a `PersistentVolumeClaim` creates an ELB or EBS volume through *in-cluster
-   controllers*, which live outside Terraform state. `just down` runs
+   controllers*, which live outside Terraform state. `just cluster-down` runs
    `terraform destroy` and never sees them, so they orphan and keep billing.
 
 Testing is therefore ranked: **money-safety first, decision-credibility second,
@@ -65,9 +65,9 @@ A two-tier strategy, split by the money boundary.
 **Cloud tier (real AWS, label-gated on the PR, never automatic):**
 
 4. **Teardown-verify** — a `just` recipe (and a `cloud-check`-labelled workflow)
-   that runs `up` → `down` → an `aws` sweep for tagged leftovers, asserting zero.
+   that runs `cluster-up` → `cluster-down` → an `aws` sweep for tagged leftovers, asserting zero.
    This is the money-safety backstop.
-5. **`completion` smoke** — the existing recipe is made to assert rather than
+5. **`cpu-completion` smoke** — the existing recipe is made to assert rather than
    print: HTTP 200 **and** a well-formed, non-empty completion. It proves the
    deploy → service → engine → token path end-to-end. It does not assert answer
    quality (out of scope per spec §5).
@@ -83,7 +83,7 @@ protects, and the money-failure it would catch is already prevented at the
 policy layer; the label-gated backstop covers the residual. Deferred until a
 regression actually bites.
 
-**Ship order and ceiling.** Policy (item 2) and the `completion` assert (item 5)
+**Ship order and ceiling.** Policy (item 2) and the `cpu-completion` assert (item 5)
 ship first — they serve both priorities and are cheap. The teardown-verify
 backstop (item 4) follows. Plan-only `terraform test` (item 3) is the lowest
 value and the first to cut. Infra-testing effort is capped at roughly the prek
@@ -104,7 +104,7 @@ setup already spent; past that it is plumbing, not testing.
 - `main` stays green on infra because the cloud gate is pre-merge and label-gated;
   the trade-off is that the gate depends on a human remembering the label. A path
   filter could nudge this later, but automatic cloud spend is rejected.
-- The `completion` smoke proves the infrastructure path, not the model. Conflating
+- The `cpu-completion` smoke proves the infrastructure path, not the model. Conflating
   "the model answered well" with "the infra is correct" is avoided by asserting
   only shape and liveness.
 - conftest adds one binary dependency and Rego as a policy language. This is
@@ -112,4 +112,4 @@ setup already spent; past that it is plumbing, not testing.
   across phases L2–L4 (Karpenter/KEDA, the IGW gateway, node-pool topology), and
   a string-matching script rots against CRDs where Rego scales.
 - Each piece ships as its own PR — this prose ADR alone, then the policy set,
-  then the `completion` change, then the workflow — one kind of change each.
+  then the `cpu-completion` change, then the workflow — one kind of change each.

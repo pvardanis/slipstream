@@ -21,7 +21,7 @@ spec:
   role: ${KARPENTER_NODE_ROLE}
   # Tag every instance and volume Karpenter launches with the same Project tag the
   # Terraform stacks carry. These nodes live outside Terraform state (Karpenter is
-  # an in-cluster controller), so `just down` never sees them; the tag is what the
+  # an in-cluster controller), so `just cluster-down` never sees them; the tag is what the
   # cloud-verify teardown sweep (`just cloud-verify`, #92) finds a leaked g5 or its
   # gp3 root by. Component distinguishes them from the Terraform-managed baseline.
   tags:

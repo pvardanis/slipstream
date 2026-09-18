@@ -2,7 +2,7 @@
 # the rig the platform is measured against (spec §3.1, ADR-0006). It is the
 # counterpart to the CPU replica in vllm.yaml — same engine version, different
 # image, model, and hardware — and the two are deployed one at a time, never both
-# (`just deploy` = CPU, `just gpu-deploy` = GPU). This replica takes over the
+# (`just cpu-deploy` = CPU, `just gpu-deploy` = GPU). This replica takes over the
 # baseline path by claiming the fixed NodePort 30800 with selector app=vllm-gpu.
 #
 # The pod lands on the Karpenter GPU node pool (k8s/gpu-node-pool.yaml): it
@@ -159,7 +159,7 @@ spec:
   # cluster, can reach vLLM through the node group. This claims the same fixed
   # nodePort 30800 the CPU replica's Service uses, so the GPU replica takes over the
   # baseline target group unchanged — the two are exposed one at a time, never both.
-  # No cloud load balancer is created here, so `just down` leaves nothing behind.
+  # No cloud load balancer is created here, so `just cluster-down` leaves nothing behind.
   type: NodePort
   selector:
     app: vllm-gpu

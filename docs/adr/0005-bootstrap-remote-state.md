@@ -65,7 +65,7 @@ two-step is run by hand.
   diff, and no state in git history going forward.
 - The eks stack still resolves the bucket name from the bootstrap output
   (`terraform -chdir=terraform/bootstrap output -raw state_bucket_name`), which now requires
-  bootstrap to be initialised against its remote backend. `up`, `plan`, and the
+  bootstrap to be initialised against its remote backend. `cluster-up`, `plan`, and the
   image recipes gain a `_bootstrap-init` dependency so a fresh checkout can read
   those outputs.
 - The tradeoff ADR-0001 took the other way: committed state made a fresh clone

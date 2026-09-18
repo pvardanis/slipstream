@@ -1,7 +1,7 @@
 # The ECR repository holding the bench-client image (slipstream-bench + the vLLM
 # tokenizer, baked on the pinned engine build). It lives in the bootstrap stack,
 # not eks, because the image must exist before any cluster can pull it and must
-# outlive `just down` — a repo in the eks stack would be destroyed on every
+# outlive `just cluster-down` — a repo in the eks stack would be destroyed on every
 # teardown, orphaning the pushed image. EKS nodes pull from it via the ECR pull
 # policy the managed node group attaches to their node IAM role, so no
 # imagePullSecrets are needed.

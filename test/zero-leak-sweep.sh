@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Assert the cloud-verify teardown left no Project=slipstream resource billing.
 # Karpenter's g5 and its gp3 root live outside Terraform state (Karpenter is an
-# in-cluster controller), so `just down` runs `terraform destroy` and never sees
+# in-cluster controller), so `just cluster-down` runs `terraform destroy` and never sees
 # them. This queries EC2 by the Project tag both those nodes and the Terraform
 # stacks carry, filtered server-side to still-billing states, and hands the two
 # JSON documents to the classifier (`slipstream-bench zero-leak`), which exits
-# non-zero if anything survives. Region is passed in because after `just down`
+# non-zero if anything survives. Region is passed in because after `just cluster-down`
 # the eks stack has no outputs left to read it from.
 set -euo pipefail
 

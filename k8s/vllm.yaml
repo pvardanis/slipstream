@@ -131,7 +131,7 @@ spec:
   # cluster, can reach vLLM through the node group. The port is fixed so the
   # baseline target group can target it; only the load balancer's security group
   # is allowed to reach it, and API-route requests still need the api-key. No cloud
-  # load balancer is created here, so `just down` leaves nothing behind.
+  # load balancer is created here, so `just cluster-down` leaves nothing behind.
   type: NodePort
   selector:
     app: vllm

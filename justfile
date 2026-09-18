@@ -1,5 +1,5 @@
-# Task runner for the slipstream platform. `just up` conjures the cluster;
-# `just down` returns spend to zero. Credentials come from your AWS_PROFILE.
+# Task runner for the slipstream platform. `just cluster-up` conjures the cluster;
+# `just cluster-down` returns spend to zero. Credentials come from your AWS_PROFILE.
 # Run `just` with no args to list recipes.
 
 eks_dir := "terraform/eks"
@@ -30,7 +30,7 @@ _bootstrap-init:
     terraform -chdir={{ bootstrap_dir }} init -input=false >&2
 
 # Create the cluster and point kubectl at it.
-up: _bootstrap-init
+cluster-up: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed `terraform output` aborts the recipe instead of
@@ -43,12 +43,12 @@ up: _bootstrap-init
     aws eks update-kubeconfig --name "${name}" --region "${region}"
     kubectl get nodes
 
-# Show the cluster changes `just up` would apply, without provisioning anything.
+# Show the cluster changes `just cluster-up` would apply, without provisioning anything.
 plan: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignment so a failed `terraform output` aborts instead of passing an
-    # empty bucket into the eks backend (see `up`).
+    # empty bucket into the eks backend (see `cluster-up`).
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ eks_dir }} plan
@@ -84,7 +84,7 @@ _read-api-key:
     printf '%s' "${key}"
 
 # Deploy the CPU vLLM replica and wait for it to serve.
-deploy: _ensure-api-key
+cpu-deploy: _ensure-api-key
     kubectl apply -f {{ manifests }}
     kubectl -n slipstream rollout status deploy/vllm --timeout=600s
 
@@ -99,11 +99,11 @@ gpu-pool-up:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v envsubst >/dev/null || { echo "envsubst required (brew install gettext)" >&2; exit 1; }
-    # Bare assignments so a failed `terraform output` aborts the recipe (see `up`);
+    # Bare assignments so a failed `terraform output` aborts the recipe (see `cluster-up`);
     # `terraform output -raw` exits 0 with empty stdout when an output resolves to
     # nothing, so the non-empty checks catch that separately — otherwise an empty
     # role and discovery tag would apply an EC2NodeClass that matches no subnet or
-    # security group and never provisions. The eks stack is initialised by `just up`.
+    # security group and never provisions. The eks stack is initialised by `just cluster-up`.
     cluster_name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
     [[ -n "${cluster_name}" ]] || { echo "eks output cluster_name is empty" >&2; exit 1; }
     node_role="$(terraform -chdir={{ eks_dir }} output -raw karpenter_node_iam_role_name)"
@@ -117,7 +117,7 @@ gpu-pool-up:
 
 # Remove the GPU node pool and device plugin. Deleting the NodePool makes Karpenter
 # drain and terminate any GPU instance it launched — instances that live outside
-# Terraform state, so reaping them here keeps `just down` from racing the controller
+# Terraform state, so reaping them here keeps `just cluster-down` from racing the controller
 # and orphaning a billing g5. Objects delete by name, so the manifest's unsubstituted
 # placeholders are irrelevant and no terraform lookup is needed — teardown never
 # blocks on eks state being reachable.
@@ -147,16 +147,16 @@ gpu-down:
 # GPU replica, and the ephemeral mTLS baseline endpoint. Everything `just bench`
 # and `just prefix-cache` need — run them against it as often as you like, then
 # `just stack-down` at the end of the day to return spend to zero.
-stack-up: up gpu-pool-up gpu-deploy baseline-up
+stack-up: cluster-up gpu-pool-up gpu-deploy baseline-up
 
 # Tear the whole benchmark stack down, returning GPU and cluster spend to zero.
-# Bootstrap state and the ECR repo survive (see `just down`). Order matters: drop
+# Bootstrap state and the ECR repo survive (see `just cluster-down`). Order matters: drop
 # the baseline endpoint and scale the GPU replica to zero, then delete the NodePool
-# so Karpenter reaps the g5 before `just down` destroys the VPC it lives in.
-stack-down: baseline-down gpu-down gpu-pool-down down
+# so Karpenter reaps the g5 before `just cluster-down` destroys the VPC it lives in.
+stack-down: baseline-down gpu-down gpu-pool-down cluster-down
 
 # Port-forward the service and curl a completion out of it.
-completion:
+cpu-completion:
     #!/usr/bin/env bash
     set -euo pipefail
     kubectl -n slipstream rollout status deploy/vllm --timeout=600s
@@ -244,7 +244,7 @@ bench *args:
     # bucket and are synced back here at the end.
     #
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
-    # empty instance id or copying from an empty bucket (see `up`).
+    # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
     bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
@@ -307,7 +307,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # in the results bucket; the join runs here against the synced files.
     #
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
-    # empty instance id or copying from an empty bucket (see `up`).
+    # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
     bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
@@ -399,7 +399,7 @@ obs-pivot:
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
 # Destroy the cluster (the bootstrap state bucket is left intact).
-down:
+cluster-down:
     terraform -chdir={{ eks_dir }} destroy -auto-approve
 
 # End-to-end cloud verification of the GPU path (ADR-0002 item 4, #92). Real GPU
@@ -417,10 +417,10 @@ cloud-verify:
 
     # Bring the path up. On any failure, stop climbing but still fall through to the
     # teardown + sweep below — a partial apply may already be billing.
-    if ! just up; then overall=1; fi
-    # Capture the region while the eks stack still has outputs; after `just down`
+    if ! just cluster-up; then overall=1; fi
+    # Capture the region while the eks stack still has outputs; after `just cluster-down`
     # they are gone. Fall back to the caller's configured region so the sweep can
-    # still run if `up` failed before exposing the output.
+    # still run if `cluster-up` failed before exposing the output.
     region="$(terraform -chdir={{ eks_dir }} output -raw region 2>/dev/null || true)"
     region="${region:-${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}}"
     if [[ "${overall}" -eq 0 ]] && ! just gpu-pool-up; then overall=1; fi
@@ -432,11 +432,11 @@ cloud-verify:
 
     # Teardown always runs, in reaping order. Scale the replica to zero and delete
     # the NodePool (Karpenter reaps the g5) before destroying the VPC it sits in;
-    # tolerate the scale/pool steps failing so `down` still runs. A failed `down`
+    # tolerate the scale/pool steps failing so `cluster-down` still runs. A failed `cluster-down`
     # is escalated — it means resources may remain for the sweep to catch.
     just gpu-down || true
     just gpu-pool-down || true
-    if ! just down; then overall=1; fi
+    if ! just cluster-down; then overall=1; fi
 
     # Money-safety backstop: assert no tagged resource outlived the teardown.
     if [[ -z "${region}" ]]; then
@@ -451,12 +451,12 @@ cloud-verify:
 # Stand up the ephemeral public baseline endpoint: a mutual-TLS load balancer
 # fronting vLLM, so both arms can be measured from one host outside the cluster.
 # It exists only for the run; `baseline-down` tears it down. Requires the cluster
-# up and vLLM deployed (`just up && just deploy`).
+# up and vLLM deployed (`just cluster-up && just cpu-deploy`).
 baseline-up: _bootstrap-init _ensure-api-key
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed lookup aborts rather than feeding empty values
-    # into terraform (see `up`).
+    # into terraform (see `cluster-up`).
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     # Pass the api-key through the environment, not `-var`, so the secret never
     # lands in the terraform process argv (visible via `ps`) or shell history.
@@ -523,7 +523,7 @@ baseline-down: _bootstrap-init
       -var="state_bucket=${bucket}" \
       -var="operator_cidr=0.0.0.0/32"
 
-# Apply the state-bootstrap stack once, before the first `just up`. Assumes the
+# Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new
 # environment bootstraps the bucket first with the two-step in ADR-0005.
 bootstrap:
