@@ -34,6 +34,7 @@ from slipstream_bench.report import (
 )
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
+from slipstream_bench.zero_leak import LeakError, find_leaks, read_aws_json
 
 app = typer.Typer(
     name="slipstream-bench",
@@ -348,6 +349,45 @@ def report(
         typer.echo(render_markdown(rows))
     else:
         typer.echo(json.dumps(rows, indent=2))
+
+
+@app.command("zero-leak")
+def zero_leak(
+    *,
+    instances: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="aws ec2 describe-instances JSON, tag-filtered to Project=slipstream.",
+        ),
+    ],
+    volumes: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="aws ec2 describe-volumes JSON, tag-filtered to Project=slipstream.",
+        ),
+    ],
+) -> None:
+    """Assert cloud-verify teardown left no Project=slipstream resource still billing.
+
+    Exit 0 when spend returned to zero, 1 when a tagged instance or volume
+    survives (named on stderr), 2 when the AWS JSON is unreadable — a broken
+    query fails loud rather than clearing a still-billing g5.
+    """
+    try:
+        leaks = find_leaks(read_aws_json(instances), read_aws_json(volumes))
+    except LeakError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    if leaks:
+        for leak in leaks:
+            typer.echo(f"leak: {leak.kind} {leak.identifier} ({leak.detail})", err=True)
+        typer.echo(f"{len(leaks)} tagged leftover(s) still billing", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("no tagged leftovers: GPU spend returned to zero")
 
 
 if __name__ == "__main__":
