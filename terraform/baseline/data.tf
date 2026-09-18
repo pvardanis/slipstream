@@ -14,7 +14,7 @@ data "terraform_remote_state" "eks" {
 
 # Read-only reference to the bootstrap stack's outputs, for the bench-client
 # image the host pulls and the ECR repository ARN its pull policy is scoped to.
-# The repository lives in bootstrap because it must outlive `just down`; reading
+# The repository lives in bootstrap because it must outlive `just cluster-down`; reading
 # it here keeps that ownership while letting the host target it.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"

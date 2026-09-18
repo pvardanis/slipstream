@@ -1,5 +1,5 @@
 # One-time, durable infrastructure that must exist before the eks stack and
-# outlive `just down`: the S3 bucket holding remote state, and the ECR repository
+# outlive `just cluster-down`: the S3 bucket holding remote state, and the ECR repository
 # for the bench-client image (see ecr.tf). This stack keeps its own state in that
 # bucket too (see backend.tf); the native S3 lockfile means no DynamoDB table is
 # needed. Credentials come from the caller's AWS_PROFILE.
@@ -15,7 +15,7 @@ resource "random_id" "suffix" {
 resource "aws_s3_bucket" "state" {
   bucket = "${var.state_bucket_prefix}-${random_id.suffix.hex}"
 
-  # The state store must survive `just down`; destroying it orphans all managed state.
+  # The state store must survive `just cluster-down`; destroying it orphans all managed state.
   lifecycle {
     prevent_destroy = true
   }

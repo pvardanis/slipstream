@@ -99,7 +99,7 @@ From `aws:infrastructure/terraform/kubernetes/karpenter/{node-pools,node-classes
   than their 750 GB.
 - **Invariants that will bite slipstream's GPU bring-up:**
   - **GPU service quota is often `0` on a fresh account** — Karpenter then *silently* fails to
-    provision. Check `L-DB2E81BA` (G instances) before first GPU `just up`.
+    provision. Check `L-DB2E81BA` (G instances) before first GPU `just cluster-up`.
   - **`nodeRepair` feature gate OFF** — it misread long model loading (JIT compile) as an
     unhealthy node and terminated GPU nodes minutes after launch. slipstream's cold-start *is* a
     long load; this is a direct trap.

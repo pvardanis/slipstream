@@ -4,7 +4,7 @@ A self-hosted LLM inference platform on AWS EKS: open models served on spot GPUs
 with the cluster-level machinery around the model as the focus — autoscaling on
 inference signals, spot-eviction survival mid-stream, cold-start elimination on
 large weight loads, inference-aware routing, and prefill/decode disaggregation.
-`just up` / `just down` conjures and destroys GPU capacity. It runs
+`just cluster-up` / `just cluster-down` conjures and destroys GPU capacity. It runs
 cost-competitive against commercial APIs and proves it on a live scoreboard.
 
 The name carries the platform's job: a slipstream is the low-drag wake behind a
@@ -28,23 +28,23 @@ bench host is driven over SSM, so no SSH client is required. Optional inspection
 tools: `k9s`, `stern`, `kubens`.
 
 ```sh
-just bootstrap   # one-time: create the S3 remote-state bucket
-just up          # create the cluster, then `kubectl get nodes`
-just deploy      # run the CPU vLLM replica and wait for it to serve
-just completion  # port-forward the service and curl a completion out of it
-just down        # destroy the cluster; spend returns to zero
+just bootstrap       # one-time: create the S3 remote-state bucket
+just cluster-up      # create the cluster, then `kubectl get nodes`
+just cpu-deploy      # run the CPU vLLM replica and wait for it to serve
+just cpu-completion  # port-forward the service and curl a completion out of it
+just cluster-down    # destroy the cluster; spend returns to zero
 ```
 
 `just bootstrap` runs once (its state is committed local state). After that,
-`just up` / `just down` are the cluster lifecycle. The task-runner and
+`just cluster-up` / `just cluster-down` are the cluster lifecycle. The task-runner and
 state-bootstrap choices are recorded in
 [`docs/adr/0001`](docs/adr/0001-task-runner-and-state-bootstrap.md).
 
-`just deploy` applies [`k8s/vllm.yaml`](k8s/vllm.yaml): a single vLLM replica
+`just cpu-deploy` applies [`k8s/vllm.yaml`](k8s/vllm.yaml): a single vLLM replica
 serving a tiny CPU model (`Qwen/Qwen2.5-0.5B-Instruct`) over the OpenAI API, so
 the platform stands up without spending GPU hours. The service is `ClusterIP`
-only — no public endpoint, no cloud load balancer — so `just completion` reaches
-it through `kubectl port-forward`, and `just down` tears the cluster down with
+only — no public endpoint, no cloud load balancer — so `just cpu-completion` reaches
+it through `kubectl port-forward`, and `just cluster-down` tears the cluster down with
 nothing left behind. `just undeploy` removes the workload without destroying the
 cluster.
 
@@ -52,7 +52,7 @@ cluster.
 
 Work from a **dedicated IAM user, not the account root**. Root can't be granted
 an EKS access entry, so the console's EKS **Resources** tab shows `Unauthorized`
-for root and the cluster only trusts whoever ran `just up`.
+for root and the cluster only trusts whoever ran `just cluster-up`.
 
 1. As root (one time), create an IAM user (e.g. `slipstream-admin`) with the
    permissions to manage VPC/EKS, and enable **console access** + MFA for it.
@@ -64,12 +64,12 @@ for root and the cluster only trusts whoever ran `just up`.
 3. Sign in to the AWS console **as that user** (not root) at
    `https://<account-id>.signin.aws.amazon.com/console` to inspect EKS there.
 
-`just up` grants cluster-admin to this caller automatically
+`just cluster-up` grants cluster-admin to this caller automatically
 (`enable_cluster_creator_admin_permissions`), so `kubectl` works immediately.
 
 ### Inspecting the cluster
 
-The workload lives in the `slipstream` namespace (created by `just deploy`).
+The workload lives in the `slipstream` namespace (created by `just cpu-deploy`).
 
 ```sh
 kubens slipstream                     # set the default namespace (no more -n flags)
@@ -141,8 +141,8 @@ then tears them down. The sequence, from a cold checkout:
 
 ```sh
 just bootstrap        # once per environment: ECR repo + shared state (see ADR-0005)
-just up               # create the cluster, point kubectl at it
-just deploy           # roll out the CPU vLLM replica, wait for it to serve
+just cluster-up       # create the cluster, point kubectl at it
+just cpu-deploy       # roll out the CPU vLLM replica, wait for it to serve
 just bench-image      # build + push the bench-client image to ECR
 
 just baseline-up      # stand up the mutual-TLS load balancer + bench host
@@ -160,7 +160,7 @@ SSM Run Command — the host has no inbound access — and sync each run's resul
 another machine with `just bench-results-sync`). Both recipes require a live baseline.
 
 The endpoint is public and billed while up: **run `just baseline-down` as soon as a
-run finishes.** `baseline-down` leaves the cluster and vLLM running; `just down`
+run finishes.** `baseline-down` leaves the cluster and vLLM running; `just cluster-down`
 destroys the cluster. Neither touches the bootstrap state bucket or the ECR repo.
 
 Region is not a per-run flag: the benchmark recipes read it from the Terraform
@@ -169,16 +169,16 @@ the AWS CLI all act in one region. Set it once via `AWS_PROFILE` / `aws configur
 profile pointing at a different region than the state was created in will not find
 these resources.
 
-For a run against the GPU rig rather than the CPU replica, swap `just deploy` for
+For a run against the GPU rig rather than the CPU replica, swap `just cpu-deploy` for
 `just gpu-pool-up && just gpu-deploy` (Karpenter brings up the `g5.xlarge`). The
 whole stack — cluster, GPU pool, GPU replica, baseline endpoint — comes up with one
 recipe and tears down with another, for when you want it live to run sweeps against
 through the day:
 
 ```sh
-just stack-up         # up + gpu-pool-up + gpu-deploy + baseline-up
+just stack-up         # cluster-up + gpu-pool-up + gpu-deploy + baseline-up
 just bench                             # run sweeps against the live rig, any time
-just stack-down       # baseline-down + gpu-down + gpu-pool-down + down (spend → 0)
+just stack-down       # baseline-down + gpu-down + gpu-pool-down + cluster-down (spend → 0)
 ```
 
 `stack-down` returns all GPU and cluster spend to zero; only the bootstrap state
@@ -192,7 +192,7 @@ teardown returns spend to zero. It costs real money, so a human triggers it — 
 is no automatic cloud run (ADR-0002).
 
 ```sh
-just cloud-verify     # up → gpu-pool-up → gpu-deploy → smoke → teardown → sweep
+just cloud-verify     # cluster-up → gpu-pool-up → gpu-deploy → smoke → teardown → sweep
 ```
 
 It runs the full path and asserts two things:
@@ -201,9 +201,9 @@ It runs the full path and asserts two things:
    well-formed, non-empty completion (`just gpu-completion`). This proves the deploy
    → service → engine → token path; it does not judge answer quality (spec §5).
 2. **Zero-leak** — after tearing the path down (`gpu-down` → `gpu-pool-down` →
-   `down`), it sweeps EC2 for any `Project=slipstream` instance or volume still in a
+   `cluster-down`), it sweeps EC2 for any `Project=slipstream` instance or volume still in a
    billing state and asserts none remain. Karpenter's `g5` and its `gp3` root live
-   outside Terraform state, so `just down` never sees them; the `EC2NodeClass` tags
+   outside Terraform state, so `just cluster-down` never sees them; the `EC2NodeClass` tags
    them with the same `Project` tag the Terraform stacks carry so the sweep
    (`test/zero-leak-sweep.sh`, classified by `slipstream-bench zero-leak`) can find
    a leaked node the destroy missed.

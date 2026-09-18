@@ -60,7 +60,7 @@ module "eks" {
   name               = var.cluster_name
   kubernetes_version = var.kubernetes_version
 
-  # Access Entries model; grant the caller running `just up` cluster admin.
+  # Access Entries model; grant the caller running `just cluster-up` cluster admin.
   authentication_mode                      = "API"
   enable_cluster_creator_admin_permissions = true
 

@@ -98,7 +98,7 @@ The GPU replica is its own manifest, not a parametrised `vllm.yaml`. It differs 
 the CPU replica in image, resources, tolerations, node target, and engine args;
 folding both into one templated file trades a small, honest duplication for a
 conditional mess. The two coexist and are deployed independently
-(`just deploy` = CPU, `just gpu-deploy` = GPU), each conftest-linted.
+(`just cpu-deploy` = CPU, `just gpu-deploy` = GPU), each conftest-linted.
 
 Engine configuration (confirmed against vLLM v0.29.0):
 

@@ -16,7 +16,7 @@ data "aws_ecrpublic_authorization_token" "token" {
 }
 
 # Authenticates the Helm provider to the cluster with the caller's AWS identity
-# via `aws eks get-token`, the same credentials `just up` uses for kubectl.
+# via `aws eks get-token`, the same credentials `just cluster-up` uses for kubectl.
 provider "helm" {
   kubernetes = {
     host                   = module.eks.cluster_endpoint
