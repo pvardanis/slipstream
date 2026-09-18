@@ -1,5 +1,5 @@
 # An ephemeral, self-signed PKI for the mutual-TLS listener, generated fresh
-# each baseline-up and destroyed on baseline-down. A private CA signs both the
+# each bench-endpoint-up and destroyed on bench-endpoint-down. A private CA signs both the
 # load balancer's server certificate and the bench client's certificate; the
 # CA bundle populates the ALB trust store so the listener accepts only clients
 # holding a certificate this CA signed. No public ACM domain or ACM Private CA

@@ -1,6 +1,6 @@
 # Read-only reference to the eks stack's outputs. Cross-stack via remote state
 # keeps the two stacks in separate state files: nothing the baseline does can
-# mutate the cluster, and baseline-down destroys only this stack. The bucket is
+# mutate the cluster, and bench-endpoint-down destroys only this stack. The bucket is
 # supplied at apply time (same value the eks stack itself uses); the key is the
 # eks stack's fixed state key.
 data "terraform_remote_state" "eks" {

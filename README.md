@@ -35,8 +35,10 @@ just cpu-completion  # port-forward the service and curl a completion out of it
 just cluster-down    # destroy the cluster; spend returns to zero
 ```
 
-`just bootstrap` runs once (its state is committed local state). After that,
-`just cluster-up` / `just cluster-down` are the cluster lifecycle. The task-runner and
+`just bootstrap` runs once; its own state lives in the S3 bucket it creates (the
+bucket name is a literal in its backend, since bootstrap is the root of the state
+chain — see ADR-0005). After that, `just cluster-up` / `just cluster-down` are the
+cluster lifecycle. The task-runner and
 state-bootstrap choices are recorded in
 [`docs/adr/0001`](docs/adr/0001-task-runner-and-state-bootstrap.md).
 
@@ -145,22 +147,22 @@ just cluster-up       # create the cluster, point kubectl at it
 just cpu-deploy       # roll out the CPU vLLM replica, wait for it to serve
 just bench-image      # build + push the bench-client image to ECR
 
-just baseline-up      # stand up the mutual-TLS load balancer + bench host
+just bench-endpoint-up      # stand up the mutual-TLS load balancer + bench host
 just bench                             # sweep the prefix-share x burstiness grid
 just prefix-cache 90 1.0               # cold/warm hit-rate for one cell
-just baseline-down    # tear down the endpoint, host, certs and client secret
+just bench-endpoint-down    # tear down the endpoint, host, certs and client secret
 ```
 
-`just baseline-up` reads the operator's public IP from `checkip.amazonaws.com` and
+`just bench-endpoint-up` reads the operator's public IP from `checkip.amazonaws.com` and
 pins the load balancer's security group to that `/32`; mutual TLS is the real gate,
 the `/32` a second lock. `just bench` and `just prefix-cache` drive the host over
 SSM Run Command — the host has no inbound access — and sync each run's results under
 `bench/results/` (`bench/results/<run-id>/` for `just bench`,
 `bench/results/prefix-cache/<run-id>/` for `just prefix-cache`; pull runs made from
-another machine with `just bench-results-sync`). Both recipes require a live baseline.
+another machine with `just bench-results-sync`). Both recipes require a live bench endpoint.
 
-The endpoint is public and billed while up: **run `just baseline-down` as soon as a
-run finishes.** `baseline-down` leaves the cluster and vLLM running; `just cluster-down`
+The endpoint is public and billed while up: **run `just bench-endpoint-down` as soon as a
+run finishes.** `bench-endpoint-down` leaves the cluster and vLLM running; `just cluster-down`
 destroys the cluster. Neither touches the bootstrap state bucket or the ECR repo.
 
 Region is not a per-run flag: the benchmark recipes read it from the Terraform
@@ -176,13 +178,16 @@ recipe and tears down with another, for when you want it live to run sweeps agai
 through the day:
 
 ```sh
-just stack-up         # cluster-up + gpu-pool-up + gpu-deploy + baseline-up
+just stack-up         # cluster-up + gpu-pool-up + gpu-deploy + bench-endpoint-up
 just bench                             # run sweeps against the live rig, any time
-just stack-down       # baseline-down + gpu-down + gpu-pool-down + cluster-down (spend → 0)
+just stack-down       # bench-endpoint-down + gpu-down + gpu-pool-down + cluster-down, then leak sweep (spend → 0)
 ```
 
-`stack-down` returns all GPU and cluster spend to zero; only the bootstrap state
-bucket and ECR repo survive.
+`stack-down` returns all GPU and cluster spend to zero, then runs the same
+zero-leak sweep as `cloud-verify` (below) to confirm no `Project=slipstream`
+instance or volume — including a Karpenter g5 the destroy raced — is still
+billing; it exits non-zero if one survived. Only the bootstrap state bucket and
+ECR repo survive.
 
 ### Cloud verify runbook
 

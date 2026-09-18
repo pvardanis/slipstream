@@ -2,7 +2,7 @@
 # the aws/tls providers are mocked and both remote-state reads (eks and bootstrap)
 # are overridden, so the assertions check the host's shape and its security
 # invariants — zero ingress, resource-scoped IAM, a locked-down results bucket —
-# without launching an instance. The real end-to-end proof is a `just baseline-up`
+# without launching an instance. The real end-to-end proof is a `just bench-endpoint-up`
 # run driven from the host, which costs money and is run by hand.
 
 # This suite applies (not just plans) so IAM policy documents and bucket ARNs are
@@ -289,11 +289,11 @@ run "bench_host_invariants" {
     error_message = "Results bucket must block all public access."
   }
 
-  # The results bucket is force-destroyed so baseline-down removes it (and the
+  # The results bucket is force-destroyed so bench-endpoint-down removes it (and the
   # run's JSON) cleanly rather than failing on a non-empty bucket.
   assert {
     condition     = aws_s3_bucket.results.force_destroy == true
-    error_message = "Results bucket must be force-destroyed so baseline-down can remove it."
+    error_message = "Results bucket must be force-destroyed so bench-endpoint-down can remove it."
   }
 }
 

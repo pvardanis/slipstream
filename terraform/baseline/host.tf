@@ -264,8 +264,8 @@ resource "aws_instance" "bench_host" {
 # this is the CIDR pinhole the operator rule already models, extended to the host.
 # The ALB security group manages all its rules as standalone rule resources (no
 # inline blocks), so this rule coexists with them instead of being revoked on
-# every apply. The host is created fresh each baseline-up and destroyed on
-# baseline-down — never stopped — so its auto-assigned public IP does not change
+# every apply. The host is created fresh each bench-endpoint-up and destroyed on
+# bench-endpoint-down — never stopped — so its auto-assigned public IP does not change
 # under it; a host meant to survive a stop/start would need an Elastic IP.
 resource "aws_vpc_security_group_ingress_rule" "alb_from_host" {
   security_group_id = aws_security_group.alb.id

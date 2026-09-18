@@ -1,7 +1,7 @@
 # Plan-level tests for the baseline exposure stack. They run offline: the aws
 # provider is mocked and the eks remote-state data source is overridden, so the
 # assertions check the stack's shape and its security invariants without
-# standing anything up. The real end-to-end proof is `just baseline-up` plus a
+# standing anything up. The real end-to-end proof is `just bench-endpoint-up` plus a
 # client-cert curl, which costs money and is run by hand.
 
 mock_provider "aws" {}

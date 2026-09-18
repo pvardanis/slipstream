@@ -1,7 +1,7 @@
 # The results bucket the bench host writes measurement JSON to. It lives outside
 # the ephemeral host so a run's numbers survive the host's teardown: the host is
-# destroyed on baseline-down, but its results stay downloadable from the S3
-# console until baseline-down removes this bucket too. force_destroy lets that
+# destroyed on bench-endpoint-down, but its results stay downloadable from the S3
+# console until bench-endpoint-down removes this bucket too. force_destroy lets that
 # teardown delete the bucket even with objects still in it, rather than failing.
 
 resource "aws_s3_bucket" "results" {

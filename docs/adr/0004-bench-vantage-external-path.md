@@ -41,7 +41,7 @@ public endpoint, and the commercial API directly.
   request and corrupt TTFT. mTLS makes access IP-independent, so a personal VPN
   on the operator side is irrelevant; an EC2 elastic-IP allowlist is an optional
   extra layer.
-- **A `just baseline-up` / `baseline-down` Terraform toggle** provisions and
+- **A `just bench-endpoint-up` / `bench-endpoint-down` Terraform toggle** provisions and
   destroys the load balancer and the EC2 instance together, so teardown leaves
   nothing standing — preserving the duty-cycle property of ADR-0001.
 
