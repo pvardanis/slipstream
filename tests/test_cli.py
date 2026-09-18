@@ -459,6 +459,22 @@ def test_zero_leak_reports_a_running_instance_and_exits_one(tmp_path: Path) -> N
     assert "i-abc" in invoked.output
 
 
+def test_zero_leak_reports_a_surviving_volume_and_exits_one(tmp_path: Path) -> None:
+    """An orphaned volume exits non-zero and names the volume on stderr."""
+    inst, vols = _sweep_files(
+        tmp_path,
+        {"Reservations": []},
+        {"Volumes": [{"VolumeId": "vol-abc", "State": "available", "Size": 100}]},
+    )
+
+    invoked = runner.invoke(
+        app, ["zero-leak", "--instances", str(inst), "--volumes", str(vols)]
+    )
+
+    assert invoked.exit_code == 1
+    assert "vol-abc" in invoked.output
+
+
 def test_zero_leak_malformed_input_exits_two(tmp_path: Path) -> None:
     """Malformed AWS JSON fails loud (exit 2) rather than reading as clean."""
     inst, vols = _sweep_files(tmp_path, {"Reservations": {}}, {"Volumes": []})

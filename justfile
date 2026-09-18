@@ -419,10 +419,18 @@ cloud-verify:
     # teardown + sweep below — a partial apply may already be billing.
     if ! just cluster-up; then overall=1; fi
     # Capture the region while the eks stack still has outputs; after `just cluster-down`
-    # they are gone. Fall back to the caller's configured region so the sweep can
-    # still run if `cluster-up` failed before exposing the output.
+    # they are gone. At this point `overall` reflects only `cluster-up`, so when it
+    # succeeded the region output must be readable — falling back to AWS_REGION / the
+    # profile default could sweep a different region and false-green while a g5 bills.
+    # Reserve that fallback for the partial-apply case, where the sweep still needs a
+    # region to catch whatever `cluster-up` created before it failed.
     region="$(terraform -chdir={{ eks_dir }} output -raw region 2>/dev/null || true)"
-    region="${region:-${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+    if [[ "${overall}" -eq 0 && -z "${region}" ]]; then
+      echo "eks region output unavailable after cluster-up; cannot target the sweep" >&2
+      overall=1
+    elif [[ -z "${region}" ]]; then
+      region="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
+    fi
     if [[ "${overall}" -eq 0 ]] && ! just gpu-pool-up; then overall=1; fi
     if [[ "${overall}" -eq 0 ]] && ! just gpu-deploy; then overall=1; fi
     if [[ "${overall}" -eq 0 ]] && ! just gpu-completion; then
