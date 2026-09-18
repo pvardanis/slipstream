@@ -409,3 +409,63 @@ def test_report_rejects_an_unjoinable_segment(tmp_path: Path) -> None:
 
     assert invoked.exit_code == 2
     assert "commercial" in invoked.output
+
+
+def _sweep_files(tmp_path: Path, instances: dict, volumes: dict) -> tuple[Path, Path]:
+    inst = tmp_path / "instances.json"
+    inst.write_text(json.dumps(instances))
+    vols = tmp_path / "volumes.json"
+    vols.write_text(json.dumps(volumes))
+    return inst, vols
+
+
+def test_zero_leak_clean_teardown_exits_zero(tmp_path: Path) -> None:
+    """No tagged leftovers exits 0 — the passing money-safety case."""
+    inst, vols = _sweep_files(tmp_path, {"Reservations": []}, {"Volumes": []})
+
+    invoked = runner.invoke(
+        app, ["zero-leak", "--instances", str(inst), "--volumes", str(vols)]
+    )
+
+    assert invoked.exit_code == 0, invoked.output
+    assert "zero" in invoked.stdout.lower()
+
+
+def test_zero_leak_reports_a_running_instance_and_exits_one(tmp_path: Path) -> None:
+    """A surviving g5 exits non-zero and names the instance on stderr."""
+    inst, vols = _sweep_files(
+        tmp_path,
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-abc",
+                            "State": {"Name": "running"},
+                            "InstanceType": "g5.xlarge",
+                        }
+                    ]
+                }
+            ]
+        },
+        {"Volumes": []},
+    )
+
+    invoked = runner.invoke(
+        app, ["zero-leak", "--instances", str(inst), "--volumes", str(vols)]
+    )
+
+    assert invoked.exit_code == 1
+    assert "i-abc" in invoked.output
+
+
+def test_zero_leak_malformed_input_exits_two(tmp_path: Path) -> None:
+    """Malformed AWS JSON fails loud (exit 2) rather than reading as clean."""
+    inst, vols = _sweep_files(tmp_path, {"Reservations": {}}, {"Volumes": []})
+
+    invoked = runner.invoke(
+        app, ["zero-leak", "--instances", str(inst), "--volumes", str(vols)]
+    )
+
+    assert invoked.exit_code == 2
+    assert "Reservations" in invoked.output
