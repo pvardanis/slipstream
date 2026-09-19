@@ -15,6 +15,12 @@ cpu_model := "Qwen/Qwen2.5-0.5B-Instruct"
 # The model id the GPU replica serves (k8s/vllm-gpu.yaml --model); the gpu-completion
 # smoke sends it as the request's model field.
 gpu_model := "Qwen/Qwen3-8B-AWQ"
+# The model the external bench path measures — the bench-image tokenizer, `bench`
+# and `prefix-cache` all read this one var so the baked tokenizer and the swept
+# token counts never diverge. Defaults to the GPU rig's model, since the mTLS bench
+# path exists to measure that rig (ADR-0004); override for a CPU-replica sweep with
+# `just bench_model="..." bench-image bench`.
+bench_model := gpu_model
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
 
@@ -154,8 +160,11 @@ stack-up: cluster-up gpu-pool-up gpu-deploy bench-endpoint-up
 # Bootstrap state and the ECR repo survive (see `just cluster-down`). Order matters:
 # drop the bench endpoint and scale the GPU replica to zero, then delete the
 # NodePool so Karpenter reaps the g5 before `just cluster-down` destroys the VPC it
-# lives in. Every teardown step is tolerated so a stuck one never skips the steps
-# after it or the leak sweep — the same money-safety discipline as `cloud-verify`.
+# lives in. `cluster-down` is gated on `bench-endpoint-down` succeeding: the endpoint's
+# load balancer and host sit in the cluster VPC, so destroying the VPC under a live
+# endpoint wedges the destroy on a DependencyViolation and orphans a billing load
+# balancer. The GPU scale/pool steps are in-cluster and orthogonal, so they run
+# regardless to stop the g5. The leak sweep always runs to report whatever survived.
 stack-down:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -163,12 +172,18 @@ stack-down:
     # Capture the region while the eks stack still has outputs; `cluster-down`
     # destroys them, and the sweep needs a region to target afterwards.
     region="$(terraform -chdir={{ eks_dir }} output -raw region 2>/dev/null || true)"
-    just bench-endpoint-down || true
+    # Tear the endpoint down first and gate the VPC destroy on it: a failed
+    # endpoint teardown leaves the load balancer and host in the VPC, so running
+    # cluster-down anyway would wedge on a DependencyViolation and orphan billing.
+    if ! just bench-endpoint-down; then
+      echo "bench-endpoint-down failed; skipping cluster-down so the VPC destroy does not wedge under a live endpoint. Resolve the endpoint teardown, then rerun stack-down." >&2
+      overall=1
+    fi
     just gpu-down || true
     just gpu-pool-down || true
-    # A failed cluster-down is escalated — it means resources may remain billing
-    # for the sweep to catch.
-    if ! just cluster-down; then overall=1; fi
+    # cluster-down only when the endpoint is gone. A failed cluster-down is escalated —
+    # it means resources may remain billing for the sweep to catch.
+    if [[ "${overall}" -eq 0 ]] && ! just cluster-down; then overall=1; fi
     if ! just _zero-leak-sweep "${region}"; then overall=1; fi
     exit "${overall}"
 
@@ -245,9 +260,9 @@ bench-image: _bootstrap-init
     aws ecr get-login-password --region "${region}" \
       | docker login --username AWS --password-stdin "${registry}"
     # Nodes are amd64; build for that arch regardless of the developer's host.
-    # Drive the baked tokenizer from the one `model` var the sweep also uses, so
-    # the two never diverge.
-    docker build --platform linux/amd64 --build-arg MODEL={{ cpu_model }} \
+    # Drive the baked tokenizer from the one `bench_model` var the sweep also uses,
+    # so the two never diverge.
+    docker build --platform linux/amd64 --build-arg MODEL={{ bench_model }} \
       -t "${repo}:{{ bench_image_tag }}" -f {{ bench_dockerfile }} .
     docker push "${repo}:{{ bench_image_tag }}"
 
@@ -287,7 +302,7 @@ bench *args:
     # non-zero at the end of the grid, so a partial failure still leaves cells worth
     # keeping: sync whatever landed regardless, then surface the sweep's status.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ cpu_model }}'"
+    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ bench_model }}'"
     sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_ARGS_B64='${args_b64}'"
     sweep_rc=0
     run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
@@ -350,7 +365,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # both cells, so the host script hard-fails on a cell failure rather than leaving a
     # half result — a non-zero here means nothing worth joining was produced.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ cpu_model }}'"
+    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ bench_model }}'"
     prefix_env="${prefix_env} RUN_ID='${run_id}' PREFIX_SHARE='{{ prefix_share }}'"
     prefix_env="${prefix_env} BURSTINESS='{{ burstiness }}' PREFIX_ARGS_B64='${args_b64}'"
     run_on_host "prefix-cache" "${prefix_env} /usr/local/bin/bench-prefix-cache.sh" 3600
@@ -411,7 +426,7 @@ obs-pivot:
     fi
     curl -sf -X POST http://localhost:4318/v1/traces \
       -H 'Content-Type: application/json' \
-      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"{{ cpu_model }}"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
+      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"{{ gpu_model }}"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
     sleep 3
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
@@ -427,9 +442,17 @@ cluster-down:
 _zero-leak-sweep region:
     #!/usr/bin/env bash
     set -euo pipefail
+    # The caller passes the region it captured before cluster-down. When teardown
+    # already destroyed the eks outputs (an interrupted cluster-up or a partial
+    # cluster-down), that capture is empty exactly when the sweep matters most, so
+    # fall back to the ambient AWS region — AWS_REGION, then the profile default —
+    # rather than skip the money-safety check.
     region="{{ region }}"
     if [[ -z "${region}" ]]; then
-      echo "region unavailable; cannot confirm zero leftovers" >&2
+      region="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
+    fi
+    if [[ -z "${region}" ]]; then
+      echo "region unavailable (no argument, AWS_REGION, or profile default); cannot confirm zero leftovers" >&2
       exit 1
     fi
     {{ justfile_directory() }}/test/zero-leak-sweep.sh "${region}"
@@ -447,21 +470,31 @@ cloud-verify:
     overall=0
     region=""
 
+    # Pre-flight: cloud-verify is a one-shot create -> verify -> destroy money check
+    # and must start from a clean slate. Against a pre-existing cluster, cluster-up's
+    # create becomes a multi-minute node-group roll, and the teardown below would then
+    # destroy a cluster the operator did not stand up here. Abort if the eks stack
+    # already holds any resource, pointing at `stack-down` to clear it first.
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
+    if terraform -chdir={{ eks_dir }} state list 2>/dev/null | grep -q .; then
+      echo "eks stack is not empty; cloud-verify expects a clean slate. Run 'just stack-down' first, then rerun." >&2
+      exit 1
+    fi
+
     # Bring the path up. On any failure, stop climbing but still fall through to the
     # teardown + sweep below — a partial apply may already be billing.
     if ! just cluster-up; then overall=1; fi
     # Capture the region while the eks stack still has outputs; after `just cluster-down`
-    # they are gone. At this point `overall` reflects only `cluster-up`, so when it
-    # succeeded the region output must be readable — falling back to AWS_REGION / the
-    # profile default could sweep a different region and false-green while a g5 bills.
-    # Reserve that fallback for the partial-apply case, where the sweep still needs a
-    # region to catch whatever `cluster-up` created before it failed.
+    # they are gone. When cluster-up succeeded the region output must be readable — a
+    # missing one there is a hard stop, since falling back to the ambient region could
+    # sweep a different one and false-green while a g5 bills. In the partial-apply case
+    # the fallback is safe and lives in `_zero-leak-sweep`, which resolves an empty
+    # region from AWS_REGION / the profile default.
     region="$(terraform -chdir={{ eks_dir }} output -raw region 2>/dev/null || true)"
     if [[ "${overall}" -eq 0 && -z "${region}" ]]; then
       echo "eks region output unavailable after cluster-up; cannot target the sweep" >&2
       overall=1
-    elif [[ -z "${region}" ]]; then
-      region="${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}"
     fi
     if [[ "${overall}" -eq 0 ]] && ! just gpu-pool-up; then overall=1; fi
     if [[ "${overall}" -eq 0 ]] && ! just gpu-deploy; then overall=1; fi
@@ -493,6 +526,15 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
     # Bare assignments so a failed lookup aborts rather than feeding empty values
     # into terraform (see `cluster-up`).
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    # Read the cluster's network topology from the eks outputs and pass it in as
+    # variables (bare assignments abort on a missing output, see `cluster-up`).
+    # The baseline holds these in its own state, so `bench-endpoint-down` destroys
+    # from state alone and never needs the eks stack — an interrupted cluster-up
+    # can no longer strand this endpoint billing.
+    vpc_id="$(terraform -chdir={{ eks_dir }} output -raw vpc_id)"
+    node_sg="$(terraform -chdir={{ eks_dir }} output -raw node_security_group_id)"
+    subnets="$(terraform -chdir={{ eks_dir }} output -json public_subnets)"
+    asgs="$(terraform -chdir={{ eks_dir }} output -json node_autoscaling_groups)"
     # Pass the api-key through the environment, not `-var`, so the secret never
     # lands in the terraform process argv (visible via `ps`) or shell history.
     TF_VAR_vllm_api_key="$(just _read-api-key)"
@@ -506,7 +548,11 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
     terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ baseline_dir }} apply -auto-approve \
       -var="state_bucket=${bucket}" \
-      -var="operator_cidr=${cidr}"
+      -var="operator_cidr=${cidr}" \
+      -var="vpc_id=${vpc_id}" \
+      -var="node_security_group_id=${node_sg}" \
+      -var="public_subnets=${subnets}" \
+      -var="node_autoscaling_groups=${asgs}"
     terraform -chdir={{ baseline_dir }} output
     # cloud-init runs asynchronously after `apply` returns — installing Docker,
     # pulling the bench image from ECR, writing the proxy scripts — so the host is

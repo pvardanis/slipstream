@@ -109,7 +109,7 @@ locals {
 resource "aws_security_group" "bench_host" {
   name_prefix = "${local.name}-host-"
   description = "Egress-only security group for the ephemeral bench host"
-  vpc_id      = local.eks.vpc_id
+  vpc_id      = var.vpc_id
 
   egress {
     description = "HTTPS to ECR, Secrets Manager, SSM, S3 and the ALB listener"
@@ -224,7 +224,7 @@ resource "aws_instance" "bench_host" {
   # First eks public subnet: the host needs its IGW route so the public IP can
   # reach ECR, Secrets Manager, SSM, S3 and the internet-facing ALB. This trusts
   # the eks stack to keep those subnets internet-routable.
-  subnet_id                   = local.eks.public_subnets[0]
+  subnet_id                   = var.public_subnets[0]
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.bench_host.id]
   iam_instance_profile        = aws_iam_instance_profile.bench_host.name

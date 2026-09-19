@@ -38,27 +38,18 @@ mock_provider "aws" {
 mock_provider "tls" {}
 
 variables {
-  state_bucket  = "slipstream-tf-state-test"
-  operator_cidr = "203.0.113.7/32"
-  vllm_api_key  = "test-key"
-  vllm_nodeport = 30800
+  state_bucket            = "slipstream-tf-state-test"
+  operator_cidr           = "203.0.113.7/32"
+  vllm_api_key            = "test-key"
+  vllm_nodeport           = 30800
+  vpc_id                  = "vpc-test"
+  public_subnets          = ["subnet-a", "subnet-b", "subnet-c"]
+  node_security_group_id  = "sg-nodes"
+  node_autoscaling_groups = ["slipstream-cpu"]
 }
 
-# File-scoped overrides so every run (invariants and the validation-rejection
-# runs) plans against mocked remote state instead of reaching for real S3.
-override_data {
-  target = data.terraform_remote_state.eks
-  values = {
-    outputs = {
-      vpc_id                  = "vpc-test"
-      public_subnets          = ["subnet-a", "subnet-b", "subnet-c"]
-      node_security_group_id  = "sg-nodes"
-      node_autoscaling_groups = ["slipstream-cpu"]
-      region                  = "eu-west-1"
-    }
-  }
-}
-
+# File-scoped override so every run (invariants and the validation-rejection
+# runs) plans against mocked bootstrap remote state instead of reaching for real S3.
 override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
@@ -78,7 +69,7 @@ run "bench_host_invariants" {
   # The host launches into a public subnet with a public IP: it needs egress to
   # ECR, Secrets Manager, SSM, S3 and the public ALB, and holds no inbound role.
   assert {
-    condition     = contains(local.eks.public_subnets, aws_instance.bench_host.subnet_id)
+    condition     = contains(var.public_subnets, aws_instance.bench_host.subnet_id)
     error_message = "Bench host must launch in one of the eks public subnets."
   }
   assert {

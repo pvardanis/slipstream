@@ -8,27 +8,18 @@ mock_provider "aws" {}
 mock_provider "tls" {}
 
 variables {
-  state_bucket  = "slipstream-tf-state-test"
-  operator_cidr = "203.0.113.7/32"
-  vllm_api_key  = "test-key"
-  vllm_nodeport = 30800
+  state_bucket            = "slipstream-tf-state-test"
+  operator_cidr           = "203.0.113.7/32"
+  vllm_api_key            = "test-key"
+  vllm_nodeport           = 30800
+  vpc_id                  = "vpc-test"
+  public_subnets          = ["subnet-a", "subnet-b", "subnet-c"]
+  node_security_group_id  = "sg-nodes"
+  node_autoscaling_groups = ["slipstream-cpu"]
 }
 
 run "exposure_invariants" {
   command = plan
-
-  override_data {
-    target = data.terraform_remote_state.eks
-    values = {
-      outputs = {
-        vpc_id                  = "vpc-test"
-        public_subnets          = ["subnet-a", "subnet-b", "subnet-c"]
-        node_security_group_id  = "sg-nodes"
-        node_autoscaling_groups = ["slipstream-cpu"]
-        region                  = "eu-west-1"
-      }
-    }
-  }
 
   # The bootstrap read feeds the bench host, not the exposure resources, but it is
   # part of the stack, so it must be overridden here too or the test reaches for
