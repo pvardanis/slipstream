@@ -58,7 +58,7 @@ resource "aws_lb" "baseline" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = local.eks.public_subnets
+  subnets            = var.public_subnets
 
   tags = local.tags
 }
@@ -69,7 +69,7 @@ resource "aws_lb_target_group" "vllm" {
   name_prefix = "bsln-"
   port        = var.vllm_nodeport
   protocol    = "HTTP"
-  vpc_id      = local.eks.vpc_id
+  vpc_id      = var.vpc_id
   target_type = "instance"
 
   health_check {
@@ -87,7 +87,7 @@ resource "aws_lb_target_group" "vllm" {
 # Register the node group's instances with the target group by attaching its
 # autoscaling group; new nodes join automatically.
 resource "aws_autoscaling_attachment" "vllm" {
-  for_each = toset(local.eks.node_autoscaling_groups)
+  for_each = toset(var.node_autoscaling_groups)
 
   autoscaling_group_name = each.value
   lb_target_group_arn    = aws_lb_target_group.vllm.arn

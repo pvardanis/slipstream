@@ -128,12 +128,15 @@ recorded in [`docs/adr/0004`](docs/adr/0004-bench-vantage-external-path.md).
 
 The bench-client image (`bench/Dockerfile`) layers the package and the model
 tokenizer onto the same pinned vLLM engine build the server runs, so the two
-tokenize identically. It is pushed to an ECR repository provisioned by
-`just bootstrap`; the bench host pulls it with the host IAM role. Build and push
-it before a sweep (rebuild after changing the package or the base engine):
+tokenize identically. The tokenizer is baked from the `bench_model` var, which
+`bench` and `prefix-cache` also send as the sweep model so the two never diverge;
+it defaults to the GPU rig's model (the mTLS bench path exists to measure that
+rig). Override it for a CPU-replica sweep — rebuild the image with the same value
+so its tokenizer matches:
 
 ```sh
-just bench-image                 # docker build + push to ECR
+just bench-image                                   # docker build + push to ECR (default bench_model)
+just bench_model="Qwen/Qwen2.5-0.5B-Instruct" bench-image   # bench the CPU replica instead
 ```
 
 ### Baseline runbook
@@ -187,7 +190,10 @@ just stack-down       # bench-endpoint-down + gpu-down + gpu-pool-down + cluster
 zero-leak sweep as `cloud-verify` (below) to confirm no `Project=slipstream`
 instance or volume — including a Karpenter g5 the destroy raced — is still
 billing; it exits non-zero if one survived. Only the bootstrap state bucket and
-ECR repo survive.
+ECR repo survive. `cluster-down` is gated on `bench-endpoint-down` succeeding:
+the endpoint's load balancer and host sit in the cluster VPC, so tearing the VPC
+down under a live endpoint would wedge on a dependency violation and orphan a
+billing load balancer — a failed endpoint teardown stops the run before that.
 
 ### Cloud verify runbook
 
@@ -195,6 +201,11 @@ ECR repo survive.
 one hand-triggered, real-GPU-spend end-to-end check that the rig serves and that
 teardown returns spend to zero. It costs real money, so a human triggers it — there
 is no automatic cloud run (ADR-0002).
+
+It expects a clean slate: it aborts if the eks stack already holds any resource,
+since running against a live cluster turns `cluster-up` into a multi-minute
+node-group roll and would tear down a cluster you did not stand up here. Run
+`just stack-down` first, then rerun.
 
 ```sh
 just cloud-verify     # cluster-up → gpu-pool-up → gpu-deploy → smoke → teardown → sweep

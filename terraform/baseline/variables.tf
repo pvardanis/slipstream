@@ -11,8 +11,32 @@ variable "cluster_name" {
   default     = "slipstream"
 }
 
+variable "vpc_id" {
+  description = "VPC the cluster runs in; the load balancer, target group and security groups attach to it. Supplied from the eks stack's outputs at apply time. Teardown reads it from this stack's own state, so it need not be set to destroy."
+  type        = string
+  default     = ""
+}
+
+variable "public_subnets" {
+  description = "Internet-routable subnets the load balancer and bench host launch into. Supplied from the eks stack's outputs at apply time; unused on destroy."
+  type        = list(string)
+  default     = []
+}
+
+variable "node_security_group_id" {
+  description = "The eks-owned node group security group the NodePort ingress rule attaches to. Supplied from the eks stack's outputs at apply time; unused on destroy."
+  type        = string
+  default     = ""
+}
+
+variable "node_autoscaling_groups" {
+  description = "Autoscaling groups backing the node group, attached to the load balancer target group so nodes register automatically. Supplied from the eks stack's outputs at apply time; unused on destroy."
+  type        = list(string)
+  default     = []
+}
+
 variable "state_bucket" {
-  description = "S3 bucket holding remote state, used to read the eks stack's outputs. Supplied from the bootstrap output at apply time."
+  description = "S3 bucket holding remote state, used to read the bootstrap stack's outputs. Supplied from the bootstrap output at apply time."
   type        = string
 
   validation {

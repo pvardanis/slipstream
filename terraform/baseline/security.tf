@@ -11,7 +11,7 @@
 resource "aws_security_group" "alb" {
   name_prefix = "${local.name}-alb-"
   description = "Ingress to the baseline load balancer"
-  vpc_id      = local.eks.vpc_id
+  vpc_id      = var.vpc_id
 
   tags = local.tags
 }
@@ -39,7 +39,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_nodes" {
 # Standalone rule on the eks-owned node security group: inline would mean editing
 # the module. Admits only the load balancer's security group on the NodePort.
 resource "aws_vpc_security_group_ingress_rule" "node_from_alb" {
-  security_group_id            = local.eks.node_security_group_id
+  security_group_id            = var.node_security_group_id
   referenced_security_group_id = aws_security_group.alb.id
   ip_protocol                  = "tcp"
   from_port                    = var.vllm_nodeport
