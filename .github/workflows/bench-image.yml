@@ -27,14 +27,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The repository name comes from a repo variable set from the bootstrap
-  # stack's `bench_image_repo_url` output (see README), so it tracks the ECR
-  # repository terraform actually created rather than restating its name here.
-  # The region stays a literal: configure-aws-credentials needs it before any
-  # AWS call, so it cannot be read back from AWS, and it is a bootstrap
-  # constant. The registry host is derived from the ECR login, so no account id
-  # is hardcoded here.
-  AWS_REGION: eu-west-1
+  # Region and repository name come from repo variables set from the bootstrap
+  # stack's `region` and `bench_image_repo_url` outputs (see README), so they
+  # track the infrastructure terraform actually created rather than restating
+  # its values here. The registry host is derived from the ECR login, so no
+  # account id is hardcoded here.
+  AWS_REGION: ${{ vars.AWS_REGION }}
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
 jobs:
