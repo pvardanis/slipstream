@@ -18,3 +18,8 @@ output "bench_image_repo_arn" {
   description = "ARN of the bench-client ECR repository. The bench endpoint's bench host IAM policy scopes image pulls to this repository rather than granting pull on every repo."
   value       = aws_ecr_repository.bench_client.arn
 }
+
+output "bench_image_push_role_arn" {
+  description = "ARN of the IAM role the bench-image GitHub Actions workflow assumes via OIDC to push to ECR; set as the role-to-assume in that workflow."
+  value       = aws_iam_role.bench_image_push.arn
+}
