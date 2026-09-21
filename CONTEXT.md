@@ -47,6 +47,16 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Multi-LoRA routing** — many LoRA adapters over one shared base model; routing an adapter-X
   request to a replica that already has adapter X loaded.
 
+## Bench
+
+- **Model definition** — the single record of the served model (HF id, HF revision, quantization,
+  KV-cache dtype) that both the bench-client image's tokenizer and the serving Engine derive from.
+  Client and server must tokenize identically, so they read one definition, not two copies.
+- **Bench-client image** — the container running the benchmark client, baking the served model's
+  tokenizer at build time so its token counts match the Engine's.
+- **Tokenizer slug** — the served-model identifier carried in the bench-client image's tag, so a
+  tag names the tokenizer the image contains rather than an opaque `latest`.
+
 ## Observability
 
 - **Request-ID** — one identifier carried across Grafana (fleet health), Sentry (code-path
