@@ -26,7 +26,7 @@ updates:
   - package-ecosystem: terraform
     directories:
       - /terraform/bootstrap
-      - /terraform/baseline
+      - /terraform/bench-endpoint
       - /terraform/eks
     schedule:
       interval: weekly

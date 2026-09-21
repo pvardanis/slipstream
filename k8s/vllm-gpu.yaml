@@ -3,7 +3,7 @@
 # counterpart to the CPU replica in vllm.yaml — same engine version, different
 # image, model, and hardware — and the two are deployed one at a time, never both
 # (`just cpu-deploy` = CPU, `just gpu-deploy` = GPU). This replica takes over the
-# baseline path by claiming the fixed NodePort 30800 with selector app=vllm-gpu.
+# bench endpoint path by claiming the fixed NodePort 30800 with selector app=vllm-gpu.
 #
 # The pod lands on the Karpenter GPU node pool (k8s/gpu-node-pool.yaml): it
 # tolerates the nvidia.com/gpu taint and asks for one nvidia.com/gpu (declared under
@@ -12,9 +12,9 @@
 # the node so Karpenter reaps it and GPU spend returns to zero (ADR-0006).
 #
 # vLLM enforces the api-key (VLLM_API_KEY, from the vllm-api-key Secret) on its API
-# routes; /health and /metrics stay open so probes and the baseline load balancer
+# routes; /health and /metrics stay open so probes and the bench endpoint load balancer
 # health check reach them. The api-key is the same value the CPU replica uses — the
-# baseline stack reads it from the one Secret regardless of which replica is exposed.
+# bench endpoint stack reads it from the one Secret regardless of which replica is exposed.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -104,7 +104,7 @@ spec:
             - "16"
           env:
             # vLLM enforces this key on its API routes (/v1); /health and /metrics
-            # stay open. Same Secret and value the CPU replica uses, so the baseline
+            # stay open. Same Secret and value the CPU replica uses, so the bench endpoint
             # stack's published api-key works against whichever replica is exposed.
             - name: VLLM_API_KEY
               valueFrom:
@@ -155,10 +155,10 @@ metadata:
   labels:
     app: vllm-gpu
 spec:
-  # NodePort so the ephemeral baseline load balancer, provisioned outside the
+  # NodePort so the ephemeral bench endpoint load balancer, provisioned outside the
   # cluster, can reach vLLM through the node group. This claims the same fixed
   # nodePort 30800 the CPU replica's Service uses, so the GPU replica takes over the
-  # baseline target group unchanged — the two are exposed one at a time, never both.
+  # bench endpoint target group unchanged — the two are exposed one at a time, never both.
   # No cloud load balancer is created here, so `just cluster-down` leaves nothing behind.
   type: NodePort
   selector:

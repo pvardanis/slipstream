@@ -14,7 +14,7 @@ output "region" {
   value       = var.region
 }
 
-# Consumed by the baseline stack to attach an ephemeral public load balancer to
+# Consumed by the bench endpoint stack to attach an ephemeral public load balancer to
 # this cluster's VPC and node group.
 output "vpc_id" {
   description = "ID of the cluster VPC."
@@ -27,7 +27,7 @@ output "public_subnets" {
 }
 
 output "node_security_group_id" {
-  description = "Security group attached to the managed node group; a baseline load balancer adds an ingress rule here to reach the vLLM NodePort."
+  description = "Security group attached to the managed node group; a bench endpoint load balancer adds an ingress rule here to reach the vLLM NodePort."
   value       = module.eks.node_security_group_id
 }
 

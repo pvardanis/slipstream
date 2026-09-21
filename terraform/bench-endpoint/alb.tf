@@ -46,15 +46,15 @@ resource "aws_s3_object" "ca_bundle" {
 }
 
 resource "aws_lb_trust_store" "mtls" {
-  name_prefix                      = "bsln-"
+  name_prefix                      = "bench-"
   ca_certificates_bundle_s3_bucket = aws_s3_bucket.trust_store.id
   ca_certificates_bundle_s3_key    = aws_s3_object.ca_bundle.key
 
   tags = local.tags
 }
 
-resource "aws_lb" "baseline" {
-  name_prefix        = "bsln-"
+resource "aws_lb" "bench_endpoint" {
+  name_prefix        = "bench-"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
@@ -66,7 +66,7 @@ resource "aws_lb" "baseline" {
 # Forwards to the vLLM NodePort on the node group over plain HTTP; TLS is already
 # terminated at the listener, and the hop stays inside the VPC.
 resource "aws_lb_target_group" "vllm" {
-  name_prefix = "bsln-"
+  name_prefix = "bench-"
   port        = var.vllm_nodeport
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -94,7 +94,7 @@ resource "aws_autoscaling_attachment" "vllm" {
 }
 
 resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.baseline.arn
+  load_balancer_arn = aws_lb.bench_endpoint.arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"

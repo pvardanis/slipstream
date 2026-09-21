@@ -12,7 +12,7 @@ from pathlib import Path
 SCRIPT = (
     Path(__file__).resolve().parents[1]
     / "terraform"
-    / "baseline"
+    / "bench-endpoint"
     / "bench_proxy_secret_split.py"
 )
 

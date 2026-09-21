@@ -169,14 +169,14 @@ run finishes.** `bench-endpoint-down` leaves the cluster and vLLM running; `just
 destroys the cluster. Neither touches the bootstrap state bucket or the ECR repo.
 
 Region is not a per-run flag: the benchmark recipes read it from the Terraform
-outputs (`terraform output -raw region`), so the cluster, the baseline stack and
+outputs (`terraform output -raw region`), so the cluster, the bench endpoint stack and
 the AWS CLI all act in one region. Set it once via `AWS_PROFILE` / `aws configure`; a
 profile pointing at a different region than the state was created in will not find
 these resources.
 
 For a run against the GPU rig rather than the CPU replica, swap `just cpu-deploy` for
 `just gpu-pool-up && just gpu-deploy` (Karpenter brings up the `g5.xlarge`). The
-whole stack — cluster, GPU pool, GPU replica, baseline endpoint — comes up with one
+whole stack — cluster, GPU pool, GPU replica, bench endpoint — comes up with one
 recipe and tears down with another, for when you want it live to run sweeps against
 through the day:
 

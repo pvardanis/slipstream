@@ -54,7 +54,7 @@ locals {
   # against the CA under the issued server name) offline.
   bench_proxy_conf = templatefile("${path.module}/bench-proxy.conf.tftpl", {
     listen_port      = local.bench_proxy_port
-    alb_dns_name     = aws_lb.baseline.dns_name
+    alb_dns_name     = aws_lb.bench_endpoint.dns_name
     server_dns_name  = var.server_dns_name
     client_cert_path = "${local.bench_proxy_cert_dir}/client.crt"
     client_key_path  = "${local.bench_proxy_cert_dir}/client.key"

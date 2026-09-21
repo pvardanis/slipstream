@@ -65,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [baseline, eks]
+        stack: [bench-endpoint, eks]
     defaults:
       run:
         working-directory: terraform/${{ matrix.stack }}

@@ -19,11 +19,11 @@ data "terraform_remote_state" "bootstrap" {
 }
 
 locals {
-  name = "${var.cluster_name}-baseline"
+  name = "${var.cluster_name}-bench-endpoint"
 
   tags = {
     Project   = "slipstream"
     ManagedBy = "terraform"
-    Component = "baseline"
+    Component = "bench-endpoint"
   }
 }
