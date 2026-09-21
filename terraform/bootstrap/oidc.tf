@@ -11,7 +11,10 @@ locals {
 
   # Only workflow runs on this repo's main branch may assume the role; the OIDC
   # subject claim is matched exactly, so a fork or a run on another branch cannot.
-  github_push_subject = "repo:${var.github_repository}:ref:refs/heads/main"
+  # The prefix carries GitHub's immutable owner/repo IDs, which the token emits
+  # when the repo has immutable subject claims enabled; a mutable "repo:owner/name"
+  # subject would not match that token.
+  github_push_subject = "${var.github_oidc_sub_prefix}:ref:refs/heads/main"
 
   bench_push_trust_policy = {
     Version = "2012-10-17"

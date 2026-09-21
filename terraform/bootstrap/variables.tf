@@ -23,10 +23,10 @@ variable "bench_image_keep_count" {
   default     = 10
 }
 
-variable "github_repository" {
-  description = "The owner/name of the GitHub repository whose Actions workflows may assume the bench-client push role via OIDC."
+variable "github_oidc_sub_prefix" {
+  description = "Immutable OIDC subject prefix for the GitHub repository whose Actions workflows may assume the bench-client push role, in the form repo:<owner>@<owner_id>/<repo>@<repo_id>. Read once from the repo's OIDC sub-claim customization (gh api repos/OWNER/REPO/actions/oidc/customization/sub); the numeric IDs are immutable, so the trust survives owner or repo renames."
   type        = string
-  default     = "pvardanis/slipstream"
+  default     = "repo:pvardanis@37624791/slipstream@1357264197"
 }
 
 variable "bench_image_push_role_name" {

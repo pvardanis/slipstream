@@ -21,7 +21,10 @@ run "github_oidc_trust_and_permissions" {
   }
 
   # Trust is scoped to this repo's main branch: aud pins the STS audience and sub
-  # pins the repo and ref, so a workflow on a fork or another branch cannot assume it.
+  # pins the repo and ref, so a workflow on a fork or another branch cannot assume
+  # it. The subject uses GitHub's immutable IDs (repo:<owner>@<owner_id>/<repo>@<repo_id>),
+  # which the repo emits when immutable subject claims are enabled, so a mutable
+  # "repo:owner/name" subject would no longer match the token and must fail here.
   assert {
     condition     = local.bench_push_trust_policy.Statement[0].Action == "sts:AssumeRoleWithWebIdentity"
     error_message = "Trust policy must allow only web-identity assumption."
@@ -31,8 +34,8 @@ run "github_oidc_trust_and_permissions" {
     error_message = "Trust policy must require the sts.amazonaws.com audience claim."
   }
   assert {
-    condition     = local.bench_push_trust_policy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:pvardanis/slipstream:ref:refs/heads/main"
-    error_message = "Trust policy must scope the subject to this repo's main branch."
+    condition     = local.bench_push_trust_policy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:pvardanis@37624791/slipstream@1357264197:ref:refs/heads/main"
+    error_message = "Trust policy must scope the subject to this repo's main branch using GitHub's immutable owner/repo IDs."
   }
 
   # GetAuthorizationToken is account-level and is the only action granted on "*";
