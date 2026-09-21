@@ -251,22 +251,24 @@ _bench-image-ref: _bootstrap-init
     [[ -n "${tag}" ]] || tag="$({{ image_tag_tool }} main-tag)"
     echo "${repo}:${tag}"
 
-# Build the bench-client image from models.yaml and push it under its content tags.
-# The tokenizer baked in is the served model at its pinned revision; the image is
-# published under both an immutable `<slug>-<sha>` tag and the floating `<slug>-main`
-# pointer. The ECR repo is provisioned by `just bootstrap`.
+# Build the bench-client image from models.yaml and push it under its immutable
+# content tag. The tokenizer baked in is the served model at its pinned revision;
+# the image is published under the immutable `<slug>-<sha>` tag only. The floating
+# `<slug>-main` pointer belongs to the trusted branch and is published solely by CI
+# on a merge to main (#103), never from a branch build here — a laptop push would
+# clobber the shared pointer with unmerged code. Pin a run to a branch build with
+# `-var bench_image_tag=<slug>-<sha>`. The ECR repo is provisioned by `just bootstrap`.
 bench-image: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
     region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
-    # The served model, its revision, and the two tags all derive from models.yaml
+    # The served model, its revision, and the content tag all derive from models.yaml
     # and git through one script, so the baked tokenizer and the image name that
     # advertises it never diverge.
     model="$({{ image_tag_tool }} hf-id)"
     revision="$({{ image_tag_tool }} revision)"
     sha_tag="$({{ image_tag_tool }} sha-tag)"
-    main_tag="$({{ image_tag_tool }} main-tag)"
     # The registry host is the repo URL without its trailing repository path.
     registry="${repo%%/*}"
     aws ecr get-login-password --region "${region}" \
@@ -274,9 +276,8 @@ bench-image: _bootstrap-init
     # Nodes are amd64; build for that arch regardless of the developer's host.
     docker build --platform linux/amd64 \
       --build-arg MODEL="${model}" --build-arg REVISION="${revision}" \
-      -t "${repo}:${sha_tag}" -t "${repo}:${main_tag}" -f {{ bench_dockerfile }} .
+      -t "${repo}:${sha_tag}" -f {{ bench_dockerfile }} .
     docker push "${repo}:${sha_tag}"
-    docker push "${repo}:${main_tag}"
 
 # Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
 bench *args:
