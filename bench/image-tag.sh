@@ -13,6 +13,11 @@
 # it defaults to models.yaml at the repo root.
 set -euo pipefail
 
+if ! command -v yq >/dev/null 2>&1; then
+  echo "image-tag.sh: yq not found; install mikefarah yq (brew install yq)" >&2
+  exit 1
+fi
+
 field="${1:?usage: image-tag.sh <hf-id|revision|slug|sha|sha-tag|main-tag>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 models_file="${MODELS_FILE:-${repo_root}/models.yaml}"
@@ -40,6 +45,14 @@ slug="$(printf '%s' "${hf_id##*/}" |
   tr '[:upper:]' '[:lower:]' |
   sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
 
+# An hfId whose final path segment holds no alphanumerics collapses to an empty
+# slug, which would tag the image `-main` / `-<sha>`. Reject it: a tag with no
+# model name is meaningless, so stop the build rather than push it.
+if [[ -z "${slug}" ]]; then
+  echo "image-tag.sh: model hfId '${hf_id}' yields an empty slug" >&2
+  exit 1
+fi
+
 # The short hash of the last commit touching any image input. A change to any of
 # these is what a new content tag must capture. This names committed state only:
 # uncommitted edits to the inputs are not reflected, since the image is built from
@@ -48,7 +61,7 @@ slug="$(printf '%s' "${hf_id##*/}" |
 image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
-    bench src/slipstream_bench pyproject.toml models.yaml)"
+    bench src pyproject.toml models.yaml)"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2
@@ -62,8 +75,18 @@ hf-id) printf '%s\n' "${hf_id}" ;;
 revision) printf '%s\n' "${revision}" ;;
 slug) printf '%s\n' "${slug}" ;;
 main-tag) printf '%s-main\n' "${slug}" ;;
-sha) printf '%s\n' "$(image_sha)" ;;
-sha-tag) printf '%s-%s\n' "${slug}" "$(image_sha)" ;;
+# Assign before printing: a failing command substitution inside a printf
+# argument does not trip `set -e` (printf still succeeds), so image_sha's
+# `exit 1` would be swallowed and a `-`-suffixed tag printed. A bare assignment
+# does honour `set -e`, so capture the sha first, then print.
+sha)
+  sha="$(image_sha)"
+  printf '%s\n' "${sha}"
+  ;;
+sha-tag)
+  sha="$(image_sha)"
+  printf '%s-%s\n' "${slug}" "${sha}"
+  ;;
 *)
   echo "image-tag.sh: unknown field '${field}'" >&2
   exit 1

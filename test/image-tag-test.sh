@@ -69,4 +69,32 @@ else
   echo "ok   unknown field rejected"
 fi
 
+# Assert a field lookup exits non-zero: a missing key or garbage slug must stop
+# the build, not silently tag the image with `null` or an empty slug.
+expect_fail() {
+  local label="$1" models="$2" field="$3"
+  if MODELS_FILE="${models}" "${script}" "${field}" >/dev/null 2>&1; then
+    echo "FAIL ${label}: expected non-zero exit" >&2
+    fail=1
+  else
+    echo "ok   ${label}"
+  fi
+}
+
+# An absent hfId: yq returns the literal `null`, which must be rejected rather
+# than baked into a `null`-slugged tag.
+cat >"${tmp}/no-hfid.yaml" <<'YAML'
+model:
+  revision: main
+YAML
+expect_fail "missing hfId rejected" "${tmp}/no-hfid.yaml" slug
+
+# An hfId whose name segment holds no alphanumerics collapses to an empty slug.
+cat >"${tmp}/empty-slug.yaml" <<'YAML'
+model:
+  hfId: org/___
+  revision: main
+YAML
+expect_fail "empty slug rejected" "${tmp}/empty-slug.yaml" main-tag
+
 exit "${fail}"
