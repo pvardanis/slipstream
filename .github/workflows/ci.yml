@@ -88,3 +88,31 @@ jobs:
             exit 1
           fi
           terraform test
+
+  bench-image-build:
+    name: bench image build (no push)
+    # PR-only: it proves the Dockerfile still builds before merge, with no
+    # credentials. A push to main publishes via bench-image.yml, which rebuilds
+    # anyway, so repeating the build here on push would be wasted work.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Build the image model.yaml describes (hfId + revision via image-tag.sh, yq
+      # preinstalled on the runner), so a broken Dockerfile or an unfetchable
+      # revision fails the PR. No tag, no push: the build succeeding is the check.
+      - name: Build the bench image (no push)
+        run: |
+          set -euo pipefail
+          # Assign before building: a failing command substitution inside a
+          # --build-arg does not trip `set -e` (docker build still runs), so an
+          # image-tag.sh error would build with an empty MODEL/REVISION rather
+          # than fail the check. A bare assignment does honour `set -e`.
+          model="$(bench/image-tag.sh hf-id)"
+          revision="$(bench/image-tag.sh revision)"
+          docker build --platform linux/amd64 \
+            --build-arg MODEL="${model}" --build-arg REVISION="${revision}" \
+            -f bench/Dockerfile .
