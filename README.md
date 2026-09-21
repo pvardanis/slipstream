@@ -152,13 +152,17 @@ no-push Dockerfile check in [`ci.yml`](.github/workflows/ci.yml), so a broken
 Dockerfile fails the no-cloud gate without any credentials. The scheme is
 recorded in [`docs/adr/0008`](docs/adr/0008-ci-built-bench-image-and-model-definition.md).
 
-One-time setup: the workflow reads the push role's ARN from a repository
-variable. After `just bootstrap` has applied the OIDC role (see #101), set it
-once — it is repo-global, not per-branch:
+One-time setup: the workflow reads the push role's ARN and the target ECR
+repository name from repository variables, both fed from the bootstrap stack's
+outputs so they track the infrastructure terraform created. After `just
+bootstrap` has applied the OIDC role and repository (see #101), set them once —
+they are repo-global, not per-branch:
 
 ```sh
 gh variable set AWS_BENCH_IMAGE_PUSH_ROLE_ARN \
   --body "$(terraform -chdir=terraform/bootstrap output -raw bench_image_push_role_arn)"
+gh variable set ECR_REPOSITORY \
+  --body "$(terraform -chdir=terraform/bootstrap output -raw bench_image_repo_url | cut -d/ -f2-)"
 ```
 
 ### Baseline runbook
