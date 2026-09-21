@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Derives the bench-client image's identity from the model definition
-# (models.yaml) and git history, so the justfile build/pull recipes and the CI
+# (model.yaml) and git history, so the justfile build/pull recipes and the CI
 # workflow name the image identically. Prints one field, selected by $1:
 #   hf-id     the served model's Hugging Face id (the tokenizer baked in)
 #   revision  the served model's pinned Hugging Face revision
@@ -9,8 +9,8 @@
 #   sha-tag   <slug>-<sha>, the immutable content tag
 #   main-tag  <slug>-main, the floating pointer to the current main build
 #
-# MODELS_FILE overrides the model definition path (used by the test fixtures);
-# it defaults to models.yaml at the repo root.
+# MODEL_FILE overrides the model definition path (used by the test fixtures);
+# it defaults to model.yaml at the repo root.
 set -euo pipefail
 
 if ! command -v yq >/dev/null 2>&1; then
@@ -20,16 +20,16 @@ fi
 
 field="${1:?usage: image-tag.sh <hf-id|revision|slug|sha|sha-tag|main-tag>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-models_file="${MODELS_FILE:-${repo_root}/models.yaml}"
+model_file="${MODEL_FILE:-${repo_root}/model.yaml}"
 
 # Read a required scalar from the model definition. yq prints the literal `null`
 # for an absent key rather than failing, so reject that here: a missing key must
 # stop the build, not tag the image with a `null` slug.
 read_key() {
   local key="$1" val
-  val="$(yq -r "${key}" "${models_file}")"
+  val="$(yq -r "${key}" "${model_file}")"
   if [[ -z "${val}" || "${val}" == "null" ]]; then
-    echo "image-tag.sh: ${models_file} is missing ${key}" >&2
+    echo "image-tag.sh: ${model_file} is missing ${key}" >&2
     exit 1
   fi
   printf '%s' "${val}"
@@ -61,7 +61,7 @@ fi
 image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
-    bench src pyproject.toml models.yaml)"
+    bench src pyproject.toml model.yaml)"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2

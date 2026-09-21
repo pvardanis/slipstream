@@ -10,7 +10,7 @@ gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
 gpu_manifests := "k8s/vllm-gpu.yaml"
 bench_dockerfile := "bench/Dockerfile"
 # Derives the bench image's served model, tokenizer slug, and content tags from
-# models.yaml + git; the build, the pull ref, and the completion smokes all read
+# model.yaml + git; the build, the pull ref, and the completion smokes all read
 # the served model through it, so the one definition drives them all.
 image_tag_tool := "bench/image-tag.sh"
 # Empty pulls the floating `<slug>-main` tag that `just bench-image` publishes on
@@ -223,7 +223,7 @@ gpu-completion:
     # vLLM enforces the api-key on its API routes; read it from the Secret.
     key="$(just _read-api-key)"
     # The request's model field must name what the GPU replica serves; read it from
-    # models.yaml, the source of truth the manifest is held to.
+    # model.yaml, the source of truth the manifest is held to.
     model="$({{ image_tag_tool }} hf-id)"
     body="$(mktemp)"
     trap 'kill "${pf_pid}" 2>/dev/null || true; rm -f "${body}"' EXIT
@@ -251,7 +251,7 @@ _bench-image-ref: _bootstrap-init
     [[ -n "${tag}" ]] || tag="$({{ image_tag_tool }} main-tag)"
     echo "${repo}:${tag}"
 
-# Build the bench-client image from models.yaml and push it under its immutable
+# Build the bench-client image from model.yaml and push it under its immutable
 # content tag. The tokenizer baked in is the served model at its pinned revision;
 # the image is published under the immutable `<slug>-<sha>` tag only. The floating
 # `<slug>-main` pointer belongs to the trusted branch and is published solely by CI
@@ -263,7 +263,7 @@ bench-image: _bootstrap-init
     set -euo pipefail
     repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
     region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
-    # The served model, its revision, and the content tag all derive from models.yaml
+    # The served model, its revision, and the content tag all derive from model.yaml
     # and git through one script, so the baked tokenizer and the image name that
     # advertises it never diverge.
     model="$({{ image_tag_tool }} hf-id)"
@@ -316,7 +316,7 @@ bench *args:
     # keeping: sync whatever landed regardless, then surface the sweep's status.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
     # The sweep counts tokens under the served model's name; read it from the same
-    # models.yaml the pulled image baked its tokenizer from, so the two agree.
+    # model.yaml the pulled image baked its tokenizer from, so the two agree.
     model="$({{ image_tag_tool }} hf-id)"
     sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
     sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_ARGS_B64='${args_b64}'"
@@ -381,7 +381,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # both cells, so the host script hard-fails on a cell failure rather than leaving a
     # half result — a non-zero here means nothing worth joining was produced.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    # Count tokens under the served model's name, read from the same models.yaml the
+    # Count tokens under the served model's name, read from the same model.yaml the
     # pulled image baked its tokenizer from, so the cold and warm cells agree with it.
     model="$({{ image_tag_tool }} hf-id)"
     prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
@@ -408,7 +408,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
 obs-test:
     bash test/otel_spine_test.sh
 
-# Assert the bench image's slug and content tags derive from models.yaml as expected (no cluster).
+# Assert the bench image's slug and content tags derive from model.yaml as expected (no cluster).
 image-tag-test:
     bash test/image-tag-test.sh
 
@@ -447,7 +447,7 @@ obs-pivot:
       echo "port-forward to svc/otel-collector never came up" >&2
       exit 1
     fi
-    # The demo trace's model_id names the served model; read it from models.yaml, the
+    # The demo trace's model_id names the served model; read it from model.yaml, the
     # source of truth the serving manifest is held to.
     model="$({{ image_tag_tool }} hf-id)"
     curl -sf -X POST http://localhost:4318/v1/traces \

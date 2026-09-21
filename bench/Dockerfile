@@ -8,7 +8,7 @@
 FROM vllm/vllm-openai-cpu:v0.29.0-x86_64
 
 # The model whose tokenizer is baked in, and the Hugging Face revision to bake it
-# at. Sourced from models.yaml by `just bench-image` (the single source of truth
+# at. Sourced from model.yaml by `just bench-image` (the single source of truth
 # for the served model); the defaults keep a bare `docker build` buildable.
 ARG MODEL=Qwen/Qwen2.5-0.5B-Instruct
 ARG REVISION=main

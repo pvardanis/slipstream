@@ -11,9 +11,9 @@
 variable "bench_image_tag" {
   description = "Tag of the bench-client image the host pulls from ECR. Defaults to the floating `<slug>-main` pointer that `just bench-image` publishes on every main build; override with a `<slug>-<sha>` tag to pin a reproducible run."
   type        = string
-  # Mirrors the `<slug>-main` tag bench/image-tag.sh derives from models.yaml.
+  # Mirrors the `<slug>-main` tag bench/image-tag.sh derives from model.yaml.
   # Terraform can't run that script at plan time, so this literal must be updated
-  # whenever models.yaml's model changes.
+  # whenever model.yaml's model changes.
   default = "qwen3-8b-awq-main"
 
   validation {
