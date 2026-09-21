@@ -8,7 +8,7 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 ## Platform
 
 - **Rig** — the locked starting hardware + model + quantization the platform is built and
-  measured against: A10G 24GB (`g5.xlarge` spot) running Qwen3-8B, AWQ-INT4 weights with an
+  measured against: A10G 24GB (`g5.xlarge` on-demand) running Qwen3-8B, AWQ-INT4 weights with an
   FP8 KV cache.
 - **Layer (L0–L4)** — a depth-first band of the platform. L0 benchmark harness · L1 single
   tuned replica · L2 platform (autoscaling, cold start, spot handling — the gap) · L3
@@ -33,6 +33,16 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
   later request sharing that prefix skips recomputing it.
 - **Concurrency headroom** — the number of concurrent sequences a replica can hold after
   weights, i.e. the free KV-cache slots. The thing L1–L4 exist to fill, route, and scale.
+- **Engine knob** — a serving-engine argument that trades KV-cache capacity, latency, or
+  throughput: `max-num-seqs`, `kv-cache-dtype`, chunked prefill, prefix caching. What the L1
+  knob sweep varies to find the ceiling; distinct from client-side workload (arrival rate,
+  prefix share).
+- **Goodput** — throughput counting only requests that meet the SLO (both `ttft` and `tpot`
+  thresholds). The metric that matters: raw throughput past the SLO cliff is requests served
+  too slowly to count.
+- **Concurrency ceiling** — the highest offered concurrency (simultaneous in-flight requests)
+  at which a replica still holds goodput ≥ its SLO fraction. The single measured number the L1
+  knob sweep produces per engine-knob configuration.
 
 ## Routing (L3)
 
@@ -56,6 +66,9 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
   tokenizer at build time so its token counts match the Engine's.
 - **Tokenizer slug** — the served-model identifier carried in the bench-client image's tag, so a
   tag names the tokenizer the image contains rather than an opaque `latest`.
+- **Knob sweep** — the L1 measurement that redeploys the replica across a grid of engine-knob
+  values and, at each, drives the client concurrency ladder to find the concurrency ceiling at
+  the goodput SLO. Two-tier: engine knobs need a redeploy per point, client workload does not.
 
 ## Observability
 
