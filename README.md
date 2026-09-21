@@ -139,6 +139,28 @@ just bench-image                                   # docker build + push to ECR 
 just bench_model="Qwen/Qwen2.5-0.5B-Instruct" bench-image   # bench the CPU replica instead
 ```
 
+### Bench image CI
+
+`just bench-image` is for a local, pinned build; merges to `main` publish the
+image. The [`bench-image`](.github/workflows/bench-image.yml) workflow
+authenticates to ECR via GitHub OIDC (no long-lived keys), and its build is
+content-hash idempotent: it computes the image's content tag, checks ECR, and
+builds and pushes only when that tag is absent. It publishes two tags — the
+immutable `<slug>-<sha>` content tag and the floating `<slug>-main` pointer — and
+is the sole publisher of `-main`. A pull request instead gets a build-only,
+no-push Dockerfile check in [`ci.yml`](.github/workflows/ci.yml), so a broken
+Dockerfile fails the no-cloud gate without any credentials. The scheme is
+recorded in [`docs/adr/0008`](docs/adr/0008-ci-built-bench-image-and-model-definition.md).
+
+One-time setup: the workflow reads the push role's ARN from a repository
+variable. After `just bootstrap` has applied the OIDC role (see #101), set it
+once — it is repo-global, not per-branch:
+
+```sh
+gh variable set AWS_BENCH_IMAGE_PUSH_ROLE_ARN \
+  --body "$(terraform -chdir=terraform/bootstrap output -raw bench_image_push_role_arn)"
+```
+
 ### Baseline runbook
 
 A benchmark run stands up an ephemeral, internet-facing endpoint and an EC2 host,
