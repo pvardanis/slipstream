@@ -1,0 +1,19 @@
+# Single source of truth for the model the GPU rig serves and the bench client
+# measures. The bench image (bench/Dockerfile, `just bench-image`) bakes this
+# model's tokenizer and names itself after it; the serving manifest
+# (k8s/vllm-gpu.yaml) is held to it by convention until the Helm/Argo CD rewire
+# reconciles these keys as chart values (ADR-0008, spec §10 "L2a"). The keys are
+# shaped to lift one-to-one into that future values.yaml.
+model:
+  # Hugging Face id whose tokenizer the bench image bakes and whose name the image
+  # tag's slug is derived from.
+  hfId: Qwen/Qwen3-8B-AWQ
+  # Pinned Hugging Face commit, not a floating branch: a moving `main` could
+  # silently re-quantize the weights out from under a re-run (spec §3.1, ADR-0006).
+  revision: 4da05a8edb55c6046cce958586c33b61da07bb79
+  # The checkpoint's config.json declares awq; pin the kernel recipe explicitly
+  # rather than depend on vLLM's auto-detection (ADR-0006).
+  quantization: awq_marlin
+  # FP8 KV cache roughly doubles concurrent-sequence capacity on the A10G, which
+  # has no hardware FP8 for weights (spec §3.1).
+  kvCacheDtype: fp8
