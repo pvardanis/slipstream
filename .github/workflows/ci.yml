@@ -95,12 +95,11 @@ jobs:
     # credentials. A push to main publishes via bench-image.yml, which rebuilds
     # anyway, so repeating the build here on push would be wasted work.
     if: github.event_name == 'pull_request'
-    # Gate the ~30-minute build on the fast checks that decide whether the image
-    # would be sound: python (baked into the image), shell-tests (which exercise
-    # build-image.sh, the build command itself), and lint. A failure in any of
-    # them skips the build rather than spending runner time on a doomed PR. The
-    # terraform job is orthogonal to the image, so it is deliberately not a gate.
-    needs: [lint, python, shell-tests]
+    # This build is the slowest job in the workflow (timeout-minutes: 30
+    # ceiling), so gate it on every other check: a PR that fails any of them
+    # cannot merge, and building an image for a doomed PR only burns runner time.
+    # Failing one skips the build instead.
+    needs: [lint, python, terraform, shell-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
