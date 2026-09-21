@@ -1,0 +1,117 @@
+# Cloud CI for the bench-client image (ADR-0008). The one workflow that holds AWS
+# access: it authenticates via GitHub OIDC to the bootstrap push role (no
+# long-lived keys) and is the sole publisher of both the immutable `<slug>-<sha>`
+# content tag and the floating `<slug>-main` pointer. Kept apart from ci.yml so
+# that gate stays no-cloud (ADR-0002 tier 1). The build is content-hash
+# idempotent: it publishes only when the content tag is absent from ECR.
+name: bench-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# OIDC needs a token to exchange for the role; checkout needs read. The bootstrap
+# role's trust is scoped to refs/heads/main, so both triggers run on main.
+permissions:
+  contents: read
+  id-token: write
+
+# Never cancel an in-flight publish: a cancelled push mid-layer leaves a partial
+# upload. Serialize instead so two main builds cannot race the floating pointer.
+concurrency:
+  group: bench-image
+  cancel-in-progress: false
+
+env:
+  # Region and repository name track the bootstrap stack's variable defaults
+  # (terraform/bootstrap: var.region, var.bench_image_repo_name). The registry
+  # host is derived from the ECR login, so no account id is hardcoded here.
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: slipstream/bench-client
+
+jobs:
+  publish:
+    name: build & push (content-hash idempotent)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # image-tag.sh derives the content sha from git history, so it needs the
+          # full history rather than a shallow clone.
+          fetch-depth: 0
+
+      # The image identity comes from model.yaml + git through image-tag.sh, so
+      # the tags published here name the same tokenizer the build bakes. yq is
+      # preinstalled on the ubuntu runner image (mikefarah v4), which the script
+      # requires.
+      - name: Derive image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          # Assign before writing: a failing command substitution inside an echo
+          # argument does not trip `set -e` (echo still succeeds), so an
+          # image-tag.sh error would write an empty tag to GITHUB_OUTPUT rather
+          # than fail the job. A bare assignment does honour `set -e`.
+          sha_tag="$(bench/image-tag.sh sha-tag)"
+          main_tag="$(bench/image-tag.sh main-tag)"
+          model="$(bench/image-tag.sh hf-id)"
+          revision="$(bench/image-tag.sh revision)"
+          {
+            echo "sha_tag=${sha_tag}"
+            echo "main_tag=${main_tag}"
+            echo "model=${model}"
+            echo "revision=${revision}"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_BENCH_IMAGE_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Build and push when the content tag is absent
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+          MAIN_TAG: ${{ steps.tags.outputs.main_tag }}
+          MODEL: ${{ steps.tags.outputs.model }}
+          REVISION: ${{ steps.tags.outputs.revision }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${ECR_REPOSITORY}"
+
+          # Distinguish "tag absent" (build) from a real API error (fail). A bare
+          # describe-images failure would otherwise read as absent and trigger a
+          # rebuild against, e.g., a missing repo or expired auth.
+          set +e
+          probe="$(aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${SHA_TAG}" 2>&1)"
+          status=$?
+          set -e
+          if [[ "${status}" -eq 0 ]]; then
+            echo "content tag ${SHA_TAG} already in ECR; nothing to build"
+            exit 0
+          fi
+          if ! grep -q 'ImageNotFoundException' <<<"${probe}"; then
+            echo "::error::ECR describe-images failed for ${SHA_TAG}:" >&2
+            echo "${probe}" >&2
+            exit "${status}"
+          fi
+
+          # Absent: build the content once and publish it under both the immutable
+          # content tag and the floating main pointer. Nodes are amd64.
+          echo "content tag ${SHA_TAG} absent; building"
+          docker build --platform linux/amd64 \
+            --build-arg MODEL="${MODEL}" --build-arg REVISION="${REVISION}" \
+            -t "${image}:${SHA_TAG}" -t "${image}:${MAIN_TAG}" \
+            -f bench/Dockerfile .
+          docker push "${image}:${SHA_TAG}"
+          docker push "${image}:${MAIN_TAG}"
