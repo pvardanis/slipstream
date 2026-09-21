@@ -27,11 +27,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Region and repository name track the bootstrap stack's variable defaults
-  # (terraform/bootstrap: var.region, var.bench_image_repo_name). The registry
-  # host is derived from the ECR login, so no account id is hardcoded here.
+  # The repository name comes from a repo variable set from the bootstrap
+  # stack's `bench_image_repo_url` output (see README), so it tracks the ECR
+  # repository terraform actually created rather than restating its name here.
+  # The region stays a literal: configure-aws-credentials needs it before any
+  # AWS call, so it cannot be read back from AWS, and it is a bootstrap
+  # constant. The registry host is derived from the ECR login, so no account id
+  # is hardcoded here.
   AWS_REGION: eu-west-1
-  ECR_REPOSITORY: slipstream/bench-client
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
 jobs:
   publish:
@@ -82,6 +86,9 @@ jobs:
           MAIN_TAG: ${{ steps.tags.outputs.main_tag }}
         run: |
           set -euo pipefail
+          # Fail loud with a fix hint if the repo variable is unset/empty rather
+          # than letting an empty name reach describe-images as a vague API error.
+          : "${ECR_REPOSITORY:?repo variable ECR_REPOSITORY is empty — set it from the bootstrap output (see README)}"
           image="${REGISTRY}/${ECR_REPOSITORY}"
 
           # Distinguish "tag absent" (build) from a real API error (fail). A bare
