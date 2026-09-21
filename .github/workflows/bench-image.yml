@@ -1,9 +1,11 @@
 # Cloud CI for the bench-client image (ADR-0008). The one workflow that holds AWS
 # access: it authenticates via GitHub OIDC to the bootstrap push role (no
-# long-lived keys) and is the sole publisher of both the immutable `<slug>-<sha>`
-# content tag and the floating `<slug>-main` pointer. Kept apart from ci.yml so
-# that gate stays no-cloud (ADR-0002 tier 1). The build is content-hash
-# idempotent: it publishes only when the content tag is absent from ECR.
+# long-lived keys) and is the sole publisher of the floating `<slug>-main`
+# pointer (the immutable `<slug>-<sha>` content tag can also be pushed locally by
+# `just bench-image`, which is harmless since that tag is content-addressed).
+# Kept apart from ci.yml so that gate stays no-cloud (ADR-0002 tier 1). The build
+# is content-hash idempotent: it publishes only when the content tag is absent
+# from ECR.
 name: bench-image
 
 on:
@@ -12,7 +14,8 @@ on:
   workflow_dispatch:
 
 # OIDC needs a token to exchange for the role; checkout needs read. The bootstrap
-# role's trust is scoped to refs/heads/main, so both triggers run on main.
+# role's trust is scoped to refs/heads/main, so a push publishes and a dispatch
+# from a non-main branch fails at the OIDC exchange rather than publishing.
 permissions:
   contents: read
   id-token: write
@@ -94,15 +97,24 @@ jobs:
             echo "content tag ${SHA_TAG} already in ECR; nothing to build"
             exit 0
           fi
-          if ! grep -q 'ImageNotFoundException' <<<"${probe}"; then
-            echo "::error::ECR describe-images failed for ${SHA_TAG}:" >&2
+          # Match the parenthesized error code the CLI prints, not a bare
+          # substring, so an unrelated error whose text happens to contain the
+          # token is not misread as "absent".
+          if ! grep -q '(ImageNotFoundException)' <<<"${probe}"; then
+            # The workflow-command annotation goes to stdout (GitHub reads
+            # ::error:: there); the raw probe goes to stderr for the run log.
+            echo "::error::ECR describe-images failed for ${SHA_TAG}"
             echo "${probe}" >&2
             exit "${status}"
           fi
 
-          # Absent: build the content once and publish it under both the immutable
-          # content tag and the floating main pointer.
+          # Absent: build the content once and publish it under the floating main
+          # pointer, then the immutable content tag. The content tag is pushed
+          # last because the existence probe keys on it: a run that dies before
+          # the content-tag push leaves it absent, so the next run rebuilds and
+          # republishes both, rather than short-circuiting on a present content
+          # tag while `-main` never got repointed.
           echo "content tag ${SHA_TAG} absent; building"
           bench/build-image.sh "${image}:${SHA_TAG}" "${image}:${MAIN_TAG}"
-          docker push "${image}:${SHA_TAG}"
           docker push "${image}:${MAIN_TAG}"
+          docker push "${image}:${SHA_TAG}"

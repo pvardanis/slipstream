@@ -106,3 +106,22 @@ jobs:
       # revision fails the PR. No tag, no push: the build succeeding is the check.
       - name: Build the bench image (no push)
         run: bench/build-image.sh
+
+  shell-tests:
+    name: shell unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # image-tag-test.sh asserts the content sha, derived from git history.
+          fetch-depth: 0
+      # The image-identity scripts' unit tests (yq preinstalled; build-image-test
+      # stubs docker, so no build runs). Wiring them here is what makes them more
+      # than decorative — a regression in the shared build command fails CI.
+      - name: Run shell unit tests
+        run: |
+          set -euo pipefail
+          bash test/image-tag-test.sh
+          bash test/build-image-test.sh
