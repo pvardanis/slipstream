@@ -9,9 +9,12 @@
 # than a command line, and write results to the results bucket so they outlive it.
 
 variable "bench_image_tag" {
-  description = "Tag of the bench-client image the host pulls from ECR. Matches the tag `just bench-image` pushes (reused across dev-loop rebuilds)."
+  description = "Tag of the bench-client image the host pulls from ECR. Defaults to the floating `<slug>-main` pointer that `just bench-image` publishes on every main build; override with a `<slug>-<sha>` tag to pin a reproducible run."
   type        = string
-  default     = "latest"
+  # Mirrors the `<slug>-main` tag bench/image-tag.sh derives from models.yaml.
+  # Terraform can't run that script at plan time, so this literal must be updated
+  # whenever models.yaml's model changes.
+  default = "qwen3-8b-awq-main"
 
   validation {
     condition     = length(var.bench_image_tag) > 0

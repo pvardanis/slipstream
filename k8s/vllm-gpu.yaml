@@ -71,6 +71,11 @@ spec:
           # version is one number across both. Pinning the engine version is a spec
           # requirement so a measurement reproduces (§3.1).
           image: vllm/vllm-openai:v0.29.0
+          # models.yaml is the source of truth for the served model: the bench image
+          # bakes its tokenizer from these same {hfId, revision, quantization,
+          # kvCacheDtype} values. Until the Helm/Argo CD rewire reconciles models.yaml
+          # into this Deployment (ADR-0008, spec §10 "L2a"), the args below duplicate
+          # its values and must match it.
           args:
             - --model
             - Qwen/Qwen3-8B-AWQ

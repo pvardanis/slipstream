@@ -7,8 +7,11 @@
 # over ClusterIP. Keep the base tag in sync with k8s/vllm.yaml.
 FROM vllm/vllm-openai-cpu:v0.29.0-x86_64
 
-# The model whose tokenizer is baked in; matches k8s/vllm.yaml and the justfile.
+# The model whose tokenizer is baked in, and the Hugging Face revision to bake it
+# at. Sourced from models.yaml by `just bench-image` (the single source of truth
+# for the served model); the defaults keep a bare `docker build` buildable.
 ARG MODEL=Qwen/Qwen2.5-0.5B-Instruct
+ARG REVISION=main
 
 # Pin the Hugging Face cache to an explicit path so the baked tokenizer is found
 # regardless of which user runs the client.
@@ -23,9 +26,10 @@ COPY pyproject.toml ./
 COPY src ./src
 RUN python3 -m pip install --no-cache-dir .
 
-# Bake the tokenizer into HF_HOME at build time, against the version the base
-# image pins. This fetch is the last step that needs the Hub.
-RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${MODEL}')"
+# Bake the tokenizer into HF_HOME at build time, pinned to the model's revision so
+# the baked tokenizer matches the weights the server loads. This fetch is the last
+# step that needs the Hub.
+RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${MODEL}', revision='${REVISION}')"
 
 # Forbid any run-time Hub call, so the client tokenizes purely from the baked
 # cache — no revision check, no soft failure on an egress-restricted pull. Set

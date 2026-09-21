@@ -9,18 +9,14 @@ manifests := "k8s/vllm.yaml"
 gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
 gpu_manifests := "k8s/vllm-gpu.yaml"
 bench_dockerfile := "bench/Dockerfile"
-# Reused across rebuilds; the pod pulls it with imagePullPolicy: Always.
-bench_image_tag := "latest"
+# Derives the bench image's served model, tokenizer slug, and content tags from
+# models.yaml + git; the build, the pull ref, and the completion smokes all read
+# the served model through it, so the one definition drives them all.
+image_tag_tool := "bench/image-tag.sh"
+# Empty pulls the floating `<slug>-main` tag that `just bench-image` publishes on
+# every main build; set a `<slug>-<sha>` tag to pin a reproducible run.
+bench_image_tag := ""
 cpu_model := "Qwen/Qwen2.5-0.5B-Instruct"
-# The model id the GPU replica serves (k8s/vllm-gpu.yaml --model); the gpu-completion
-# smoke sends it as the request's model field.
-gpu_model := "Qwen/Qwen3-8B-AWQ"
-# The model the external bench path measures — the bench-image tokenizer, `bench`
-# and `prefix-cache` all read this one var so the baked tokenizer and the swept
-# token counts never diverge. Defaults to the GPU rig's model, since the mTLS bench
-# path exists to measure that rig (ADR-0004); override for a CPU-replica sweep with
-# `just bench_model="..." bench-image bench`.
-bench_model := gpu_model
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
 
@@ -226,12 +222,15 @@ gpu-completion:
     [[ -n "${ready}" ]] || { echo "vllm-gpu /health never came up" >&2; exit 1; }
     # vLLM enforces the api-key on its API routes; read it from the Secret.
     key="$(just _read-api-key)"
+    # The request's model field must name what the GPU replica serves; read it from
+    # models.yaml, the source of truth the manifest is held to.
+    model="$({{ image_tag_tool }} hf-id)"
     body="$(mktemp)"
     trap 'kill "${pf_pid}" 2>/dev/null || true; rm -f "${body}"' EXIT
     code="$(curl -s -o "${body}" -w '%{http_code}' http://localhost:8000/v1/completions \
       -H 'Content-Type: application/json' \
       -H "Authorization: Bearer ${key}" \
-      -d '{"model":"{{ gpu_model }}","prompt":"The slipstream platform serves","max_tokens":32}')"
+      -d "{\"model\":\"${model}\",\"prompt\":\"The slipstream platform serves\",\"max_tokens\":32}")"
     [[ "${code}" == "200" ]] || { echo "completion returned HTTP ${code}:" >&2; cat "${body}" >&2; exit 1; }
     # Assert the body carries a non-empty completion — shape and liveness, not
     # answer quality. A 200 with an empty choices/text still means the engine
@@ -245,26 +244,39 @@ _bench-image-ref: _bootstrap-init
     set -euo pipefail
     # Bare assignment (not `local`/`export`) so `set -e` aborts on a terraform
     # failure — a missing bootstrap state or AWS auth error surfaces here instead
-    # of collapsing to a bogus `:latest` ref that the caller would apply blindly.
+    # of collapsing to a bogus `repo:tag` ref that the caller would apply blindly.
     repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
-    echo "${repo}:{{ bench_image_tag }}"
+    # An empty bench_image_tag follows the floating main build; a set value pins it.
+    tag='{{ bench_image_tag }}'
+    [[ -n "${tag}" ]] || tag="$({{ image_tag_tool }} main-tag)"
+    echo "${repo}:${tag}"
 
-# Build the bench-client image and push it to its ECR repo (provisioned by `just bootstrap`).
+# Build the bench-client image from models.yaml and push it under its content tags.
+# The tokenizer baked in is the served model at its pinned revision; the image is
+# published under both an immutable `<slug>-<sha>` tag and the floating `<slug>-main`
+# pointer. The ECR repo is provisioned by `just bootstrap`.
 bench-image: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
     region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
+    # The served model, its revision, and the two tags all derive from models.yaml
+    # and git through one script, so the baked tokenizer and the image name that
+    # advertises it never diverge.
+    model="$({{ image_tag_tool }} hf-id)"
+    revision="$({{ image_tag_tool }} revision)"
+    sha_tag="$({{ image_tag_tool }} sha-tag)"
+    main_tag="$({{ image_tag_tool }} main-tag)"
     # The registry host is the repo URL without its trailing repository path.
     registry="${repo%%/*}"
     aws ecr get-login-password --region "${region}" \
       | docker login --username AWS --password-stdin "${registry}"
     # Nodes are amd64; build for that arch regardless of the developer's host.
-    # Drive the baked tokenizer from the one `bench_model` var the sweep also uses,
-    # so the two never diverge.
-    docker build --platform linux/amd64 --build-arg MODEL={{ bench_model }} \
-      -t "${repo}:{{ bench_image_tag }}" -f {{ bench_dockerfile }} .
-    docker push "${repo}:{{ bench_image_tag }}"
+    docker build --platform linux/amd64 \
+      --build-arg MODEL="${model}" --build-arg REVISION="${revision}" \
+      -t "${repo}:${sha_tag}" -t "${repo}:${main_tag}" -f {{ bench_dockerfile }} .
+    docker push "${repo}:${sha_tag}"
+    docker push "${repo}:${main_tag}"
 
 # Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
 bench *args:
@@ -302,7 +314,10 @@ bench *args:
     # non-zero at the end of the grid, so a partial failure still leaves cells worth
     # keeping: sync whatever landed regardless, then surface the sweep's status.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ bench_model }}'"
+    # The sweep counts tokens under the served model's name; read it from the same
+    # models.yaml the pulled image baked its tokenizer from, so the two agree.
+    model="$({{ image_tag_tool }} hf-id)"
+    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
     sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_ARGS_B64='${args_b64}'"
     sweep_rc=0
     run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
@@ -365,7 +380,10 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # both cells, so the host script hard-fails on a cell failure rather than leaving a
     # half result — a non-zero here means nothing worth joining was produced.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='{{ bench_model }}'"
+    # Count tokens under the served model's name, read from the same models.yaml the
+    # pulled image baked its tokenizer from, so the cold and warm cells agree with it.
+    model="$({{ image_tag_tool }} hf-id)"
+    prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
     prefix_env="${prefix_env} RUN_ID='${run_id}' PREFIX_SHARE='{{ prefix_share }}'"
     prefix_env="${prefix_env} BURSTINESS='{{ burstiness }}' PREFIX_ARGS_B64='${args_b64}'"
     run_on_host "prefix-cache" "${prefix_env} /usr/local/bin/bench-prefix-cache.sh" 3600
@@ -388,6 +406,10 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 obs-test:
     bash test/otel_spine_test.sh
+
+# Assert the bench image's slug and content tags derive from models.yaml as expected (no cluster).
+image-tag-test:
+    bash test/image-tag-test.sh
 
 # Deploy the OTel Collector spine stub to the cluster.
 obs-up:
@@ -424,9 +446,12 @@ obs-pivot:
       echo "port-forward to svc/otel-collector never came up" >&2
       exit 1
     fi
+    # The demo trace's model_id names the served model; read it from models.yaml, the
+    # source of truth the serving manifest is held to.
+    model="$({{ image_tag_tool }} hf-id)"
     curl -sf -X POST http://localhost:4318/v1/traces \
       -H 'Content-Type: application/json' \
-      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"{{ gpu_model }}"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
+      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"'"${model}"'"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
     sleep 3
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
