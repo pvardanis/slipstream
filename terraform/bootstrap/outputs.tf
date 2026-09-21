@@ -15,6 +15,6 @@ output "bench_image_repo_url" {
 }
 
 output "bench_image_repo_arn" {
-  description = "ARN of the bench-client ECR repository. The baseline bench host's IAM policy scopes image pulls to this repository rather than granting pull on every repo."
+  description = "ARN of the bench-client ECR repository. The bench endpoint's bench host IAM policy scopes image pulls to this repository rather than granting pull on every repo."
   value       = aws_ecr_repository.bench_client.arn
 }

@@ -10,7 +10,7 @@
 # rules on every apply, so the group is kept rule-free and all rules stand alone.
 resource "aws_security_group" "alb" {
   name_prefix = "${local.name}-alb-"
-  description = "Ingress to the baseline load balancer"
+  description = "Ingress to the bench endpoint load balancer"
   vpc_id      = var.vpc_id
 
   tags = local.tags
@@ -44,7 +44,7 @@ resource "aws_vpc_security_group_ingress_rule" "node_from_alb" {
   ip_protocol                  = "tcp"
   from_port                    = var.vllm_nodeport
   to_port                      = var.vllm_nodeport
-  description                  = "Baseline load balancer to vLLM NodePort"
+  description                  = "Bench endpoint load balancer to vLLM NodePort"
 
   tags = local.tags
 }

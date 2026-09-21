@@ -1,7 +1,7 @@
-# Outputs from the baseline stack.
+# Outputs from the bench endpoint stack.
 output "alb_dns_name" {
   description = "AWS-assigned DNS name of the load balancer. The bench client connects here, resolving server_dns_name to this name so the mTLS server certificate validates."
-  value       = aws_lb.baseline.dns_name
+  value       = aws_lb.bench_endpoint.dns_name
 }
 
 output "server_dns_name" {

@@ -1,10 +1,10 @@
 # A single CPU vLLM replica serving a tiny model over the OpenAI API.
 # The CPU model lets the platform stand up without spending GPU hours (spec §2).
 # Reachable in-cluster as http://vllm.slipstream.svc:8000, and on a NodePort so
-# an ephemeral baseline load balancer can front it from outside the cluster.
+# an ephemeral bench endpoint load balancer can front it from outside the cluster.
 # vLLM enforces an api-key (VLLM_API_KEY, from the vllm-api-key Secret) on its API
 # routes; /health and /metrics stay open so probes and the load balancer health
-# check reach them. The baseline load balancer's mutual TLS is the complete,
+# check reach them. The bench endpoint load balancer's mutual TLS is the complete,
 # connection-level gate; the api-key is a second lock on the API routes.
 apiVersion: v1
 kind: Namespace
@@ -70,8 +70,8 @@ spec:
               value: "1"
             # vLLM enforces this key on its API routes (/v1); /health and /metrics
             # stay open. It guards the NodePort and the in-cluster path alike,
-            # independent of the baseline load balancer's mutual TLS. Generated once
-            # and stored in the cluster; the baseline stack reads the same value
+            # independent of the bench endpoint load balancer's mutual TLS. Generated once
+            # and stored in the cluster; the bench endpoint stack reads the same value
             # into Secrets Manager.
             - name: VLLM_API_KEY
               valueFrom:
@@ -127,9 +127,9 @@ metadata:
   labels:
     app: vllm
 spec:
-  # NodePort so an ephemeral baseline load balancer, provisioned outside the
+  # NodePort so an ephemeral bench endpoint load balancer, provisioned outside the
   # cluster, can reach vLLM through the node group. The port is fixed so the
-  # baseline target group can target it; only the load balancer's security group
+  # bench endpoint target group can target it; only the load balancer's security group
   # is allowed to reach it, and API-route requests still need the api-key. No cloud
   # load balancer is created here, so `just cluster-down` leaves nothing behind.
   type: NodePort

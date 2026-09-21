@@ -1,4 +1,4 @@
-# Inputs for the baseline stack.
+# Inputs for the bench endpoint stack.
 variable "region" {
   description = "AWS region for the load balancer. Must match the eks stack's region so the LB sits in the cluster VPC."
   type        = string
@@ -6,7 +6,7 @@ variable "region" {
 }
 
 variable "cluster_name" {
-  description = "Name of the EKS cluster this baseline fronts; used to prefix baseline resource names."
+  description = "Name of the EKS cluster this bench endpoint fronts; used to prefix bench endpoint resource names."
   type        = string
   default     = "slipstream"
 }

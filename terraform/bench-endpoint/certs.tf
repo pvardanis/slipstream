@@ -5,13 +5,13 @@
 # holding a certificate this CA signed. No public ACM domain or ACM Private CA
 # is involved — the endpoint lives for minutes and only the bench client and
 # operator ever connect. All private keys land in state in plaintext (Terraform
-# always stores arguments plaintext), which is why the baseline state file is
+# always stores arguments plaintext), which is why the bench endpoint state file is
 # isolated and the bucket is encrypted and IAM-locked.
 
 variable "server_dns_name" {
   description = "SAN the load balancer server certificate is issued for. The bench client reaches the ALB under this name (via --resolve/--connect-to), since the self-signed cert cannot cover the AWS-assigned ALB DNS name."
   type        = string
-  default     = "vllm.baseline.slipstream.internal"
+  default     = "vllm.bench-endpoint.slipstream.internal"
 }
 
 variable "cert_validity_hours" {

@@ -1,4 +1,4 @@
-# Plan-level tests for the baseline exposure stack. They run offline: the aws
+# Plan-level tests for the bench endpoint exposure stack. They run offline: the aws
 # provider is mocked and the eks remote-state data source is overridden, so the
 # assertions check the stack's shape and its security invariants without
 # standing anything up. The real end-to-end proof is `just bench-endpoint-up` plus a
@@ -36,11 +36,11 @@ run "exposure_invariants" {
 
   # The load balancer is public and an ALB (only the ALB terminates mutual TLS).
   assert {
-    condition     = aws_lb.baseline.internal == false
-    error_message = "Baseline load balancer must be internet-facing to measure from an external vantage."
+    condition     = aws_lb.bench_endpoint.internal == false
+    error_message = "Bench endpoint load balancer must be internet-facing to measure from an external vantage."
   }
   assert {
-    condition     = aws_lb.baseline.load_balancer_type == "application"
+    condition     = aws_lb.bench_endpoint.load_balancer_type == "application"
     error_message = "Must be an ALB: only the application load balancer terminates mutual TLS."
   }
 

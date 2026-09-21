@@ -4,7 +4,7 @@
 
 eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
-baseline_dir := "terraform/baseline"
+bench_endpoint_dir := "terraform/bench-endpoint"
 manifests := "k8s/vllm.yaml"
 gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
 gpu_manifests := "k8s/vllm-gpu.yaml"
@@ -60,9 +60,9 @@ cluster-plan: _bootstrap-init
     terraform -chdir={{ eks_dir }} plan
 
 # Ensure the vLLM api-key Secret exists. Generated once and left stable across
-# deploys: vLLM enforces it on its API routes, and the baseline stack reads the
+# deploys: vLLM enforces it on its API routes, and the bench endpoint stack reads the
 # same value into Secrets Manager for the bench client. Regenerating it would
-# lock out an api-key already published to a running baseline.
+# lock out an api-key already published to a running bench endpoint.
 _ensure-api-key:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -70,7 +70,7 @@ _ensure-api-key:
     # `--ignore-not-found` prints nothing when the Secret is absent but still errors
     # on a real failure (unreachable API server, wrong context, RBAC), so a
     # connection problem can't masquerade as "absent" and mint a fresh key against
-    # the wrong cluster — diverging from a key already published to a baseline.
+    # the wrong cluster — diverging from a key already published to a bench endpoint.
     if [[ -z "$(kubectl -n slipstream get secret vllm-api-key --ignore-not-found -o name)" ]]; then
       # Bare assignment so a failed openssl aborts: in argument position a failed
       # $(...) does not trip set -e, which would create a Secret with an empty key.
@@ -81,7 +81,7 @@ _ensure-api-key:
 
 # Read the vLLM api-key out of the cluster Secret, failing loudly if the Secret
 # exists but carries no api-key value rather than emitting an empty credential
-# (an empty key would then authenticate nothing and be published to a baseline).
+# (an empty key would then authenticate nothing and be published to a bench endpoint).
 _read-api-key:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -278,8 +278,8 @@ bench *args:
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
-    instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
-    bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
+    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
     image="$(just _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
     # so concurrent or repeated runs never overwrite each other.
@@ -314,12 +314,12 @@ bench *args:
     echo "results synced to bench/results/${run_id}/"
     exit "${sweep_rc}"
 
-# Sync every sweep and prefix-cache run's results from the baseline results bucket to bench/results for local reporting; use to pull runs made from another machine.
+# Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
-    bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
     mkdir -p bench/results/prefix-cache
     aws s3 sync "s3://${bucket}/sweeps" bench/results --region "${region}"
     aws s3 sync "s3://${bucket}/prefix-cache" bench/results/prefix-cache --region "${region}"
@@ -341,8 +341,8 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
-    instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
-    bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
+    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
+    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
     image="$(just _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
     # so concurrent or repeated runs never overwrite each other.
@@ -528,7 +528,7 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     # Read the cluster's network topology from the eks outputs and pass it in as
     # variables (bare assignments abort on a missing output, see `cluster-up`).
-    # The baseline holds these in its own state, so `bench-endpoint-down` destroys
+    # The bench endpoint holds these in its own state, so `bench-endpoint-down` destroys
     # from state alone and never needs the eks stack — an interrupted cluster-up
     # can no longer strand this endpoint billing.
     vpc_id="$(terraform -chdir={{ eks_dir }} output -raw vpc_id)"
@@ -545,15 +545,15 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
       || { echo "could not determine operator IP from checkip.amazonaws.com" >&2; exit 1; }
     cidr="${cidr}/32"
     [[ "${cidr}" =~ ^[0-9.]+/32$ ]] || { echo "unexpected operator IP from checkip: ${cidr}" >&2; exit 1; }
-    terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ baseline_dir }} apply -auto-approve \
+    terraform -chdir={{ bench_endpoint_dir }} init -input=false -backend-config="bucket=${bucket}"
+    terraform -chdir={{ bench_endpoint_dir }} apply -auto-approve \
       -var="state_bucket=${bucket}" \
       -var="operator_cidr=${cidr}" \
       -var="vpc_id=${vpc_id}" \
       -var="node_security_group_id=${node_sg}" \
       -var="public_subnets=${subnets}" \
       -var="node_autoscaling_groups=${asgs}"
-    terraform -chdir={{ baseline_dir }} output
+    terraform -chdir={{ bench_endpoint_dir }} output
     # cloud-init runs asynchronously after `apply` returns — installing Docker,
     # pulling the bench image from ECR, writing the proxy scripts — so the host is
     # not ready the instant terraform finishes. Block on the boot sentinel the host
@@ -561,8 +561,8 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
     # "failed: <step>") so a following `just bench`/`prefix-cache` cannot race a host
     # whose /usr/local/bin scripts are not written yet (exit 127 on proxy-up).
     region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
-    results_bucket="$(terraform -chdir={{ baseline_dir }} output -raw results_bucket_name)"
-    instance="$(terraform -chdir={{ baseline_dir }} output -raw bench_host_instance_id)"
+    results_bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
     key="s3://${results_bucket}/boot-status/${instance}"
     echo "waiting for bench host ${instance} to finish boot..." >&2
     deadline=$((SECONDS + 420))
@@ -594,13 +594,13 @@ bench-endpoint-down: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
-    terraform -chdir={{ baseline_dir }} init -input=false -backend-config="bucket=${bucket}"
+    terraform -chdir={{ bench_endpoint_dir }} init -input=false -backend-config="bucket=${bucket}"
     # Destroy needs no live cluster or IP lookup: the api-key and operator CIDR only
     # shape resources being torn down. Placeholders keep teardown of a public
     # endpoint from being blocked by an already-deleted Secret or an offline network,
     # which would otherwise orphan an internet-facing load balancer.
     TF_VAR_vllm_api_key="unused" \
-      terraform -chdir={{ baseline_dir }} destroy -auto-approve \
+      terraform -chdir={{ bench_endpoint_dir }} destroy -auto-approve \
       -var="state_bucket=${bucket}" \
       -var="operator_cidr=0.0.0.0/32"
 

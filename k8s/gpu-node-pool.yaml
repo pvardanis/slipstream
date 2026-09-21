@@ -23,7 +23,7 @@ spec:
   # Terraform stacks carry. These nodes live outside Terraform state (Karpenter is
   # an in-cluster controller), so `just cluster-down` never sees them; the tag is what the
   # cloud-verify teardown sweep (`just cloud-verify`, #92) finds a leaked g5 or its
-  # gp3 root by. Component distinguishes them from the Terraform-managed baseline.
+  # gp3 root by. Component distinguishes them from the Terraform-managed bench endpoint.
   tags:
     Project: slipstream
     Component: gpu-node

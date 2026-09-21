@@ -343,7 +343,7 @@ run "bench_proxy_config" {
   }
   # It forwards to the ALB DNS name on 443, terminating mutual TLS upstream.
   assert {
-    condition     = strcontains(local.bench_proxy_conf, "proxy_pass ${aws_lb.baseline.dns_name}:443")
+    condition     = strcontains(local.bench_proxy_conf, "proxy_pass ${aws_lb.bench_endpoint.dns_name}:443")
     error_message = "Proxy must forward to the ALB DNS name on 443."
   }
   assert {
