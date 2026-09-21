@@ -16,8 +16,8 @@ image_tag_tool := "bench/image-tag.sh"
 # Builds the image from model.yaml, tagging it with each ref passed; shared with
 # the CI workflows so the one build command never diverges.
 build_image_tool := "bench/build-image.sh"
-# Empty pulls the floating `<slug>-main` tag that `just bench-image` publishes on
-# every main build; set a `<slug>-<sha>` tag to pin a reproducible run.
+# Empty pulls the floating `<slug>-main` tag that CI publishes on every merge to
+# main; set a `<slug>-<sha>` tag to pin a reproducible run.
 bench_image_tag := ""
 cpu_model := "Qwen/Qwen2.5-0.5B-Instruct"
 otel_manifests := "k8s/otel-collector.yaml"
