@@ -167,6 +167,18 @@ gh variable set AWS_REGION \
   --body "$(terraform -chdir=terraform/bootstrap output -raw region)"
 ```
 
+Bootstrapping under a different repo (a fork, a rename, or a new owner) also
+needs the OIDC trust to match that repo. The trust subject uses GitHub's
+immutable owner/repo IDs, so set `github_oidc_sub_prefix` in
+`terraform/bootstrap` to the repo's own value before applying — the default is
+this repo's IDs, and a mismatch fails the workflow's role assumption with
+`Not authorized to perform sts:AssumeRoleWithWebIdentity`:
+
+```sh
+gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+# -> repo:<owner>@<owner_id>/<repo>@<repo_id>, the value for github_oidc_sub_prefix
+```
+
 To benchmark an unmerged branch's image: pull requests never publish, so first
 push the branch's content image locally, then pin the endpoint to that immutable
 tag rather than the `-main` default (which tracks the last `main` publish, not
