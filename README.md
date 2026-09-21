@@ -167,6 +167,17 @@ gh variable set AWS_REGION \
   --body "$(terraform -chdir=terraform/bootstrap output -raw region)"
 ```
 
+To benchmark an unmerged branch's image: pull requests never publish, so first
+push the branch's content image locally, then pin the endpoint to that immutable
+tag rather than the `-main` default (which tracks the last `main` publish, not
+your branch):
+
+```sh
+just bench-image   # build + push this checkout's qwen3-8b-awq-<sha> content tag
+terraform -chdir=terraform/bench-endpoint apply \
+  -var bench_image_tag="$(bench/image-tag.sh sha-tag)"
+```
+
 ### Baseline runbook
 
 A benchmark run stands up an ephemeral, internet-facing endpoint and an EC2 host,
