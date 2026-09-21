@@ -18,11 +18,12 @@ resource "aws_ecr_repository" "bench_client" {
   }
 }
 
-# The lifecycle keeps ECR storage bounded across the duty-cycle. Rules are
-# evaluated in ascending priority order and an image an earlier rule selects is not
-# re-evaluated by later ones, so rule 1 claims the floating -main tag first and the
-# -sha count rule (rule 2) can never expire it. Rule 3 sweeps the images a tag move
-# or replaced push leaves untagged.
+# The lifecycle keeps ECR storage bounded across the duty-cycle. ECR evaluates all
+# rules together, then applies them by ascending rulePriority: an image matching a
+# higher-priority rule cannot be expired by a lower-priority one (though the lower
+# rule still counts it). So rule 1 matches the floating -main tag and rule 2's -sha
+# count sweep can never expire it. Rule 3 sweeps the images a tag move or replaced
+# push leaves untagged.
 resource "aws_ecr_lifecycle_policy" "bench_client" {
   repository = aws_ecr_repository.bench_client.name
 

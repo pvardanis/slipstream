@@ -48,8 +48,24 @@ run "github_oidc_trust_and_permissions" {
     condition     = local.bench_push_permissions_policy.Statement[0].Resource == "*"
     error_message = "GetAuthorizationToken has no resource scope and must be granted on *."
   }
+  # A docker push needs the full layer-upload sequence plus PutImage; dropping any
+  # one silently breaks the push at runtime, so assert the whole set rather than a
+  # single action. DescribeImages sits on its own statement and backs the workflow's
+  # content-hash existence check.
   assert {
-    condition     = contains(local.bench_push_permissions_policy.Statement[1].Action, "ecr:PutImage")
-    error_message = "Role must be able to push image manifests to the bench-client repo."
+    condition = alltrue([
+      for action in [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+      ] : contains(local.bench_push_permissions_policy.Statement[1].Action, action)
+    ])
+    error_message = "Push statement must grant the full docker-push action set."
+  }
+  assert {
+    condition     = local.bench_push_permissions_policy.Statement[2].Action == "ecr:DescribeImages"
+    error_message = "A separate statement must grant DescribeImages for the content-hash existence check."
   }
 }
