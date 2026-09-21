@@ -57,13 +57,9 @@ jobs:
           # than fail the job. A bare assignment does honour `set -e`.
           sha_tag="$(bench/image-tag.sh sha-tag)"
           main_tag="$(bench/image-tag.sh main-tag)"
-          model="$(bench/image-tag.sh hf-id)"
-          revision="$(bench/image-tag.sh revision)"
           {
             echo "sha_tag=${sha_tag}"
             echo "main_tag=${main_tag}"
-            echo "model=${model}"
-            echo "revision=${revision}"
           } >>"${GITHUB_OUTPUT}"
 
       - name: Authenticate to AWS via OIDC
@@ -81,8 +77,6 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
           MAIN_TAG: ${{ steps.tags.outputs.main_tag }}
-          MODEL: ${{ steps.tags.outputs.model }}
-          REVISION: ${{ steps.tags.outputs.revision }}
         run: |
           set -euo pipefail
           image="${REGISTRY}/${ECR_REPOSITORY}"
@@ -107,11 +101,8 @@ jobs:
           fi
 
           # Absent: build the content once and publish it under both the immutable
-          # content tag and the floating main pointer. Nodes are amd64.
+          # content tag and the floating main pointer.
           echo "content tag ${SHA_TAG} absent; building"
-          docker build --platform linux/amd64 \
-            --build-arg MODEL="${MODEL}" --build-arg REVISION="${REVISION}" \
-            -t "${image}:${SHA_TAG}" -t "${image}:${MAIN_TAG}" \
-            -f bench/Dockerfile .
+          bench/build-image.sh "${image}:${SHA_TAG}" "${image}:${MAIN_TAG}"
           docker push "${image}:${SHA_TAG}"
           docker push "${image}:${MAIN_TAG}"

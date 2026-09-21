@@ -105,14 +105,4 @@ jobs:
       # preinstalled on the runner), so a broken Dockerfile or an unfetchable
       # revision fails the PR. No tag, no push: the build succeeding is the check.
       - name: Build the bench image (no push)
-        run: |
-          set -euo pipefail
-          # Assign before building: a failing command substitution inside a
-          # --build-arg does not trip `set -e` (docker build still runs), so an
-          # image-tag.sh error would build with an empty MODEL/REVISION rather
-          # than fail the check. A bare assignment does honour `set -e`.
-          model="$(bench/image-tag.sh hf-id)"
-          revision="$(bench/image-tag.sh revision)"
-          docker build --platform linux/amd64 \
-            --build-arg MODEL="${model}" --build-arg REVISION="${revision}" \
-            -f bench/Dockerfile .
+        run: bench/build-image.sh

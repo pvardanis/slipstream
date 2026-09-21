@@ -13,6 +13,9 @@ bench_dockerfile := "bench/Dockerfile"
 # model.yaml + git; the build, the pull ref, and the completion smokes all read
 # the served model through it, so the one definition drives them all.
 image_tag_tool := "bench/image-tag.sh"
+# Builds the image from model.yaml, tagging it with each ref passed; shared with
+# the CI workflows so the one build command never diverges.
+build_image_tool := "bench/build-image.sh"
 # Empty pulls the floating `<slug>-main` tag that `just bench-image` publishes on
 # every main build; set a `<slug>-<sha>` tag to pin a reproducible run.
 bench_image_tag := ""
@@ -263,20 +266,14 @@ bench-image: _bootstrap-init
     set -euo pipefail
     repo="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_image_repo_url)"
     region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
-    # The served model, its revision, and the content tag all derive from model.yaml
-    # and git through one script, so the baked tokenizer and the image name that
-    # advertises it never diverge.
-    model="$({{ image_tag_tool }} hf-id)"
-    revision="$({{ image_tag_tool }} revision)"
+    # The content tag derives from model.yaml and git, so the baked tokenizer and
+    # the image name that advertises it never diverge.
     sha_tag="$({{ image_tag_tool }} sha-tag)"
     # The registry host is the repo URL without its trailing repository path.
     registry="${repo%%/*}"
     aws ecr get-login-password --region "${region}" \
       | docker login --username AWS --password-stdin "${registry}"
-    # Nodes are amd64; build for that arch regardless of the developer's host.
-    docker build --platform linux/amd64 \
-      --build-arg MODEL="${model}" --build-arg REVISION="${revision}" \
-      -t "${repo}:${sha_tag}" -f {{ bench_dockerfile }} .
+    {{ build_image_tool }} "${repo}:${sha_tag}"
     docker push "${repo}:${sha_tag}"
 
 # Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
@@ -411,6 +408,10 @@ obs-test:
 # Assert the bench image's slug and content tags derive from model.yaml as expected (no cluster).
 image-tag-test:
     bash test/image-tag-test.sh
+
+# Assert build-image.sh assembles the docker build with the model.yaml args and one -t per ref (docker stubbed, no build).
+build-image-test:
+    bash test/build-image-test.sh
 
 # Deploy the OTel Collector spine stub to the cluster.
 obs-up:
