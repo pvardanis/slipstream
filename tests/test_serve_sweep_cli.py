@@ -172,6 +172,13 @@ def test_zero_max_concurrency_is_rejected() -> None:
     assert "--max-concurrency" in plain(result)
 
 
+def test_duplicate_share_is_rejected() -> None:
+    """A repeated --prefix-share reruns an identical cell; the CLI rejects it."""
+    result = _dry_run("--prefix-share", "50", "--prefix-share", "50")
+    assert result.exit_code == 2
+    assert "duplicate prefix-share" in plain(result)
+
+
 def test_share_above_100_is_rejected() -> None:
     """A prefix-share outside 0..100 is rejected with a diagnostic."""
     result = _dry_run("--prefix-share", "150")
