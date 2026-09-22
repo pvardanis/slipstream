@@ -5,9 +5,9 @@ Markdown and JSON are written from the same rows
 :func:`slipstream_bench.sweep_aggregation.aggregate` emits — Markdown the human-readable
 view, JSON the structured table later layers re-read. The primary chart plots the
 concurrency ceiling per engine point — x = max-num-seqs, series = kv-cache-dtype,
-faceted by prefix-caching x prefix-share — rendered offline through matplotlib's Agg
-backend. Caching-off carries only its single share-0 baseline, so its row holds one
-facet while caching-on spans the swept shares: a ragged grid, no duplicated null cells.
+faceted by the combined caching/share condition — rendered offline through matplotlib's
+Agg backend. Caching-off carries only its single share-0 baseline, so it holds one facet
+while caching-on spans the swept shares: a ragged grid, no duplicated null cells.
 """
 
 import json
@@ -44,29 +44,8 @@ _CEILING_AXIS_LABEL = "max sustained --max-concurrency at SLO"
 _SLO_TITLE = "concurrency ceiling — goodput >= 95% (ttft <= 1000ms, tpot <= 50ms)"
 
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
-# a swept value — its own facet column, ordered ahead of the swept shares.
+# a swept value — its own facet, ordered ahead of the swept shares.
 _NO_SHARE_LABEL = "n/a"
-
-
-def _cell(value: object) -> str:
-    """Render one table cell, a not-captured None as an empty field."""
-    return "" if value is None else str(value)
-
-
-def _row_cells(row: dict) -> list[str]:
-    """Flatten one ceiling row into its cells, :data:`_TABLE_COLUMNS` order."""
-    failures = row["failures"]
-    return [
-        _cell(row["max_num_seqs"]),
-        _cell(row["kv_cache_dtype"]),
-        _cell(row["prefix_caching"]),
-        _cell(row["prefix_share"]),
-        _cell(row["ceiling"]),
-        _cell(failures["timeout"]),
-        _cell(failures["other"]),
-        _cell(failures["oom"]),
-        _cell(row["num_preemptions"]),
-    ]
 
 
 def rows_to_markdown(rows: list[dict]) -> str:
@@ -97,66 +76,6 @@ def rows_to_json(rows: list[dict]) -> str:
     :return: the rows as an indented JSON array.
     """
     return json.dumps(rows, indent=2)
-
-
-def _share_label(row: dict) -> str:
-    """Label a row's facet column: the swept share, or n/a when caching is off."""
-    return _NO_SHARE_LABEL if not row["prefix_caching"] else str(row["prefix_share"])
-
-
-def _ceiling_frame(rows: list[dict]) -> pd.DataFrame:
-    """Shape the ceiling rows into the frame the primary chart facets over.
-
-    Derives the two facet labels the plot reads — prefix-caching as on/off and the
-    share column (n/a for the caching-off baseline) — and keeps the ceiling as-is, so
-    a point that held no rung plots as a gap rather than a zero.
-    """
-    records = [
-        {
-            "max_num_seqs": row["max_num_seqs"],
-            "kv_cache_dtype": row["kv_cache_dtype"],
-            "prefix_caching": "on" if row["prefix_caching"] else "off",
-            "prefix_share": _share_label(row),
-            "ceiling": row["ceiling"],
-        }
-        for row in rows
-    ]
-    return pd.DataFrame.from_records(records)
-
-
-def _share_order(frame: pd.DataFrame) -> list[str]:
-    """Order the facet columns: the caching-off n/a baseline, then swept shares."""
-    swept = sorted(
-        {label for label in frame["prefix_share"] if label != _NO_SHARE_LABEL},
-        key=int,
-    )
-    has_baseline = (frame["prefix_share"] == _NO_SHARE_LABEL).any()
-    return ([_NO_SHARE_LABEL] if has_baseline else []) + swept
-
-
-def _plot_ceilings(rows: list[dict]) -> sns.FacetGrid:
-    """Draw the primary ceiling chart onto a faceted grid.
-
-    :param rows: the aggregated ceiling rows.
-    :return: the seaborn FacetGrid, ready to save — the caller closes its figure.
-    """
-    frame = _ceiling_frame(rows)
-    grid = sns.relplot(
-        data=frame,
-        kind="line",
-        x="max_num_seqs",
-        y="ceiling",
-        hue="kv_cache_dtype",
-        row="prefix_caching",
-        col="prefix_share",
-        col_order=_share_order(frame),
-        marker="o",
-    )
-    grid.set_axis_labels("max-num-seqs", _CEILING_AXIS_LABEL)
-    grid.set_titles("caching {row_name} · prefix-share {col_name}")
-    grid.figure.suptitle(_SLO_TITLE)
-    grid.tight_layout()
-    return grid
 
 
 def write_artifacts(rows: list[dict], charts_dir: Path) -> dict[str, Path]:
@@ -192,3 +111,103 @@ def write_artifacts(rows: list[dict], charts_dir: Path) -> dict[str, Path]:
     finally:
         plt.close(grid.figure)
     return paths
+
+
+def _cell(value: object) -> str:
+    """Render one table cell, a not-captured None as an empty field."""
+    return "" if value is None else str(value)
+
+
+def _row_cells(row: dict) -> list[str]:
+    """Flatten one ceiling row into its cells, :data:`_TABLE_COLUMNS` order."""
+    failures = row["failures"]
+    return [
+        _cell(row["max_num_seqs"]),
+        _cell(row["kv_cache_dtype"]),
+        _cell(row["prefix_caching"]),
+        _cell(row["prefix_share"]),
+        _cell(row["ceiling"]),
+        _cell(failures["timeout"]),
+        _cell(failures["other"]),
+        _cell(failures["oom"]),
+        _cell(row["num_preemptions"]),
+    ]
+
+
+def _share_label(row: dict) -> str:
+    """Label a row's share: the swept share, or n/a when caching is off."""
+    return _NO_SHARE_LABEL if not row["prefix_caching"] else str(row["prefix_share"])
+
+
+def _condition_label(row: dict) -> str:
+    """Name a row's facet: the caching condition and, for caching-on, its share.
+
+    Caching and share collapse into one facet axis rather than a caching x share
+    cross-product, so the ragged grid holds only the conditions the sweep ran — one
+    caching-off baseline facet and one per swept share — with no empty cross cells.
+    """
+    return f"caching {'on' if row['prefix_caching'] else 'off'} · share {_share_label(row)}"
+
+
+def _ceiling_frame(rows: list[dict]) -> pd.DataFrame:
+    """Shape the ceiling rows into the frame the primary chart facets over.
+
+    Derives the facet label the plot reads — the combined caching/share condition —
+    and keeps the ceiling as-is, so a point that held no rung plots as a gap rather
+    than a zero. Carries prefix-caching and the share label alongside so the facets
+    order the caching-off baseline ahead of the swept shares.
+    """
+    records = [
+        {
+            "max_num_seqs": row["max_num_seqs"],
+            "kv_cache_dtype": row["kv_cache_dtype"],
+            "prefix_caching": "on" if row["prefix_caching"] else "off",
+            "prefix_share": _share_label(row),
+            "condition": _condition_label(row),
+            "ceiling": row["ceiling"],
+        }
+        for row in rows
+    ]
+    return pd.DataFrame.from_records(records)
+
+
+def _condition_order(frame: pd.DataFrame) -> list[str]:
+    """Order the facets: the caching-off baseline first, then swept shares by number."""
+    conditions = frame[
+        ["condition", "prefix_caching", "prefix_share"]
+    ].drop_duplicates()
+
+    def sort_key(row: tuple) -> tuple[int, int]:
+        caching_rank = 0 if row.prefix_caching == "off" else 1
+        share_rank = (
+            -1 if row.prefix_share == _NO_SHARE_LABEL else int(row.prefix_share)
+        )
+        return (caching_rank, share_rank)
+
+    ordered = sorted(conditions.itertuples(index=False), key=sort_key)
+    return [row.condition for row in ordered]
+
+
+def _plot_ceilings(rows: list[dict]) -> sns.FacetGrid:
+    """Draw the primary ceiling chart onto a faceted grid.
+
+    :param rows: the aggregated ceiling rows.
+    :return: the seaborn FacetGrid, ready to save — the caller closes its figure.
+    """
+    frame = _ceiling_frame(rows)
+    grid = sns.relplot(
+        data=frame,
+        kind="line",
+        x="max_num_seqs",
+        y="ceiling",
+        hue="kv_cache_dtype",
+        col="condition",
+        col_order=_condition_order(frame),
+        col_wrap=4,
+        marker="o",
+    )
+    grid.set_axis_labels("max-num-seqs", _CEILING_AXIS_LABEL)
+    grid.set_titles("{col_name}")
+    grid.figure.suptitle(_SLO_TITLE)
+    grid.tight_layout()
+    return grid
