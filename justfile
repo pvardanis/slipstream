@@ -403,6 +403,7 @@ knob-sweep:
               share_flags=(--prefix-share 10 --prefix-share 50 --prefix-share 90) ;;
             off) pc_flag="--no-enable-prefix-caching"
               share_flags=(--prefix-share 0) ;;
+            *) echo "!! knob-sweep: unexpected pc='${pc}'" >&2; exit 1 ;;
           esac
           point="mns${mns}_kv${kv}_pc${pc}"
           echo "==> knob-sweep point ${point}" >&2
