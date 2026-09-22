@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "L0 benchmark harness for the slipstream platform: serve sweeps, cost-per-1M, and prefix-cache hit rates."
 requires-python = ">=3.11"
 dependencies = [
+    "pandas>=3",
     "prometheus-client>=0.26.0",
     "pydantic>=2",
     "pyyaml>=6",
+    "seaborn>=0.13",
     "typer>=0.12",
 ]
 
