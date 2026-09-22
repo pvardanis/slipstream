@@ -158,13 +158,19 @@ def write_artifacts(
     :return: the written paths, keyed ``markdown`` / ``json`` / ``png`` for the ceiling
         table and its plot, ``rungs_markdown`` / ``rungs_json`` / ``rungs_png`` for the
         cliff table and its plot.
-    :raise ValueError: when ``rows`` is empty — an empty run holds no ceiling and must
-        not be written as a header-only table and a blank plot.
+    :raise ValueError: when ``rows`` or ``rungs`` is empty — an empty run holds neither a
+        ceiling nor a cliff and must not be written as a header-only table and a blank
+        plot. The two are non-empty together for a run aggregated off one directory, but
+        the parameters are independent, so each is guarded.
     :raise OSError: when the directory cannot be made or an artifact cannot be written.
     """
     if not rows:
         raise ValueError(
             "cannot chart an empty ceiling table: the run aggregated no rows"
+        )
+    if not rungs:
+        raise ValueError(
+            "cannot chart an empty cliff table: the run aggregated no rungs"
         )
     charts_dir = Path(charts_dir)
     charts_dir.mkdir(parents=True, exist_ok=True)
