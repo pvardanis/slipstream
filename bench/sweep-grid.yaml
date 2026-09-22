@@ -5,10 +5,9 @@
 tier1:
   max_num_seqs: [16, 32, 64, 128, 256]
 
-  # KV cache dtype: chart label -> token that vLLM's --kv-cache-dtype accepts.
-  kv_cache_dtype:
-    fp8: fp8
-    fp16: float16
+  # KV cache dtype chart labels; sweep_grid maps each to the token vLLM's
+  # --kv-cache-dtype accepts (fp16 -> float16).
+  kv_cache_dtype: [fp8, fp16]
 
   # Prefix-caching arm: its deploy flag, and which prefix shares to sweep under it.
   # Caching off reuses no prefix KV, so it sweeps a single 0 baseline (ADR-0009).
