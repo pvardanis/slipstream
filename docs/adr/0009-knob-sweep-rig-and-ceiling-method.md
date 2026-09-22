@@ -63,8 +63,13 @@ the saturation batch first, then vary interacting knobs only near it — the gri
 
 - `--max-concurrency` ladder {8, 16, 32, 64, 128, 256} — the ceiling search itself, raised until
   goodput drops below 95%.
-- `prefix_share` ∈ {10, 50, 90} — reused from the existing harness, meaningful only under
-  prefix-caching=on.
+- `prefix_share` — swept over {10, 50, 90} only when `prefix-caching=on`; when off it is pinned
+  to a single `0` baseline. With caching off vLLM reuses no prefix KV regardless of how much
+  prefix requests share (`KVCacheManager.get_computed_blocks` returns zero computed blocks when
+  `enable_caching` is false), and the workload holds `total_len` fixed while share only
+  re-partitions it into prefix/suffix, so goodput is flat across share — a swept share there
+  measures a definitional null. The ladder is therefore {10, 50, 90} under caching-on and {0}
+  under caching-off, so no null cell is ever run.
 
 **Held fixed:** `max-model-len=4096` (a product constraint, not a perf knob — halving it would
 double the ceiling by serving a shorter context, so its doubling relationship is noted here
@@ -100,15 +105,17 @@ soft-fail signal — the real "`max-num-seqs` pushed too high" tell, distinct fr
 
 ### Chart — offline artifact, data first
 
-A new `chart` subcommand renders a static matplotlib PNG to
+A new `chart` subcommand renders a static PNG (seaborn over matplotlib) to
 `bench/results/<run_id>/charts/`, with the aggregated ceiling table written beside it as
 CSV/JSON — the table is the durable artifact, the PNG disposable. Aggregation is a **new**
-`sweep_ceiling.py` module (CLI `knob-sweep`) keyed by (`max-num-seqs`, `kv-cache-dtype`,
+`sweep_aggregation.py` module (CLI `aggregate-sweep`) keyed by (`max-num-seqs`, `kv-cache-dtype`,
 `prefix-caching`), reusing `results.py` readers — not folded into `report.py`, whose job is the
 single-config cost×prefix economics join, a different key and output.
 
 - Primary chart: y = max sustained concurrency at SLO, x = `max-num-seqs`, series =
-  `kv-cache-dtype`, facet = prefix-caching on/off.
+  `kv-cache-dtype`, faceted by prefix-caching × `prefix_share`. Caching-off carries the single
+  `0` share, so its row is one facet (labelled share n/a) while caching-on spans the {10, 50, 90}
+  share columns — a ragged grid, no duplicated null cells.
 - Diagnostic: goodput vs `--max-concurrency` per config — the goodput cliff, showing *where* SLO
   breaks, not just the ceiling number.
 
@@ -125,12 +132,13 @@ single-config cost×prefix economics join, a different key and output.
 ## Consequences
 
 - #33 ships as a small PR stack, one kind of change each: this ADR + glossary (docs), the
-  envsubst templating + `just knob-sweep` recipe (infra), `sweep_ceiling.py` + failure
-  classification (code), the `chart` subcommand + plotting dependency (code).
+  envsubst templating + `just knob-sweep` recipe (orchestration), `sweep_aggregation.py` +
+  failure classification (code), the seaborn + pandas plotting dependency (deps), the `chart`
+  subcommand (code).
 - The sweep is ~20 Tier-1 redeploys (~90s+ each) × a cheap Tier-2 client ladder. It runs in the
   label-gated cloud tier (ADR-0002) — it needs a live GPU — hand-triggered, never on push.
 - Once the sweep produces real numbers, `k8s/vllm-gpu.yaml`'s placeholder engine args are
   patched with the tuned values. That is a data-driven config change on its **own** later commit,
   not part of building the rig — the rig has to run before the numbers exist.
-- A first plotting dependency (matplotlib) enters the bench package, previously
-  `prometheus-client` + `typer` only.
+- A first plotting dependency (seaborn + pandas, over matplotlib) enters the bench package,
+  previously `prometheus-client` + `typer` only.
