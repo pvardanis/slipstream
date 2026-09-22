@@ -1,4 +1,4 @@
-<!-- ADR recording the first GPU layer: a Karpenter-provisioned g5.xlarge spot node pool and the Qwen3-8B AWQ-INT4 / FP8-KV vLLM replica that runs on it (spec §3.1, epic #19 / issue #32). -->
+<!-- ADR recording the first GPU layer: a Karpenter-provisioned g5.xlarge on-demand node pool and the Qwen3-8B AWQ-INT4 / FP8-KV vLLM replica that runs on it (spec §3.1, epic #19 / issue #32). -->
 
 # ADR-0006: GPU node pool (Karpenter) and the AWQ-INT4 / FP8-KV replica
 
@@ -12,7 +12,7 @@ creates (ADR-0001), serving a tiny CPU vLLM replica (issue #25). That CPU replic
 stays — it is the substrate the platform machinery (autoscaling, routing, the
 observability spine) is built and debugged against so GPU hours go to measurement,
 not YAML debugging (spec §2). This ADR adds the first **GPU** capacity next to it:
-a `g5.xlarge` spot A10G brought up by Karpenter, running Qwen3-8B AWQ-INT4 with an
+a `g5.xlarge` on-demand A10G brought up by Karpenter, running Qwen3-8B AWQ-INT4 with an
 FP8 KV cache, no tensor parallelism — the rig the platform is measured against
 (CONTEXT.md, spec §3.1). It is the bring-up, not the tuning: the concurrency knob
 sweep is a separate piece (issue #33).

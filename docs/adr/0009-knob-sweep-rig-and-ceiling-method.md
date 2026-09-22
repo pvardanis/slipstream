@@ -51,7 +51,9 @@ the saturation batch first, then vary interacting knobs only near it — the gri
 
 - `max-num-seqs` ∈ {16, 32, 64, 128, 256} × `kv-cache-dtype` ∈ {fp16, fp8} — the interacting
   KV-capacity pair. FP8 roughly doubles KV slots, shifting where `max-num-seqs` saturates, so
-  these are swept jointly and the clamp point read off.
+  these are swept jointly and the clamp point read off. FP8 is the rig's committed KV dtype
+  (spec §3.1, ADR-0006); **fp16 is swept as the counterfactual baseline, not a candidate** — it
+  quantifies what FP8 buys in isolation, it is not a config the deliverable might select.
 - `enable-prefix-caching` ∈ {off, on} — treated as a **condition, not a crossed axis**: *off*
   gives the true-capacity ceiling (prefix caching inflates measured concurrency whenever bench
   prompts share a prefix, since cached blocks consume zero new KV), *on* is the prod-realism
@@ -66,8 +68,9 @@ the saturation batch first, then vary interacting knobs only near it — the gri
 
 **Held fixed:** `max-model-len=4096` (a product constraint, not a perf knob — halving it would
 double the ceiling by serving a shorter context, so its doubling relationship is noted here
-rather than swept), `block-size=16` (sweeping it coarsens prefix-cache granularity and muddies
-the concurrency signal — a separate micro-experiment if ever wanted), `gpu-memory-utilization=0.90`,
+rather than swept), vLLM's default `block-size` of 16 (sweeping it coarsens prefix-cache
+granularity and muddies the concurrency signal — a separate micro-experiment if ever wanted),
+`gpu-memory-utilization=0.90`,
 chunked prefill at its default (only bites at long prompts; the workload's `total_len≈1000` is
 short), `tensor-parallel-size=1`.
 
