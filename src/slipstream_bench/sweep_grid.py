@@ -10,8 +10,10 @@ burstiness. Points reuse EnginePoint from sweep_aggregation so the grid emits, t
 recipe writes, and the aggregator parses one slug format from one place.
 """
 
+from enum import Enum
+from itertools import product
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeVar
 
 import yaml
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
@@ -19,19 +21,25 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationErr
 from slipstream_bench.sweep_aggregation import EnginePoint
 
 # The KV-cache dtype and prefix-caching arms are keyed by their chart labels, the
-# same tokens EnginePoint.from_dirname parses off a slug — constraining them here
-# keeps the grid from emitting a slug the aggregator would later reject.
+# same tokens EnginePoint.from_dirname parses off a slug. The grid carries only the
+# label; the token vLLM's --kv-cache-dtype accepts is mapped here, so a rename of a
+# vLLM token is a one-line edit in code, not a change every grid file must copy.
 KvLabel = Literal["fp8", "fp16"]
 PrefixCachingLabel = Literal["on", "off"]
 
+_KV_ENGINE_TOKEN: dict[KvLabel, str] = {"fp8": "fp8", "fp16": "float16"}
 
-def _unique(values: list[int]) -> list[int]:
+T = TypeVar("T")
+
+
+def _unique(values: list[T]) -> list[T]:
     """Reject a repeated swept value: two equal points collide on one results subdir."""
     if len(set(values)) != len(values):
         raise ValueError("swept values must be unique, none repeated")
     return values
 
 
+KvLabels = Annotated[list[KvLabel], Field(min_length=1), AfterValidator(_unique)]
 PositiveInts = Annotated[
     list[Annotated[int, Field(gt=0)]], Field(min_length=1), AfterValidator(_unique)
 ]
@@ -45,6 +53,21 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 class SweepGridError(Exception):
     """A sweep grid that cannot be read or does not validate."""
+
+
+class SweepGridPart(str, Enum):
+    """A slice of the grid the knob-sweep loop asks the `sweep-grid` CLI for.
+
+    - ``points``: the Tier-1 engine points as TSV, one manifest redeploy per row,
+      each keyed by its results-subdir slug (mns{N}_kv{fp8|fp16}_pc{on|off}).
+    - ``ladder``: the Tier-2 --max-concurrency rungs, one per line — the ceiling
+      search the recipe raises until goodput drops below the SLO.
+    - ``burstiness``: the single pinned scalar the whole sweep runs at.
+    """
+
+    points = "points"
+    ladder = "ladder"
+    burstiness = "burstiness"
 
 
 class PrefixCachingArm(BaseModel):
@@ -67,7 +90,7 @@ class Tier1(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_num_seqs: PositiveInts
-    kv_cache_dtype: Annotated[dict[KvLabel, NonEmptyStr], Field(min_length=1)]
+    kv_cache_dtype: KvLabels
     prefix_caching: Annotated[
         dict[PrefixCachingLabel, PrefixCachingArm], Field(min_length=1)
     ]
@@ -112,9 +135,15 @@ def load_grid(path: Path) -> SweepGrid:
         data = yaml.safe_load(text)
     except yaml.YAMLError as error:
         raise SweepGridError(f"{path} is not valid YAML: {error}") from error
+    # safe_load returns None for an empty or comment-only file without raising;
+    # name that here so the sweep aborts on a clear message, not an opaque
+    # "input should be a mapping" from validating None.
     if data is None:
         raise SweepGridError(f"sweep grid is empty: {path}")
     try:
+        # model_validate, not SweepGrid(**data): a list or scalar top level would
+        # make **data raise TypeError past this handler; model_validate turns any
+        # non-mapping into the ValidationError we wrap.
         return SweepGrid.model_validate(data)
     except ValidationError as error:
         raise SweepGridError(f"invalid sweep grid ({path}):\n{error}") from error
@@ -128,24 +157,29 @@ def render_points(grid: SweepGrid) -> str:
     the max-num-seqs / engine token / flag as the deploy's env, and the CSV as the
     per-point prefix-share sweep (Tier-2, no redeploy). The chart label (fp8/fp16)
     becomes the engine token vLLM accepts (fp16 -> float16) here, so the recipe
-    passes it straight through.
+    passes it straight through. Emitting text, not objects, is the CLI seam: the
+    consumer is a bash `read` loop that parses these tab-separated fields.
     """
-    rows: list[str] = []
-    for max_num_seqs in grid.tier1.max_num_seqs:
-        for kv_label, kv_engine in grid.tier1.kv_cache_dtype.items():
-            for pc_label, arm in grid.tier1.prefix_caching.items():
-                point = EnginePoint(
+    return "\n".join(
+        "\t".join(
+            [
+                EnginePoint(
                     max_num_seqs=max_num_seqs,
                     kv_cache_dtype=kv_label,
                     prefix_caching=pc_label == "on",
-                )
-                shares = ",".join(str(share) for share in arm.prefix_share)
-                rows.append(
-                    "\t".join(
-                        [point.slug(), str(max_num_seqs), kv_engine, arm.flag, shares]
-                    )
-                )
-    return "\n".join(rows)
+                ).slug(),
+                str(max_num_seqs),
+                _KV_ENGINE_TOKEN[kv_label],
+                arm.flag,
+                ",".join(str(share) for share in arm.prefix_share),
+            ]
+        )
+        for max_num_seqs, kv_label, (pc_label, arm) in product(
+            grid.tier1.max_num_seqs,
+            grid.tier1.kv_cache_dtype,
+            grid.tier1.prefix_caching.items(),
+        )
+    )
 
 
 def render_ladder(grid: SweepGrid) -> str:
@@ -156,3 +190,15 @@ def render_ladder(grid: SweepGrid) -> str:
 def render_burstiness(grid: SweepGrid) -> str:
     """Emit the pinned burstiness scalar the whole sweep runs at."""
     return str(grid.tier2.burstiness)
+
+
+_RENDERERS = {
+    SweepGridPart.points: render_points,
+    SweepGridPart.ladder: render_ladder,
+    SweepGridPart.burstiness: render_burstiness,
+}
+
+
+def render_part(part: SweepGridPart, grid: SweepGrid) -> str:
+    """Emit the grid slice ``part`` names, as the knob-sweep loop reads it."""
+    return _RENDERERS[part](grid)
