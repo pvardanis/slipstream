@@ -79,15 +79,27 @@ granularity and muddies the concurrency signal — a separate micro-experiment i
 chunked prefill at its default (only bites at long prompts; the workload's `total_len≈1000` is
 short), `tensor-parallel-size=1`.
 
-### Rig mechanics — `just knob-sweep` orchestrates, the CLI post-processes
+### Rig mechanics — the grid is a checked-in file, the recipe orchestrates, the CLI brackets it
 
-There is no engine-knob parametrisation today. The Tier-1 loop lives in a new `just knob-sweep`
-recipe (orchestration): render the manifest with the point's knob values (envsubst, matching the
-existing `gpu-node-pool.yaml` convention), `gpu-deploy`, wait for rollout, scrape vLLM's startup
+The swept grid is not hard-coded in the recipe: every value lives in `bench/sweep-grid.yaml` —
+the `max-num-seqs`/`kv-cache-dtype`/`prefix-caching` arms with their per-arm prefix shares, the
+Tier-2 `--max-concurrency` ladder, and the pinned burstiness. The `slipstream-bench sweep-grid`
+subcommand loads that file, validates the whole grid against a pydantic model (`SweepGrid`), and
+emits the values the recipe reads: the Tier-1 points as TSV, the concurrency ladder, and the
+burstiness. Validating up front means a typo or out-of-range value fails before the first deploy,
+not mid-sweep on a live GPU. The CLI therefore **brackets** the run rather than only trailing it —
+it emits the validated grid at the front and aggregates the collected JSON at the back; the recipe
+in between holds no knob values or knob logic.
+
+The Tier-1 loop lives in the `just knob-sweep` recipe (orchestration): read the grid values from
+the CLI (each into a variable, so an invalid grid aborts the sweep before any deploy), then per
+point render the manifest with its knob values (envsubst, matching the existing `gpu-node-pool.yaml`
+convention), `gpu-deploy`, wait for rollout, scrape vLLM's startup
 `Maximum concurrency for N tokens per request` line as a *predicted* ceiling, then invoke the
-existing `bench` path for the Tier-2 client ladder, and collect. The Python CLI stays pure
-post-processing over collected JSON. Results land under `bench/results/<run_id>/`, one subdir per
-engine config (`mns{N}_kv{dtype}_pc{on|off}/`).
+existing `bench` path for the Tier-2 client ladder, and collect. Results land under
+`bench/results/<run_id>/`, one subdir per engine config (`mns{N}_kv{dtype}_pc{on|off}/`). That
+subdir name is the point's *slug*, built and parsed by one shared `EnginePoint` value object, so
+the grid emitter, the recipe path, and the aggregator's key never drift.
 
 Manifest templating is envsubst now; a Helm chart deriving from the model definition (anticipated
 by ADR-0008) is a **separate** concern on its own ticket under epic #19 — when it lands, the sweep
@@ -132,9 +144,10 @@ single-config cost×prefix economics join, a different key and output.
 ## Consequences
 
 - #33 ships as a small PR stack, one kind of change each: this ADR + glossary (docs), the
-  envsubst templating + `just knob-sweep` recipe (orchestration), `sweep_aggregation.py` +
-  failure classification (code), the seaborn + pandas plotting dependency (deps), the `chart`
-  subcommand (code).
+  `pydantic` + `pyyaml` grid dependency (deps), the `SweepGrid` model + `sweep-grid` CLI +
+  `bench/sweep-grid.yaml` (code), the `just knob-sweep` recipe reading that CLI (orchestration),
+  `sweep_aggregation.py` + failure classification (code), the seaborn + pandas plotting dependency
+  (deps), the `chart` subcommand (code).
 - The sweep is ~20 Tier-1 redeploys (~90s+ each) × a cheap Tier-2 client ladder. It runs in the
   label-gated cloud tier (ADR-0002) — it needs a live GPU — hand-triggered, never on push.
 - Once the sweep produces real numbers, `k8s/vllm-gpu.yaml`'s placeholder engine args are
