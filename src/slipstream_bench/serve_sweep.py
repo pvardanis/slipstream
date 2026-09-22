@@ -81,11 +81,7 @@ class SweepConfig:
         for share in self.prefix_shares:
             if not 0 <= share <= 100:
                 raise SweepError(f"prefix-share {share} is outside 0..100")
-        # A closed-loop cap of zero (or below) admits no in-flight request, so every
-        # cell at that rung measures nothing. Reject it before the grid runs.
-        for cap in self.max_concurrency_values:
-            if cap < 1:
-                raise SweepError(f"--max-concurrency {cap} is below 1")
+        self._reject_nonpositive_caps()
         # vLLM's prefix_repetition workload gives each prefix at least one prompt,
         # so it rejects a run with more prefixes than prompts. Fail fast here rather
         # than let every cell die the same way mid-grid.
@@ -95,6 +91,18 @@ class SweepConfig:
                 f"{self.num_prefixes}: raise prompts or lower prefixes"
             )
         self._require_tokenizer_when_commercial()
+
+    def _reject_nonpositive_caps(self) -> None:
+        """Reject a closed-loop max-concurrency cap that admits no in-flight request.
+
+        A cap of zero (or below) lets no request run, so every cell at that rung
+        would measure nothing. Fail fast before the grid runs.
+
+        :raise SweepError: on a max-concurrency cap below 1.
+        """
+        for cap in self.max_concurrency_values:
+            if cap < 1:
+                raise SweepError(f"--max-concurrency {cap} is below 1")
 
     def _require_tokenizer_when_commercial(self) -> None:
         """Reject a commercial sweep that has no local tokenizer for synthesis.
@@ -291,6 +299,16 @@ def _annotate_prefix_share(result_file: str, share: int, warn: Echo) -> bool:
     return True
 
 
+def _cell_label(share: int, burstiness: float, max_concurrency: int | None) -> str:
+    """Describe one cell for its progress and failure lines.
+
+    A closed-loop cell names its in-flight cap so its lines are told apart from the
+    open-loop pass; an open-loop cell (no cap) carries none.
+    """
+    cap = "" if max_concurrency is None else f" max-concurrency {max_concurrency}"
+    return f"prefix-share {share}% burstiness {burstiness}{cap}"
+
+
 def run_sweep(
     config: SweepConfig,
     *,
@@ -335,17 +353,12 @@ def run_sweep(
             echo(" ".join(command))
             continue
         result_file = _result_file(config, share, burstiness, max_concurrency)
-        # A closed-loop cell names its in-flight cap so its progress and failure
-        # lines are told apart from the open-loop pass.
-        cap = "" if max_concurrency is None else f" max-concurrency {max_concurrency}"
-        echo(f"==> prefix-share {share}% burstiness {burstiness}{cap} -> {result_file}")
+        label = _cell_label(share, burstiness, max_concurrency)
+        echo(f"==> {label} -> {result_file}")
         code = runner(command)
         if code != 0:
             failed += 1
-            warn(
-                f"!! cell prefix-share {share}% burstiness {burstiness}{cap} "
-                f"failed (exit {code})"
-            )
+            warn(f"!! cell {label} failed (exit {code})")
             continue
         completed += 1
         # A cell that ran but cannot be stamped yields a result the report will
