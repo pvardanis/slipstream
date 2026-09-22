@@ -13,6 +13,7 @@ import typer
 from slipstream_bench.cli_helpers import (
     DEFAULT_BURSTINESS,
     DEFAULT_GOODPUT,
+    DEFAULT_MAX_CONCURRENCY,
     DEFAULT_PREFIX_SHARES,
     resolve_api_key_env,
     run_cell,
@@ -91,6 +92,14 @@ def serve_sweep(
             min=0, help="Floor the prefix to a multiple of N tokens (0 = off)."
         ),
     ] = 0,
+    max_concurrency: Annotated[
+        list[int],
+        typer.Option(
+            min=1,
+            help="In-flight request cap to ladder, closed-loop (repeatable). "
+            "Omit to sweep open-loop, bound only by --request-rate.",
+        ),
+    ] = DEFAULT_MAX_CONCURRENCY,
     request_rate: Annotated[
         str,
         typer.Option(callback=validate_request_rate, help="Requests/sec, or 'inf'."),
@@ -142,6 +151,7 @@ def serve_sweep(
             goodput=goodput,
             tokenizer=tokenizer,
             commercial=api_key_env is not None,
+            max_concurrency_values=tuple(max_concurrency),
         )
         code = run_sweep(
             config,

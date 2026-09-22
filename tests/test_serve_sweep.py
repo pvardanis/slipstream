@@ -152,9 +152,34 @@ def test_cell_command_omits_the_tokenizer_when_unset() -> None:
 
 
 def test_grid_is_the_cartesian_product_in_order() -> None:
-    """The grid yields every (share, burstiness) pair, shares outermost."""
+    """The grid yields every (share, burstiness, max-concurrency) cell, shares outermost.
+
+    With no closed-loop ladder configured, the max-concurrency axis contributes a
+    single open-loop ``None``, so the grid is one cell per (share, burstiness) pair.
+    """
     cfg = _config(prefix_shares=[10, 90], burstiness_values=[0.2, 1.0])
-    assert list(grid(cfg)) == [(10, 0.2), (10, 1.0), (90, 0.2), (90, 1.0)]
+    assert list(grid(cfg)) == [
+        (10, 0.2, None),
+        (10, 1.0, None),
+        (90, 0.2, None),
+        (90, 1.0, None),
+    ]
+
+
+def test_grid_ladders_max_concurrency_innermost() -> None:
+    """A closed-loop ladder is the innermost axis, contiguous per (share, burstiness)."""
+    cfg = _config(
+        prefix_shares=[90],
+        burstiness_values=[1.0],
+        max_concurrency_values=[8, 16, 32],
+    )
+    assert list(grid(cfg)) == [(90, 1.0, 8), (90, 1.0, 16), (90, 1.0, 32)]
+
+
+def test_config_rejects_a_nonpositive_max_concurrency() -> None:
+    """A max-concurrency of zero caps in-flight requests at none; reject it upfront."""
+    with pytest.raises(SweepError, match="max-concurrency"):
+        _config(max_concurrency_values=[0])
 
 
 # --- cell_command: the flag assembly the retired bash test pinned ------------
@@ -204,6 +229,23 @@ def test_cell_command_result_file_is_distinct_per_cell() -> None:
 
     assert "/tmp/slipstream-bench/pshare25_burst0.2.json" in low
     assert "/tmp/slipstream-bench/pshare90_burst1.0.json" in high
+
+
+def test_cell_command_carries_max_concurrency_when_set() -> None:
+    """A closed-loop cell caps in-flight requests and names a result file by the cap."""
+    cfg = _config(out_dir="/tmp/slipstream-bench")
+    joined = " ".join(cell_command(cfg, share=90, burstiness=1.0, max_concurrency=32))
+
+    assert "--max-concurrency 32" in joined
+    assert "/tmp/slipstream-bench/pshare90_burst1.0_mc32.json" in joined
+
+
+def test_cell_command_omits_max_concurrency_when_open_loop() -> None:
+    """An open-loop cell (no cap) leaves --max-concurrency off and its file un-suffixed."""
+    joined = " ".join(cell_command(_config(), share=90, burstiness=1.0))
+
+    assert "--max-concurrency" not in joined
+    assert "pshare90_burst1.0.json" in joined
 
 
 # --- run_sweep: dry run, survival, and per-cell tally ------------------------
