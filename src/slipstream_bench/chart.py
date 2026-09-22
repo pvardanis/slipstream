@@ -28,7 +28,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from slipstream_bench.sweep_aggregation import _GOODPUT_FLOOR
+from slipstream_bench.sweep_aggregation import (
+    _GOODPUT_FLOOR,
+    CeilingRow,
+    RungRow,
+)
 
 _TABLE_COLUMNS = (
     "max_num_seqs",
@@ -80,7 +84,7 @@ _RUNG_TABLE_COLUMNS = (
 _NO_SHARE_LABEL = "n/a"
 
 
-def rows_to_markdown(rows: list[dict]) -> str:
+def rows_to_markdown(rows: list[CeilingRow]) -> str:
     """Render the aggregated ceiling rows as a GitHub-flavored Markdown table.
 
     The human-readable durable artifact: it renders inline in a PR or a run's notes,
@@ -96,7 +100,7 @@ def rows_to_markdown(rows: list[dict]) -> str:
     return "\n".join([header, separator, *body])
 
 
-def rows_to_json(rows: list[dict]) -> str:
+def rows_to_json(rows: list[CeilingRow]) -> str:
     """Render the aggregated ceiling rows as indented JSON, the durable data artifact.
 
     Keeps the rows' nested structure — the failure cohorts and not-captured nulls —
@@ -110,7 +114,7 @@ def rows_to_json(rows: list[dict]) -> str:
     return json.dumps(rows, indent=2)
 
 
-def rungs_to_markdown(rungs: list[dict]) -> str:
+def rungs_to_markdown(rungs: list[RungRow]) -> str:
     """Render the per-rung goodput rows as a GitHub-flavored Markdown table.
 
     The human-readable view of the diagnostic cliff: one line per ladder rung, the
@@ -127,7 +131,7 @@ def rungs_to_markdown(rungs: list[dict]) -> str:
     return "\n".join([header, separator, *body])
 
 
-def rungs_to_json(rungs: list[dict]) -> str:
+def rungs_to_json(rungs: list[RungRow]) -> str:
     """Render the per-rung goodput rows as indented JSON, the durable cliff data.
 
     Keeps the full-precision goodput fraction the Markdown rounds, so the diagnostic
@@ -141,7 +145,7 @@ def rungs_to_json(rungs: list[dict]) -> str:
 
 
 def write_artifacts(
-    rows: list[dict], rungs: list[dict], charts_dir: Path
+    rows: list[CeilingRow], rungs: list[RungRow], charts_dir: Path
 ) -> dict[str, Path]:
     """Write both tables and both charts into a run's charts directory.
 
@@ -204,7 +208,7 @@ def _cell(value: object) -> str:
     return "" if value is None else str(value)
 
 
-def _row_cells(row: dict) -> list[str]:
+def _row_cells(row: CeilingRow) -> list[str]:
     """Flatten one ceiling row into its cells, :data:`_TABLE_COLUMNS` order."""
     failures = row["failures"]
     return [
@@ -220,12 +224,12 @@ def _row_cells(row: dict) -> list[str]:
     ]
 
 
-def _share_label(row: dict) -> str:
+def _share_label(row: CeilingRow) -> str:
     """Label a row's share: the swept share, or n/a when caching is off."""
     return _NO_SHARE_LABEL if not row["prefix_caching"] else str(row["prefix_share"])
 
 
-def _condition_label(row: dict) -> str:
+def _condition_label(row: CeilingRow) -> str:
     """Name a row's facet: the caching condition and, for caching-on, its share.
 
     Caching and share collapse into one facet axis rather than a caching x share
@@ -235,7 +239,7 @@ def _condition_label(row: dict) -> str:
     return f"caching {'on' if row['prefix_caching'] else 'off'} · share {_share_label(row)}"
 
 
-def _ceiling_frame(rows: list[dict]) -> pd.DataFrame:
+def _ceiling_frame(rows: list[CeilingRow]) -> pd.DataFrame:
     """Shape the ceiling rows into the frame the primary chart facets over.
 
     Derives the facet label the plot reads — the combined caching/share condition —
@@ -274,7 +278,7 @@ def _condition_order(frame: pd.DataFrame) -> list[str]:
     return [row.condition for row in ordered]
 
 
-def _plot_ceilings(rows: list[dict]) -> sns.FacetGrid:
+def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
     """Draw the primary ceiling chart onto a faceted grid.
 
     :param rows: the aggregated ceiling rows.
@@ -299,7 +303,7 @@ def _plot_ceilings(rows: list[dict]) -> sns.FacetGrid:
     return grid
 
 
-def _rung_cells(rung: dict) -> list[str]:
+def _rung_cells(rung: RungRow) -> list[str]:
     """Flatten one rung into its cells, :data:`_RUNG_TABLE_COLUMNS` order.
 
     The goodput fraction rounds to three decimals for the human view — the messy
@@ -315,13 +319,13 @@ def _rung_cells(rung: dict) -> list[str]:
     ]
 
 
-def _point_label(rung: dict) -> str:
+def _point_label(rung: RungRow) -> str:
     """Name a rung's facet: the engine point one Tier-1 redeploy measured."""
     caching = "on" if rung["prefix_caching"] else "off"
     return f"mns{rung['max_num_seqs']} · {rung['kv_cache_dtype']} · caching {caching}"
 
 
-def _cliff_frame(rungs: list[dict]) -> pd.DataFrame:
+def _cliff_frame(rungs: list[RungRow]) -> pd.DataFrame:
     """Shape the rung rows into the frame the diagnostic chart facets over.
 
     Derives the facet label (the engine point) and the hue label (the swept share, or
@@ -345,7 +349,7 @@ def _point_order(frame: pd.DataFrame) -> list[str]:
     return list(dict.fromkeys(frame["point"]))
 
 
-def _plot_cliffs(rungs: list[dict]) -> sns.FacetGrid:
+def _plot_cliffs(rungs: list[RungRow]) -> sns.FacetGrid:
     """Draw the diagnostic goodput-cliff chart onto a faceted grid.
 
     One facet per engine point, a line per swept share, the 95% floor drawn as the

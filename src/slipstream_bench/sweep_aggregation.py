@@ -18,6 +18,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 from slipstream_bench.results import read_result, to_numeric_metric
 
@@ -39,6 +40,50 @@ _GOODPUT_FLOOR = 0.95
 
 class SweepAggregationError(Exception):
     """A sweep artifact that cannot be aggregated into a ceiling row."""
+
+
+class FailureCohorts(TypedDict):
+    """The failed-request cohorts summed across a ceiling row's rungs.
+
+    ``oom`` stays ``None`` when the sweep collected no OOMKilled event and engine-log
+    scrape — a not-captured cohort, distinct from a measured zero.
+    """
+
+    timeout: int
+    other: int
+    oom: int | None
+
+
+class CeilingRow(TypedDict):
+    """One folded row: a point-and-share ceiling with its summed failure cohorts.
+
+    ``ceiling`` is ``None`` for a point-and-share that held no passing rung, and
+    ``num_preemptions`` ``None`` when the sweep took no /metrics snapshot — both
+    not-captured, never an invented zero (ADR-0009).
+    """
+
+    max_num_seqs: int
+    kv_cache_dtype: str
+    prefix_caching: bool
+    prefix_share: int
+    ceiling: int | None
+    failures: FailureCohorts
+    num_preemptions: int | None
+
+
+class RungRow(TypedDict):
+    """One unfolded row: a single ladder rung's goodput at its offered concurrency.
+
+    The cliff before :class:`CeilingRow` folds each ladder to one number — the point
+    knobs, the rung's prefix-share and ``max_concurrency``, and its goodput fraction.
+    """
+
+    max_num_seqs: int
+    kv_cache_dtype: str
+    prefix_caching: bool
+    prefix_share: int
+    max_concurrency: int
+    goodput_fraction: float
 
 
 @dataclass(frozen=True)
@@ -295,7 +340,7 @@ def _read_point_cells(subdir: Path) -> list[LoadCell]:
     return cells
 
 
-def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
+def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[CeilingRow]:
     """Fold one point's ladder cells into a ceiling row per prefix-share.
 
     :param point: the engine-knob point the subdir measured.
@@ -310,7 +355,7 @@ def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
     return [_get_point_row(point, share, by_share[share]) for share in sorted(by_share)]
 
 
-def _get_rungs_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
+def _get_rungs_for_point(point: EnginePoint, subdir: Path) -> list[RungRow]:
     """Unfold one point's ladder cells into a per-rung row, the cliff before the fold.
 
     :param point: the engine-knob point the subdir measured.
@@ -326,7 +371,7 @@ def _get_rungs_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
     return [_get_rung_row(point, cell) for cell in cells]
 
 
-def _get_rung_row(point: EnginePoint, cell: LoadCell) -> dict:
+def _get_rung_row(point: EnginePoint, cell: LoadCell) -> RungRow:
     """Build one per-rung row: the point knobs, the rung's share, cap, and goodput."""
     return {
         "max_num_seqs": point.max_num_seqs,
@@ -338,7 +383,7 @@ def _get_rung_row(point: EnginePoint, cell: LoadCell) -> dict:
     }
 
 
-def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> dict:
+def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> CeilingRow:
     """Build one ceiling row from a point-and-share group's ladder cells.
 
     The measured ceiling and the summed failure cohorts across the group's rungs.
@@ -361,7 +406,7 @@ def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> dic
     }
 
 
-def aggregate_ceilings(run_dir: Path) -> list[dict]:
+def aggregate_ceilings(run_dir: Path) -> list[CeilingRow]:
     """Fold a knob-sweep run into ceiling rows, one per point and prefix-share.
 
     :param run_dir: the ``bench/results/<run_id>`` directory the sweep wrote, one
@@ -380,7 +425,7 @@ def aggregate_ceilings(run_dir: Path) -> list[dict]:
     ]
 
 
-def aggregate_rungs(run_dir: Path) -> list[dict]:
+def aggregate_rungs(run_dir: Path) -> list[RungRow]:
     """Unfold a knob-sweep run into per-rung rows, the goodput cliff behind the ceiling.
 
     Where :func:`aggregate_ceilings` folds each point-and-share ladder to one ceiling,
