@@ -28,6 +28,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from slipstream_bench.sweep_aggregation import _GOODPUT_FLOOR
+
 _TABLE_COLUMNS = (
     "max_num_seqs",
     "kv_cache_dtype",
@@ -52,11 +54,11 @@ _SLO_TITLE = (
     "goodput >= 95% (ttft <= 1000ms, tpot <= 50ms)"
 )
 
-# The diagnostic cliff reads the same SLO. The 0.95 floor mirrors
-# sweep_aggregation._GOODPUT_FLOOR (drawn as the reference line the cliff crosses) and
-# the ttft/tpot thresholds mirror cli_helpers.DEFAULT_GOODPUT, both by hand — the rung
-# rows carry the goodput fraction, not the SLO it was read at.
-_GOODPUT_FLOOR = 0.95
+# The diagnostic cliff reads the same SLO. The reference line is drawn at
+# sweep_aggregation._GOODPUT_FLOOR itself (imported, not copied), so the line the cliff
+# crosses always marks the aggregator's true floor. The title's "0.95"/"floor" text and
+# the ttft/tpot thresholds stay hand-mirrored prose — the rung rows carry the goodput
+# fraction, not the SLO it was read at.
 _CLIFF_AXIS_LABEL = "goodput fraction (met SLO / completed)"
 _CLIFF_TITLE = (
     "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)"
