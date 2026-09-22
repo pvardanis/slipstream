@@ -14,10 +14,10 @@ from pathlib import Path
 import pytest
 
 from slipstream_bench.results import ResultError
-from slipstream_bench.sweep_ceiling import (
+from slipstream_bench.sweep_aggregation import (
     EnginePoint,
     LoadCell,
-    SweepCeilingError,
+    SweepAggregationError,
     aggregate,
     classify_failures,
     get_ceiling,
@@ -101,7 +101,7 @@ def test_reads_fp16_counterfactual_dtype_and_caching_off() -> None:
 )
 def test_rejects_a_malformed_subdir_name(name: str) -> None:
     """A subdir that names no valid engine point fails fast, not silently."""
-    with pytest.raises(SweepCeilingError, match="point"):
+    with pytest.raises(SweepAggregationError, match="point"):
         EnginePoint.from_dirname(name)
 
 
@@ -129,7 +129,7 @@ def test_rejects_a_missing_or_non_numeric_metric(metric: str) -> None:
     """A metric absent or null cannot be priced into a fraction — fail fast."""
     record = {"request_goodput": 7.5, "request_throughput": 8.0}
     record[metric] = None
-    with pytest.raises(SweepCeilingError, match=metric):
+    with pytest.raises(SweepAggregationError, match=metric):
         goodput_fraction(record, Path("cell.json"))
 
 
@@ -179,7 +179,7 @@ def test_a_shortfall_count_that_is_missing_or_non_int_is_rejected(key: str) -> N
     not an uncaught TypeError past the CLI's exit-2 path."""
     record = {"num_prompts": 10, "completed": 8}
     record[key] = "10"
-    with pytest.raises(SweepCeilingError, match=key):
+    with pytest.raises(SweepAggregationError, match=key):
         classify_failures(record, Path("cell.json"))
 
 
@@ -187,20 +187,20 @@ def test_completed_above_attempted_is_rejected_as_inconsistent() -> None:
     """More completed than attempted is corrupt counting — fail fast, not a
     clamped-to-zero shortfall that hides the inconsistency."""
     record = {"num_prompts": 8, "completed": 10}
-    with pytest.raises(SweepCeilingError, match="completed"):
+    with pytest.raises(SweepAggregationError, match="completed"):
         classify_failures(record, Path("cell.json"))
 
 
 def test_a_non_list_errors_field_is_rejected() -> None:
     """A malformed errors field cannot be cohorted — fail fast, not a silent 0."""
-    with pytest.raises(SweepCeilingError, match="errors"):
+    with pytest.raises(SweepAggregationError, match="errors"):
         classify_failures({"errors": "boom"}, Path("cell.json"))
 
 
 def test_a_non_string_errors_entry_is_rejected() -> None:
     """A non-string entry has no error text to classify — fail fast with context,
     not an uncaught AttributeError past the CLI's exit-2 path."""
-    with pytest.raises(SweepCeilingError, match="errors"):
+    with pytest.raises(SweepAggregationError, match="errors"):
         classify_failures({"errors": ["", 123]}, Path("cell.json"))
 
 
@@ -256,7 +256,7 @@ def test_reads_the_rung_share_goodput_and_cohorts(tmp_path: Path) -> None:
 def test_rejects_a_cell_missing_its_join_key(tmp_path: Path, key: str) -> None:
     """An open-loop or un-stamped cell has no ceiling axis — fail fast."""
     path = _write_cell(tmp_path, **{key: None})
-    with pytest.raises(SweepCeilingError, match=key):
+    with pytest.raises(SweepAggregationError, match=key):
         read_cell(path)
 
 
@@ -265,7 +265,7 @@ def test_rejects_a_boolean_join_key(tmp_path: Path, key: str) -> None:
     """bool is an int subclass, so a JSON true must not slip through as a 1 cap
     or share — the guard rejects it."""
     path = _write_cell(tmp_path, **{key: True})
-    with pytest.raises(SweepCeilingError, match=key):
+    with pytest.raises(SweepAggregationError, match=key):
         read_cell(path)
 
 
@@ -345,7 +345,7 @@ def test_ignores_a_non_point_subdir_and_the_ledger(tmp_path: Path) -> None:
 
 def test_a_run_with_no_point_subdirs_is_rejected(tmp_path: Path) -> None:
     """An empty run measured nothing — fail fast rather than emit no rows."""
-    with pytest.raises(SweepCeilingError, match="no knob-sweep points"):
+    with pytest.raises(SweepAggregationError, match="no knob-sweep points"):
         aggregate(tmp_path)
 
 
@@ -353,5 +353,5 @@ def test_a_point_subdir_with_no_rungs_is_rejected(tmp_path: Path) -> None:
     """A point whose sweep collected no rungs measured nothing — fail fast rather
     than silently drop the point from the table."""
     (tmp_path / "mns64_kvfp8_pcon").mkdir()
-    with pytest.raises(SweepCeilingError, match="no ladder"):
+    with pytest.raises(SweepAggregationError, match="no ladder"):
         aggregate(tmp_path)

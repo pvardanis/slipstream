@@ -35,7 +35,7 @@ from slipstream_bench.report import (
 )
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
-from slipstream_bench.sweep_ceiling import SweepCeilingError, aggregate
+from slipstream_bench.sweep_aggregation import SweepAggregationError, aggregate
 from slipstream_bench.zero_leak import LeakError, find_leaks, read_aws_json
 
 app = typer.Typer(
@@ -384,7 +384,7 @@ def aggregate_sweep(
     """
     try:
         rows = aggregate(run_dir)
-    except (SweepCeilingError, ResultError) as error:
+    except (SweepAggregationError, ResultError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     typer.echo(json.dumps(rows, indent=2))

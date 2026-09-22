@@ -37,7 +37,7 @@ _TIMEOUT_MARKER = "timeout"
 _GOODPUT_FLOOR = 0.95
 
 
-class SweepCeilingError(Exception):
+class SweepAggregationError(Exception):
     """A sweep artifact that cannot be aggregated into a ceiling row."""
 
 
@@ -63,12 +63,12 @@ class EnginePoint:
         :param name: the subdir the recipe nested a point's JSON under, e.g.
             ``mns64_kvfp8_pcon``.
         :return: the engine-knob point it names.
-        :raise SweepCeilingError: when the name is not a valid point — a stray
+        :raise SweepAggregationError: when the name is not a valid point — a stray
             directory would otherwise aggregate as a nonsense key.
         """
         match = _POINT_PATTERN.match(name)
         if match is None:
-            raise SweepCeilingError(
+            raise SweepAggregationError(
                 f"'{name}' is not a knob-sweep point subdir "
                 f"(want mns<N>_kv<fp8|fp16>_pc<on|off>)"
             )
@@ -91,14 +91,14 @@ def goodput_fraction(record: dict, source: Path) -> float:
     :param record: the cell's parsed ``vllm bench serve --save-result`` record.
     :param source: the cell's result file, for the error message.
     :return: the goodput fraction, 0.0 when the cell completed nothing.
-    :raise SweepCeilingError: when either rate is absent, null, non-numeric,
+    :raise SweepAggregationError: when either rate is absent, null, non-numeric,
         non-finite, or negative.
     """
     goodput = to_numeric_metric(
-        record, source, "request_goodput", error_cls=SweepCeilingError
+        record, source, "request_goodput", error_cls=SweepAggregationError
     )
     throughput = to_numeric_metric(
-        record, source, "request_throughput", error_cls=SweepCeilingError
+        record, source, "request_throughput", error_cls=SweepAggregationError
     )
     if throughput == 0:
         return 0.0
@@ -119,18 +119,18 @@ def classify_failures(record: dict, source: Path) -> dict:
     :param record: the cell's parsed result record.
     :param source: the cell's result file, for the error message.
     :return: the cohort counts ``{"timeout": int, "other": int, "oom": None}``.
-    :raise SweepCeilingError: when ``errors`` is present but not a list, or holds a
+    :raise SweepAggregationError: when ``errors`` is present but not a list, or holds a
         non-string entry — a malformed field cannot be cohorted.
     """
     errors = record.get("errors")
     if errors is None:
         return _get_cohorts_from_shortfall(record, source)
     if not isinstance(errors, list):
-        raise SweepCeilingError(
+        raise SweepAggregationError(
             f"result {source} has a non-list errors field: cannot cohort failures"
         )
     if any(entry and not isinstance(entry, str) for entry in errors):
-        raise SweepCeilingError(
+        raise SweepAggregationError(
             f"result {source} has a non-string errors entry: cannot cohort failures"
         )
     timeout = sum(1 for error in errors if error and _TIMEOUT_MARKER in error.lower())
@@ -148,14 +148,14 @@ def _get_cohorts_from_shortfall(record: dict, source: Path) -> dict:
     :param record: the cell's parsed result record.
     :param source: the cell's result file, for the error message.
     :return: the cohort counts, the whole shortfall in *other*.
-    :raise SweepCeilingError: when either count is absent, null, or not a whole
+    :raise SweepAggregationError: when either count is absent, null, or not a whole
         number, or completed exceeds attempted — a broken result must not read as a
         clean zero-failure cell.
     """
     attempted = _require_int(record, source, "num_prompts")
     completed = _require_int(record, source, "completed")
     if completed > attempted:
-        raise SweepCeilingError(
+        raise SweepAggregationError(
             f"result {source} completed {completed} of {attempted} attempted: "
             f"inconsistent counts"
         )
@@ -184,7 +184,7 @@ class LoadCell:
         :param source: the cell's result file, for the error message.
         :return: the cell's offered concurrency, prefix-share, goodput fraction, and
             failure cohorts.
-        :raise SweepCeilingError: when the cell lacks its closed-loop cap or its
+        :raise SweepAggregationError: when the cell lacks its closed-loop cap or its
             stamped prefix-share, or carries a bad goodput or errors field.
         """
         return cls(
@@ -202,12 +202,12 @@ def _require_int(record: dict, source: Path, key: str) -> int:
     :param source: the cell's result file, for the error message.
     :param key: the field to read as an int.
     :return: the field as an int.
-    :raise SweepCeilingError: when the field is absent, null, or not a whole number
+    :raise SweepAggregationError: when the field is absent, null, or not a whole number
         — bool is an int subclass but never a valid cap or share.
     """
     value = record.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
-        raise SweepCeilingError(f"result {source} missing or non-integer {key}")
+        raise SweepAggregationError(f"result {source} missing or non-integer {key}")
     return value
 
 
@@ -216,7 +216,7 @@ def read_cell(path: Path) -> LoadCell:
 
     :param path: the cell's ``vllm bench serve --save-result`` JSON.
     :return: the cell built and validated from the file's record.
-    :raise SweepCeilingError: when the cell lacks its closed-loop cap or its stamped
+    :raise SweepAggregationError: when the cell lacks its closed-loop cap or its stamped
         prefix-share, or carries a bad goodput or errors field.
     :raise ResultError: when the file cannot be read (see
         :func:`slipstream_bench.results.read_result`).
@@ -272,7 +272,7 @@ def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
     :param point: the engine-knob point the subdir measured.
     :param subdir: the point's subdir of Tier-2 client JSONs.
     :return: one row per prefix-share the point ran, in ascending share order.
-    :raise SweepCeilingError: when the subdir holds no ladder rungs — a point that
+    :raise SweepAggregationError: when the subdir holds no ladder rungs — a point that
         measured nothing must not silently drop from the table.
     """
     by_share: dict[int, list[LoadCell]] = defaultdict(list)
@@ -280,7 +280,7 @@ def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
         cell = read_cell(result)
         by_share[cell.prefix_share].append(cell)
     if not by_share:
-        raise SweepCeilingError(
+        raise SweepAggregationError(
             f"knob-sweep point {subdir} holds no ladder rungs (no *.json cells): "
             f"the point measured nothing"
         )
@@ -316,7 +316,7 @@ def aggregate(run_dir: Path) -> list[dict]:
     :param run_dir: the ``bench/results/<run_id>`` directory the sweep wrote, one
         subdir per engine-knob point.
     :return: the ceiling rows, sorted by point key then prefix-share.
-    :raise SweepCeilingError: when the directory holds no point subdirs, or a point
+    :raise SweepAggregationError: when the directory holds no point subdirs, or a point
         subdir holds no ladder rungs (an empty run or point measured nothing and must
         not report zero rows as a clean result), or a cell cannot be aggregated — a
         missing cap or share, a bad goodput, or a malformed errors field (see
@@ -325,7 +325,7 @@ def aggregate(run_dir: Path) -> list[dict]:
     """
     points = _get_point_dirs(run_dir)
     if not points:
-        raise SweepCeilingError(
+        raise SweepAggregationError(
             f"no knob-sweep points under {run_dir} "
             f"(want mns<N>_kv<fp8|fp16>_pc<on|off> subdirs)"
         )
