@@ -1,8 +1,8 @@
 """Tests for the chart CLI subcommand: fold a run dir into its charts artifacts.
 
-Pin the front-end contract: a run directory of point subdirs writes the ceiling
-table and its plot under <run_dir>/charts at exit 0, and an empty or unreadable run
-fails loud at exit 2 rather than writing an empty chart.
+Pin the front-end contract: a run directory of point subdirs writes the ceiling and
+cliff tables and both plots under <run_dir>/charts at exit 0, and an empty or unreadable
+run fails loud at exit 2 rather than writing an empty chart.
 """
 
 import json
@@ -28,7 +28,7 @@ def _write_rung(point_dir: Path, *, share: int, cap: int, fraction: float) -> No
 
 
 def test_charts_a_run_dir_into_table_and_plot_artifacts(tmp_path: Path) -> None:
-    """A run folds to a non-empty Markdown, JSON, and PNG under its charts subdir."""
+    """A run folds to non-empty ceiling and cliff tables and both plots under charts."""
     _write_rung(tmp_path / "mns64_kvfp8_pcon", share=50, cap=32, fraction=0.98)
 
     result = runner.invoke(app, ["chart", "--run-dir", str(tmp_path)])
@@ -39,6 +39,9 @@ def test_charts_a_run_dir_into_table_and_plot_artifacts(tmp_path: Path) -> None:
         "ceiling-table.md",
         "ceiling-table.json",
         "ceiling-by-max-num-seqs.png",
+        "goodput-cliff.md",
+        "goodput-cliff.json",
+        "goodput-by-max-concurrency.png",
     ):
         artifact = charts / name
         assert artifact.is_file() and artifact.stat().st_size > 0

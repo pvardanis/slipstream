@@ -1,13 +1,17 @@
-"""Render a knob-sweep run's aggregated ceiling table to Markdown/JSON and a static PNG.
+"""Render a knob-sweep run's aggregated tables to Markdown/JSON and two static PNGs.
 
-The ceiling table is the durable artifact and the PNG is disposable (ADR-0009), so the
-Markdown and JSON are written from the same rows
-:func:`slipstream_bench.sweep_aggregation.aggregate_ceilings` emits — Markdown the human-readable
-view, JSON the structured table later layers re-read. The primary chart plots the
-concurrency ceiling per engine point — x = max-num-seqs, series = kv-cache-dtype,
-faceted by the combined caching/share condition — rendered offline through matplotlib's
-Agg backend. Caching-off carries only its single share-0 baseline, so it holds one facet
-while caching-on spans the swept shares: a ragged grid, no duplicated null cells.
+The tables are the durable artifacts and the PNGs disposable (ADR-0009), so each plot's
+Markdown and JSON are written from the same rows the aggregator emits — Markdown the
+human-readable view, JSON the structured table later layers re-read. Two charts, a pair:
+the primary plots the concurrency ceiling per engine point
+(:func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`) — x = max-num-seqs,
+series = kv-cache-dtype, faceted by the combined caching/share condition; the diagnostic
+plots the goodput cliff each ceiling was read off
+(:func:`slipstream_bench.sweep_aggregation.aggregate_rungs`) — x = --max-concurrency,
+y = goodput fraction, series = prefix-share, one facet per engine point, with the 95%
+floor drawn as a reference line. Both render offline through matplotlib's Agg backend.
+Caching-off carries only its single share-0 baseline, so it holds one primary facet while
+caching-on spans the swept shares: a ragged grid, no duplicated null cells.
 """
 
 import json
@@ -48,6 +52,27 @@ _SLO_TITLE = (
     "goodput >= 95% (ttft <= 1000ms, tpot <= 50ms)"
 )
 
+# The diagnostic cliff reads the same SLO. The 0.95 floor mirrors
+# sweep_aggregation._GOODPUT_FLOOR (drawn as the reference line the cliff crosses) and
+# the ttft/tpot thresholds mirror cli_helpers.DEFAULT_GOODPUT, both by hand — the rung
+# rows carry the goodput fraction, not the SLO it was read at.
+_GOODPUT_FLOOR = 0.95
+_CLIFF_AXIS_LABEL = "goodput fraction (met SLO / completed)"
+_CLIFF_TITLE = (
+    "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)"
+)
+
+# The diagnostic table's columns: the engine point, the rung's offered concurrency, and
+# its goodput fraction — the cliff before aggregate_ceilings folds it to one number.
+_RUNG_TABLE_COLUMNS = (
+    "max_num_seqs",
+    "kv_cache_dtype",
+    "prefix_caching",
+    "prefix_share",
+    "max_concurrency",
+    "goodput_fraction",
+)
+
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
 # a swept value — its own facet, ordered ahead of the swept shares.
 _NO_SHARE_LABEL = "n/a"
@@ -83,16 +108,54 @@ def rows_to_json(rows: list[dict]) -> str:
     return json.dumps(rows, indent=2)
 
 
-def write_artifacts(rows: list[dict], charts_dir: Path) -> dict[str, Path]:
-    """Write the ceiling table and primary chart into a run's charts directory.
+def rungs_to_markdown(rungs: list[dict]) -> str:
+    """Render the per-rung goodput rows as a GitHub-flavored Markdown table.
 
-    The Markdown and JSON are the durable data artifacts; the PNG is the disposable
-    view of them. The directory is created on the way out, so the run directory need
-    not pre-hold it.
+    The human-readable view of the diagnostic cliff: one line per ladder rung, the
+    goodput fraction rounded for reading. The full-precision fraction stays in the
+    JSON artifact.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings` emitted.
+    :param rungs: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_rungs`
+        emitted, already sorted by point, then prefix-share, then offered concurrency.
+    :return: the table as one string: header, separator, one row per rung.
+    """
+    header = "| " + " | ".join(_RUNG_TABLE_COLUMNS) + " |"
+    separator = "| " + " | ".join("---" for _ in _RUNG_TABLE_COLUMNS) + " |"
+    body = ["| " + " | ".join(_rung_cells(rung)) + " |" for rung in rungs]
+    return "\n".join([header, separator, *body])
+
+
+def rungs_to_json(rungs: list[dict]) -> str:
+    """Render the per-rung goodput rows as indented JSON, the durable cliff data.
+
+    Keeps the full-precision goodput fraction the Markdown rounds, so the diagnostic
+    table re-reads as the same objects the aggregator emitted.
+
+    :param rungs: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_rungs`
+        emitted, already sorted by point, then prefix-share, then offered concurrency.
+    :return: the rows as an indented JSON array.
+    """
+    return json.dumps(rungs, indent=2)
+
+
+def write_artifacts(
+    rows: list[dict], rungs: list[dict], charts_dir: Path
+) -> dict[str, Path]:
+    """Write both tables and both charts into a run's charts directory.
+
+    The Markdown and JSON are the durable data artifacts; the PNGs are the disposable
+    view of them. The primary chart plots the ceiling per point, the diagnostic the
+    goodput cliff each ceiling was read off. The directory is created on the way out,
+    so the run directory need not pre-hold it.
+
+    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`
+        emitted.
+    :param rungs: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_rungs`
+        emitted.
     :param charts_dir: the ``bench/results/<run_id>/charts`` directory to write into.
-    :return: the written paths, keyed ``markdown`` / ``json`` / ``png``.
+    :return: the written paths, keyed ``markdown`` / ``json`` / ``png`` for the ceiling
+        table and its plot, ``rungs_markdown`` / ``rungs_json`` / ``rungs_png`` for the
+        cliff table and its plot.
     :raise ValueError: when ``rows`` is empty — an empty run holds no ceiling and must
         not be written as a header-only table and a blank plot.
     :raise OSError: when the directory cannot be made or an artifact cannot be written.
@@ -107,15 +170,25 @@ def write_artifacts(rows: list[dict], charts_dir: Path) -> dict[str, Path]:
         "markdown": charts_dir / "ceiling-table.md",
         "json": charts_dir / "ceiling-table.json",
         "png": charts_dir / "ceiling-by-max-num-seqs.png",
+        "rungs_markdown": charts_dir / "goodput-cliff.md",
+        "rungs_json": charts_dir / "goodput-cliff.json",
+        "rungs_png": charts_dir / "goodput-by-max-concurrency.png",
     }
     paths["markdown"].write_text(rows_to_markdown(rows))
     paths["json"].write_text(rows_to_json(rows))
-    grid = _plot_ceilings(rows)
+    paths["rungs_markdown"].write_text(rungs_to_markdown(rungs))
+    paths["rungs_json"].write_text(rungs_to_json(rungs))
+    _save_figure(_plot_ceilings(rows), paths["png"])
+    _save_figure(_plot_cliffs(rungs), paths["rungs_png"])
+    return paths
+
+
+def _save_figure(grid: sns.FacetGrid, path: Path) -> None:
+    """Save a grid to a PNG and close its figure, freeing it even on a write error."""
     try:
-        grid.savefig(paths["png"])
+        grid.savefig(path)
     finally:
         plt.close(grid.figure)
-    return paths
 
 
 def _cell(value: object) -> str:
@@ -214,5 +287,83 @@ def _plot_ceilings(rows: list[dict]) -> sns.FacetGrid:
     grid.set_axis_labels("max-num-seqs", _CEILING_AXIS_LABEL)
     grid.set_titles("{col_name}")
     grid.figure.suptitle(_SLO_TITLE)
+    grid.tight_layout()
+    return grid
+
+
+def _rung_cells(rung: dict) -> list[str]:
+    """Flatten one rung into its cells, :data:`_RUNG_TABLE_COLUMNS` order.
+
+    The goodput fraction rounds to three decimals for the human view — the messy
+    goodput/throughput ratio reads cleanly here, its full precision kept in the JSON.
+    """
+    return [
+        _cell(rung["max_num_seqs"]),
+        _cell(rung["kv_cache_dtype"]),
+        _cell(rung["prefix_caching"]),
+        _cell(rung["prefix_share"]),
+        _cell(rung["max_concurrency"]),
+        f"{rung['goodput_fraction']:.3f}",
+    ]
+
+
+def _point_label(rung: dict) -> str:
+    """Name a rung's facet: the engine point one Tier-1 redeploy measured."""
+    caching = "on" if rung["prefix_caching"] else "off"
+    return f"mns{rung['max_num_seqs']} · {rung['kv_cache_dtype']} · caching {caching}"
+
+
+def _cliff_frame(rungs: list[dict]) -> pd.DataFrame:
+    """Shape the rung rows into the frame the diagnostic chart facets over.
+
+    Derives the facet label (the engine point) and the hue label (the swept share, or
+    n/a when caching is off), keeping each rung's offered concurrency and goodput so the
+    plot draws the cliff per point.
+    """
+    records = [
+        {
+            "point": _point_label(rung),
+            "prefix_share": _share_label(rung),
+            "max_concurrency": rung["max_concurrency"],
+            "goodput_fraction": rung["goodput_fraction"],
+        }
+        for rung in rungs
+    ]
+    return pd.DataFrame.from_records(records)
+
+
+def _point_order(frame: pd.DataFrame) -> list[str]:
+    """Order the facets by first appearance — the point key aggregate_rungs sorted on."""
+    return list(dict.fromkeys(frame["point"]))
+
+
+def _plot_cliffs(rungs: list[dict]) -> sns.FacetGrid:
+    """Draw the diagnostic goodput-cliff chart onto a faceted grid.
+
+    One facet per engine point, a line per swept share, the 95% floor drawn as the
+    reference line the cliff crosses. The offered-concurrency axis is log-2 scaled so
+    the doubling ladder spaces evenly.
+
+    :param rungs: the aggregated per-rung rows.
+    :return: the seaborn FacetGrid, ready to save — the caller closes its figure.
+    """
+    frame = _cliff_frame(rungs)
+    grid = sns.relplot(
+        data=frame,
+        kind="line",
+        x="max_concurrency",
+        y="goodput_fraction",
+        hue="prefix_share",
+        col="point",
+        col_order=_point_order(frame),
+        col_wrap=4,
+        marker="o",
+    )
+    grid.refline(y=_GOODPUT_FLOOR, color="crimson", linestyle="--")
+    for ax in grid.axes.flat:
+        ax.set_xscale("log", base=2)
+    grid.set_axis_labels("--max-concurrency", _CLIFF_AXIS_LABEL)
+    grid.set_titles("{col_name}")
+    grid.figure.suptitle(_CLIFF_TITLE)
     grid.tight_layout()
     return grid
