@@ -1,11 +1,12 @@
-"""Build and run one ``vllm bench serve`` per prefix-share x burstiness cell.
+"""Build and run one ``vllm bench serve`` per prefix-share x burstiness x cap cell.
 
 A thin wrapper over vLLM's native ``prefix_repetition`` workload, not a bespoke
-load generator. It fires that workload across a grid of prefix-share % and
-burstiness, applies the platform SLO as ``--goodput``, and saves the raw client
-JSON (per-request TTFT/ITL via ``--save-detailed``) one file per grid cell.
-Everything downstream — the cost-per-1M post-processor, the prefix-cache-hit
-scraper — joins on that JSON.
+load generator. It fires that workload across a grid of prefix-share %,
+burstiness, and an optional closed-loop max-concurrency ladder, applies the
+platform SLO as ``--goodput``, and saves the raw client JSON (per-request
+TTFT/ITL via ``--save-detailed``) one file per grid cell. Everything downstream —
+the cost-per-1M post-processor, the prefix-cache-hit scraper, the concurrency
+ceiling — joins on that JSON.
 
 Prefix-share % is the knob the routing sweep needs: it splits a fixed token
 budget between the shared prefix and the per-request suffix, so share 90 means a
@@ -34,7 +35,14 @@ class SweepError(Exception):
 
 @dataclass(frozen=True)
 class SweepConfig:
-    """The knobs one sweep is run with; the grid is prefix_shares x burstiness_values."""
+    """The knobs one sweep is run with.
+
+    The grid is prefix_shares x burstiness_values x max_concurrency_values. An empty
+    ``max_concurrency_values`` sweeps open-loop (arrival-rate bound by request_rate,
+    no in-flight cap); a non-empty ladder sweeps closed-loop, capping in-flight
+    requests with ``vllm bench serve --max-concurrency`` — the axis the concurrency
+    ceiling is read off (ADR-0009).
+    """
 
     base_url: str
     model: str
@@ -51,6 +59,7 @@ class SweepConfig:
     goodput: list[str]
     tokenizer: str | None = None
     commercial: bool = False
+    max_concurrency_values: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject a config that would run zero cells or an out-of-range share.
@@ -60,8 +69,8 @@ class SweepConfig:
         having measured nothing.
 
         :raise SweepError: on an empty grid axis, an empty SLO, a share outside
-            0..100, fewer prompts than prefixes, or a commercial run without a
-            local tokenizer.
+            0..100, a max-concurrency cap below 1, fewer prompts than prefixes, or
+            a commercial run without a local tokenizer.
         """
         if not self.prefix_shares:
             raise SweepError("no prefix-shares to sweep: the grid would be empty")
@@ -72,6 +81,11 @@ class SweepConfig:
         for share in self.prefix_shares:
             if not 0 <= share <= 100:
                 raise SweepError(f"prefix-share {share} is outside 0..100")
+        # A closed-loop cap of zero (or below) admits no in-flight request, so every
+        # cell at that rung measures nothing. Reject it before the grid runs.
+        for cap in self.max_concurrency_values:
+            if cap < 1:
+                raise SweepError(f"--max-concurrency {cap} is below 1")
         # vLLM's prefix_repetition workload gives each prefix at least one prompt,
         # so it rejects a run with more prefixes than prompts. Fail fast here rather
         # than let every cell die the same way mid-grid.
@@ -131,26 +145,49 @@ def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int
     return prefix_len, total_len - prefix_len
 
 
-def grid(config: SweepConfig) -> Iterator[tuple[int, float]]:
-    """Yield every (prefix-share, burstiness) cell, shares outermost."""
-    yield from product(config.prefix_shares, config.burstiness_values)
+def grid(config: SweepConfig) -> Iterator[tuple[int, float, int | None]]:
+    """Yield every (prefix-share, burstiness, max-concurrency) cell, shares outermost.
+
+    The max-concurrency ladder is the innermost axis, so every rung of it runs
+    contiguously within one (share, burstiness) pair — the sequence the concurrency
+    ceiling is read off. With no ladder configured the axis is a single open-loop
+    ``None``, one cell per (share, burstiness) pair.
+    """
+    ladder: tuple[int | None, ...] = config.max_concurrency_values or (None,)
+    yield from product(config.prefix_shares, config.burstiness_values, ladder)
 
 
-def _result_file(config: SweepConfig, share: int, burstiness: float) -> str:
-    """Name a distinct result JSON for one grid cell."""
-    return f"{config.out_dir}/pshare{share}_burst{burstiness}.json"
+def _result_file(
+    config: SweepConfig, share: int, burstiness: float, max_concurrency: int | None
+) -> str:
+    """Name a distinct result JSON for one grid cell.
+
+    A closed-loop cell carries its cap in the name so ladder rungs never collide;
+    an open-loop cell (no cap) is left un-suffixed.
+    """
+    cap = f"_mc{max_concurrency}" if max_concurrency is not None else ""
+    return f"{config.out_dir}/pshare{share}_burst{burstiness}{cap}.json"
 
 
-def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[str]:
+def cell_command(
+    config: SweepConfig,
+    *,
+    share: int,
+    burstiness: float,
+    max_concurrency: int | None = None,
+) -> list[str]:
     """Assemble the ``vllm bench serve`` command for one grid cell.
 
     ``--goodput`` carries the SLO; ``--save-result``/``--save-detailed`` writes the
     raw per-request client JSON; ``--percentile-metrics`` + ``--metric-percentiles``
-    report p95 and p99 side by side for ttft, tpot, itl, and e2el.
+    report p95 and p99 side by side for ttft, tpot, itl, and e2el. A set
+    ``max_concurrency`` caps in-flight requests (closed-loop); omitting it leaves the
+    arrival rate the sole limiter (open-loop).
 
     :param config: the sweep knobs shared across every cell.
     :param share: this cell's prefix-share percentage.
     :param burstiness: this cell's burstiness (low = bursty, 1.0 = Poisson).
+    :param max_concurrency: this cell's in-flight cap, or None for open-loop.
     :return: the argv list for this cell.
     :raise SweepError: when block alignment would erase the prefix (see
         :func:`split_lengths`).
@@ -167,6 +204,13 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
     tokenizer_args = (
         ["--tokenizer", config.tokenizer]
         if config.tokenizer and config.tokenizer.strip()
+        else []
+    )
+    # A closed-loop cell caps in-flight requests with the client-side semaphore;
+    # an open-loop cell omits the flag and lets the arrival rate alone limit load.
+    concurrency_args = (
+        ["--max-concurrency", str(max_concurrency)]
+        if max_concurrency is not None
         else []
     )
     return [
@@ -200,6 +244,7 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
         str(config.seed),
         "--burstiness",
         str(burstiness),
+        *concurrency_args,
         "--goodput",
         *config.goodput,
         "--percentile-metrics",
@@ -209,7 +254,7 @@ def cell_command(config: SweepConfig, *, share: int, burstiness: float) -> list[
         "--save-result",
         "--save-detailed",
         "--result-filename",
-        _result_file(config, share, burstiness),
+        _result_file(config, share, burstiness, max_concurrency),
     ]
 
 
@@ -282,18 +327,23 @@ def run_sweep(
     completed = 0
     failed = 0
     unannotated = 0
-    for share, burstiness in grid(config):
-        command = cell_command(config, share=share, burstiness=burstiness)
+    for share, burstiness, max_concurrency in grid(config):
+        command = cell_command(
+            config, share=share, burstiness=burstiness, max_concurrency=max_concurrency
+        )
         if dry_run:
             echo(" ".join(command))
             continue
-        result_file = _result_file(config, share, burstiness)
-        echo(f"==> prefix-share {share}% burstiness {burstiness} -> {result_file}")
+        result_file = _result_file(config, share, burstiness, max_concurrency)
+        # A closed-loop cell names its in-flight cap so its progress and failure
+        # lines are told apart from the open-loop pass.
+        cap = "" if max_concurrency is None else f" max-concurrency {max_concurrency}"
+        echo(f"==> prefix-share {share}% burstiness {burstiness}{cap} -> {result_file}")
         code = runner(command)
         if code != 0:
             failed += 1
             warn(
-                f"!! cell prefix-share {share}% burstiness {burstiness} "
+                f"!! cell prefix-share {share}% burstiness {burstiness}{cap} "
                 f"failed (exit {code})"
             )
             continue

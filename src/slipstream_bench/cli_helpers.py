@@ -18,6 +18,8 @@ from slipstream_bench.serve_sweep import SweepError
 DEFAULT_PREFIX_SHARES = (10, 50, 90)
 DEFAULT_BURSTINESS = (0.2, 1.0)
 DEFAULT_GOODPUT = ("ttft:1000", "tpot:50")
+# Empty by default: the sweep is open-loop unless a closed-loop ladder is passed.
+DEFAULT_MAX_CONCURRENCY: tuple[int, ...] = ()
 
 
 def validate_request_rate(value: str) -> str:

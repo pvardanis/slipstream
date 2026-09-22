@@ -75,6 +75,33 @@ def test_dry_run_honours_grid_overrides() -> None:
     assert "--prefix-repetition-suffix-len 750" in result.stdout
 
 
+def test_dry_run_ladders_max_concurrency_closed_loop() -> None:
+    """A max-concurrency ladder multiplies the grid and caps in-flight per rung."""
+    result = _dry_run(
+        "--prefix-share",
+        "90",
+        "--burstiness",
+        "1.0",
+        "--max-concurrency",
+        "8",
+        "--max-concurrency",
+        "64",
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.count("vllm bench serve") == 2
+    assert "--max-concurrency 8" in result.stdout
+    assert "--max-concurrency 64" in result.stdout
+
+
+def test_dry_run_is_open_loop_without_a_ladder() -> None:
+    """With no ladder the default grid stays open-loop, emitting no in-flight cap."""
+    result = _dry_run()
+
+    assert result.exit_code == 0
+    assert "--max-concurrency" not in result.stdout
+
+
 def test_dry_run_applies_alignment() -> None:
     """--align-blocks floors the prefix to whole blocks in the emitted command."""
     result = _dry_run(
