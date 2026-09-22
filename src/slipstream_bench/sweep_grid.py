@@ -16,7 +16,14 @@ from pathlib import Path
 from typing import Annotated, Literal, TypeVar
 
 import yaml
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 from slipstream_bench.sweep_aggregation import EnginePoint
 
@@ -58,15 +65,15 @@ class SweepGridError(Exception):
 class SweepGridPart(str, Enum):
     """A slice of the grid the knob-sweep loop asks the `sweep-grid` CLI for.
 
-    - ``points``: the Tier-1 engine points as TSV, one manifest redeploy per row,
-      each keyed by its results-subdir slug (mns{N}_kv{fp8|fp16}_pc{on|off}).
-    - ``ladder``: the Tier-2 --max-concurrency rungs, one per line — the ceiling
-      search the recipe raises until goodput drops below the SLO.
+    - ``engine_points``: the Tier-1 engine points as TSV, one manifest redeploy per
+      row, each keyed by its results-subdir slug (mns{N}_kv{fp8|fp16}_pc{on|off}).
+    - ``concurrency_ladder``: the Tier-2 --max-concurrency rungs, one per line — the
+      ceiling search the recipe raises until goodput drops below the SLO.
     - ``burstiness``: the single pinned scalar the whole sweep runs at.
     """
 
-    points = "points"
-    ladder = "ladder"
+    engine_points = "engine-points"
+    concurrency_ladder = "concurrency-ladder"
     burstiness = "burstiness"
 
 
@@ -94,6 +101,22 @@ class Tier1(BaseModel):
     prefix_caching: Annotated[
         dict[PrefixCachingLabel, PrefixCachingArm], Field(min_length=1)
     ]
+
+    @model_validator(mode="after")
+    def _off_arm_pins_the_zero_share(self) -> "Tier1":
+        """Hold the caching-off arm to a single 0 share.
+
+        With caching off vLLM reuses no prefix KV, so sweeping share there measures
+        a definitional null (ADR-0009). Any share but the single [0] baseline is a
+        grid mistake, caught here before the sweep runs.
+        """
+        off = self.prefix_caching.get("off")
+        if off is not None and off.prefix_share != [0]:
+            raise ValueError(
+                "prefix_caching 'off' reuses no prefix KV; its prefix_share must be "
+                f"the single [0] baseline, not {off.prefix_share}"
+            )
+        return self
 
 
 class Tier2(BaseModel):
@@ -193,8 +216,8 @@ def render_burstiness(grid: SweepGrid) -> str:
 
 
 _RENDERERS = {
-    SweepGridPart.points: render_points,
-    SweepGridPart.ladder: render_ladder,
+    SweepGridPart.engine_points: render_points,
+    SweepGridPart.concurrency_ladder: render_ladder,
     SweepGridPart.burstiness: render_burstiness,
 }
 
