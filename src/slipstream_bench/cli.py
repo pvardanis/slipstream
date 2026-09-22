@@ -362,8 +362,8 @@ def report(
         typer.echo(json.dumps(rows, indent=2))
 
 
-@app.command("knob-sweep")
-def knob_sweep(
+@app.command("aggregate-sweep")
+def aggregate_sweep(
     *,
     run_dir: Annotated[
         Path,
@@ -375,7 +375,7 @@ def knob_sweep(
         ),
     ],
 ) -> None:
-    """Aggregate a knob-sweep run into the concurrency-ceiling table.
+    """Aggregate a knob-sweep run's saved results into the concurrency-ceiling table.
 
     Emits one JSON row per (max-num-seqs, kv-cache-dtype, prefix-caching) point and
     prefix-share: the measured ceiling and the {timeout, oom, other} failure
