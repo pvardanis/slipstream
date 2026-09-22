@@ -357,9 +357,12 @@ bench *args:
 #   max-num-seqs (mns) {16,32,64,128,256} x KV dtype {fp8,fp16} x prefix caching
 #   {on,off} = 20 points, the three nested loops below.
 # Tier 2 = client load ladder, no redeploy. Against each already-running Tier-1
-# point, `just bench` walks --max-concurrency {8..256} (x prefix-share, inside
-# bench) to find the highest rung that holds goodput at the SLO — the sustained
-# concurrency ceiling for that point.
+# point, `just bench` walks --max-concurrency {8..256} to find the highest rung
+# that holds goodput at the SLO — the sustained concurrency ceiling for that point.
+# The prefix-share axis rides along, but only where it can matter: {10,50,90} when
+# prefix caching is on, a single 0 baseline when off. With caching off vLLM reuses
+# no prefix KV whatever the share, so a swept share there measures a definitional
+# null (ADR-0009).
 #
 # For each Tier-1 point: render + redeploy the GPU replica, scrape vLLM's predicted
 # concurrency ceiling from the startup log, then drive the Tier-2 ladder against it.
@@ -392,9 +395,14 @@ knob-sweep:
           *) kv_dtype="${kv}" ;;
         esac
         for pc in on off; do
+          # Sweep prefix-share only where prefix caching can act on it; with caching
+          # off vLLM reuses no prefix KV, so the ladder runs a single 0 baseline rather
+          # than three shares that would measure the same null (ADR-0009).
           case "${pc}" in
-            on) pc_flag="--enable-prefix-caching" ;;
-            off) pc_flag="--no-enable-prefix-caching" ;;
+            on) pc_flag="--enable-prefix-caching"
+              share_flags=(--prefix-share 10 --prefix-share 50 --prefix-share 90) ;;
+            off) pc_flag="--no-enable-prefix-caching"
+              share_flags=(--prefix-share 0) ;;
           esac
           point="mns${mns}_kv${kv}_pc${pc}"
           echo "==> knob-sweep point ${point}" >&2
@@ -423,6 +431,7 @@ knob-sweep:
           # some cells failed — keep the partial results and flag the run.
           if ! BENCH_RUN_ID="${run_id}/${point}" just bench \
               --burstiness 1.0 \
+              "${share_flags[@]}" \
               --max-concurrency 8 --max-concurrency 16 --max-concurrency 32 \
               --max-concurrency 64 --max-concurrency 128 --max-concurrency 256; then
             echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
