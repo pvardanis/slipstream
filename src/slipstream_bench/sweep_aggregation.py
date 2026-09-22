@@ -78,6 +78,18 @@ class EnginePoint:
             prefix_caching=match["pc"] == "on",
         )
 
+    def slug(self) -> str:
+        """Name the subdir this point's Tier-2 JSON is nested under.
+
+        The inverse of ``from_dirname``: the single builder of the
+        ``mns{N}_kv{dtype}_pc{on|off}`` format the grid emits, the recipe writes,
+        and the aggregator parses — so all three read one format from one place.
+
+        :return: the point's subdir name, e.g. ``mns64_kvfp8_pcon``.
+        """
+        caching = "on" if self.prefix_caching else "off"
+        return f"mns{self.max_num_seqs}_kv{self.kv_cache_dtype}_pc{caching}"
+
 
 def goodput_fraction(record: dict, source: Path) -> float:
     """Read the fraction of a cell's completed requests that met the SLO.

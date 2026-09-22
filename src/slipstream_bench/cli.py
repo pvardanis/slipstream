@@ -36,6 +36,13 @@ from slipstream_bench.report import (
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
 from slipstream_bench.sweep_aggregation import SweepAggregationError, aggregate
+from slipstream_bench.sweep_grid import (
+    SweepGridError,
+    load_grid,
+    render_burstiness,
+    render_ladder,
+    render_points,
+)
 from slipstream_bench.zero_leak import LeakError, find_leaks, read_aws_json
 
 app = typer.Typer(
@@ -388,6 +395,45 @@ def aggregate_sweep(
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     typer.echo(json.dumps(rows, indent=2))
+
+
+class SweepGridPart(str, Enum):
+    """Which slice of the grid the knob-sweep loop is asking for."""
+
+    points = "points"
+    ladder = "ladder"
+    burstiness = "burstiness"
+
+
+@app.command("sweep-grid")
+def sweep_grid(
+    part: Annotated[
+        SweepGridPart,
+        typer.Argument(help="Which grid values to emit for the knob-sweep loop."),
+    ],
+    *,
+    grid: Annotated[
+        Path, typer.Option(help="The sweep grid YAML the recipe varies its knobs over.")
+    ] = Path("bench/sweep-grid.yaml"),
+) -> None:
+    """Emit a validated slice of the knob-sweep grid for `just knob-sweep` to read.
+
+    `points` prints the Tier-1 engine points as TSV (one redeploy per row, keyed by
+    its results-subdir slug), `ladder` the Tier-2 --max-concurrency rungs, and
+    `burstiness` the pinned scalar. The whole grid is validated first, so an invalid
+    value fails here rather than mid-sweep on a live GPU (ADR-0009).
+    """
+    renderers = {
+        SweepGridPart.points: render_points,
+        SweepGridPart.ladder: render_ladder,
+        SweepGridPart.burstiness: render_burstiness,
+    }
+    try:
+        loaded = load_grid(grid)
+    except SweepGridError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(renderers[part](loaded))
 
 
 @app.command("zero-leak")
