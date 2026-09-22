@@ -12,8 +12,9 @@ import pytest
 
 from slipstream_bench.chart import (
     _ceiling_frame,
+    _condition_label,
+    _condition_order,
     _share_label,
-    _share_order,
     rows_to_json,
     rows_to_markdown,
     write_artifacts,
@@ -91,21 +92,33 @@ def test_share_label_is_n_a_when_caching_is_off() -> None:
     assert _share_label(_row(prefix_caching=False, prefix_share=0)) == "n/a"
 
 
-def test_ceiling_frame_maps_caching_to_on_off_and_keeps_a_missing_ceiling() -> None:
-    """The frame carries on/off caching labels and preserves a None ceiling as a gap."""
+def test_condition_label_folds_caching_and_share_into_one_facet_name() -> None:
+    """A caching-on row names its share; a caching-off row names its n/a baseline."""
+    assert _condition_label(_row(prefix_caching=True, prefix_share=90)) == (
+        "caching on · share 90"
+    )
+    assert _condition_label(_row(prefix_caching=False, prefix_share=0)) == (
+        "caching off · share n/a"
+    )
+
+
+def test_ceiling_frame_folds_the_condition_and_keeps_a_missing_ceiling() -> None:
+    """The frame carries the combined condition and preserves a None ceiling as a gap."""
     frame = _ceiling_frame(
         [
             _row(prefix_caching=True, prefix_share=50, ceiling=32),
             _row(prefix_caching=False, prefix_share=0, ceiling=None),
         ]
     )
-    assert list(frame["prefix_caching"]) == ["on", "off"]
-    assert list(frame["prefix_share"]) == ["50", "n/a"]
+    assert list(frame["condition"]) == [
+        "caching on · share 50",
+        "caching off · share n/a",
+    ]
     assert frame["ceiling"].isna().tolist() == [False, True]
 
 
-def test_share_order_sorts_shares_numerically_behind_the_n_a_baseline() -> None:
-    """Facet columns order the n/a baseline first, then swept shares by number not text."""
+def test_condition_order_sorts_shares_numerically_behind_the_off_baseline() -> None:
+    """Facets order the caching-off baseline first, then swept shares by number."""
     frame = _ceiling_frame(
         [
             _row(prefix_caching=True, prefix_share=90),
@@ -114,13 +127,20 @@ def test_share_order_sorts_shares_numerically_behind_the_n_a_baseline() -> None:
             _row(prefix_caching=False, prefix_share=0),
         ]
     )
-    assert _share_order(frame) == ["n/a", "9", "90", "100"]
+    assert _condition_order(frame) == [
+        "caching off · share n/a",
+        "caching on · share 9",
+        "caching on · share 90",
+        "caching on · share 100",
+    ]
 
 
-def test_share_order_omits_the_baseline_when_no_caching_off_row_is_present() -> None:
-    """A run with only caching-on points carries no n/a column."""
+def test_condition_order_omits_the_baseline_when_no_caching_off_row_is_present() -> (
+    None
+):
+    """A run with only caching-on points carries no baseline facet."""
     frame = _ceiling_frame([_row(prefix_caching=True, prefix_share=50)])
-    assert _share_order(frame) == ["50"]
+    assert _condition_order(frame) == ["caching on · share 50"]
 
 
 def _grid_rows() -> list[dict]:
