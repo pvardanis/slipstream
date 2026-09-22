@@ -136,6 +136,16 @@ def test_burstiness_emits_the_pinned_scalar(tmp_path: Path) -> None:
             lambda g: g["tier1"]["prefix_caching"]["on"].update(prefix_share=[10, 10]),
             "prefix_share",
         ),
+        # Caching-off reuses no prefix KV, so its share is pinned to the [0]
+        # baseline: any other value, or more than one, is a grid mistake.
+        (
+            lambda g: g["tier1"]["prefix_caching"]["off"].update(prefix_share=[50]),
+            "prefix_share",
+        ),
+        (
+            lambda g: g["tier1"]["prefix_caching"]["off"].update(prefix_share=[0, 10]),
+            "prefix_share",
+        ),
         # A typo'd knob name is rejected, not silently ignored (extra="forbid").
         (lambda g: g["tier1"].update(max_num_seq=[16]), "max_num_seq"),
         (lambda g: g.update(tier3={}), "tier3"),
