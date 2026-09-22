@@ -28,7 +28,7 @@ def _valid_grid() -> dict:
     return {
         "tier1": {
             "max_num_seqs": [16, 32, 64, 128, 256],
-            "kv_cache_dtype": {"fp8": "fp8", "fp16": "float16"},
+            "kv_cache_dtype": ["fp8", "fp16"],
             "prefix_caching": {
                 "on": {"flag": "--enable-prefix-caching", "prefix_share": [10, 50, 90]},
                 "off": {"flag": "--no-enable-prefix-caching", "prefix_share": [0]},
@@ -100,12 +100,9 @@ def test_burstiness_emits_the_pinned_scalar(tmp_path: Path) -> None:
         (lambda g: g["tier1"].update(max_num_seqs=[]), "max_num_seqs"),
         (lambda g: g["tier1"].update(max_num_seqs=[0, 16]), "max_num_seqs"),
         (lambda g: g["tier1"].update(max_num_seqs=[-8]), "max_num_seqs"),
-        (lambda g: g["tier1"].update(kv_cache_dtype={}), "kv_cache_dtype"),
-        (lambda g: g["tier1"].update(kv_cache_dtype={"fp8": ""}), "kv_cache_dtype"),
-        (
-            lambda g: g["tier1"].update(kv_cache_dtype={"int8": "int8"}),
-            "kv_cache_dtype",
-        ),
+        (lambda g: g["tier1"].update(kv_cache_dtype=[]), "kv_cache_dtype"),
+        (lambda g: g["tier1"].update(kv_cache_dtype=["fp8", "fp8"]), "kv_cache_dtype"),
+        (lambda g: g["tier1"].update(kv_cache_dtype=["int8"]), "kv_cache_dtype"),
         (lambda g: g["tier1"].update(prefix_caching={}), "prefix_caching"),
         (
             lambda g: g["tier1"]["prefix_caching"]["on"].update(flag=""),
