@@ -1,0 +1,26 @@
+# Swept knob grid for `just knob-sweep` (ADR-0009). The recipe reads this file
+# through `slipstream-bench sweep-grid`, which validates it against the SweepGrid
+# pydantic model; every value the sweep varies lives here, nothing is hard-coded in
+# the recipe.
+tier1:
+  max_num_seqs: [16, 32, 64, 128, 256]
+
+  # KV cache dtype: chart label -> token that vLLM's --kv-cache-dtype accepts.
+  kv_cache_dtype:
+    fp8: fp8
+    fp16: float16
+
+  # Prefix-caching arm: its deploy flag, and which prefix shares to sweep under it.
+  # Caching off reuses no prefix KV, so it sweeps a single 0 baseline (ADR-0009).
+  # The keys are quoted so YAML keeps them as the strings "on"/"off", not booleans.
+  prefix_caching:
+    "on":
+      flag: --enable-prefix-caching
+      prefix_share: [10, 50, 90]
+    "off":
+      flag: --no-enable-prefix-caching
+      prefix_share: [0]
+
+tier2:
+  max_concurrency: [8, 16, 32, 64, 128, 256]
+  burstiness: 1.0
