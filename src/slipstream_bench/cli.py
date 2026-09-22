@@ -36,7 +36,7 @@ from slipstream_bench.report import (
 )
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
-from slipstream_bench.sweep_aggregation import SweepAggregationError, aggregate
+from slipstream_bench.sweep_aggregation import SweepAggregationError, aggregate_ceilings
 from slipstream_bench.sweep_grid import (
     SweepGridError,
     SweepGridPart,
@@ -390,7 +390,7 @@ def aggregate_sweep(
     events and /metrics snapshots they need (ADR-0009).
     """
     try:
-        rows = aggregate(run_dir)
+        rows = aggregate_ceilings(run_dir)
     except (SweepAggregationError, ResultError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
@@ -418,7 +418,7 @@ def chart(
     """
     charts_dir = run_dir / "charts"
     try:
-        rows = aggregate(run_dir)
+        rows = aggregate_ceilings(run_dir)
         written = write_artifacts(rows, charts_dir)
     except (SweepAggregationError, ResultError) as error:
         typer.echo(str(error), err=True)

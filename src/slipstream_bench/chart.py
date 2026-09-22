@@ -2,7 +2,7 @@
 
 The ceiling table is the durable artifact and the PNG is disposable (ADR-0009), so the
 Markdown and JSON are written from the same rows
-:func:`slipstream_bench.sweep_aggregation.aggregate` emits — Markdown the human-readable
+:func:`slipstream_bench.sweep_aggregation.aggregate_ceilings` emits — Markdown the human-readable
 view, JSON the structured table later layers re-read. The primary chart plots the
 concurrency ceiling per engine point — x = max-num-seqs, series = kv-cache-dtype,
 faceted by the combined caching/share condition — rendered offline through matplotlib's
@@ -59,7 +59,7 @@ def rows_to_markdown(rows: list[dict]) -> str:
     The human-readable durable artifact: it renders inline in a PR or a run's notes,
     the failure cohorts flattened into columns and a not-captured None left blank.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate`
+    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`
         emitted, already sorted by point then prefix-share.
     :return: the table as one string: header, separator, one row per ceiling row.
     """
@@ -76,7 +76,7 @@ def rows_to_json(rows: list[dict]) -> str:
     so the table re-reads as the same objects the aggregator emitted, unlike the
     flattened Markdown meant for a human reader.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate`
+    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`
         emitted, already sorted by point then prefix-share.
     :return: the rows as an indented JSON array.
     """
@@ -90,7 +90,7 @@ def write_artifacts(rows: list[dict], charts_dir: Path) -> dict[str, Path]:
     view of them. The directory is created on the way out, so the run directory need
     not pre-hold it.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate` emitted.
+    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings` emitted.
     :param charts_dir: the ``bench/results/<run_id>/charts`` directory to write into.
     :return: the written paths, keyed ``markdown`` / ``json`` / ``png``.
     :raise ValueError: when ``rows`` is empty — an empty run holds no ceiling and must
