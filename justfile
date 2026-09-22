@@ -352,10 +352,14 @@ bench *args:
 
 # Two-tier engine-knob sweep (#33, ADR-0009).
 #
+# Every swept value lives in bench/sweep-grid.yaml, read here through
+# `slipstream-bench sweep-grid`, which validates the whole grid before the first
+# deploy — the recipe holds no knob values or knob logic of its own.
+#
 # Tier 1 = engine knobs, one GPU redeploy per point. The knobs live in the vLLM
 # launch args, so every combination needs a fresh `just gpu-deploy`:
 #   max-num-seqs (mns) {16,32,64,128,256} x KV dtype {fp8,fp16} x prefix caching
-#   {on,off} = 20 points, the three nested loops below.
+#   {on,off} = 20 points, one grid row each.
 # Tier 2 = client load ladder, no redeploy. Against each already-running Tier-1
 # point, `just bench` walks --max-concurrency {8..256} to find the highest rung
 # that holds goodput at the SLO — the sustained concurrency ceiling for that point.
@@ -378,69 +382,69 @@ bench *args:
 knob-sweep:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Read every swept value from the validated grid before touching a GPU. Each
+    # value is captured into a variable so the CLI's exit code is checked and an
+    # invalid grid aborts the sweep here, not mid-run — never `< <(...)`, which
+    # would run the CLI in a subshell and hide its failure under `set -e`.
+    engine_points="$(uv run slipstream-bench sweep-grid engine-points)"
+    concurrency_ladder="$(uv run slipstream-bench sweep-grid concurrency-ladder)"
+    burstiness="$(uv run slipstream-bench sweep-grid burstiness)"
+    conc_flags=()
+    while IFS= read -r rung; do conc_flags+=(--max-concurrency "${rung}"); done <<<"${concurrency_ladder}"
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
     run_dir="bench/results/${run_id}"
     mkdir -p "${run_dir}"
     ledger="${run_dir}/predicted-ceilings.tsv"
     printf 'point\tpredicted_ceiling\n' >"${ledger}"
     overall=0
-    # Tier 1: max-num-seqs (mns) x KV dtype x prefix caching. Each iteration is one
-    # engine-knob point that gets its own redeploy below.
-    for mns in 16 32 64 128 256; do
-      for kv in fp8 fp16; do
-        # vLLM's --kv-cache-dtype accepts float16, not fp16; map the chart/ADR label
-        # to the engine token so the arm deploys (fp8 is accepted as-is).
-        case "${kv}" in
-          fp16) kv_dtype="float16" ;;
-          *) kv_dtype="${kv}" ;;
-        esac
-        for pc in on off; do
-          # Sweep prefix-share only where prefix caching can act on it; with caching
-          # off vLLM reuses no prefix KV, so the ladder runs a single 0 baseline rather
-          # than three shares that would measure the same null (ADR-0009).
-          case "${pc}" in
-            on) pc_flag="--enable-prefix-caching"
-              share_flags=(--prefix-share 10 --prefix-share 50 --prefix-share 90) ;;
-            off) pc_flag="--no-enable-prefix-caching"
-              share_flags=(--prefix-share 0) ;;
-            *) echo "!! knob-sweep: unexpected pc='${pc}'" >&2; exit 1 ;;
-          esac
-          point="mns${mns}_kv${kv}_pc${pc}"
-          echo "==> knob-sweep point ${point}" >&2
-          # Render + redeploy the GPU replica for this engine-knob point. A failed
-          # deploy leaves the point unmeasurable; record it and move on rather than
-          # abandon the remaining points.
-          if ! MAX_NUM_SEQS="${mns}" KV_CACHE_DTYPE="${kv_dtype}" PREFIX_CACHING_FLAG="${pc_flag}" just gpu-deploy; then
-            echo "!! ${point}: gpu-deploy failed; skipping point" >&2
-            printf '%s\t%s\n' "${point}" "<deploy-failed>" >>"${ledger}"
-            overall=1
-            continue
-          fi
-          # Scrape vLLM's predicted concurrency ceiling from the startup log. It is a
-          # VRAM/KV-budget upper bound, not a measured ceiling (ADR-0009): recorded as a
-          # cross-check against the Tier-2 goodput result, never reported as the ceiling.
-          # replicas=1, so `logs deploy/vllm-gpu` reads the one pod just rolled out.
-          predicted="$(kubectl -n slipstream logs deploy/vllm-gpu \
-            | grep -oE 'Maximum concurrency for [0-9,]+ tokens per request: [0-9.]+x' \
-            | tail -1 || true)"
-          printf '%s\t%s\n' "${point}" "${predicted:-<none>}" >>"${ledger}"
-          echo "    predicted: ${predicted:-<no ceiling line in startup log>}" >&2
-          # Tier 2: client load ladder against this point, no redeploy. The nested
-          # BENCH_RUN_ID lands the per-point JSON under ${run_dir}/${point}/ (see
-          # `bench`). serve-sweep survives
-          # per-cell failures and only exits non-zero at the end, so a non-zero here means
-          # some cells failed — keep the partial results and flag the run.
-          if ! BENCH_RUN_ID="${run_id}/${point}" just bench \
-              --burstiness 1.0 \
-              "${share_flags[@]}" \
-              --max-concurrency 8 --max-concurrency 16 --max-concurrency 32 \
-              --max-concurrency 64 --max-concurrency 128 --max-concurrency 256; then
-            echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
-            overall=1
-          fi
-        done
-      done
-    done
+    # One grid row per Tier-1 point: slug, max-num-seqs, KV engine token, prefix-
+    # caching flag, and the CSV of prefix shares to sweep under it. The grid already
+    # mapped the KV label to the engine token (fp16 -> float16) and picked the shares
+    # per caching arm, so the recipe just deploys the point and drives the ladder.
+    while IFS=$'\t' read -r point mns kv_dtype pc_flag shares_csv; do
+      share_flags=()
+      IFS=',' read -r -a shares <<<"${shares_csv}"
+      for share in "${shares[@]}"; do share_flags+=(--prefix-share "${share}"); done
+      echo "==> knob-sweep point ${point}" >&2
+      # Render + redeploy the GPU replica for this engine-knob point. A failed
+      # deploy leaves the point unmeasurable; record it and move on rather than
+      # abandon the remaining points.
+      if ! MAX_NUM_SEQS="${mns}" KV_CACHE_DTYPE="${kv_dtype}" PREFIX_CACHING_FLAG="${pc_flag}" just gpu-deploy; then
+        echo "!! ${point}: gpu-deploy failed; skipping point" >&2
+        printf '%s\t%s\n' "${point}" "<deploy-failed>" >>"${ledger}"
+        overall=1
+        continue
+      fi
+      # Scrape vLLM's predicted concurrency ceiling from the startup log. It is a
+      # VRAM/KV-budget upper bound, not a measured ceiling (ADR-0009): a cross-check
+      # against the Tier-2 goodput result, never reported as the ceiling. The log
+      # read and the ceiling grep are split so a lost log (kubectl failed) records a
+      # different sentinel than a log that simply carried no ceiling line.
+      # replicas=1, so `logs deploy/vllm-gpu` reads the one pod just rolled out.
+      if ! logs="$(kubectl -n slipstream logs deploy/vllm-gpu 2>/dev/null)"; then
+        echo "!! ${point}: could not read vLLM startup log for predicted ceiling" >&2
+        predicted="<logs-unavailable>"
+      else
+        predicted="$(printf '%s\n' "${logs}" \
+          | grep -oE 'Maximum concurrency for [0-9,]+ tokens per request: [0-9.]+x' \
+          | tail -1)"
+        predicted="${predicted:-<none>}"
+      fi
+      printf '%s\t%s\n' "${point}" "${predicted}" >>"${ledger}"
+      echo "    predicted: ${predicted}" >&2
+      # Tier 2: client load ladder against this point, no redeploy. The nested
+      # BENCH_RUN_ID lands the per-point JSON under ${run_dir}/${point}/ (see
+      # `bench`). serve-sweep survives per-cell failures and only exits non-zero at
+      # the end, so a non-zero here means some cells failed — keep the partial
+      # results and flag the run.
+      if ! BENCH_RUN_ID="${run_id}/${point}" just bench \
+          --burstiness "${burstiness}" \
+          "${share_flags[@]}" \
+          "${conc_flags[@]}"; then
+        echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
+        overall=1
+      fi
+    done <<<"${engine_points}"
     echo "knob sweep ${run_id} complete; results in ${run_dir}/ (ceilings: ${ledger})" >&2
     exit "${overall}"
 
