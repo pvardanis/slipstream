@@ -129,12 +129,32 @@ gpu-pool-up:
 gpu-pool-down:
     kubectl delete -f {{ gpu_pool_manifests }} --ignore-not-found
 
+# Render the GPU manifest's swept engine knobs from the environment, defaulting to
+# the committed rig config (max-num-seqs 16, FP8 KV, prefix caching on) so a plain
+# `just gpu-deploy` deploys the committed rig config. `just knob-sweep` sets
+# MAX_NUM_SEQS / KV_CACHE_DTYPE / PREFIX_CACHING_FLAG per sweep point (#33, ADR-0009).
+# Only these three placeholders are substituted, so nothing else in the manifest
+# (an image tag, a shell-like token) is touched. Prints to stdout — pipe to
+# `kubectl apply -f -` (or `kubectl diff -f -` to preview before applying).
+_render-gpu-manifest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v envsubst >/dev/null || { echo "envsubst required (brew install gettext)" >&2; exit 1; }
+    MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}" \
+    KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}" \
+    PREFIX_CACHING_FLAG="${PREFIX_CACHING_FLAG:---enable-prefix-caching}" \
+      envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG}' <{{ gpu_manifests }}
+
 # Deploy the GPU vLLM replica and wait for it to serve. Karpenter provisions the
 # g5 on demand once the pod requests a GPU, so the wait covers node bring-up, the
 # ~10 GB image pull, and the AWQ weight load — hence the long timeout. Reuses the
-# vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses.
+# vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses. The
+# manifest is rendered (see `_render-gpu-manifest`) so the swept engine knobs
+# default to the committed rig unless the knob sweep overrides them.
 gpu-deploy: _ensure-api-key
-    kubectl apply -f {{ gpu_manifests }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _render-gpu-manifest | kubectl apply -f -
     kubectl -n slipstream rollout status deploy/vllm-gpu --timeout=1200s
 
 # Scale the GPU replica up to one and wait for it to serve. Karpenter brings a g5
@@ -292,8 +312,11 @@ bench *args:
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
     image="$(just _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
-    # so concurrent or repeated runs never overwrite each other.
-    run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+    # so concurrent or repeated runs never overwrite each other. The knob sweep
+    # (#33) injects BENCH_RUN_ID to nest one Tier-2 ladder per engine-knob point
+    # under a shared run (e.g. <run>/mns16_kvfp8_pcon); RUN_ID is only ever a path
+    # segment host-side (bench-sweep.sh), so a slash gives the nested subdir for free.
+    run_id="${BENCH_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 
     # run_on_host sends one command to the host over SSM, polls to completion and
     # surfaces its stderr; it reads the region and instance set above.
@@ -326,6 +349,90 @@ bench *args:
     aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
     echo "results synced to bench/results/${run_id}/"
     exit "${sweep_rc}"
+
+# Two-tier engine-knob sweep (#33, ADR-0009).
+#
+# Tier 1 = engine knobs, one GPU redeploy per point. The knobs live in the vLLM
+# launch args, so every combination needs a fresh `just gpu-deploy`:
+#   max-num-seqs (mns) {16,32,64,128,256} x KV dtype {fp8,fp16} x prefix caching
+#   {on,off} = 20 points, the three nested loops below.
+# Tier 2 = client load ladder, no redeploy. Against each already-running Tier-1
+# point, `just bench` walks --max-concurrency {8..256} (x prefix-share, inside
+# bench) to find the highest rung that holds goodput at the SLO — the sustained
+# concurrency ceiling for that point.
+#
+# For each Tier-1 point: render + redeploy the GPU replica, scrape vLLM's predicted
+# concurrency ceiling from the startup log, then drive the Tier-2 ladder against it.
+# Each point's ladder JSON lands under bench/results/<run>/mns{N}_kv{fp8|fp16}_pc{on|off}/,
+# and the predicted ceilings are tabulated alongside. FP8 is the committed rig; fp16
+# is swept only as a counterfactual baseline. Burstiness is pinned to one value: the
+# Tier-2 ladder is closed-loop (--max-concurrency caps in-flight requests and releases
+# a new one as each completes), not open-loop (--request-rate drives arrivals on a
+# clock, and burstiness shapes their inter-arrival gaps). Under closed-loop there is no
+# arrival process for burstiness to shape, so it is inert here. A point that fails to
+# deploy or whose ladder reports failures is recorded and the sweep continues, exiting
+# non-zero at the end. Requires a live stack (`just stack-up`).
+knob-sweep:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+    run_dir="bench/results/${run_id}"
+    mkdir -p "${run_dir}"
+    ledger="${run_dir}/predicted-ceilings.tsv"
+    printf 'point\tpredicted_ceiling\n' >"${ledger}"
+    overall=0
+    # Tier 1: max-num-seqs (mns) x KV dtype x prefix caching. Each iteration is one
+    # engine-knob point that gets its own redeploy below.
+    for mns in 16 32 64 128 256; do
+      for kv in fp8 fp16; do
+        # vLLM's --kv-cache-dtype accepts float16, not fp16; map the chart/ADR label
+        # to the engine token so the arm deploys (fp8 is accepted as-is).
+        case "${kv}" in
+          fp16) kv_dtype="float16" ;;
+          *) kv_dtype="${kv}" ;;
+        esac
+        for pc in on off; do
+          case "${pc}" in
+            on) pc_flag="--enable-prefix-caching" ;;
+            off) pc_flag="--no-enable-prefix-caching" ;;
+          esac
+          point="mns${mns}_kv${kv}_pc${pc}"
+          echo "==> knob-sweep point ${point}" >&2
+          # Render + redeploy the GPU replica for this engine-knob point. A failed
+          # deploy leaves the point unmeasurable; record it and move on rather than
+          # abandon the remaining points.
+          if ! MAX_NUM_SEQS="${mns}" KV_CACHE_DTYPE="${kv_dtype}" PREFIX_CACHING_FLAG="${pc_flag}" just gpu-deploy; then
+            echo "!! ${point}: gpu-deploy failed; skipping point" >&2
+            printf '%s\t%s\n' "${point}" "<deploy-failed>" >>"${ledger}"
+            overall=1
+            continue
+          fi
+          # Scrape vLLM's predicted concurrency ceiling from the startup log. It is a
+          # VRAM/KV-budget upper bound, not a measured ceiling (ADR-0009): recorded as a
+          # cross-check against the Tier-2 goodput result, never reported as the ceiling.
+          # replicas=1, so `logs deploy/vllm-gpu` reads the one pod just rolled out.
+          predicted="$(kubectl -n slipstream logs deploy/vllm-gpu \
+            | grep -oE 'Maximum concurrency for [0-9,]+ tokens per request: [0-9.]+x' \
+            | tail -1 || true)"
+          printf '%s\t%s\n' "${point}" "${predicted:-<none>}" >>"${ledger}"
+          echo "    predicted: ${predicted:-<no ceiling line in startup log>}" >&2
+          # Tier 2: client load ladder against this point, no redeploy. The nested
+          # BENCH_RUN_ID lands the per-point JSON under ${run_dir}/${point}/ (see
+          # `bench`). serve-sweep survives
+          # per-cell failures and only exits non-zero at the end, so a non-zero here means
+          # some cells failed — keep the partial results and flag the run.
+          if ! BENCH_RUN_ID="${run_id}/${point}" just bench \
+              --burstiness 1.0 \
+              --max-concurrency 8 --max-concurrency 16 --max-concurrency 32 \
+              --max-concurrency 64 --max-concurrency 128 --max-concurrency 256; then
+            echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
+            overall=1
+          fi
+        done
+      done
+    done
+    echo "knob sweep ${run_id} complete; results in ${run_dir}/ (ceilings: ${ledger})" >&2
+    exit "${overall}"
 
 # Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
 bench-results-sync:
