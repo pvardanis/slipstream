@@ -78,9 +78,7 @@ class SweepConfig:
             raise SweepError("no burstiness values to sweep: the grid would be empty")
         if not self.goodput:
             raise SweepError("no goodput SLO given: want e.g. 'ttft:1000 tpot:50'")
-        for share in self.prefix_shares:
-            if not 0 <= share <= 100:
-                raise SweepError(f"prefix-share {share} is outside 0..100")
+        self._reject_out_of_range_shares()
         self._reject_nonpositive_caps()
         # vLLM's prefix_repetition workload gives each prefix at least one prompt,
         # so it rejects a run with more prefixes than prompts. Fail fast here rather
@@ -91,6 +89,15 @@ class SweepConfig:
                 f"{self.num_prefixes}: raise prompts or lower prefixes"
             )
         self._require_tokenizer_when_commercial()
+
+    def _reject_out_of_range_shares(self) -> None:
+        """Reject a prefix-share outside 0..100, which names no valid split.
+
+        :raise SweepError: on a prefix-share below 0 or above 100.
+        """
+        for share in self.prefix_shares:
+            if not 0 <= share <= 100:
+                raise SweepError(f"prefix-share {share} is outside 0..100")
 
     def _reject_nonpositive_caps(self) -> None:
         """Reject a closed-loop max-concurrency cap that admits no in-flight request.
@@ -161,6 +168,9 @@ def grid(config: SweepConfig) -> Iterator[tuple[int, float, int | None]]:
     ceiling is read off. With no ladder configured the axis is a single open-loop
     ``None``, one cell per (share, burstiness) pair.
     """
+    # An empty ladder is open-loop: fall back to a single ``None`` rung so the grid
+    # still yields one cell per (share, burstiness) pair. The Cartesian product then
+    # walks shares outermost and the ladder innermost.
     ladder: tuple[int | None, ...] = config.max_concurrency_values or (None,)
     yield from product(config.prefix_shares, config.burstiness_values, ladder)
 
