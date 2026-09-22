@@ -1,4 +1,4 @@
-"""Tests for the knob-sweep CLI subcommand: aggregate a run dir into the table.
+"""Tests for the aggregate-sweep CLI subcommand: fold a run dir into the table.
 
 Pin the front-end contract: a run directory of point subdirs folds to a JSON
 ceiling table on stdout at exit 0, and an empty or unreadable run fails loud at
@@ -31,7 +31,7 @@ def test_aggregates_a_run_dir_into_a_json_ceiling_table(tmp_path: Path) -> None:
     """A point with a holding rung folds to one row carrying its measured ceiling."""
     _write_rung(tmp_path / "mns64_kvfp8_pcon", share=50, cap=32, fraction=0.98)
 
-    result = runner.invoke(app, ["knob-sweep", "--run-dir", str(tmp_path)])
+    result = runner.invoke(app, ["aggregate-sweep", "--run-dir", str(tmp_path)])
 
     assert result.exit_code == 0
     (row,) = json.loads(result.stdout)
@@ -44,7 +44,7 @@ def test_aggregates_a_run_dir_into_a_json_ceiling_table(tmp_path: Path) -> None:
 
 def test_an_empty_run_dir_fails_at_exit_2(tmp_path: Path) -> None:
     """A run with no point subdirs is rejected, not printed as an empty table."""
-    result = runner.invoke(app, ["knob-sweep", "--run-dir", str(tmp_path)])
+    result = runner.invoke(app, ["aggregate-sweep", "--run-dir", str(tmp_path)])
 
     assert result.exit_code == 2
     assert "no knob-sweep points" in result.stderr
@@ -57,7 +57,7 @@ def test_an_unreadable_cell_fails_at_exit_2(tmp_path: Path) -> None:
     point_dir.mkdir()
     (point_dir / "pshare50_burst1.0_mc32.json").write_text("not json")
 
-    result = runner.invoke(app, ["knob-sweep", "--run-dir", str(tmp_path)])
+    result = runner.invoke(app, ["aggregate-sweep", "--run-dir", str(tmp_path)])
 
     assert result.exit_code == 2
     assert result.stderr.strip()
@@ -65,6 +65,8 @@ def test_an_unreadable_cell_fails_at_exit_2(tmp_path: Path) -> None:
 
 def test_a_missing_run_dir_is_rejected_by_the_option(tmp_path: Path) -> None:
     """A non-existent run directory fails on the option's own existence check."""
-    result = runner.invoke(app, ["knob-sweep", "--run-dir", str(tmp_path / "absent")])
+    result = runner.invoke(
+        app, ["aggregate-sweep", "--run-dir", str(tmp_path / "absent")]
+    )
 
     assert result.exit_code != 0
