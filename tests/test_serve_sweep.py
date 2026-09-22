@@ -167,19 +167,34 @@ def test_grid_is_the_cartesian_product_in_order() -> None:
 
 
 def test_grid_ladders_max_concurrency_innermost() -> None:
-    """A closed-loop ladder is the innermost axis, contiguous per (share, burstiness)."""
+    """The ladder is innermost: its rungs run contiguously within one (share, burstiness).
+
+    Varying all three axes (2 shares x 2 burstiness x 2 rungs) is what pins the
+    nesting — with a single value on the other two axes the ladder's position in
+    the product would be unobservable. Shares stay outermost, ladder innermost.
+    """
     cfg = _config(
-        prefix_shares=[90],
-        burstiness_values=[1.0],
-        max_concurrency_values=[8, 16, 32],
+        prefix_shares=[10, 90],
+        burstiness_values=[0.2, 1.0],
+        max_concurrency_values=[8, 16],
     )
-    assert list(grid(cfg)) == [(90, 1.0, 8), (90, 1.0, 16), (90, 1.0, 32)]
+    assert list(grid(cfg)) == [
+        (10, 0.2, 8),
+        (10, 0.2, 16),
+        (10, 1.0, 8),
+        (10, 1.0, 16),
+        (90, 0.2, 8),
+        (90, 0.2, 16),
+        (90, 1.0, 8),
+        (90, 1.0, 16),
+    ]
 
 
-def test_config_rejects_a_nonpositive_max_concurrency() -> None:
-    """A max-concurrency of zero caps in-flight requests at none; reject it upfront."""
+@pytest.mark.parametrize("cap", [0, -1])
+def test_config_rejects_a_nonpositive_max_concurrency(cap: int) -> None:
+    """A max-concurrency of zero or below caps in-flight requests at none; reject it."""
     with pytest.raises(SweepError, match="max-concurrency"):
-        _config(max_concurrency_values=[0])
+        _config(max_concurrency_values=[cap])
 
 
 # --- cell_command: the flag assembly the retired bash test pinned ------------
@@ -293,6 +308,41 @@ def test_run_sweep_invokes_the_runner_once_per_cell(tmp_path) -> None:
 
     assert code == 0
     assert len(calls) == 6
+
+
+def test_run_sweep_ladders_max_concurrency_into_distinct_files(tmp_path) -> None:
+    """A closed-loop ladder runs each rung to its own file and labels the progress line.
+
+    Guards the integration seam the unit tests only prove piecewise: multiple rungs
+    of one (share, burstiness) pair write distinct ``_mc{N}`` files (never colliding)
+    and the operator's progress line carries the cap it is running.
+    """
+    cfg = _config(
+        prefix_shares=[90],
+        burstiness_values=[1.0],
+        max_concurrency_values=[8, 64],
+        out_dir=str(tmp_path),
+    )
+    echoed: list[str] = []
+
+    def runner(command: list[str]) -> int:
+        Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
+    code = run_sweep(
+        cfg,
+        dry_run=False,
+        runner=runner,
+        echo=echoed.append,
+        warn=lambda _line: None,
+    )
+
+    assert code == 0
+    written = sorted(p.name for p in tmp_path.glob("*.json"))
+    assert written == ["pshare90_burst1.0_mc64.json", "pshare90_burst1.0_mc8.json"]
+    # Each rung's progress line names the cap it is running.
+    assert any("max-concurrency 8" in line for line in echoed)
+    assert any("max-concurrency 64" in line for line in echoed)
 
 
 def _result_filename(command: list[str]) -> str:

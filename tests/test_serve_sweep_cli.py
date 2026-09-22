@@ -165,6 +165,13 @@ def test_zero_total_len_is_rejected() -> None:
     assert "--total-len" in plain(result)
 
 
+def test_zero_max_concurrency_is_rejected() -> None:
+    """--max-concurrency must be at least 1; the CLI rejects a zero rung at parse."""
+    result = _dry_run("--max-concurrency", "0")
+    assert result.exit_code == 2
+    assert "--max-concurrency" in plain(result)
+
+
 def test_share_above_100_is_rejected() -> None:
     """A prefix-share outside 0..100 is rejected with a diagnostic."""
     result = _dry_run("--prefix-share", "150")
