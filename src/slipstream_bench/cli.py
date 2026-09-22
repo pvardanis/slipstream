@@ -35,6 +35,7 @@ from slipstream_bench.report import (
 )
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
+from slipstream_bench.sweep_ceiling import SweepCeilingError, aggregate
 from slipstream_bench.zero_leak import LeakError, find_leaks, read_aws_json
 
 app = typer.Typer(
@@ -359,6 +360,34 @@ def report(
         typer.echo(render_markdown(rows))
     else:
         typer.echo(json.dumps(rows, indent=2))
+
+
+@app.command("knob-sweep")
+def knob_sweep(
+    *,
+    run_dir: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=False,
+            help="The bench/results/<run_id> directory the sweep wrote, one subdir "
+            "per engine-knob point.",
+        ),
+    ],
+) -> None:
+    """Aggregate a knob-sweep run into the concurrency-ceiling table.
+
+    Emits one JSON row per (max-num-seqs, kv-cache-dtype, prefix-caching) point and
+    prefix-share: the measured ceiling and the {timeout, oom, other} failure
+    cohorts. oom and num_preemptions read null until the recipe collects the pod
+    events and /metrics snapshots they need (ADR-0009).
+    """
+    try:
+        rows = aggregate(run_dir)
+    except (SweepCeilingError, ResultError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(json.dumps(rows, indent=2))
 
 
 @app.command("zero-leak")
