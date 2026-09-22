@@ -10,6 +10,7 @@ from typing import Annotated
 
 import typer
 
+from slipstream_bench.chart import write_artifacts
 from slipstream_bench.cli_helpers import (
     DEFAULT_BURSTINESS,
     DEFAULT_GOODPUT,
@@ -394,6 +395,35 @@ def aggregate_sweep(
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     typer.echo(json.dumps(rows, indent=2))
+
+
+@app.command("chart")
+def chart(
+    *,
+    run_dir: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=False,
+            help="The bench/results/<run_id> directory the sweep wrote, one subdir "
+            "per engine-knob point.",
+        ),
+    ],
+) -> None:
+    """Chart a knob-sweep run: write the ceiling table and its primary plot.
+
+    Aggregates the run, then writes the ceiling table as CSV and JSON with the primary
+    ceiling-by-max-num-seqs plot beside them under ``<run_dir>/charts`` — the table the
+    durable artifact, the PNG the disposable view (ADR-0009).
+    """
+    try:
+        rows = aggregate(run_dir)
+    except (SweepAggregationError, ResultError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    written = write_artifacts(rows, run_dir / "charts")
+    for path in written.values():
+        typer.echo(str(path))
 
 
 @app.command("sweep-grid")
