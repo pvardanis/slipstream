@@ -42,13 +42,14 @@ class SweepCeilingError(Exception):
 
 
 @dataclass(frozen=True)
-class Point:
+class EnginePoint:
     """The engine-knob point one Tier-1 redeploy measured.
 
-    The three knobs the sweep varies per redeploy: the batch cap (max-num-seqs),
-    the KV-cache dtype (fp8 committed, fp16 the counterfactual baseline), and
-    whether prefix caching was on. Binding them into one value object keeps the
-    aggregation key from travelling as three loose values a caller could transpose.
+    The three engine knobs the sweep varies per redeploy: the batch cap
+    (max-num-seqs), the KV-cache dtype (fp8 committed, fp16 the counterfactual
+    baseline), and whether prefix caching was on. Binding them into one value object
+    keeps the aggregation key from travelling as three loose values a caller could
+    transpose.
     """
 
     max_num_seqs: int
@@ -56,7 +57,7 @@ class Point:
     prefix_caching: bool
 
     @classmethod
-    def from_dirname(cls, name: str) -> "Point":
+    def from_dirname(cls, name: str) -> "EnginePoint":
         """Parse a point off its sweep subdir name.
 
         :param name: the subdir the recipe nested a point's JSON under, e.g.
@@ -123,7 +124,7 @@ def classify_failures(record: dict, source: Path) -> dict:
     """
     errors = record.get("errors")
     if errors is None:
-        return _cohorts_from_shortfall(record, source)
+        return _get_cohorts_from_shortfall(record, source)
     if not isinstance(errors, list):
         raise SweepCeilingError(
             f"result {source} has a non-list errors field: cannot cohort failures"
@@ -137,7 +138,7 @@ def classify_failures(record: dict, source: Path) -> dict:
     return {"timeout": timeout, "other": other, "oom": None}
 
 
-def _cohorts_from_shortfall(record: dict, source: Path) -> dict:
+def _get_cohorts_from_shortfall(record: dict, source: Path) -> dict:
     """Cohort failures a no-detail result only knows as attempted-minus-completed.
 
     Without a per-request ``errors`` array the kind of each failure is unknown, so
@@ -162,17 +163,36 @@ def _cohorts_from_shortfall(record: dict, source: Path) -> dict:
 
 
 @dataclass(frozen=True)
-class Cell:
-    """One Tier-2 ladder rung: an offered concurrency and how it held up.
+class LoadCell:
+    """One Tier-2 client-load ladder rung: an offered concurrency and how it held up.
 
-    The closed-loop ``--max-concurrency`` the rung offered, the prefix-share it ran,
-    the fraction of its completed requests that met the SLO, and its failure cohorts.
+    The two client knobs the ladder varies without a redeploy — the closed-loop
+    ``--max-concurrency`` the rung offered and the prefix-share it ran — plus the
+    fraction of its completed requests that met the SLO and its failure cohorts.
     """
 
     max_concurrency: int
     prefix_share: int
     goodput_fraction: float
     failures: dict
+
+    @classmethod
+    def from_record(cls, record: dict, source: Path) -> "LoadCell":
+        """Build a cell from a parsed client JSON, validating each field at the seam.
+
+        :param record: the cell's parsed ``vllm bench serve --save-result`` record.
+        :param source: the cell's result file, for the error message.
+        :return: the cell's offered concurrency, prefix-share, goodput fraction, and
+            failure cohorts.
+        :raise SweepCeilingError: when the cell lacks its closed-loop cap or its
+            stamped prefix-share, or carries a bad goodput or errors field.
+        """
+        return cls(
+            max_concurrency=_require_int(record, source, "max_concurrency"),
+            prefix_share=_require_int(record, source, "prefix_share"),
+            goodput_fraction=goodput_fraction(record, source),
+            failures=classify_failures(record, source),
+        )
 
 
 def _require_int(record: dict, source: Path, key: str) -> int:
@@ -191,27 +211,20 @@ def _require_int(record: dict, source: Path, key: str) -> int:
     return value
 
 
-def read_cell(path: Path) -> Cell:
+def read_cell(path: Path) -> LoadCell:
     """Read one Tier-2 client JSON into a ladder cell.
 
     :param path: the cell's ``vllm bench serve --save-result`` JSON.
-    :return: the cell's offered concurrency, prefix-share, goodput fraction, and
-        failure cohorts.
+    :return: the cell built and validated from the file's record.
     :raise SweepCeilingError: when the cell lacks its closed-loop cap or its stamped
         prefix-share, or carries a bad goodput or errors field.
     :raise ResultError: when the file cannot be read (see
         :func:`slipstream_bench.results.read_result`).
     """
-    record = read_result(path)
-    return Cell(
-        max_concurrency=_require_int(record, path, "max_concurrency"),
-        prefix_share=_require_int(record, path, "prefix_share"),
-        goodput_fraction=goodput_fraction(record, path),
-        failures=classify_failures(record, path),
-    )
+    return LoadCell.from_record(read_result(path), path)
 
 
-def ceiling(cells: list[Cell]) -> int | None:
+def get_ceiling(cells: list[LoadCell]) -> int | None:
     """Return the highest offered concurrency whose goodput held at the SLO.
 
     The ceiling is the highest ``--max-concurrency`` rung meeting the 95% goodput
@@ -230,7 +243,7 @@ def ceiling(cells: list[Cell]) -> int | None:
     return max(passing) if passing else None
 
 
-def _point_dirs(run_dir: Path) -> list[tuple[Point, Path]]:
+def _get_point_dirs(run_dir: Path) -> list[tuple[EnginePoint, Path]]:
     """Find the engine-knob point subdirs under a run directory, in key order.
 
     A run directory also holds the predicted-ceilings ledger and a charts subdir;
@@ -241,26 +254,28 @@ def _point_dirs(run_dir: Path) -> list[tuple[Point, Path]]:
     :return: the (point, subdir) pairs, sorted by point key.
     """
     found = [
-        (Point.from_dirname(child.name), child)
+        (EnginePoint.from_dirname(child.name), child)
         for child in run_dir.iterdir()
         if child.is_dir() and _POINT_PATTERN.match(child.name)
     ]
-    return sorted(found, key=lambda pair: _point_key(pair[0]))
+    return sorted(found, key=lambda pair: _get_point_key(pair[0]))
 
 
-def _point_key(point: Point) -> tuple[int, str, bool]:
+def _get_point_key(point: EnginePoint) -> tuple[int, str, bool]:
     """Order points by max-num-seqs, then kv-dtype, then prefix-caching."""
     return (point.max_num_seqs, point.kv_cache_dtype, point.prefix_caching)
 
 
-def _rows_for_point(point: Point, subdir: Path) -> list[dict]:
+def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
     """Fold one point's ladder cells into a ceiling row per prefix-share.
 
     :param point: the engine-knob point the subdir measured.
     :param subdir: the point's subdir of Tier-2 client JSONs.
     :return: one row per prefix-share the point ran, in ascending share order.
+    :raise SweepCeilingError: when the subdir holds no ladder rungs — a point that
+        measured nothing must not silently drop from the table.
     """
-    by_share: dict[int, list[Cell]] = defaultdict(list)
+    by_share: dict[int, list[LoadCell]] = defaultdict(list)
     for result in sorted(subdir.glob("*.json")):
         cell = read_cell(result)
         by_share[cell.prefix_share].append(cell)
@@ -269,10 +284,10 @@ def _rows_for_point(point: Point, subdir: Path) -> list[dict]:
             f"knob-sweep point {subdir} holds no ladder rungs (no *.json cells): "
             f"the point measured nothing"
         )
-    return [_point_row(point, share, by_share[share]) for share in sorted(by_share)]
+    return [_get_point_row(point, share, by_share[share]) for share in sorted(by_share)]
 
 
-def _point_row(point: Point, share: int, cells: list[Cell]) -> dict:
+def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> dict:
     """Build one ceiling row from a point-and-share group's ladder cells.
 
     The measured ceiling and the summed failure cohorts across the group's rungs.
@@ -285,7 +300,7 @@ def _point_row(point: Point, share: int, cells: list[Cell]) -> dict:
         "kv_cache_dtype": point.kv_cache_dtype,
         "prefix_caching": point.prefix_caching,
         "prefix_share": share,
-        "ceiling": ceiling(cells),
+        "ceiling": get_ceiling(cells),
         "failures": {
             "timeout": sum(cell.failures["timeout"] for cell in cells),
             "other": sum(cell.failures["other"] for cell in cells),
@@ -308,10 +323,12 @@ def aggregate(run_dir: Path) -> list[dict]:
         :func:`read_cell`).
     :raise ResultError: when a cell file cannot be read (see :func:`read_cell`).
     """
-    points = _point_dirs(run_dir)
+    points = _get_point_dirs(run_dir)
     if not points:
         raise SweepCeilingError(
             f"no knob-sweep points under {run_dir} "
             f"(want mns<N>_kv<fp8|fp16>_pc<on|off> subdirs)"
         )
-    return [row for point, subdir in points for row in _rows_for_point(point, subdir)]
+    return [
+        row for point, subdir in points for row in _get_rows_for_point(point, subdir)
+    ]

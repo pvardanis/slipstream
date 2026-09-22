@@ -15,12 +15,12 @@ import pytest
 
 from slipstream_bench.results import ResultError
 from slipstream_bench.sweep_ceiling import (
-    Cell,
-    Point,
+    EnginePoint,
+    LoadCell,
     SweepCeilingError,
     aggregate,
-    ceiling,
     classify_failures,
+    get_ceiling,
     goodput_fraction,
     read_cell,
 )
@@ -40,8 +40,8 @@ def _write_cell(tmp_path: Path, name: str = "cell.json", **extra: object) -> Pat
     return path
 
 
-def _cell(max_concurrency: int, fraction: float, *, prefix_share: int = 50) -> Cell:
-    return Cell(
+def _cell(max_concurrency: int, fraction: float, *, prefix_share: int = 50) -> LoadCell:
+    return LoadCell(
         max_concurrency=max_concurrency,
         prefix_share=prefix_share,
         goodput_fraction=fraction,
@@ -54,15 +54,15 @@ class TestPointFromDirname:
 
     def test_parses_max_num_seqs_kv_dtype_and_prefix_caching(self) -> None:
         """mns64_kvfp8_pcon -> (64, fp8, prefix caching on)."""
-        point = Point.from_dirname("mns64_kvfp8_pcon")
-        assert point == Point(
+        point = EnginePoint.from_dirname("mns64_kvfp8_pcon")
+        assert point == EnginePoint(
             max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True
         )
 
     def test_reads_fp16_counterfactual_dtype_and_caching_off(self) -> None:
         """mns256_kvfp16_pcoff -> (256, fp16, prefix caching off)."""
-        point = Point.from_dirname("mns256_kvfp16_pcoff")
-        assert point == Point(
+        point = EnginePoint.from_dirname("mns256_kvfp16_pcoff")
+        assert point == EnginePoint(
             max_num_seqs=256, kv_cache_dtype="fp16", prefix_caching=False
         )
 
@@ -80,7 +80,7 @@ class TestPointFromDirname:
     def test_rejects_a_malformed_subdir_name(self, name: str) -> None:
         """A subdir that names no valid engine point fails fast, not silently."""
         with pytest.raises(SweepCeilingError, match="point"):
-            Point.from_dirname(name)
+            EnginePoint.from_dirname(name)
 
 
 class TestGoodputFraction:
@@ -187,24 +187,24 @@ class TestCeiling:
             _cell(64, 0.80),
             _cell(128, 0.50),
         ]
-        assert ceiling(cells) == 32
+        assert get_ceiling(cells) == 32
 
     def test_a_rung_exactly_at_the_floor_holds(self) -> None:
         """95% is meeting the SLO, not missing it, so a 0.95 rung counts."""
-        assert ceiling([_cell(8, 0.95), _cell(16, 0.94)]) == 8
+        assert get_ceiling([_cell(8, 0.95), _cell(16, 0.94)]) == 8
 
     def test_no_rung_meets_the_floor_is_no_ceiling(self) -> None:
         """Even the lowest offered load misses the SLO — the point has no ceiling."""
-        assert ceiling([_cell(8, 0.80), _cell(16, 0.50)]) is None
+        assert get_ceiling([_cell(8, 0.80), _cell(16, 0.50)]) is None
 
     def test_takes_the_highest_passing_rung_even_past_a_dip(self) -> None:
         """The definition is the highest rung above the floor, robust to a noisy dip."""
         cells = [_cell(8, 0.99), _cell(16, 0.90), _cell(32, 0.96)]
-        assert ceiling(cells) == 32
+        assert get_ceiling(cells) == 32
 
     def test_no_cells_is_no_ceiling(self) -> None:
         """A point with no ladder cells measured nothing — no ceiling, not a zero."""
-        assert ceiling([]) is None
+        assert get_ceiling([]) is None
 
 
 class TestReadCell:
