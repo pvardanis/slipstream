@@ -34,7 +34,7 @@ spec:
   # holds one copy of the weights, and the node pool is capped at one GPU.
   strategy:
     type: Recreate
-  # A cold spot g5 must be provisioned by Karpenter, then pull the ~10 GB image and
+  # A cold g5 must be provisioned by Karpenter, then pull the ~10 GB image and
   # load the ~6 GB AWQ weights before the pod goes ready. Give the rollout room to
   # clear that cold start instead of failing the Deployment as stalled.
   progressDeadlineSeconds: 1200
@@ -91,22 +91,32 @@ spec:
             - awq_marlin
             # FP8 KV cache. A10G/Ampere has no hardware FP8 for weights (hence INT4
             # AWQ for those), but the KV cache still uses FP8, roughly doubling
-            # concurrent-sequence capacity (spec §3.1).
+            # concurrent-sequence capacity (spec §3.1). FP8 is the committed rig
+            # dtype and the render default; the knob sweep (#33) renders this per
+            # point to chart fp16 as a counterfactual baseline (ADR-0009).
             - --kv-cache-dtype
-            - fp8
+            - "${KV_CACHE_DTYPE}"
             # No tensor parallelism — the 8B model fits one A10G. Stated explicitly
             # (it is also the default) to make "no TP" unambiguous (spec §3.1).
             - --tensor-parallel-size
             - "1"
-            # Starting values, NOT tuned. The concurrency ceiling
-            # (max-num-seqs / gpu-memory-utilization / max-model-len) is found by the
-            # knob sweep in #33; treating these as measured settings would be wrong.
+            # Held fixed across every sweep arm: the KV budget is profiled against
+            # gpu-memory-utilization at startup, so the concurrency number must move
+            # with the knob under test, not with the token budget or the VRAM
+            # fraction (ADR-0009). Starting values, not a tuned result.
             - --max-model-len
             - "4096"
             - --gpu-memory-utilization
             - "0.90"
+            # Swept knobs, rendered per point by the knob sweep (#33). The committed
+            # rig's default values live in `_render-gpu-manifest`, so a plain
+            # `just gpu-deploy` renders these placeholders to that config; `just
+            # knob-sweep` overrides them per point. max-num-seqs caps concurrent
+            # sequences; prefix caching (V1 GPU default on) renders as an explicit
+            # --enable-prefix-caching / --no-enable-prefix-caching flag.
             - --max-num-seqs
-            - "16"
+            - "${MAX_NUM_SEQS}"
+            - ${PREFIX_CACHING_FLAG}
           env:
             # vLLM enforces this key on its API routes (/v1); /health and /metrics
             # stay open. Same Secret and value the CPU replica uses, so the bench endpoint
@@ -134,7 +144,7 @@ spec:
           # The image and weights are pulled on first start and the AWQ model loads
           # onto the card before the server serves; keep liveness and readiness from
           # acting until then. failureThreshold × periodSeconds (80 × 15 = 20 min)
-          # covers a cold spot node's image pull plus weight load.
+          # covers a cold node's image pull plus weight load.
           startupProbe:
             httpGet:
               path: /health
