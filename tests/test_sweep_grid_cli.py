@@ -17,9 +17,7 @@ runner = CliRunner()
 VALID_GRID = """\
 tier1:
   max_num_seqs: [16, 64]
-  kv_cache_dtype:
-    fp8: fp8
-    fp16: float16
+  kv_cache_dtype: [fp8, fp16]
   prefix_caching:
     "on":
       flag: --enable-prefix-caching
