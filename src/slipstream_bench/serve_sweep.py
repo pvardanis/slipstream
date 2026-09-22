@@ -69,8 +69,9 @@ class SweepConfig:
         having measured nothing.
 
         :raise SweepError: on an empty grid axis, an empty SLO, a share outside
-            0..100, a max-concurrency cap below 1, fewer prompts than prefixes, or
-            a commercial run without a local tokenizer.
+            0..100, a max-concurrency cap below 1, a repeated grid-axis value,
+            fewer prompts than prefixes, or a commercial run without a local
+            tokenizer.
         """
         if not self.prefix_shares:
             raise SweepError("no prefix-shares to sweep: the grid would be empty")
@@ -80,6 +81,7 @@ class SweepConfig:
             raise SweepError("no goodput SLO given: want e.g. 'ttft:1000 tpot:50'")
         self._reject_out_of_range_shares()
         self._reject_nonpositive_caps()
+        self._reject_duplicate_axis_values()
         # vLLM's prefix_repetition workload gives each prefix at least one prompt,
         # so it rejects a run with more prefixes than prompts. Fail fast here rather
         # than let every cell die the same way mid-grid.
@@ -110,6 +112,32 @@ class SweepConfig:
         for cap in self.max_concurrency_values:
             if cap < 1:
                 raise SweepError(f"--max-concurrency {cap} is below 1")
+
+    def _reject_duplicate_axis_values(self) -> None:
+        """Reject a grid axis that repeats a value, which reruns an identical cell.
+
+        The grid is the cartesian product of the three axes, so a repeated
+        prefix-share, burstiness, or max-concurrency value runs the same cell
+        twice — a full ``vllm bench serve`` pass whose result file, named from
+        the cell's coordinates, overwrites the first cell's own output. Fail fast
+        before the grid wastes the run.
+
+        :raise SweepError: on a repeated value in prefix_shares, burstiness_values,
+            or max_concurrency_values.
+        """
+        axes = (
+            ("prefix-share", self.prefix_shares),
+            ("burstiness", self.burstiness_values),
+            ("max-concurrency", self.max_concurrency_values),
+        )
+        for label, values in axes:
+            seen: set[object] = set()
+            for value in values:
+                if value in seen:
+                    raise SweepError(
+                        f"duplicate {label} {value}: each grid value sweeps once"
+                    )
+                seen.add(value)
 
     def _require_tokenizer_when_commercial(self) -> None:
         """Reject a commercial sweep that has no local tokenizer for synthesis.

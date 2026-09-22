@@ -197,6 +197,23 @@ def test_config_rejects_a_nonpositive_max_concurrency(cap: int) -> None:
         _config(max_concurrency_values=[cap])
 
 
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"prefix_shares": [10, 50, 10]}, "duplicate prefix-share 10"),
+        ({"prefix_shares": [10, 50, 10, 50]}, "duplicate prefix-share 10"),
+        ({"burstiness_values": [0.2, 1.0, 0.2]}, "duplicate burstiness 0.2"),
+        ({"max_concurrency_values": [8, 16, 8]}, "duplicate max-concurrency 8"),
+    ],
+)
+def test_config_rejects_a_duplicate_axis_value(
+    overrides: dict[str, object], match: str
+) -> None:
+    """A repeated grid-axis value reruns an identical cell; reject it at construction."""
+    with pytest.raises(SweepError, match=match):
+        _config(**overrides)
+
+
 # --- cell_command: the flag assembly the retired bash test pinned ------------
 
 
