@@ -8,6 +8,7 @@ non-empty PNG files under the Agg backend.
 import json
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pytest
 
 from slipstream_bench.chart import (
@@ -15,6 +16,7 @@ from slipstream_bench.chart import (
     _cliff_frame,
     _condition_label,
     _condition_order,
+    _plot_cliffs,
     _point_label,
     _point_order,
     _share_label,
@@ -24,6 +26,7 @@ from slipstream_bench.chart import (
     rungs_to_markdown,
     write_artifacts,
 )
+from slipstream_bench.sweep_aggregation import _GOODPUT_FLOOR
 
 
 def _row(
@@ -331,3 +334,27 @@ def test_write_artifacts_rejects_an_empty_ceiling_table(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="empty ceiling table"):
         write_artifacts([], [], tmp_path / "charts")
     assert not (tmp_path / "charts").exists()
+
+
+def test_write_artifacts_rejects_empty_rungs(tmp_path: Path) -> None:
+    """Non-empty ceilings with no rungs must not write a header-only cliff table."""
+    with pytest.raises(ValueError, match="empty cliff table"):
+        write_artifacts(_grid_rows(), [], tmp_path / "charts")
+    assert not (tmp_path / "charts").exists()
+
+
+def test_plot_cliffs_refline_sits_at_the_aggregators_floor() -> None:
+    """The crimson reference line tracks the aggregator's floor, not a copied number."""
+    grid = _plot_cliffs(_grid_rungs())
+    try:
+        reflines = [
+            line
+            for ax in grid.axes.flat
+            for line in ax.lines
+            if line.get_linestyle() == "--"
+        ]
+        assert reflines
+        for line in reflines:
+            assert list(line.get_ydata()) == [_GOODPUT_FLOOR, _GOODPUT_FLOOR]
+    finally:
+        plt.close(grid.figure)

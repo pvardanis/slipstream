@@ -427,7 +427,7 @@ def chart(
         rows = aggregate_ceilings(run_dir)
         rungs = aggregate_rungs(run_dir)
         written = write_artifacts(rows, rungs, charts_dir)
-    except (SweepAggregationError, ResultError) as error:
+    except (SweepAggregationError, ResultError, ValueError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     except OSError as error:
