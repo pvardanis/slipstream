@@ -1,8 +1,9 @@
-"""Render a knob-sweep run's aggregated ceiling table to CSV/JSON and a static PNG.
+"""Render a knob-sweep run's aggregated ceiling table to Markdown/JSON and a static PNG.
 
 The ceiling table is the durable artifact and the PNG is disposable (ADR-0009), so the
-CSV and JSON are written from the same rows
-:func:`slipstream_bench.sweep_aggregation.aggregate` emits. The primary chart plots the
+Markdown and JSON are written from the same rows
+:func:`slipstream_bench.sweep_aggregation.aggregate` emits — Markdown the human-readable
+view, JSON the structured table later layers re-read. The primary chart plots the
 concurrency ceiling per engine point — x = max-num-seqs, series = kv-cache-dtype,
 faceted by prefix-caching x prefix-share — rendered offline through matplotlib's Agg
 backend. Caching-off carries only its single share-0 baseline, so its row holds one
@@ -23,7 +24,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-_CSV_COLUMNS = (
+_TABLE_COLUMNS = (
     "max_num_seqs",
     "kv_cache_dtype",
     "prefix_caching",
@@ -36,9 +37,9 @@ _CSV_COLUMNS = (
 )
 
 # The ceiling axis names its SLO predicate: the KB pairs a goodput/ceiling number with
-# the SLO it was read at, never bare. These thresholds mirror the shared SLO the
-# aggregator reads the ceiling off (ADR-0009: goodput >= 95% meeting ttft<=1000ms and
-# tpot<=50ms) — the same source cli_helpers.DEFAULT_GOODPUT feeds the harness.
+# the SLO it was read at, never bare. The ttft/tpot thresholds mirror the harness's
+# cli_helpers.DEFAULT_GOODPUT and the 95% floor mirrors sweep_aggregation._GOODPUT_FLOOR
+# (ADR-0009). This label is a manual copy of those constants, kept in sync by hand.
 _CEILING_AXIS_LABEL = "max sustained --max-concurrency at SLO"
 _SLO_TITLE = "concurrency ceiling — goodput >= 95% (ttft <= 1000ms, tpot <= 50ms)"
 
@@ -48,12 +49,12 @@ _NO_SHARE_LABEL = "n/a"
 
 
 def _cell(value: object) -> str:
-    """Render one CSV cell, a not-captured None as an empty field."""
+    """Render one table cell, a not-captured None as an empty field."""
     return "" if value is None else str(value)
 
 
 def _row_cells(row: dict) -> list[str]:
-    """Flatten one ceiling row into its CSV cells, :data:`_CSV_COLUMNS` order."""
+    """Flatten one ceiling row into its cells, :data:`_TABLE_COLUMNS` order."""
     failures = row["failures"]
     return [
         _cell(row["max_num_seqs"]),
@@ -68,17 +69,20 @@ def _row_cells(row: dict) -> list[str]:
     ]
 
 
-def rows_to_csv(rows: list[dict]) -> str:
-    """Render the aggregated ceiling rows as CSV, the durable data artifact.
+def rows_to_markdown(rows: list[dict]) -> str:
+    """Render the aggregated ceiling rows as a GitHub-flavored Markdown table.
+
+    The human-readable durable artifact: it renders inline in a PR or a run's notes,
+    the failure cohorts flattened into columns and a not-captured None left blank.
 
     :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate`
         emitted, already sorted by point then prefix-share.
-    :return: the CSV text: one header line, then one line per row, the failure
-        cohorts flattened and a not-captured None left as an empty field.
+    :return: the table as one string: header, separator, one row per ceiling row.
     """
-    header = ",".join(_CSV_COLUMNS)
-    body = [",".join(_row_cells(row)) for row in rows]
-    return "\n".join([header, *body])
+    header = "| " + " | ".join(_TABLE_COLUMNS) + " |"
+    separator = "| " + " | ".join("---" for _ in _TABLE_COLUMNS) + " |"
+    body = ["| " + " | ".join(_row_cells(row)) + " |" for row in rows]
+    return "\n".join([header, separator, *body])
 
 
 def rows_to_json(rows: list[dict]) -> str:
@@ -86,7 +90,7 @@ def rows_to_json(rows: list[dict]) -> str:
 
     Keeps the rows' nested structure — the failure cohorts and not-captured nulls —
     so the table re-reads as the same objects the aggregator emitted, unlike the
-    flattened CSV meant for a spreadsheet.
+    flattened Markdown meant for a human reader.
 
     :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate`
         emitted, already sorted by point then prefix-share.
@@ -158,24 +162,33 @@ def _plot_ceilings(rows: list[dict]) -> sns.FacetGrid:
 def write_artifacts(rows: list[dict], charts_dir: Path) -> dict[str, Path]:
     """Write the ceiling table and primary chart into a run's charts directory.
 
-    The CSV and JSON are the durable data artifacts; the PNG is the disposable view of
-    them. The directory is created on the way out, so the run directory need not
-    pre-hold it.
+    The Markdown and JSON are the durable data artifacts; the PNG is the disposable
+    view of them. The directory is created on the way out, so the run directory need
+    not pre-hold it.
 
     :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate` emitted.
     :param charts_dir: the ``bench/results/<run_id>/charts`` directory to write into.
-    :return: the written paths, keyed ``csv`` / ``json`` / ``png``.
+    :return: the written paths, keyed ``markdown`` / ``json`` / ``png``.
+    :raise ValueError: when ``rows`` is empty — an empty run holds no ceiling and must
+        not be written as a header-only table and a blank plot.
+    :raise OSError: when the directory cannot be made or an artifact cannot be written.
     """
+    if not rows:
+        raise ValueError(
+            "cannot chart an empty ceiling table: the run aggregated no rows"
+        )
     charts_dir = Path(charts_dir)
     charts_dir.mkdir(parents=True, exist_ok=True)
     paths = {
-        "csv": charts_dir / "ceiling-table.csv",
+        "markdown": charts_dir / "ceiling-table.md",
         "json": charts_dir / "ceiling-table.json",
         "png": charts_dir / "ceiling-by-max-num-seqs.png",
     }
-    paths["csv"].write_text(rows_to_csv(rows))
+    paths["markdown"].write_text(rows_to_markdown(rows))
     paths["json"].write_text(rows_to_json(rows))
     grid = _plot_ceilings(rows)
-    grid.savefig(paths["png"])
-    plt.close(grid.figure)
+    try:
+        grid.savefig(paths["png"])
+    finally:
+        plt.close(grid.figure)
     return paths

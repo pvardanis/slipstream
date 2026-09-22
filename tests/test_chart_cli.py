@@ -28,7 +28,7 @@ def _write_rung(point_dir: Path, *, share: int, cap: int, fraction: float) -> No
 
 
 def test_charts_a_run_dir_into_table_and_plot_artifacts(tmp_path: Path) -> None:
-    """A run folds to a non-empty CSV, JSON, and PNG under its charts subdir."""
+    """A run folds to a non-empty Markdown, JSON, and PNG under its charts subdir."""
     _write_rung(tmp_path / "mns64_kvfp8_pcon", share=50, cap=32, fraction=0.98)
 
     result = runner.invoke(app, ["chart", "--run-dir", str(tmp_path)])
@@ -36,7 +36,7 @@ def test_charts_a_run_dir_into_table_and_plot_artifacts(tmp_path: Path) -> None:
     assert result.exit_code == 0
     charts = tmp_path / "charts"
     for name in (
-        "ceiling-table.csv",
+        "ceiling-table.md",
         "ceiling-table.json",
         "ceiling-by-max-num-seqs.png",
     ):
@@ -63,7 +63,7 @@ def test_an_unreadable_cell_fails_at_exit_2(tmp_path: Path) -> None:
     result = runner.invoke(app, ["chart", "--run-dir", str(tmp_path)])
 
     assert result.exit_code == 2
-    assert result.stderr.strip()
+    assert "pshare50_burst1.0_mc32.json" in result.stderr
 
 
 def test_a_missing_run_dir_is_rejected_by_the_option(tmp_path: Path) -> None:
