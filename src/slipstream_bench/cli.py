@@ -412,16 +412,22 @@ def chart(
 ) -> None:
     """Chart a knob-sweep run: write the ceiling table and its primary plot.
 
-    Aggregates the run, then writes the ceiling table as CSV and JSON with the primary
-    ceiling-by-max-num-seqs plot beside them under ``<run_dir>/charts`` — the table the
-    durable artifact, the PNG the disposable view (ADR-0009).
+    Aggregates the run, then writes the ceiling table as Markdown and JSON with the
+    primary ceiling-by-max-num-seqs plot beside them under ``<run_dir>/charts`` — the
+    table the durable artifact, the PNG the disposable view (ADR-0009).
     """
+    charts_dir = run_dir / "charts"
     try:
         rows = aggregate(run_dir)
+        written = write_artifacts(rows, charts_dir)
     except (SweepAggregationError, ResultError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
-    written = write_artifacts(rows, run_dir / "charts")
+    except OSError as error:
+        typer.echo(
+            f"could not write chart artifacts under {charts_dir}: {error}", err=True
+        )
+        raise typer.Exit(code=2) from error
     for path in written.values():
         typer.echo(str(path))
 
