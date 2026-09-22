@@ -278,6 +278,23 @@ def _get_point_key(point: EnginePoint) -> tuple[int, str, bool]:
     return (point.max_num_seqs, point.kv_cache_dtype, point.prefix_caching)
 
 
+def _read_point_cells(subdir: Path) -> list[LoadCell]:
+    """Read a point subdir's Tier-2 ladder rungs, failing fast when it holds none.
+
+    :param subdir: the point's subdir of Tier-2 client JSONs.
+    :return: the ladder cells the subdir holds, one per client JSON.
+    :raise SweepAggregationError: when the subdir holds no ladder rungs — a point that
+        measured nothing must not silently drop from the table.
+    """
+    cells = [read_cell(result) for result in sorted(subdir.glob("*.json"))]
+    if not cells:
+        raise SweepAggregationError(
+            f"knob-sweep point {subdir} holds no ladder rungs (no *.json cells): "
+            f"the point measured nothing"
+        )
+    return cells
+
+
 def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
     """Fold one point's ladder cells into a ceiling row per prefix-share.
 
@@ -288,15 +305,37 @@ def _get_rows_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
         measured nothing must not silently drop from the table.
     """
     by_share: dict[int, list[LoadCell]] = defaultdict(list)
-    for result in sorted(subdir.glob("*.json")):
-        cell = read_cell(result)
+    for cell in _read_point_cells(subdir):
         by_share[cell.prefix_share].append(cell)
-    if not by_share:
-        raise SweepAggregationError(
-            f"knob-sweep point {subdir} holds no ladder rungs (no *.json cells): "
-            f"the point measured nothing"
-        )
     return [_get_point_row(point, share, by_share[share]) for share in sorted(by_share)]
+
+
+def _get_rungs_for_point(point: EnginePoint, subdir: Path) -> list[dict]:
+    """Unfold one point's ladder cells into a per-rung row, the cliff before the fold.
+
+    :param point: the engine-knob point the subdir measured.
+    :param subdir: the point's subdir of Tier-2 client JSONs.
+    :return: one row per rung, sorted by prefix-share then offered concurrency, each
+        carrying the point knobs and the rung's own goodput fraction.
+    :raise SweepAggregationError: when the subdir holds no ladder rungs.
+    """
+    cells = sorted(
+        _read_point_cells(subdir),
+        key=lambda cell: (cell.prefix_share, cell.max_concurrency),
+    )
+    return [_get_rung_row(point, cell) for cell in cells]
+
+
+def _get_rung_row(point: EnginePoint, cell: LoadCell) -> dict:
+    """Build one per-rung row: the point knobs, the rung's share, cap, and goodput."""
+    return {
+        "max_num_seqs": point.max_num_seqs,
+        "kv_cache_dtype": point.kv_cache_dtype,
+        "prefix_caching": point.prefix_caching,
+        "prefix_share": cell.prefix_share,
+        "max_concurrency": cell.max_concurrency,
+        "goodput_fraction": cell.goodput_fraction,
+    }
 
 
 def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> dict:
@@ -335,12 +374,46 @@ def aggregate_ceilings(run_dir: Path) -> list[dict]:
         :func:`read_cell`).
     :raise ResultError: when a cell file cannot be read (see :func:`read_cell`).
     """
+    points = _require_point_dirs(run_dir)
+    return [
+        row for point, subdir in points for row in _get_rows_for_point(point, subdir)
+    ]
+
+
+def aggregate_rungs(run_dir: Path) -> list[dict]:
+    """Unfold a knob-sweep run into per-rung rows, the goodput cliff behind the ceiling.
+
+    Where :func:`aggregate_ceilings` folds each point-and-share ladder to one ceiling,
+    this keeps every rung — the goodput fraction at each offered ``--max-concurrency`` —
+    so the diagnostic chart plots the cliff the ceiling was read off (ADR-0009).
+
+    :param run_dir: the ``bench/results/<run_id>`` directory the sweep wrote, one
+        subdir per engine-knob point.
+    :return: the rung rows, sorted by point key, then prefix-share, then offered
+        concurrency.
+    :raise SweepAggregationError: when the directory holds no point subdirs, or a point
+        subdir holds no ladder rungs, or a cell cannot be aggregated (see
+        :func:`read_cell`).
+    :raise ResultError: when a cell file cannot be read (see :func:`read_cell`).
+    """
+    points = _require_point_dirs(run_dir)
+    return [
+        row for point, subdir in points for row in _get_rungs_for_point(point, subdir)
+    ]
+
+
+def _require_point_dirs(run_dir: Path) -> list[tuple[EnginePoint, Path]]:
+    """Find a run's engine-knob point subdirs, failing fast when it holds none.
+
+    :param run_dir: the ``bench/results/<run_id>`` directory the sweep wrote.
+    :return: the (point, subdir) pairs, sorted by point key.
+    :raise SweepAggregationError: when the directory holds no point subdirs — an empty
+        run measured nothing and must not report zero rows as a clean result.
+    """
     points = _get_point_dirs(run_dir)
     if not points:
         raise SweepAggregationError(
             f"no knob-sweep points under {run_dir} "
             f"(want mns<N>_kv<fp8|fp16>_pc<on|off> subdirs)"
         )
-    return [
-        row for point, subdir in points for row in _get_rows_for_point(point, subdir)
-    ]
+    return points

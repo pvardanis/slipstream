@@ -19,6 +19,7 @@ from slipstream_bench.sweep_aggregation import (
     LoadCell,
     SweepAggregationError,
     aggregate_ceilings,
+    aggregate_rungs,
     classify_failures,
     get_ceiling,
     goodput_fraction,
@@ -381,3 +382,69 @@ def test_a_point_subdir_with_no_rungs_is_rejected(tmp_path: Path) -> None:
     (tmp_path / "mns64_kvfp8_pcon").mkdir()
     with pytest.raises(SweepAggregationError, match="no ladder"):
         aggregate_ceilings(tmp_path)
+
+
+# The whole run unfolded into per-rung rows, the goodput cliff the ceiling reads off.
+
+
+def test_one_row_per_rung_carrying_the_point_share_cap_and_goodput(
+    tmp_path: Path,
+) -> None:
+    """Each ladder rung keeps its own goodput at its cap — the cliff, not the fold."""
+    point = tmp_path / "mns64_kvfp8_pcon"
+    _write_rung(point, share=50, cap=32, fraction=0.98)
+    _write_rung(point, share=50, cap=64, fraction=0.80)
+
+    rungs = aggregate_rungs(tmp_path)
+
+    assert rungs == [
+        {
+            "max_num_seqs": 64,
+            "kv_cache_dtype": "fp8",
+            "prefix_caching": True,
+            "prefix_share": 50,
+            "max_concurrency": 32,
+            "goodput_fraction": pytest.approx(0.98),
+        },
+        {
+            "max_num_seqs": 64,
+            "kv_cache_dtype": "fp8",
+            "prefix_caching": True,
+            "prefix_share": 50,
+            "max_concurrency": 64,
+            "goodput_fraction": pytest.approx(0.80),
+        },
+    ]
+
+
+def test_rungs_sort_by_point_then_share_then_max_concurrency(tmp_path: Path) -> None:
+    """Rungs order by the point key, then share, then the ladder cap within a group."""
+    point = tmp_path / "mns64_kvfp8_pcon"
+    _write_rung(point, share=90, cap=8, fraction=0.99)
+    _write_rung(point, share=10, cap=64, fraction=0.99)
+    _write_rung(point, share=10, cap=8, fraction=0.99)
+    _write_rung(tmp_path / "mns16_kvfp8_pcon", share=10, cap=8, fraction=0.99)
+
+    rungs = aggregate_rungs(tmp_path)
+
+    assert [
+        (r["max_num_seqs"], r["prefix_share"], r["max_concurrency"]) for r in rungs
+    ] == [
+        (16, 10, 8),
+        (64, 10, 8),
+        (64, 10, 64),
+        (64, 90, 8),
+    ]
+
+
+def test_rungs_reject_a_run_with_no_point_subdirs(tmp_path: Path) -> None:
+    """An empty run measured no cliff — fail fast, as the ceiling fold does."""
+    with pytest.raises(SweepAggregationError, match="no knob-sweep points"):
+        aggregate_rungs(tmp_path)
+
+
+def test_rungs_reject_a_point_subdir_with_no_rungs(tmp_path: Path) -> None:
+    """A point that collected no rungs has no cliff to plot — fail fast."""
+    (tmp_path / "mns64_kvfp8_pcon").mkdir()
+    with pytest.raises(SweepAggregationError, match="no ladder"):
+        aggregate_rungs(tmp_path)
