@@ -88,6 +88,32 @@ def test_reads_fp16_counterfactual_dtype_and_caching_off() -> None:
     )
 
 
+def test_slug_names_the_point_subdir() -> None:
+    """slug() builds the subdir name from_dirname reads back."""
+    assert (
+        EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True).slug()
+        == "mns64_kvfp8_pcon"
+    )
+    assert (
+        EnginePoint(
+            max_num_seqs=256, kv_cache_dtype="fp16", prefix_caching=False
+        ).slug()
+        == "mns256_kvfp16_pcoff"
+    )
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        EnginePoint(max_num_seqs=16, kv_cache_dtype="fp8", prefix_caching=True),
+        EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False),
+    ],
+)
+def test_slug_round_trips_through_from_dirname(point: EnginePoint) -> None:
+    """slug and from_dirname are one format from both ends, no drift."""
+    assert EnginePoint.from_dirname(point.slug()) == point
+
+
 @pytest.mark.parametrize(
     "name",
     [
