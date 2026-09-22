@@ -39,9 +39,14 @@ _TABLE_COLUMNS = (
 # The ceiling axis names its SLO predicate: the KB pairs a goodput/ceiling number with
 # the SLO it was read at, never bare. The ttft/tpot thresholds mirror the harness's
 # cli_helpers.DEFAULT_GOODPUT and the 95% floor mirrors sweep_aggregation._GOODPUT_FLOOR
-# (ADR-0009). This label is a manual copy of those constants, kept in sync by hand.
+# (ADR-0009). The title also names the pinned burstiness the whole grid ran at — the
+# aggregated rows do not carry it, so it is asserted here from the grid's pin, not read
+# from the data. This label is a manual copy of those constants, kept in sync by hand.
 _CEILING_AXIS_LABEL = "max sustained --max-concurrency at SLO"
-_SLO_TITLE = "concurrency ceiling — goodput >= 95% (ttft <= 1000ms, tpot <= 50ms)"
+_SLO_TITLE = (
+    "concurrency ceiling — burstiness 1.0, "
+    "goodput >= 95% (ttft <= 1000ms, tpot <= 50ms)"
+)
 
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
 # a swept value — its own facet, ordered ahead of the swept shares.
