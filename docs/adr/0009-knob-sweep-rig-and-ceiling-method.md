@@ -66,8 +66,8 @@ the saturation batch first, then vary interacting knobs only near it — the gri
 - `prefix_share` — swept over {10, 50, 90} only when `prefix-caching=on`; when off it is pinned
   to a single `0` baseline. With caching off vLLM reuses no prefix KV regardless of how much
   prefix requests share (`KVCacheManager.get_computed_blocks` returns zero computed blocks when
-  `enable_caching` is false), and the workload holds `total_len` fixed while share only
-  re-partitions it into prefix/suffix, so goodput is flat across share — a swept share there
+  `enable_caching` is false, vLLM v0.29.0), and the workload holds `total_len` fixed while share
+  only re-partitions it into prefix/suffix, so goodput is flat across share — a swept share there
   measures a definitional null. The ladder is therefore {10, 50, 90} under caching-on and {0}
   under caching-off, so no null cell is ever run.
 
@@ -105,7 +105,7 @@ soft-fail signal — the real "`max-num-seqs` pushed too high" tell, distinct fr
 
 ### Chart — offline artifact, data first
 
-A new `chart` subcommand renders a static PNG (seaborn over matplotlib) to
+A new `chart` subcommand renders a static PNG (seaborn, atop matplotlib) to
 `bench/results/<run_id>/charts/`, with the aggregated ceiling table written beside it as
 CSV/JSON — the table is the durable artifact, the PNG disposable. Aggregation is a **new**
 `sweep_aggregation.py` module (CLI `aggregate-sweep`) keyed by (`max-num-seqs`, `kv-cache-dtype`,
@@ -140,5 +140,5 @@ single-config cost×prefix economics join, a different key and output.
 - Once the sweep produces real numbers, `k8s/vllm-gpu.yaml`'s placeholder engine args are
   patched with the tuned values. That is a data-driven config change on its **own** later commit,
   not part of building the rig — the rig has to run before the numbers exist.
-- A first plotting dependency (seaborn + pandas, over matplotlib) enters the bench package,
-  previously `prometheus-client` + `typer` only.
+- A first plotting dependency (seaborn + pandas, atop matplotlib) enters the bench package,
+  joining `prometheus-client` + `typer`.
