@@ -12,11 +12,16 @@ import pytest
 
 from slipstream_bench.chart import (
     _ceiling_frame,
+    _cliff_frame,
     _condition_label,
     _condition_order,
+    _point_label,
+    _point_order,
     _share_label,
     rows_to_json,
     rows_to_markdown,
+    rungs_to_json,
+    rungs_to_markdown,
     write_artifacts,
 )
 
@@ -143,6 +148,120 @@ def test_condition_order_omits_the_baseline_when_no_caching_off_row_is_present()
     assert _condition_order(frame) == ["caching on · share 50"]
 
 
+def _rung(
+    *,
+    max_num_seqs: int = 64,
+    kv_cache_dtype: str = "fp8",
+    prefix_caching: bool = True,
+    prefix_share: int = 50,
+    max_concurrency: int = 32,
+    goodput_fraction: float = 0.98,
+) -> dict:
+    return {
+        "max_num_seqs": max_num_seqs,
+        "kv_cache_dtype": kv_cache_dtype,
+        "prefix_caching": prefix_caching,
+        "prefix_share": prefix_share,
+        "max_concurrency": max_concurrency,
+        "goodput_fraction": goodput_fraction,
+    }
+
+
+def test_rungs_markdown_header_and_separator_name_every_column() -> None:
+    """The diagnostic table heads the point knobs, the offered cap, and the goodput."""
+    header, separator = rungs_to_markdown([_rung()]).splitlines()[:2]
+    assert header == (
+        "| max_num_seqs | kv_cache_dtype | prefix_caching | prefix_share | "
+        "max_concurrency | goodput_fraction |"
+    )
+    assert separator == "| " + " | ".join(["---"] * 6) + " |"
+
+
+def test_rungs_markdown_renders_the_goodput_fraction_to_three_decimals() -> None:
+    """The human view rounds the messy goodput/throughput ratio; the JSON keeps it."""
+    body = rungs_to_markdown([_rung(goodput_fraction=0.937541)]).splitlines()[2]
+    assert body == "| 64 | fp8 | True | 50 | 32 | 0.938 |"
+
+
+def test_rungs_json_round_trips_the_full_precision_fraction() -> None:
+    """The JSON artifact keeps the rung rows verbatim — the durable, re-readable cliff."""
+    rungs = [_rung(goodput_fraction=0.937541), _rung(max_concurrency=64)]
+    assert json.loads(rungs_to_json(rungs)) == rungs
+
+
+def test_point_label_names_the_engine_deploy_the_facet_stands_for() -> None:
+    """A rung's facet is its engine point: the batch cap, KV dtype, and caching."""
+    assert _point_label(_rung(max_num_seqs=128, kv_cache_dtype="fp16")) == (
+        "mns128 · fp16 · caching on"
+    )
+    assert _point_label(_rung(prefix_caching=False)) == "mns64 · fp8 · caching off"
+
+
+def test_cliff_frame_folds_the_point_and_share_labels_and_keeps_goodput() -> None:
+    """The frame carries the facet point, the hue share, and the rung's goodput."""
+    frame = _cliff_frame(
+        [
+            _rung(max_concurrency=32, goodput_fraction=0.98),
+            _rung(prefix_caching=False, prefix_share=0, goodput_fraction=0.80),
+        ]
+    )
+    assert list(frame["point"]) == [
+        "mns64 · fp8 · caching on",
+        "mns64 · fp8 · caching off",
+    ]
+    assert list(frame["prefix_share"]) == ["50", "n/a"]
+    assert list(frame["goodput_fraction"]) == [0.98, 0.80]
+
+
+def test_point_order_keeps_the_aggregators_point_key_order() -> None:
+    """Facets follow the order aggregate_rungs already sorted the points into."""
+    frame = _cliff_frame(
+        [
+            _rung(max_num_seqs=64, kv_cache_dtype="fp8"),
+            _rung(max_num_seqs=64, kv_cache_dtype="fp8", max_concurrency=64),
+            _rung(max_num_seqs=128, kv_cache_dtype="fp16"),
+        ]
+    )
+    assert _point_order(frame) == [
+        "mns64 · fp8 · caching on",
+        "mns128 · fp16 · caching on",
+    ]
+
+
+def _grid_rungs() -> list[dict]:
+    """A ragged run's rungs: caching-on spans shares {10,50,90}, off pins share 0.
+
+    Each point holds a two-rung ladder with a cliff — the high rung dips below the
+    floor — so the diagnostic plot exercises a real drop, not a flat line.
+    """
+    rungs = []
+    for mns in (64, 128):
+        for kv in ("fp8", "fp16"):
+            for share in (10, 50, 90):
+                for cap, frac in ((8, 0.99), (64, 0.80)):
+                    rungs.append(
+                        _rung(
+                            max_num_seqs=mns,
+                            kv_cache_dtype=kv,
+                            prefix_share=share,
+                            max_concurrency=cap,
+                            goodput_fraction=frac,
+                        )
+                    )
+            for cap, frac in ((8, 0.99), (64, 0.80)):
+                rungs.append(
+                    _rung(
+                        max_num_seqs=mns,
+                        kv_cache_dtype=kv,
+                        prefix_caching=False,
+                        prefix_share=0,
+                        max_concurrency=cap,
+                        goodput_fraction=frac,
+                    )
+                )
+    return rungs
+
+
 def _grid_rows() -> list[dict]:
     """A ragged run: caching-on spans shares {10,50,90}, caching-off pins share 0.
 
@@ -173,11 +292,19 @@ def _grid_rows() -> list[dict]:
     return rows
 
 
-def test_write_artifacts_writes_a_non_empty_markdown_json_and_png(
+def test_write_artifacts_writes_both_tables_and_both_plots_none_empty(
     tmp_path: Path,
 ) -> None:
-    """The chart writes the two data artifacts and the primary plot, none empty."""
-    written = write_artifacts(_grid_rows(), tmp_path / "charts")
+    """The chart writes the ceiling and cliff data artifacts and both plots, none empty."""
+    written = write_artifacts(_grid_rows(), _grid_rungs(), tmp_path / "charts")
+    assert set(written) == {
+        "markdown",
+        "json",
+        "png",
+        "rungs_markdown",
+        "rungs_json",
+        "rungs_png",
+    }
     for path in written.values():
         assert path.is_file() and path.stat().st_size > 0
 
@@ -185,20 +312,22 @@ def test_write_artifacts_writes_a_non_empty_markdown_json_and_png(
 def test_write_artifacts_creates_the_charts_directory(tmp_path: Path) -> None:
     """The charts subdir is made on the way out — the run dir need not pre-hold it."""
     charts_dir = tmp_path / "run" / "charts"
-    write_artifacts(_grid_rows(), charts_dir)
+    write_artifacts(_grid_rows(), _grid_rungs(), charts_dir)
     assert charts_dir.is_dir()
 
 
 def test_write_artifacts_tables_match_their_renderers(tmp_path: Path) -> None:
-    """The written Markdown and JSON are exactly what the renderers emit — one source."""
-    rows = _grid_rows()
-    written = write_artifacts(rows, tmp_path / "charts")
+    """The written tables are exactly what the renderers emit — one source each."""
+    rows, rungs = _grid_rows(), _grid_rungs()
+    written = write_artifacts(rows, rungs, tmp_path / "charts")
     assert written["markdown"].read_text() == rows_to_markdown(rows)
     assert written["json"].read_text() == rows_to_json(rows)
+    assert written["rungs_markdown"].read_text() == rungs_to_markdown(rungs)
+    assert written["rungs_json"].read_text() == rungs_to_json(rungs)
 
 
 def test_write_artifacts_rejects_an_empty_ceiling_table(tmp_path: Path) -> None:
     """An empty run holds no ceiling and must not write a header-only table."""
     with pytest.raises(ValueError, match="empty ceiling table"):
-        write_artifacts([], tmp_path / "charts")
+        write_artifacts([], [], tmp_path / "charts")
     assert not (tmp_path / "charts").exists()

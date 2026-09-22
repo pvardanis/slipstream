@@ -36,7 +36,11 @@ from slipstream_bench.report import (
 )
 from slipstream_bench.results import ResultError
 from slipstream_bench.serve_sweep import SweepConfig, SweepError, run_sweep
-from slipstream_bench.sweep_aggregation import SweepAggregationError, aggregate_ceilings
+from slipstream_bench.sweep_aggregation import (
+    SweepAggregationError,
+    aggregate_ceilings,
+    aggregate_rungs,
+)
 from slipstream_bench.sweep_grid import (
     SweepGridError,
     SweepGridPart,
@@ -410,16 +414,19 @@ def chart(
         ),
     ],
 ) -> None:
-    """Chart a knob-sweep run: write the ceiling table and its primary plot.
+    """Chart a knob-sweep run: write the ceiling and cliff tables and both plots.
 
-    Aggregates the run, then writes the ceiling table as Markdown and JSON with the
-    primary ceiling-by-max-num-seqs plot beside them under ``<run_dir>/charts`` — the
-    table the durable artifact, the PNG the disposable view (ADR-0009).
+    Aggregates the run two ways — the folded ceiling per point and the per-rung goodput
+    cliff — then writes each as Markdown and JSON with its plot beside them under
+    ``<run_dir>/charts``: the primary ceiling-by-max-num-seqs chart and the diagnostic
+    goodput-by-max-concurrency cliff. The tables are the durable artifacts, the PNGs the
+    disposable view (ADR-0009).
     """
     charts_dir = run_dir / "charts"
     try:
         rows = aggregate_ceilings(run_dir)
-        written = write_artifacts(rows, charts_dir)
+        rungs = aggregate_rungs(run_dir)
+        written = write_artifacts(rows, rungs, charts_dir)
     except (SweepAggregationError, ResultError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
