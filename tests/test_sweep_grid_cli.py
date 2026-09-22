@@ -39,7 +39,7 @@ def _write_grid(tmp_path: Path, text: str = VALID_GRID) -> Path:
 
 def test_points_prints_the_tier1_tsv(tmp_path: Path) -> None:
     result = runner.invoke(
-        app, ["sweep-grid", "points", "--grid", str(_write_grid(tmp_path))]
+        app, ["sweep-grid", "engine-points", "--grid", str(_write_grid(tmp_path))]
     )
     assert result.exit_code == 0
     rows = result.stdout.splitlines()
@@ -49,7 +49,7 @@ def test_points_prints_the_tier1_tsv(tmp_path: Path) -> None:
 
 def test_ladder_prints_the_max_concurrency_rungs(tmp_path: Path) -> None:
     result = runner.invoke(
-        app, ["sweep-grid", "ladder", "--grid", str(_write_grid(tmp_path))]
+        app, ["sweep-grid", "concurrency-ladder", "--grid", str(_write_grid(tmp_path))]
     )
     assert result.exit_code == 0
     assert result.stdout.splitlines() == ["8", "16", "32"]
@@ -65,7 +65,7 @@ def test_burstiness_prints_the_pinned_scalar(tmp_path: Path) -> None:
 
 def test_missing_grid_fails_loud_at_exit_2(tmp_path: Path) -> None:
     result = runner.invoke(
-        app, ["sweep-grid", "points", "--grid", str(tmp_path / "absent.yaml")]
+        app, ["sweep-grid", "engine-points", "--grid", str(tmp_path / "absent.yaml")]
     )
     assert result.exit_code == 2
     assert "not found" in result.stderr
@@ -75,6 +75,6 @@ def test_invalid_grid_fails_loud_at_exit_2(tmp_path: Path) -> None:
     path = _write_grid(
         tmp_path, VALID_GRID.replace("max_num_seqs: [16, 64]", "max_num_seqs: []")
     )
-    result = runner.invoke(app, ["sweep-grid", "points", "--grid", str(path)])
+    result = runner.invoke(app, ["sweep-grid", "engine-points", "--grid", str(path)])
     assert result.exit_code == 2
     assert "max_num_seqs" in result.stderr
