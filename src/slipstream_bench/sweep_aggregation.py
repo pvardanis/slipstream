@@ -322,7 +322,7 @@ def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> dic
     }
 
 
-def aggregate(run_dir: Path) -> list[dict]:
+def aggregate_ceilings(run_dir: Path) -> list[dict]:
     """Fold a knob-sweep run into ceiling rows, one per point and prefix-share.
 
     :param run_dir: the ``bench/results/<run_id>`` directory the sweep wrote, one

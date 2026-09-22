@@ -18,7 +18,7 @@ from slipstream_bench.sweep_aggregation import (
     EnginePoint,
     LoadCell,
     SweepAggregationError,
-    aggregate,
+    aggregate_ceilings,
     classify_failures,
     get_ceiling,
     goodput_fraction,
@@ -311,7 +311,7 @@ def test_one_row_per_point_and_share_with_the_ceiling(tmp_path: Path) -> None:
     _write_rung(point, share=50, cap=64, fraction=0.80)
     _write_rung(point, share=90, cap=32, fraction=0.99)
 
-    rows = aggregate(tmp_path)
+    rows = aggregate_ceilings(tmp_path)
 
     assert rows == [
         {
@@ -341,7 +341,7 @@ def test_sums_failure_cohorts_across_a_group_ladder(tmp_path: Path) -> None:
     _write_rung(point, share=10, cap=8, fraction=0.99, errors=["TimeoutError", ""])
     _write_rung(point, share=10, cap=16, fraction=0.90, errors=["broke", "broke"])
 
-    (row,) = aggregate(tmp_path)
+    (row,) = aggregate_ceilings(tmp_path)
 
     assert row["failures"] == {"timeout": 1, "other": 2, "oom": None}
     assert row["ceiling"] == 8
@@ -352,7 +352,7 @@ def test_rows_sort_by_point_then_share(tmp_path: Path) -> None:
     _write_rung(tmp_path / "mns256_kvfp8_pcon", share=10, cap=8, fraction=0.99)
     _write_rung(tmp_path / "mns16_kvfp8_pcon", share=10, cap=8, fraction=0.99)
 
-    rows = aggregate(tmp_path)
+    rows = aggregate_ceilings(tmp_path)
 
     assert [row["max_num_seqs"] for row in rows] == [16, 256]
 
@@ -363,7 +363,7 @@ def test_ignores_a_non_point_subdir_and_the_ledger(tmp_path: Path) -> None:
     (tmp_path / "charts").mkdir()
     (tmp_path / "predicted-ceilings.tsv").write_text("point\tpredicted\n")
 
-    rows = aggregate(tmp_path)
+    rows = aggregate_ceilings(tmp_path)
 
     assert len(rows) == 1
     assert rows[0]["max_num_seqs"] == 32
@@ -372,7 +372,7 @@ def test_ignores_a_non_point_subdir_and_the_ledger(tmp_path: Path) -> None:
 def test_a_run_with_no_point_subdirs_is_rejected(tmp_path: Path) -> None:
     """An empty run measured nothing — fail fast rather than emit no rows."""
     with pytest.raises(SweepAggregationError, match="no knob-sweep points"):
-        aggregate(tmp_path)
+        aggregate_ceilings(tmp_path)
 
 
 def test_a_point_subdir_with_no_rungs_is_rejected(tmp_path: Path) -> None:
@@ -380,4 +380,4 @@ def test_a_point_subdir_with_no_rungs_is_rejected(tmp_path: Path) -> None:
     than silently drop the point from the table."""
     (tmp_path / "mns64_kvfp8_pcon").mkdir()
     with pytest.raises(SweepAggregationError, match="no ladder"):
-        aggregate(tmp_path)
+        aggregate_ceilings(tmp_path)
