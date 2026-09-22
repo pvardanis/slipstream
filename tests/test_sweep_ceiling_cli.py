@@ -50,6 +50,19 @@ def test_an_empty_run_dir_fails_at_exit_2(tmp_path: Path) -> None:
     assert "no knob-sweep points" in result.stderr
 
 
+def test_an_unreadable_cell_fails_at_exit_2(tmp_path: Path) -> None:
+    """A point subdir holding a non-JSON rung surfaces the reader's error at exit 2,
+    not an uncaught traceback — the except tuple catches ResultError too."""
+    point_dir = tmp_path / "mns64_kvfp8_pcon"
+    point_dir.mkdir()
+    (point_dir / "pshare50_burst1.0_mc32.json").write_text("not json")
+
+    result = runner.invoke(app, ["knob-sweep", "--run-dir", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert result.stderr.strip()
+
+
 def test_a_missing_run_dir_is_rejected_by_the_option(tmp_path: Path) -> None:
     """A non-existent run directory fails on the option's own existence check."""
     result = runner.invoke(app, ["knob-sweep", "--run-dir", str(tmp_path / "absent")])
