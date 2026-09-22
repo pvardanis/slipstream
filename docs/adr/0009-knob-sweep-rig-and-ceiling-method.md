@@ -119,7 +119,8 @@ soft-fail signal — the real "`max-num-seqs` pushed too high" tell, distinct fr
 
 A new `chart` subcommand renders a static PNG (seaborn, atop matplotlib) to
 `bench/results/<run_id>/charts/`, with the aggregated ceiling table written beside it as
-CSV/JSON — the table is the durable artifact, the PNG disposable. Aggregation is a **new**
+Markdown and JSON — Markdown the human-readable view, JSON the structured table later
+layers re-read; the table is the durable artifact, the PNG disposable. Aggregation is a **new**
 `sweep_aggregation.py` module (CLI `aggregate-sweep`) keyed by (`max-num-seqs`, `kv-cache-dtype`,
 `prefix-caching`), reusing `results.py` readers — not folded into `report.py`, whose job is the
 single-config cost×prefix economics join, a different key and output.
