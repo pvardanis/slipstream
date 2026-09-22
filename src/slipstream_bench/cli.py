@@ -379,7 +379,7 @@ def knob_sweep(
 
     Emits one JSON row per (max-num-seqs, kv-cache-dtype, prefix-caching) point and
     prefix-share: the measured ceiling and the {timeout, oom, other} failure
-    cohorts. oom and num_preemptions read null until the recipe collects the pod
+    cohorts. oom and num_preemptions read null — the recipe does not collect the pod
     events and /metrics snapshots they need (ADR-0009).
     """
     try:

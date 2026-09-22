@@ -8,10 +8,10 @@ SLO. Failed requests are cohorted {timeout, other} from the client JSON's per-re
 errors (or the completed-short-of-attempted shortfall when a run saved no per-request
 detail). oom needs the pod OOMKilled event plus an engine-log CUDA-OOM scrape, and
 vLLM's num_preemptions soft-fail signal needs a /metrics snapshot — captures the
-recipe does not collect yet, so both are surfaced as not-captured rather than
-invented. Keyed by (max-num-seqs, kv-cache-dtype, prefix-caching), the
-key the chart's x / series / facet read — a different key and output from report.py's
-single-config cost economics join.
+recipe does not collect, so both are surfaced as not-captured rather than invented.
+Rows are keyed by (max-num-seqs, kv-cache-dtype, prefix-caching) with one row per
+prefix-share within a point — the chart reads the engine knobs as x / series / facet
+and prefix-share as the within-point dimension.
 """
 
 import re
@@ -27,8 +27,9 @@ _POINT_PATTERN = re.compile(r"^mns(?P<mns>\d+)_kv(?P<kv>fp8|fp16)_pc(?P<pc>on|of
 
 # vLLM stores a failed request's error as the formatted exception traceback, so a
 # client-side deadline miss (asyncio.TimeoutError) writes the type name — and thus
-# this lowercased marker — into the error text. Any other non-empty error is a hard
-# failure of an unclassified kind.
+# this lowercased marker — into the error text. The match is a substring over the
+# whole traceback, so any error text containing "timeout" counts as timeout; every
+# other non-empty error is a hard failure of an unclassified kind.
 _TIMEOUT_MARKER = "timeout"
 
 # Goodput floor the ceiling is read off: a rung holds only if at least this
@@ -88,7 +89,7 @@ def goodput_fraction(record: dict, source: Path) -> float:
 
     :param record: the cell's parsed ``vllm bench serve --save-result`` record.
     :param source: the cell's result file, for the error message.
-    :return: the goodput fraction in 0..1.
+    :return: the goodput fraction, 0.0 when the cell completed nothing.
     :raise SweepCeilingError: when either rate is absent, null, non-numeric,
         non-finite, or negative.
     """
@@ -112,7 +113,7 @@ def classify_failures(record: dict, source: Path) -> dict:
     ``--save-detailed`` carries no per-request errors, so its failures — completed
     short of attempted — fall to *other*, their kind unknown. *oom* is always
     ``None``: it needs the pod ``OOMKilled`` event and engine-log scrape the sweep
-    recipe does not collect yet, and an invented zero would read as measured-and-none.
+    recipe does not collect, and an invented zero would read as measured-and-none.
 
     :param record: the cell's parsed result record.
     :param source: the cell's result file, for the error message.
@@ -122,7 +123,7 @@ def classify_failures(record: dict, source: Path) -> dict:
     """
     errors = record.get("errors")
     if errors is None:
-        return _cohorts_from_shortfall(record)
+        return _cohorts_from_shortfall(record, source)
     if not isinstance(errors, list):
         raise SweepCeilingError(
             f"result {source} has a non-list errors field: cannot cohort failures"
@@ -136,7 +137,7 @@ def classify_failures(record: dict, source: Path) -> dict:
     return {"timeout": timeout, "other": other, "oom": None}
 
 
-def _cohorts_from_shortfall(record: dict) -> dict:
+def _cohorts_from_shortfall(record: dict, source: Path) -> dict:
     """Cohort failures a no-detail result only knows as attempted-minus-completed.
 
     Without a per-request ``errors`` array the kind of each failure is unknown, so
@@ -144,11 +145,20 @@ def _cohorts_from_shortfall(record: dict) -> dict:
     *other* — never silently dropped, never guessed as timeouts.
 
     :param record: the cell's parsed result record.
+    :param source: the cell's result file, for the error message.
     :return: the cohort counts, the whole shortfall in *other*.
+    :raise SweepCeilingError: when either count is absent, null, or not a whole
+        number, or completed exceeds attempted — a broken result must not read as a
+        clean zero-failure cell.
     """
-    attempted = record.get("num_prompts") or 0
-    completed = record.get("completed") or 0
-    return {"timeout": 0, "other": max(0, attempted - completed), "oom": None}
+    attempted = _require_int(record, source, "num_prompts")
+    completed = _require_int(record, source, "completed")
+    if completed > attempted:
+        raise SweepCeilingError(
+            f"result {source} completed {completed} of {attempted} attempted: "
+            f"inconsistent counts"
+        )
+    return {"timeout": 0, "other": attempted - completed, "oom": None}
 
 
 @dataclass(frozen=True)
@@ -254,6 +264,11 @@ def _rows_for_point(point: Point, subdir: Path) -> list[dict]:
     for result in sorted(subdir.glob("*.json")):
         cell = read_cell(result)
         by_share[cell.prefix_share].append(cell)
+    if not by_share:
+        raise SweepCeilingError(
+            f"knob-sweep point {subdir} holds no ladder rungs (no *.json cells): "
+            f"the point measured nothing"
+        )
     return [_point_row(point, share, by_share[share]) for share in sorted(by_share)]
 
 
@@ -263,7 +278,7 @@ def _point_row(point: Point, share: int, cells: list[Cell]) -> dict:
     The measured ceiling and the summed failure cohorts across the group's rungs.
     ``oom`` and ``num_preemptions`` stay ``None``: oom needs the pod OOMKilled event
     and engine-log scrape, num_preemptions a /metrics snapshot — neither collected by
-    the sweep recipe yet (ADR-0009), and an invented zero would read as measured-and-none.
+    the sweep recipe (ADR-0009), and an invented zero would read as measured-and-none.
     """
     return {
         "max_num_seqs": point.max_num_seqs,
@@ -286,10 +301,11 @@ def aggregate(run_dir: Path) -> list[dict]:
     :param run_dir: the ``bench/results/<run_id>`` directory the sweep wrote, one
         subdir per engine-knob point.
     :return: the ceiling rows, sorted by point key then prefix-share.
-    :raise SweepCeilingError: when the directory holds no point subdirs (an empty run
-        measured nothing and must not report zero rows as a clean result), or a cell
-        cannot be aggregated — a missing cap or share, a bad goodput, or a malformed
-        errors field (see :func:`read_cell`).
+    :raise SweepCeilingError: when the directory holds no point subdirs, or a point
+        subdir holds no ladder rungs (an empty run or point measured nothing and must
+        not report zero rows as a clean result), or a cell cannot be aggregated — a
+        missing cap or share, a bad goodput, or a malformed errors field (see
+        :func:`read_cell`).
     :raise ResultError: when a cell file cannot be read (see :func:`read_cell`).
     """
     points = _point_dirs(run_dir)
