@@ -30,7 +30,7 @@ _EXPERIMENT: dict[str, object] = {
     "burstiness_values": [0.2, 1.0],
     "max_concurrency_values": [],
     "total_len": 1000,
-    "num_prompts": 100,
+    "num_prompts": 500,
     "num_prefixes": 5,
     "output_len": 128,
     "align_blocks": 0,

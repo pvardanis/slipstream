@@ -15,8 +15,9 @@ max_concurrency_values: []
 
 # Prefix+suffix token budget, split by each prefix-share.
 total_len: 1000
-# Requests per grid cell.
-num_prompts: 100
+# Requests per grid cell; sized so the p95 TTFT gate has real tail samples (~25 above
+# p95) rather than resting on the few worst requests.
+num_prompts: 500
 # Distinct shared prefixes to synthesise.
 num_prefixes: 5
 # Output tokens per request.
