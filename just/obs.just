@@ -1,6 +1,7 @@
 # Observability lifecycle: the OTel Collector spine stub deploy, teardown, and trace pivot.
 
 # Deploy the OTel Collector spine stub to the cluster.
+[group('obs')]
 obs-up:
     kubectl create namespace slipstream --dry-run=client -o yaml | kubectl apply -f -
     kubectl create configmap otel-collector-config -n slipstream \
@@ -10,11 +11,13 @@ obs-up:
     kubectl -n slipstream rollout status deploy/otel-collector --timeout=120s
 
 # Remove the OTel Collector (leaves the cluster running).
+[group('obs')]
 obs-down:
     kubectl delete configmap otel-collector-config -n slipstream --ignore-not-found
     kubectl delete -f {{ otel_manifests }} --ignore-not-found
 
 # Send one shape-only OTLP trace through the cluster collector and show its request_id log line.
+[group('obs')]
 obs-pivot:
     #!/usr/bin/env bash
     set -euo pipefail

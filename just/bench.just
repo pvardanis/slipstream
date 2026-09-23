@@ -20,6 +20,7 @@ _bench-image-ref: _bootstrap-init
 # on a merge to main (#103), never from a branch build here — a laptop push would
 # clobber the shared pointer with unmerged code. Pin a run to a branch build with
 # `-var bench_image_tag=<slug>-<sha>`. The ECR repo is provisioned by `just bootstrap`.
+[group('bench')]
 bench-image: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
@@ -36,6 +37,7 @@ bench-image: _bootstrap-init
     docker push "${repo}:${sha_tag}"
 
 # Sweep `vllm bench serve` across the prefix-share x burstiness grid a --config YAML defines, from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
+[group('bench')]
 bench *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -124,6 +126,7 @@ bench *args:
 # arrival process for burstiness to shape, so it is inert here. A point that fails to
 # deploy or whose ladder reports failures is recorded and the sweep continues, exiting
 # non-zero at the end. Requires a live stack (`just stack-up`).
+[group('bench')]
 knob-sweep:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -201,6 +204,7 @@ knob-sweep:
     exit "${overall}"
 
 # Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
+[group('bench')]
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -212,6 +216,7 @@ bench-results-sync:
     echo "synced sweep and prefix-cache results to bench/results/"
 
 # Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).
+[group('bench')]
 prefix-cache prefix_share="90" burstiness="1.0" *args="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -295,6 +300,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
 # fronting vLLM, so both arms can be measured from one host outside the cluster.
 # It exists only for the run; `bench-endpoint-down` tears it down. Requires the cluster
 # up and vLLM deployed (`just cluster-up && just cpu-deploy`).
+[group('bench')]
 bench-endpoint-up: _bootstrap-init _ensure-api-key
     #!/usr/bin/env bash
     set -euo pipefail
@@ -365,6 +371,7 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
 
 # Destroy the ephemeral bench endpoint (load balancer, trust store, certs,
 # client secret). The cluster and its vLLM workload stay up.
+[group('bench')]
 bench-endpoint-down: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
