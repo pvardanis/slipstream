@@ -58,8 +58,9 @@ mkdir -p "${results_dir}"
 # Decode the experiment config into its own dir, mounted read-only into the container
 # and passed as load-sweep's --config for both the cold and the warm run. It carries the
 # unique seed that makes the cold run miss and the warm run replay against the now-warm
-# cache. Decode on its own line so a corrupt PREFIX_CONFIG_B64 aborts here rather than
-# writing a truncated config the runs would then reject.
+# cache. base64 -d is the last stage of its own pipe, so invalid base64 fails the
+# pipeline under pipefail and aborts the run before either cell, rather than proceeding
+# with a config the runs would reject.
 config_dir="/tmp/prefix-cache-config/${RUN_ID}"
 rm -rf "${config_dir}"
 mkdir -p "${config_dir}"
