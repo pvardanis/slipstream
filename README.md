@@ -27,7 +27,7 @@ concern's heading:
 | Concern | Key recipes | Covers |
 | --- | --- | --- |
 | `cluster` | `bootstrap`, `cluster-up` / `cluster-down`, `gpu-pool-up` | Remote-state bootstrap, EKS create/plan/destroy, the GPU node pool. |
-| `serve` | `cpu-deploy` / `gpu-deploy`, `undeploy` | The vLLM api-key Secret, CPU and GPU replicas, their scale and completion smokes. |
+| `serve` | `gpu-deploy`, `gpu-up` / `gpu-down` | The vLLM api-key Secret, the GPU replica, its scale and completion smokes. |
 | `bench` | `bench-image`, `bench`, `knob-sweep`, `prefix-cache` | The bench-client image, the load and knob sweeps, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
 | `obs` | `obs-up` / `obs-down`, `obs-pivot` | The OTel Collector spine stub — deploy, teardown, trace pivot. |
 | `test` | `cli-test` | Local smokes: the Python suite and the shell tests for the OTel spine and bench image (no cluster). |
@@ -49,8 +49,9 @@ tools: `k9s`, `stern`, `kubens`.
 ```sh
 just bootstrap       # one-time: create the S3 remote-state bucket
 just cluster-up      # create the cluster, then `kubectl get nodes`
-just cpu-deploy      # run the CPU vLLM replica and wait for it to serve
-just cpu-completion  # port-forward the service and curl a completion out of it
+just gpu-pool-up     # apply the GPU node pool + NVIDIA device plugin
+just gpu-deploy      # roll out the GPU vLLM replica (Karpenter brings up the g5)
+just gpu-completion  # port-forward the service and curl a completion out of it
 just cluster-down    # destroy the cluster; spend returns to zero
 ```
 
@@ -61,13 +62,16 @@ cluster lifecycle. The task-runner and
 state-bootstrap choices are recorded in
 [`docs/adr/0001`](docs/adr/0001-task-runner-and-state-bootstrap.md).
 
-`just cpu-deploy` applies [`k8s/vllm.yaml`](k8s/vllm.yaml): a single vLLM replica
-serving a tiny CPU model (`Qwen/Qwen2.5-0.5B-Instruct`) over the OpenAI API, so
-the platform stands up without spending GPU hours. The service is `ClusterIP`
-only — no public endpoint, no cloud load balancer — so `just cpu-completion` reaches
-it through `kubectl port-forward`, and `just cluster-down` tears the cluster down with
-nothing left behind. `just undeploy` removes the workload without destroying the
-cluster.
+`just gpu-pool-up` applies the GPU node pool (NodePool + EC2NodeClass) and the
+NVIDIA device plugin; `just gpu-deploy` applies [`k8s/vllm-gpu.yaml`](k8s/vllm-gpu.yaml):
+a single vLLM replica serving the AWQ-quantized model from
+[`model.yaml`](model.yaml) over the OpenAI API. Karpenter provisions a `g5.xlarge`
+on demand once the pod requests a GPU, so `gpu-deploy` covers node bring-up, the
+~10 GB image pull, and the weight load. The service is `ClusterIP` only — no public
+endpoint, no cloud load balancer — so `just gpu-completion` reaches it through
+`kubectl port-forward`. `just gpu-down` scales the replica to zero and Karpenter
+reaps the `g5` (ADR-0006); `just cluster-down` tears the cluster down with nothing
+left behind.
 
 ### AWS access
 
@@ -90,7 +94,7 @@ for root and the cluster only trusts whoever ran `just cluster-up`.
 
 ### Inspecting the cluster
 
-The workload lives in the `slipstream` namespace (created by `just cpu-deploy`).
+The workload lives in the `slipstream` namespace (created by `just gpu-deploy`).
 
 ```sh
 kubens slipstream                     # set the default namespace (no more -n flags)
@@ -162,15 +166,12 @@ recorded in [`docs/adr/0004`](docs/adr/0004-bench-vantage-external-path.md).
 
 The bench-client image (`bench/Dockerfile`) layers the package and the model
 tokenizer onto the same pinned vLLM engine build the server runs, so the two
-tokenize identically. The tokenizer is baked from the `bench_model` var, which
-`bench` and `prefix-cache` also send as the sweep model so the two never diverge;
-it defaults to the GPU rig's model (the mTLS bench path exists to measure that
-rig). Override it for a CPU-replica sweep — rebuild the image with the same value
-so its tokenizer matches:
+tokenize identically. The tokenizer is baked from the `bench_model` var — the GPU
+rig's model from `model.yaml` — which `bench` and `prefix-cache` also send as the
+sweep model, so the image tokenizer and the sweep never diverge:
 
 ```sh
-just bench-image                                   # docker build + push to ECR (default bench_model)
-just bench_model="Qwen/Qwen2.5-0.5B-Instruct" bench-image   # bench the CPU replica instead
+just bench-image   # docker build + push the bench-client image to ECR
 ```
 
 ### Bench image CI
@@ -224,7 +225,7 @@ terraform -chdir=terraform/bench-endpoint apply \
   -var bench_image_tag="$(bench/image-tag.sh sha-tag)"
 ```
 
-### Baseline runbook
+### Benchmark runbook
 
 A benchmark run stands up an ephemeral, internet-facing endpoint and an EC2 host,
 then tears them down. The sequence, from a cold checkout:
@@ -232,7 +233,8 @@ then tears them down. The sequence, from a cold checkout:
 ```sh
 just bootstrap        # once per environment: ECR repo + shared state (see ADR-0005)
 just cluster-up       # create the cluster, point kubectl at it
-just cpu-deploy       # roll out the CPU vLLM replica, wait for it to serve
+just gpu-pool-up      # apply the GPU node pool + NVIDIA device plugin
+just gpu-deploy       # roll out the GPU vLLM replica (Karpenter brings up the g5)
 just bench-image      # build + push the bench-client image to ECR
 
 just bench-endpoint-up      # stand up the mutual-TLS load balancer + bench host
@@ -259,9 +261,7 @@ the AWS CLI all act in one region. Set it once via `AWS_PROFILE` / `aws configur
 profile pointing at a different region than the state was created in will not find
 these resources.
 
-For a run against the GPU rig rather than the CPU replica, swap `just cpu-deploy` for
-`just gpu-pool-up && just gpu-deploy` (Karpenter brings up the `g5.xlarge`). The
-whole stack — cluster, GPU pool, GPU replica, bench endpoint — comes up with one
+The whole stack — cluster, GPU pool, GPU replica, bench endpoint — comes up with one
 recipe and tears down with another, for when you want it live to run sweeps against
 through the day:
 
