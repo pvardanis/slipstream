@@ -27,13 +27,18 @@ source /etc/bench-proxy/proxy.env
 : "${RUN_ID:?prefix-cache needs RUN_ID (the results-bucket prefix for this run)}"
 : "${PREFIX_SHARE:?prefix-cache needs PREFIX_SHARE (the cell prefix-share percent)}"
 : "${BURSTINESS:?prefix-cache needs BURSTINESS (the cell burstiness)}"
-# PREFIX_ARGS_B64 is optional: extra serve-sweep flags the caller appended to
+# The cold/warm cell's experiment config, base64-encoded by `just prefix-cache` so it
+# crosses the SSM command line intact; it carries the single-cell grid, the unique seed,
+# and the residency-isolating overrides (align_blocks, num_prefixes). Decoded to a file
+# below, mounted into the container and passed as load-sweep's --config.
+: "${PREFIX_CONFIG_B64:?prefix-cache needs PREFIX_CONFIG_B64 (the base64 load-sweep config)}"
+# PREFIX_ARGS_B64 is optional: extra load-sweep flags the caller appended to
 # `just prefix-cache`, base64-encoded so they cross the SSM command line without any
 # quoting that the host shell (not necessarily bash) would misparse.
 prefix_args_b64="${PREFIX_ARGS_B64:-}"
 
 echo "prefix-cache: fetching the vLLM api-key" >&2
-# vLLM enforces an api-key on /v1; serve-sweep's openai backend sends it as the bearer
+# vLLM enforces an api-key on /v1; load-sweep's openai backend sends it as the bearer
 # token via OPENAI_API_KEY. Export it so `docker run -e OPENAI_API_KEY` passes it by
 # name — the value stays out of docker's argv (it still shows in `docker inspect` on
 # this single-tenant throwaway host, an accepted tradeoff for an env-based client).
@@ -50,14 +55,17 @@ results_dir="/tmp/prefix-cache-results/${RUN_ID}"
 rm -rf "${results_dir}"
 mkdir -p "${results_dir}"
 
-# A seed unique to this invocation makes serve-sweep emit prefixes the server has never
-# cached, so the cold run genuinely misses. The cold and warm runs share it, so the
-# warm run replays the cold run's prefixes against the now-populated cache. This build
-# exposes no reset route to empty the cache instead, so a fresh seed is how the cold
-# run is made cold.
-seed="$(date +%s)"
+# Decode the experiment config into its own dir, mounted read-only into the container
+# and passed as load-sweep's --config for both the cold and the warm run. It carries the
+# unique seed that makes the cold run miss and the warm run replay against the now-warm
+# cache. Decode on its own line so a corrupt PREFIX_CONFIG_B64 aborts here rather than
+# writing a truncated config the runs would then reject.
+config_dir="/tmp/prefix-cache-config/${RUN_ID}"
+rm -rf "${config_dir}"
+mkdir -p "${config_dir}"
+printf '%s' "${PREFIX_CONFIG_B64}" | base64 -d >"${config_dir}/sweep-config.yaml"
 
-# Decode the optional flags and split on whitespace into an array; serve-sweep flags
+# Decode the optional flags and split on whitespace into an array; load-sweep flags
 # carry no spaces, so word-splitting the decoded string reconstructs them. Decode on
 # its own line so a corrupt PREFIX_ARGS_B64 aborts here: piping straight into the
 # here-string would hide the failure, since read returns 0 whatever the pipe's status.
@@ -74,36 +82,30 @@ scrape() {
 }
 
 # One bench cell (a single prefix-share/burstiness) run twice, cold then warm. The
-# workload shape is picked to make cache residency the only variable in the gap:
-#   --align-blocks 16 floors the prefix to whole 16-token blocks (vLLM's prefix cache
-#     reuses whole blocks only; a ragged tail recomputes every time in both regimes and
-#     dilutes the gap). 16 is vLLM's default block_size — revisit it if the served
-#     backend runs a different block size, or the alignment is wrong.
-#   --num-prefixes 16 raises the share of the cold run that is a genuine first exposure
-#     rather than a self-hit on a prefix the run itself just planted, widening the
-#     cold/warm gap (full isolation would need num-prefixes near num-prompts, which
-#     serve-sweep defaults to 100).
-# A caller can override either by appending its own flag after `just prefix-cache`.
+# workload shape that makes cache residency the only variable in the gap — the single
+# share/burstiness cell, the shared seed, and the align_blocks/num_prefixes isolation —
+# lives in the mounted config `just prefix-cache` composed; only the --out-dir differs
+# between the two runs so each writes its own cell JSON.
 # --network host so the container reaches the proxy on 127.0.0.1; --rm for a one-shot;
 # run as the invoking user so the JSON is not root-owned (a no-op under SSM's root).
 # --entrypoint slipstream-bench overrides the base image's `vllm serve` entrypoint so
-# the container runs the bench harness, not the server; serve-sweep is then its arg.
+# the container runs the bench harness, not the server; load-sweep is then its arg.
 run_cell() {
   docker run --rm --network host --user "$(id -u):$(id -g)" \
     --entrypoint slipstream-bench \
     -e OPENAI_API_KEY \
     -v "${results_dir}:/out" \
+    -v "${config_dir}:/config:ro" \
     "${IMAGE_REF}" \
-    serve-sweep \
+    load-sweep \
+    --config /config/sweep-config.yaml \
     --base-url "${base_url}" --model "${MODEL}" \
-    --prefix-share "${PREFIX_SHARE}" --burstiness "${BURSTINESS}" \
-    --align-blocks 16 --num-prefixes 16 \
-    --seed "${seed}" --out-dir "$1" "${prefix_args[@]}"
+    --out-dir "$1" "${prefix_args[@]}"
 }
 
 cell="pshare${PREFIX_SHARE}_burst${BURSTINESS}.json"
 
-echo "prefix-cache: cold run (fresh prefixes, seed ${seed})" >&2
+echo "prefix-cache: cold run (fresh prefixes, seed from config)" >&2
 scrape "${results_dir}/cold_before.prom"
 run_cell /out/cold
 scrape "${results_dir}/cold_after.prom"

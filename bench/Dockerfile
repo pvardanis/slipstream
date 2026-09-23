@@ -3,7 +3,7 @@
 # onto the same pinned vLLM engine build the server runs (k8s/vllm.yaml). Building
 # on that base means the client's transformers/tokenizers versions match the
 # server's exactly, so the two tokenize identically, and it keeps the `vllm bench
-# serve` CLI that serve-sweep drives. Launched in-cluster, the client reaches vLLM
+# serve` CLI that load-sweep drives. Launched in-cluster, the client reaches vLLM
 # over ClusterIP. Keep the base tag in sync with k8s/vllm.yaml.
 FROM vllm/vllm-openai-cpu:v0.29.0-x86_64
 
@@ -25,6 +25,12 @@ WORKDIR /opt/slipstream-bench
 COPY pyproject.toml ./
 COPY src ./src
 RUN python3 -m pip install --no-cache-dir .
+
+# Bake the default experiment config so an in-cluster run that passes no --config
+# resolves load-sweep's default (bench/load-sweep.yaml, Typer exists=True) instead of
+# exiting 2 on a missing file. The knob-sweep and prefix-cache paths mount + pass a
+# per-point config; this covers a bare `load-sweep` with no config supplied.
+COPY bench/load-sweep.yaml ./bench/load-sweep.yaml
 
 # Bake the tokenizer into HF_HOME at build time, pinned to the model's revision so
 # the baked tokenizer matches the weights the server loads. This fetch is the last
