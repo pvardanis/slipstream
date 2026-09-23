@@ -51,9 +51,9 @@ rm -rf "${results_dir}"
 mkdir -p "${results_dir}"
 
 # Decode the experiment config into its own dir, mounted read-only into the container
-# and passed as load-sweep's --config. Decode on its own line so a corrupt
-# SWEEP_CONFIG_B64 aborts here rather than writing a truncated config the sweep would
-# then reject cell by cell.
+# and passed as load-sweep's --config. base64 -d is the last stage of its own pipe, so
+# invalid base64 fails the pipeline under pipefail and aborts the run before the sweep
+# starts, rather than proceeding with a config the sweep would reject cell by cell.
 config_dir="/tmp/bench-config/${RUN_ID}"
 rm -rf "${config_dir}"
 mkdir -p "${config_dir}"
