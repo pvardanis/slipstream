@@ -27,7 +27,7 @@ app = typer.Typer(
 
 # A nameless, callback-less sub-app merges its commands onto the root at the same
 # level, so each concept groups its commands in its own module while the CLI keeps
-# a flat command surface (`slipstream-bench serve-sweep`, not `... sweep serve-sweep`).
+# a flat command surface (`slipstream-bench load-sweep`, not `... sweep load-sweep`).
 app.add_typer(sweep_app)
 app.add_typer(cost_app)
 app.add_typer(report_app)

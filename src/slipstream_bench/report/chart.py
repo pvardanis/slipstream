@@ -48,10 +48,11 @@ _TABLE_COLUMNS = (
 
 # The ceiling axis names its SLO predicate: the KB pairs a goodput/ceiling number with
 # the SLO it was read at, never bare. The ttft/tpot thresholds mirror the harness's
-# sweep.cli.DEFAULT_GOODPUT and the 95% floor mirrors sweep.aggregation._GOODPUT_FLOOR
-# (ADR-0009). The title also names the pinned burstiness the whole grid ran at — the
-# aggregated rows do not carry it, so it is asserted here from the grid's pin, not read
-# from the data. This label is a manual copy of those constants, kept in sync by hand.
+# default goodput (bench/load-sweep.yaml) and the 95% floor mirrors
+# sweep.aggregation._GOODPUT_FLOOR (ADR-0009). The title also names the pinned
+# burstiness the whole grid ran at — the aggregated rows do not carry it, so it is
+# asserted here from the grid's pin, not read from the data. This label is a manual
+# copy of those constants, kept in sync by hand.
 _CEILING_AXIS_LABEL = "max sustained --max-concurrency at SLO"
 _SLO_TITLE = (
     "concurrency ceiling — burstiness 1.0, "
