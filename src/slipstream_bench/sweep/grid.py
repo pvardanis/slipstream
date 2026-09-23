@@ -13,7 +13,7 @@ recipe writes, and the aggregator parses one slug format from one place.
 from enum import Enum
 from itertools import product
 from pathlib import Path
-from typing import Annotated, Literal, TypeVar
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import (
@@ -26,6 +26,12 @@ from pydantic import (
 )
 
 from slipstream_bench.sweep.aggregation import EnginePoint
+from slipstream_bench.sweep.fields import (
+    NonEmptyStr,
+    PrefixShares,
+    UniquePositiveInts,
+    unique,
+)
 
 # The KV-cache dtype and prefix-caching arms are keyed by their chart labels, the
 # same tokens EnginePoint.from_dirname parses off a slug. The grid carries only the
@@ -36,26 +42,7 @@ PrefixCachingLabel = Literal["on", "off"]
 
 _KV_ENGINE_TOKEN: dict[KvLabel, str] = {"fp8": "fp8", "fp16": "float16"}
 
-T = TypeVar("T")
-
-
-def _unique(values: list[T]) -> list[T]:
-    """Reject a repeated swept value: two equal points collide on one results subdir."""
-    if len(set(values)) != len(values):
-        raise ValueError("swept values must be unique, none repeated")
-    return values
-
-
-KvLabels = Annotated[list[KvLabel], Field(min_length=1), AfterValidator(_unique)]
-PositiveInts = Annotated[
-    list[Annotated[int, Field(gt=0)]], Field(min_length=1), AfterValidator(_unique)
-]
-PrefixShares = Annotated[
-    list[Annotated[int, Field(ge=0, le=100)]],
-    Field(min_length=1),
-    AfterValidator(_unique),
-]
-NonEmptyStr = Annotated[str, Field(min_length=1)]
+KvLabels = Annotated[list[KvLabel], Field(min_length=1), AfterValidator(unique)]
 
 
 class SweepGridError(Exception):
@@ -96,7 +83,7 @@ class Tier1(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_num_seqs: PositiveInts
+    max_num_seqs: UniquePositiveInts
     kv_cache_dtype: KvLabels
     prefix_caching: Annotated[
         dict[PrefixCachingLabel, PrefixCachingArm], Field(min_length=1)
@@ -124,7 +111,7 @@ class Tier2(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_concurrency: PositiveInts
+    max_concurrency: UniquePositiveInts
     burstiness: Annotated[float, Field(gt=0)]
 
 

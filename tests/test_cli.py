@@ -55,11 +55,11 @@ _QUOTE = [
 
 
 def test_help_lists_the_subcommands() -> None:
-    """``--help`` advertises serve-sweep, cost, commercial-cost, and prefix-cache."""
+    """``--help`` advertises load-sweep, cost, commercial-cost, and prefix-cache."""
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    assert "serve-sweep" in result.stdout
+    assert "load-sweep" in result.stdout
     assert "cost" in result.stdout
     assert "commercial-cost" in result.stdout
     assert "prefix-cache" in result.stdout
@@ -70,7 +70,7 @@ def test_no_args_shows_help() -> None:
     """Invoking the app with no subcommand renders help rather than erroring blankly."""
     result = runner.invoke(app, [])
 
-    assert "serve-sweep" in result.output
+    assert "load-sweep" in result.output
     assert "cost" in result.output
     assert "prefix-cache" in result.output
 

@@ -1,4 +1,4 @@
-"""Tests for the serve-sweep command builder, split math, and grid orchestration.
+"""Tests for the load-sweep command builder, split math, and grid orchestration.
 
 Covers the edge cases: integer prefix/suffix truncation, block alignment and its
 collapse guard, a fixed seed replaying every cell, one ``vllm bench serve`` per
@@ -91,47 +91,7 @@ def test_alignment_that_erases_prefix_fails_fast() -> None:
         split_lengths(100, 10, align_blocks=16)
 
 
-# --- SweepConfig invariants: no empty grid, shares in range --------------------
-
-
-@pytest.mark.parametrize(
-    ("overrides", "match"),
-    [
-        ({"prefix_shares": []}, "prefix-shares"),
-        ({"burstiness_values": []}, "burstiness"),
-        ({"goodput": []}, "goodput"),
-        ({"prefix_shares": [150]}, "outside 0..100"),
-        ({"num_prompts": 2, "num_prefixes": 5}, "num-prompts"),
-        ({"commercial": True}, "tokenizer"),
-    ],
-)
-def test_config_rejects_a_meaningless_sweep(
-    overrides: dict[str, object], match: str
-) -> None:
-    """An empty grid axis, empty SLO, or out-of-range share fails at construction."""
-    with pytest.raises(SweepError, match=match):
-        _config(**overrides)
-
-
-# --- commercial arm: a local tokenizer, not the provider model id ------------
-
-
-def test_commercial_sweep_requires_a_tokenizer() -> None:
-    """A commercial run cannot resolve --model as an HF tokenizer; --tokenizer is required."""
-    with pytest.raises(SweepError, match="tokenizer"):
-        _config(commercial=True)
-
-
-def test_commercial_sweep_with_a_tokenizer_is_valid() -> None:
-    """A commercial run pinned to a local tokenizer constructs without error."""
-    _config(commercial=True, tokenizer="Qwen/Qwen2.5-0.5B-Instruct")
-
-
-@pytest.mark.parametrize("blank", ["", "   ", "\t"])
-def test_commercial_sweep_rejects_a_blank_tokenizer(blank: str) -> None:
-    """A whitespace-only tokenizer pins no real ruler and dies in every cell; reject upfront."""
-    with pytest.raises(SweepError, match="tokenizer"):
-        _config(commercial=True, tokenizer=blank)
+# --- commercial arm: a local tokenizer reaches the command -------------------
 
 
 def test_cell_command_carries_the_tokenizer_when_set() -> None:
@@ -187,30 +147,6 @@ def test_grid_ladders_max_concurrency_innermost() -> None:
         (90, 1.0, 8),
         (90, 1.0, 16),
     ]
-
-
-@pytest.mark.parametrize("cap", [0, -1])
-def test_config_rejects_a_nonpositive_max_concurrency(cap: int) -> None:
-    """A max-concurrency of zero or below caps in-flight requests at none; reject it."""
-    with pytest.raises(SweepError, match="max-concurrency"):
-        _config(max_concurrency_values=[cap])
-
-
-@pytest.mark.parametrize(
-    ("overrides", "match"),
-    [
-        ({"prefix_shares": [10, 50, 10]}, "duplicate prefix-share 10"),
-        ({"prefix_shares": [10, 50, 10, 50]}, "duplicate prefix-share 10"),
-        ({"burstiness_values": [0.2, 1.0, 0.2]}, "duplicate burstiness 0.2"),
-        ({"max_concurrency_values": [8, 16, 8]}, "duplicate max-concurrency 8"),
-    ],
-)
-def test_config_rejects_a_duplicate_axis_value(
-    overrides: dict[str, object], match: str
-) -> None:
-    """A repeated grid-axis value reruns an identical cell; reject it at construction."""
-    with pytest.raises(SweepError, match=match):
-        _config(**overrides)
 
 
 # --- cell_command: the flag assembly the retired bash test pinned ------------

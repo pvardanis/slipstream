@@ -1,0 +1,36 @@
+# Experiment definition for `slipstream-bench load-sweep` (tier-2 client load).
+# The recipe / bench-sweep.sh inject --base-url, --model (model.yaml is the served-
+# model source of truth) and --out-dir; everything that defines the experiment — the
+# grid axes, token budget, SLO, seed — lives here, validated by SweepConfig before
+# the sweep touches the endpoint.
+
+# Prefix-share % axis: each splits the token budget into shared prefix and suffix.
+prefix_shares: [10, 50, 90]
+
+# Burstiness axis: low = bursty, 1.0 = Poisson arrivals.
+burstiness_values: [0.2, 1.0]
+
+# Closed-loop in-flight cap ladder; empty sweeps open-loop, bound only by request_rate.
+max_concurrency_values: []
+
+# Prefix+suffix token budget, split by each prefix-share.
+total_len: 1000
+# Requests per grid cell.
+num_prompts: 100
+# Distinct shared prefixes to synthesise.
+num_prefixes: 5
+# Output tokens per request.
+output_len: 128
+# Floor the prefix to a multiple of N tokens; 0 disables alignment.
+align_blocks: 0
+# Requests/sec, or 'inf' for an unthrottled sweep.
+request_rate: 8
+# RNG seed, fixed so runs replay identical prefixes.
+seed: 0
+# Goodput SLO passed to vllm bench serve.
+goodput: ["ttft:1000", "tpot:50"]
+
+# Local tokenizer for prompt synthesis; omit for the self-hosted arm (vLLM defaults
+# it to --model). Required for the commercial arm, whose provider model is not a
+# loadable HF tokenizer.
+# tokenizer: Qwen/Qwen2.5-0.5B-Instruct
