@@ -109,7 +109,8 @@ def load_sweep(
         bool, typer.Option(help="Print the vllm commands instead of running them.")
     ] = False,
 ) -> None:
-    """Sweep vllm bench serve across the prefix-share x burstiness grid a config defines."""
+    """Sweep vllm bench serve across the prefix-share x burstiness grid a config
+    defines."""
     try:
         # A dry run builds no cells and touches no endpoint, so it does not need
         # the key resolved — preview a commercial sweep without exporting a secret.
