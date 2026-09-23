@@ -12,6 +12,11 @@ from pydantic import AfterValidator, BeforeValidator, Field
 
 T = TypeVar("T")
 
+NonEmptyStr = Annotated[str, Field(min_length=1)]
+
+PositiveInt = Annotated[int, Field(gt=0)]
+NonNegativeInt = Annotated[int, Field(ge=0)]
+
 
 def unique(values: list[T]) -> list[T]:
     """Reject a repeated swept value: two equal points collide on one results subdir."""
@@ -49,11 +54,6 @@ def _validate_request_rate(value: str) -> str:
         )
     return value
 
-
-NonEmptyStr = Annotated[str, Field(min_length=1)]
-
-PositiveInt = Annotated[int, Field(gt=0)]
-NonNegativeInt = Annotated[int, Field(ge=0)]
 
 # A requests/sec rate or the literal 'inf'; a bare YAML number is coerced to the
 # string the flag carries before the number/'inf' check runs.
