@@ -24,14 +24,14 @@ Run `just` (or `just --list`) to see the recipes. Each lives in a file under
 `just/` named for its lifecycle concern, and `just --list` sections them under that
 concern's heading:
 
-| Concern | Covers |
-| --- | --- |
-| `cluster` | Remote-state bootstrap, EKS create/plan/destroy, the GPU node pool. |
-| `serve` | The vLLM api-key Secret, CPU and GPU replicas, their scale and completion smokes. |
-| `bench` | The bench-client image, the load and knob sweeps, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
-| `obs` | The OTel Collector spine stub — deploy, teardown, trace pivot. |
-| `test` | Local smokes: the Python suite and the shell tests for the OTel spine and bench image (no cluster). |
-| `orchestrate` | Whole-stack up/down, the one-shot cloud verification, the zero-leak spend sweep. |
+| Concern | Key recipes | Covers |
+| --- | --- | --- |
+| `cluster` | `bootstrap`, `cluster-up` / `cluster-down`, `gpu-pool-up` | Remote-state bootstrap, EKS create/plan/destroy, the GPU node pool. |
+| `serve` | `cpu-deploy` / `gpu-deploy`, `undeploy` | The vLLM api-key Secret, CPU and GPU replicas, their scale and completion smokes. |
+| `bench` | `bench-image`, `bench`, `knob-sweep`, `prefix-cache` | The bench-client image, the load and knob sweeps, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
+| `obs` | `obs-up` / `obs-down`, `obs-pivot` | The OTel Collector spine stub — deploy, teardown, trace pivot. |
+| `test` | `cli-test` | Local smokes: the Python suite and the shell tests for the OTel spine and bench image (no cluster). |
+| `orchestrate` | `stack-up` / `stack-down`, `cloud-verify` | Whole-stack up/down, the one-shot cloud verification, the zero-leak spend sweep. |
 
 The sections are display-only: `just` imports the six files into one flat
 namespace, so any recipe calls any other unqualified (`just stack-up` chains
@@ -104,9 +104,9 @@ stern vllm -n slipstream --tail 50    # tail vLLM logs, follows pod restarts
 ## Benchmark harness
 
 The L0 benchmark harness ships as `slipstream-bench`, a Python package managed by
-[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches five benchmark
-subcommands (plus `zero-leak`, the teardown sweep `just cloud-verify` classifies with).
-The rewrite from bash is recorded in
+[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches the benchmark
+subcommands below (plus `zero-leak`, the teardown sweep `just cloud-verify`
+classifies with). The rewrite from bash is recorded in
 [`docs/adr/0003`](docs/adr/0003-l0-bench-harness-in-python.md).
 
 - **`load-sweep`** — fire `vllm bench serve` across a prefix-share × burstiness
@@ -118,6 +118,12 @@ The rewrite from bash is recorded in
   `--out-dir` and `--api-key-env` set the execution context, and `--dry-run`
   prints the `vllm` commands without running them. This is the recipe `just bench`
   drives on the bench host.
+- **`sweep-grid`** — emit one validated slice (`engine-points`,
+  `concurrency-ladder`, `burstiness`) of the knob grid in `bench/sweep-grid.yaml`
+  for `just knob-sweep` to read, so every swept value is validated up front and
+  nothing is hard-coded in the recipe (ADR-0009).
+- **`aggregate-sweep`** — fold a finished `knob-sweep` run's per-point result JSON
+  into the concurrency-ceiling table, the durable artifact of the sweep.
 - **`cost`** — price result JSON files (path arguments) into $/1M input and output
   tokens from a `--config` provenance YAML: the instance price/hr and output:input
   ratio, tagged with the weight checksum, vLLM version and quantization recipe that
@@ -125,11 +131,15 @@ The rewrite from bash is recorded in
 - **`commercial-cost`** — price the same tokens at a commercial API's quoted $/1M
   input and output rates, read from a `--config` provenance YAML pinning the api,
   model and quote date; the comparison arm for the scoreboard.
-- **`prefix-cache`** — compute one run's cold/warm prefix-cache hit-rate delta from
-  the `/metrics` snapshots bracketing each run and the cell JSON. This is the join
-  `just prefix-cache` runs locally after the host produces the snapshots.
+- **`prefix-cache`** — compute one run's prefix-cache hit-rate from the `/metrics`
+  snapshots bracketing it and the cell JSON, tagged by `--cache-state cold|warm`
+  (which regime the run measured). This is the join `just prefix-cache` runs locally
+  for each regime after the host produces the snapshots.
 - **`report`** — join the three arms (latency, cost, commercial) into the baseline
   $/1M-at-SLO report, emitted as JSON or a Markdown table (`--format`).
+- **`chart`** — chart a finished `knob-sweep` run: write the ceiling and goodput-cliff
+  tables (Markdown + JSON, the durable artifacts) and their plots under
+  `<run-dir>/charts` (ADR-0009).
 
 Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
 `uv.lock` on first use — no manual `venv` or `pip install`. Every subcommand takes
@@ -141,8 +151,10 @@ uv run slipstream-bench load-sweep --help   # options for one subcommand
 just cli-test                               # run the package test suite (uv run pytest)
 ```
 
-Runtime dependencies stay slim (`typer` and `prometheus-client`); `pytest` and `ruff` are dev-only,
-and the repo's pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
+Runtime dependencies are `typer` (CLI), `pydantic` + `pyyaml` (validate the
+`--config` YAMLs), `prometheus-client` (parse `/metrics`), and `pandas` + `seaborn`
+(the `chart` tables and plots); `pytest` and `ruff` are dev-only, and the repo's
+pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
 run inside a baked bench-client image on an external EC2 bench host, which drives
 them against vLLM through an ephemeral public mutual-TLS load balancer, so the
 latency recorded is what an off-cluster client sees. That measurement path is
@@ -267,6 +279,40 @@ ECR repo survive. `cluster-down` is gated on `bench-endpoint-down` succeeding:
 the endpoint's load balancer and host sit in the cluster VPC, so tearing the VPC
 down under a live endpoint would wedge on a dependency violation and orphan a
 billing load balancer — a failed endpoint teardown stops the run before that.
+
+### Knob sweep runbook
+
+`just knob-sweep` is the two-tier engine-knob sweep (ADR-0009). Every swept value
+lives in [`bench/sweep-grid.yaml`](bench/sweep-grid.yaml), read through
+`slipstream-bench sweep-grid`, which validates the whole grid before the first
+deploy — the recipe holds no knob values of its own.
+
+- **Tier 1 — engine knobs**, one GPU redeploy per point: `max-num-seqs` ×
+  KV-cache dtype (`fp8`/`fp16`) × prefix caching (on/off). The knobs live in the
+  vLLM launch args, so each combination needs a fresh `gpu-deploy`.
+- **Tier 2 — client load ladder**, no redeploy: against each running Tier-1 point,
+  `just bench` walks the concurrency ladder to find the highest rung that holds
+  goodput at the SLO — that point's sustained concurrency ceiling.
+
+It runs against a live stack, so bring the GPU rig and the bench endpoint up first:
+
+```sh
+just stack-up          # cluster + GPU pool + GPU replica + bench endpoint
+just knob-sweep        # redeploy + drive the ladder per point (long-running)
+just stack-down        # tear the rig down; spend → 0
+```
+
+Each point's ladder JSON lands under `bench/results/<run-id>/<point>/`, with the
+per-point predicted ceilings tabulated alongside. A point that fails to deploy or
+whose ladder reports failures is recorded and the sweep continues, exiting non-zero
+at the end (its resumability and orchestrator choice are recorded in
+[`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)).
+Turn a finished run into artifacts locally — no cluster needed:
+
+```sh
+uv run slipstream-bench aggregate-sweep --run-dir bench/results/<run-id>   # ceiling table
+uv run slipstream-bench chart --run-dir bench/results/<run-id>             # tables + plots
+```
 
 ### Cloud verify runbook
 
