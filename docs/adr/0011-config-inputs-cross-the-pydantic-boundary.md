@@ -14,7 +14,7 @@ sorted every parse seam into three groups: the human-authored config file
 (`LoadCell`, `Segment` → **frozen dataclass** with `from_record`), and
 CLI-supplied arguments (`SweepConfig`, `CostInputs`, `CommercialCostInputs` →
 **frozen dataclass** with `__post_init__`). At the time, the knobs that define a
-run reached the package as CLI options: `serve-sweep` took 18, `cost` and
+run reached the package as CLI options: `load-sweep` took 18, `cost` and
 `commercial-cost` six each, and each value object re-validated those options in
 its `__post_init__` — a validation layer sitting behind Typer's option
 constraints, which the dataclass comment itself flagged as a duplication.
@@ -85,7 +85,7 @@ Everything else in ADR-0010 stands:
 ## Consequences
 
 - The pydantic-guarded boundary now covers four config files, not one:
-  `sweep-grid.yaml` plus the per-command experiment definitions for `serve-sweep`,
+  `sweep-grid.yaml` plus the per-command experiment definitions for `load-sweep`,
   `cost`, and `commercial-cost` (and `prefix-cache`, per the epic). A run is a
   directory of small, reviewable YAMLs.
 - Callers of these commands reason about a single validation layer. The Typer
