@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from slipstream_bench.cost.commercial import (
     CommercialCostError,
@@ -172,45 +173,67 @@ def test_same_input_reproduces_identical_output(tmp_path: Path) -> None:
     assert run_a == run_b
 
 
-def test_non_positive_input_price_is_rejected() -> None:
-    """A non-positive input rate is a free-token fiction; reject it."""
-    with pytest.raises(CommercialCostError, match="input-price-per-1m"):
-        _inputs(input_price_per_1m=0.0)
+_VALID_PAYLOAD = {"input_price_per_1m": 0.5, "output_price_per_1m": 1.5, **PINS}
 
 
-def test_non_positive_output_price_is_rejected() -> None:
-    """A non-positive output rate is a free-token fiction; reject it."""
-    with pytest.raises(CommercialCostError, match="output-price-per-1m"):
-        _inputs(output_price_per_1m=-1.0)
+def test_valid_payload_validates() -> None:
+    """A complete, in-range payload validates into CommercialCostInputs."""
+    inputs = CommercialCostInputs.model_validate(_VALID_PAYLOAD)
+
+    assert inputs.input_price_per_1m == 0.5
+    assert inputs.price_quoted_on == "2026-09-11"
 
 
-@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
-def test_non_finite_input_price_is_rejected(bad: float) -> None:
-    """NaN/Infinity slip past a bare <= 0 check and poison the cost; reject them."""
-    with pytest.raises(CommercialCostError, match="input-price-per-1m"):
-        _inputs(input_price_per_1m=bad)
+def test_unquoted_iso_date_is_coerced_from_a_yaml_date() -> None:
+    """An unquoted YAML date parses to a date object; the model keeps its ISO text."""
+    from datetime import date
+
+    inputs = CommercialCostInputs.model_validate(
+        {**_VALID_PAYLOAD, "price_quoted_on": date(2026, 9, 11)}
+    )
+
+    assert inputs.price_quoted_on == "2026-09-11"
 
 
-@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
-def test_non_finite_output_price_is_rejected(bad: float) -> None:
-    """NaN/Infinity slip past a bare <= 0 check and poison the cost; reject them."""
-    with pytest.raises(CommercialCostError, match="output-price-per-1m"):
-        _inputs(output_price_per_1m=bad)
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # A non-positive rate is a free-token fiction; NaN/Infinity slip past a bare
+        # <= 0 check and poison every run cost, so the model rejects them too.
+        ("input_price_per_1m", 0.0),
+        ("input_price_per_1m", -1.0),
+        ("input_price_per_1m", float("nan")),
+        ("input_price_per_1m", float("inf")),
+        ("output_price_per_1m", 0.0),
+        ("output_price_per_1m", -1.0),
+        ("output_price_per_1m", float("nan")),
+        ("output_price_per_1m", float("inf")),
+        # A quoted figure detached from provider/model/date is a list price with no
+        # provenance; blank fields and a non-ISO quote date both fail.
+        ("api", ""),
+        ("model", ""),
+        ("price_quoted_on", ""),
+        ("price_quoted_on", "last tuesday"),
+    ],
+)
+def test_rejection_matrix(field: str, value: object) -> None:
+    """model_validate rejects a bad rate, blank pin, or non-ISO date, naming the field."""
+    with pytest.raises(ValidationError, match=field):
+        CommercialCostInputs.model_validate({**_VALID_PAYLOAD, field: value})
 
 
-@pytest.mark.parametrize("field", ["api", "model", "price_quoted_on"])
-def test_empty_quote_provenance_is_rejected(field: str) -> None:
-    """A quoted figure detached from provider/model/date is a lie; blank fails."""
-    pins = {**PINS, field: ""}
-    with pytest.raises(CommercialCostError, match=field.replace("_", "-")):
-        CommercialCostInputs(input_price_per_1m=0.5, output_price_per_1m=1.5, **pins)
+def test_extra_key_is_forbidden() -> None:
+    """An unknown key is a typo in a reviewed artifact, not a silent pass-through."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CommercialCostInputs.model_validate({**_VALID_PAYLOAD, "unknown_knob": 1})
 
 
-def test_ill_formed_quote_date_is_rejected() -> None:
-    """A price-quoted-on that is not an ISO date pins nothing real; reject it."""
-    pins = {**PINS, "price_quoted_on": "last tuesday"}
-    with pytest.raises(CommercialCostError, match="price-quoted-on"):
-        CommercialCostInputs(input_price_per_1m=0.5, output_price_per_1m=1.5, **pins)
+@pytest.mark.parametrize("missing", list(_VALID_PAYLOAD))
+def test_missing_field_is_rejected(missing: str) -> None:
+    """Every rate and provenance field is required; an omitted one fails."""
+    payload = {k: v for k, v in _VALID_PAYLOAD.items() if k != missing}
+    with pytest.raises(ValidationError, match=missing):
+        CommercialCostInputs.model_validate(payload)
 
 
 @pytest.mark.parametrize("metric", ["total_input_tokens", "total_output_tokens"])

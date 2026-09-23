@@ -7,20 +7,40 @@ subcommands and keeps them wired and discoverable via --help.
 import json
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 from slipstream_bench.cli import app
 
 runner = CliRunner()
 
-_PINS = [
-    "--weight-checksum",
-    "sha256:deadbeef",
-    "--vllm-version",
-    "0.6.3",
-    "--quant-recipe",
-    "awq_marlin+fp8-kv",
-]
+_COST_PROVENANCE = {
+    "price_per_hour": 2.0,
+    "output_input_ratio": 1,
+    "weight_checksum": "sha256:deadbeef",
+    "vllm_version": "0.6.3",
+    "quant_recipe": "awq_marlin+fp8-kv",
+}
+
+_COMMERCIAL_PROVENANCE = {
+    "input_price_per_1m": 0.5,
+    "output_price_per_1m": 1.5,
+    "api": "openai",
+    "model": "gpt-4o-mini",
+    "price_quoted_on": "2026-09-11",
+}
+
+
+def _cost_config(tmp_path: Path, **overrides: object) -> Path:
+    path = tmp_path / "cost.yaml"
+    path.write_text(yaml.safe_dump({**_COST_PROVENANCE, **overrides}))
+    return path
+
+
+def _commercial_config(tmp_path: Path, **overrides: object) -> Path:
+    path = tmp_path / "commercial.yaml"
+    path.write_text(yaml.safe_dump({**_COMMERCIAL_PROVENANCE, **overrides}))
+    return path
 
 
 def _result_file(tmp_path: Path) -> Path:
@@ -38,20 +58,6 @@ def _result_file(tmp_path: Path) -> Path:
         )
     )
     return result
-
-
-_QUOTE = [
-    "--input-price-per-1m",
-    "0.5",
-    "--output-price-per-1m",
-    "1.5",
-    "--api",
-    "openai",
-    "--model",
-    "gpt-4o-mini",
-    "--price-quoted-on",
-    "2026-09-11",
-]
 
 
 def test_help_lists_the_subcommands() -> None:
@@ -162,46 +168,28 @@ def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
 
 
 def test_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
-    """The cost command emits a JSON array of priced records to stdout."""
+    """The cost command reads provenance from --config and emits priced JSON."""
     result = _result_file(tmp_path)
+    config = _cost_config(tmp_path)
 
-    invoked = runner.invoke(
-        app,
-        [
-            "cost",
-            "--price-per-hour",
-            "2.0",
-            "--output-input-ratio",
-            "1",
-            *_PINS,
-            str(result),
-        ],
-    )
+    invoked = runner.invoke(app, ["cost", "--config", str(config), str(result)])
 
     assert invoked.exit_code == 0, invoked.output
     records = json.loads(invoked.stdout)
     assert len(records) == 1
     assert records[0]["cost_per_1m_input_usd"] == 2.0
+    assert records[0]["weight_checksum"] == "sha256:deadbeef"
 
 
 def test_cost_prices_multiple_files_as_an_ordered_array(tmp_path: Path) -> None:
-    """Two files yield a two-element array in the order given."""
+    """Result files stay path args: two files yield an ordered two-element array."""
     first = _result_file(tmp_path)
     second = tmp_path / "other.json"
     second.write_text(first.read_text())
+    config = _cost_config(tmp_path)
 
     invoked = runner.invoke(
-        app,
-        [
-            "cost",
-            "--price-per-hour",
-            "2.0",
-            "--output-input-ratio",
-            "1",
-            *_PINS,
-            str(first),
-            str(second),
-        ],
+        app, ["cost", "--config", str(config), str(first), str(second)]
     )
 
     assert invoked.exit_code == 0, invoked.output
@@ -213,29 +201,42 @@ def test_cost_rejects_a_malformed_result_file(tmp_path: Path) -> None:
     """A file that exists but is not JSON hits the ResultError arm: exit 2, stderr."""
     result = tmp_path / "bad.json"
     result.write_text("{not json")
+    config = _cost_config(tmp_path)
 
-    invoked = runner.invoke(
-        app,
-        [
-            "cost",
-            "--price-per-hour",
-            "2.0",
-            "--output-input-ratio",
-            "1",
-            *_PINS,
-            str(result),
-        ],
-    )
+    invoked = runner.invoke(app, ["cost", "--config", str(config), str(result)])
 
     assert invoked.exit_code == 2
     assert "cannot read" in invoked.output
 
 
-def test_commercial_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
-    """The commercial-cost command emits a JSON array priced at the quoted rates."""
+def test_cost_requires_a_config(tmp_path: Path) -> None:
+    """Omitting --config exits 2: the provenance is not optional."""
     result = _result_file(tmp_path)
 
-    invoked = runner.invoke(app, ["commercial-cost", *_QUOTE, str(result)])
+    invoked = runner.invoke(app, ["cost", str(result)])
+
+    assert invoked.exit_code == 2
+
+
+def test_cost_rejects_a_non_positive_price(tmp_path: Path) -> None:
+    """A zero price in the config exits 2 with a diagnostic, never a $0 figure."""
+    result = _result_file(tmp_path)
+    config = _cost_config(tmp_path, price_per_hour=0)
+
+    invoked = runner.invoke(app, ["cost", "--config", str(config), str(result)])
+
+    assert invoked.exit_code == 2
+    assert "price_per_hour" in invoked.output
+
+
+def test_commercial_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
+    """The commercial-cost command reads quoted rates from --config and prices."""
+    result = _result_file(tmp_path)
+    config = _commercial_config(tmp_path)
+
+    invoked = runner.invoke(
+        app, ["commercial-cost", "--config", str(config), str(result)]
+    )
 
     assert invoked.exit_code == 0, invoked.output
     records = json.loads(invoked.stdout)
@@ -247,46 +248,43 @@ def test_commercial_cost_prices_a_result_to_stdout(tmp_path: Path) -> None:
 
 
 def test_commercial_cost_rejects_a_non_positive_rate(tmp_path: Path) -> None:
-    """A zero input rate exits 2 with a diagnostic, never a free-token figure."""
+    """A zero input rate in the config exits 2, never a free-token figure."""
     result = _result_file(tmp_path)
-    quote = ["--input-price-per-1m", "0", *_QUOTE[2:]]
+    config = _commercial_config(tmp_path, input_price_per_1m=0)
 
-    invoked = runner.invoke(app, ["commercial-cost", *quote, str(result)])
+    invoked = runner.invoke(
+        app, ["commercial-cost", "--config", str(config), str(result)]
+    )
 
     assert invoked.exit_code == 2
-    assert "input-price-per-1m" in invoked.output
+    assert "input_price_per_1m" in invoked.output
+
+
+def test_commercial_cost_rejects_a_non_iso_quote_date(tmp_path: Path) -> None:
+    """A free-text quote date in the config exits 2 with a diagnostic."""
+    result = _result_file(tmp_path)
+    config = _commercial_config(tmp_path, price_quoted_on="last tuesday")
+
+    invoked = runner.invoke(
+        app, ["commercial-cost", "--config", str(config), str(result)]
+    )
+
+    assert invoked.exit_code == 2
+    assert "price_quoted_on" in invoked.output
 
 
 def test_commercial_cost_rejects_a_malformed_result_file(tmp_path: Path) -> None:
     """A file that exists but is not JSON hits the ResultError arm: exit 2, stderr."""
     result = tmp_path / "bad.json"
     result.write_text("{not json")
-
-    invoked = runner.invoke(app, ["commercial-cost", *_QUOTE, str(result)])
-
-    assert invoked.exit_code == 2
-    assert "cannot read" in invoked.output
-
-
-def test_cost_rejects_a_non_positive_price(tmp_path: Path) -> None:
-    """A zero price exits 2 with a diagnostic, never a $0 figure."""
-    result = _result_file(tmp_path)
+    config = _commercial_config(tmp_path)
 
     invoked = runner.invoke(
-        app,
-        [
-            "cost",
-            "--price-per-hour",
-            "0",
-            "--output-input-ratio",
-            "1",
-            *_PINS,
-            str(result),
-        ],
+        app, ["commercial-cost", "--config", str(config), str(result)]
     )
 
     assert invoked.exit_code == 2
-    assert "price-per-hour" in invoked.output
+    assert "cannot read" in invoked.output
 
 
 def _report_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:

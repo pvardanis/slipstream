@@ -99,12 +99,13 @@ The rewrite from bash is recorded in
   `--out-dir` and `--api-key-env` set the execution context, and `--dry-run`
   prints the `vllm` commands without running them. This is the recipe `just bench`
   drives on the bench host.
-- **`cost`** — price a `load-sweep` result JSON into $/1M input and output tokens
-  from an instance's `--price-per-hour`, tagging the output with the weight
-  checksum, vLLM version and quantization recipe that produced the run.
-- **`commercial-cost`** — price the same tokens at a commercial API's quoted
-  `--input-price-per-1m` / `--output-price-per-1m`, the comparison arm for the
-  scoreboard.
+- **`cost`** — price result JSON files (path arguments) into $/1M input and output
+  tokens from a `--config` provenance YAML: the instance price/hr and output:input
+  ratio, tagged with the weight checksum, vLLM version and quantization recipe that
+  produced the run.
+- **`commercial-cost`** — price the same tokens at a commercial API's quoted $/1M
+  input and output rates, read from a `--config` provenance YAML pinning the api,
+  model and quote date; the comparison arm for the scoreboard.
 - **`prefix-cache`** — compute one run's cold/warm prefix-cache hit-rate delta from
   the `/metrics` snapshots bracketing each run and the cell JSON. This is the join
   `just prefix-cache` runs locally after the host produces the snapshots.

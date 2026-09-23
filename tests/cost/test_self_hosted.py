@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from slipstream_bench.cost.self_hosted import (
     CostError,
@@ -129,16 +130,55 @@ def test_same_input_reproduces_identical_output(tmp_path: Path) -> None:
     assert run_a == run_b
 
 
-def test_non_positive_price_is_rejected() -> None:
-    """A zero price is a free-GPU fiction; reject it before the arithmetic."""
-    with pytest.raises(CostError, match="price-per-hour"):
-        _inputs(price_per_hour=0.0)
+_VALID_PAYLOAD = {"price_per_hour": 2.0, "output_input_ratio": 1.0, **PINS}
 
 
-def test_non_positive_ratio_is_rejected() -> None:
-    """A non-positive ratio inverts the split; reject it before the arithmetic."""
-    with pytest.raises(CostError, match="output-input-ratio"):
-        _inputs(output_input_ratio=-1.0)
+def test_valid_payload_validates() -> None:
+    """A complete, in-range payload validates into CostInputs."""
+    inputs = CostInputs.model_validate(_VALID_PAYLOAD)
+
+    assert inputs.price_per_hour == 2.0
+    assert inputs.weight_checksum == "sha256:deadbeef"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # A non-positive price is a free-GPU fiction; a non-positive ratio inverts
+        # the input/output split. NaN and Infinity slip past a bare <= 0 check and
+        # poison every figure, so the model rejects them too.
+        ("price_per_hour", 0.0),
+        ("price_per_hour", -1.0),
+        ("price_per_hour", float("inf")),
+        ("price_per_hour", float("nan")),
+        ("output_input_ratio", 0.0),
+        ("output_input_ratio", -1.0),
+        ("output_input_ratio", float("inf")),
+        ("output_input_ratio", float("nan")),
+        # A $/1M figure detached from its artifact is a lie; blank provenance fails.
+        ("weight_checksum", ""),
+        ("vllm_version", ""),
+        ("quant_recipe", ""),
+    ],
+)
+def test_rejection_matrix(field: str, value: object) -> None:
+    """model_validate rejects a bad price, ratio, or blank pin, naming the field."""
+    with pytest.raises(ValidationError, match=field):
+        CostInputs.model_validate({**_VALID_PAYLOAD, field: value})
+
+
+def test_extra_key_is_forbidden() -> None:
+    """An unknown key is a typo in a reviewed artifact, not a silent pass-through."""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CostInputs.model_validate({**_VALID_PAYLOAD, "unknown_knob": 1})
+
+
+@pytest.mark.parametrize("missing", list(_VALID_PAYLOAD))
+def test_missing_field_is_rejected(missing: str) -> None:
+    """Every price and provenance field is required; an omitted one fails."""
+    payload = {k: v for k, v in _VALID_PAYLOAD.items() if k != missing}
+    with pytest.raises(ValidationError, match=missing):
+        CostInputs.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -222,11 +262,3 @@ def test_token_counts_are_emitted_as_integers() -> None:
 
     assert isinstance(priced["total_input_tokens"], int)
     assert isinstance(priced["total_output_tokens"], int)
-
-
-@pytest.mark.parametrize("field", ["weight_checksum", "vllm_version", "quant_recipe"])
-def test_empty_provenance_is_rejected(field: str) -> None:
-    """A $/1M figure detached from its artifact is a lie; blank provenance fails."""
-    pins = {**PINS, field: ""}
-    with pytest.raises(CostError, match=field.replace("_", "-")):
-        CostInputs(price_per_hour=2.0, output_input_ratio=1.0, **pins)
