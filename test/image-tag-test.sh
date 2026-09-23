@@ -97,4 +97,42 @@ model:
 YAML
 expect_fail "empty slug rejected" "${tmp}/empty-slug.yaml" main-tag
 
+# The content sha names the tokenizer and the harness, not the experiment config:
+# bench/load-sweep.yaml is a runtime input mounted at sweep time, so editing it must
+# not roll the image tag, while editing a real image input (the package) must. Drive
+# real git history in a scratch repo the script treats as its own root: it derives
+# repo_root from its own location, so a copy under scratch/bench sees scratch's log.
+scratch="$(mktemp -d)"
+trap 'rm -rf "${tmp}" "${scratch}"' EXIT
+mkdir -p "${scratch}/bench" "${scratch}/src"
+cp "${script}" "${scratch}/bench/image-tag.sh"
+scratch_script="${scratch}/bench/image-tag.sh"
+cat >"${scratch}/model.yaml" <<'YAML'
+model:
+  hfId: Qwen/Qwen3-8B-AWQ
+  revision: 4da05a8edb55c6046cce958586c33b61da07bb79
+YAML
+printf 'seed: 1\n' >"${scratch}/bench/load-sweep.yaml"
+printf 'name = "slipstream-bench"\n' >"${scratch}/pyproject.toml"
+git -C "${scratch}" init -q
+git -C "${scratch}" -c user.email=t@t -c user.name=t add -A
+git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qm init
+base_tag="$("${scratch_script}" sha-tag)"
+
+# A config-only commit must leave the tag unchanged.
+printf 'seed: 2\n' >"${scratch}/bench/load-sweep.yaml"
+git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qam config-only
+check "config edit keeps tag" "${base_tag}" "$("${scratch_script}" sha-tag)"
+
+# An image-input commit must roll the tag.
+printf 'name = "slipstream-bench"\nversion = "0.2"\n' >"${scratch}/pyproject.toml"
+git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qam input-change
+input_tag="$("${scratch_script}" sha-tag)"
+if [[ "${input_tag}" != "${base_tag}" ]]; then
+  echo "ok   image-input edit rolls tag (${input_tag})"
+else
+  echo "FAIL image-input edit rolls tag: still '${base_tag}'" >&2
+  fail=1
+fi
+
 exit "${fail}"

@@ -26,11 +26,11 @@ COPY pyproject.toml ./
 COPY src ./src
 RUN python3 -m pip install --no-cache-dir .
 
-# Bake the default experiment config so an in-cluster run that passes no --config
-# resolves load-sweep's default (bench/load-sweep.yaml, Typer exists=True) instead of
-# exiting 2 on a missing file. The knob-sweep and prefix-cache paths mount + pass a
-# per-point config; this covers a bare `load-sweep` with no config supplied.
-COPY bench/load-sweep.yaml ./bench/load-sweep.yaml
+# The experiment config is not baked: knob-sweep and prefix-cache compose a per-point
+# config on the operator's laptop and mount it in as load-sweep's --config, so the
+# image carries the tokenizer and harness only and stays identical across config
+# edits. A bare `load-sweep` with no --config exits 2 on the missing default, which
+# no deployed path hits — every sweep passes --config.
 
 # Bake the tokenizer into HF_HOME at build time, pinned to the model's revision so
 # the baked tokenizer matches the weights the server loads. This fetch is the last
