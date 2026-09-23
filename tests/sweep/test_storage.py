@@ -42,10 +42,24 @@ def test_result_and_cache_key_prefixes_do_not_collide() -> None:
     )
 
 
+@pytest.mark.parametrize("build", [result_storage, cache_key_storage])
+def test_builders_reject_a_blank_bucket(build) -> None:
+    with pytest.raises(StorageError, match="blank"):
+        build("   ")
+
+
 def test_results_bucket_from_env_reads_the_sweep_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RESULTS_BUCKET", _BUCKET)
+
+    assert results_bucket_from_env() == _BUCKET
+
+
+def test_results_bucket_from_env_trims_surrounding_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RESULTS_BUCKET", f"  {_BUCKET}  ")
 
     assert results_bucket_from_env() == _BUCKET
 
