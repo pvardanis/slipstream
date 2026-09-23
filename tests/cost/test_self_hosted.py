@@ -155,10 +155,14 @@ def test_valid_payload_validates() -> None:
         ("output_input_ratio", -1.0),
         ("output_input_ratio", float("inf")),
         ("output_input_ratio", float("nan")),
-        # A $/1M figure detached from its artifact is a lie; blank provenance fails.
+        # A $/1M figure detached from its artifact is a lie; an empty or
+        # whitespace-only pin describes no artifact and fails.
         ("weight_checksum", ""),
+        ("weight_checksum", "   "),
         ("vllm_version", ""),
+        ("vllm_version", "   "),
         ("quant_recipe", ""),
+        ("quant_recipe", "   "),
     ],
 )
 def test_rejection_matrix(field: str, value: object) -> None:
