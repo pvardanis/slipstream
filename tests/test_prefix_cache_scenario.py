@@ -51,6 +51,15 @@ def test_bad_cache_state_fails_model_validate(state: str) -> None:
         PrefixCacheScenario.model_validate({"cache_state": state})
 
 
+@pytest.mark.parametrize("model", ["", "   ", "\t\n"])
+def test_blank_model_selector_is_rejected(model: str) -> None:
+    """A blank selector is truthy at scrape's model-or-default step yet names no
+    series, so it is rejected at the boundary rather than deferred to a scrape miss.
+    """
+    with pytest.raises(ValidationError, match="model"):
+        PrefixCacheScenario.model_validate({"cache_state": "cold", "model": model})
+
+
 def test_unknown_key_fails_model_validate() -> None:
     """A typo in the reviewed artifact fails loudly rather than being ignored."""
     with pytest.raises(ValidationError, match="cache_stat"):

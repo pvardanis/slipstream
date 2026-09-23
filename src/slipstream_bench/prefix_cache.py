@@ -18,11 +18,11 @@ reuse the warmed cache for the warm run, and pass the matching cache_state.
 
 import math
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from prometheus_client.parser import text_string_to_metric_families
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
 
 from slipstream_bench.results import read_result
 
@@ -42,6 +42,20 @@ class PrefixCacheError(Exception):
     """A prefix-cache input that cannot produce a meaningful hit rate."""
 
 
+def _require_served_model(value: str) -> str:
+    """Reject a model selector blank once surrounding whitespace is stripped.
+
+    A whitespace-only selector is truthy, so it would slip past scrape's
+    ``model or model_id`` default and become a real selector that matches no series;
+    reject it here at the boundary rather than defer to a confusing scrape miss.
+
+    :raise ValueError: when the selector is blank after stripping.
+    """
+    if not value.strip():
+        raise ValueError("model selector must not be blank")
+    return value
+
+
 class PrefixCacheScenario(BaseModel):
     """The scenario one prefix-cache run measures, from its YAML definition.
 
@@ -54,13 +68,10 @@ class PrefixCacheScenario(BaseModel):
     so a typo in the reviewed artifact fails loudly.
     """
 
-    # ``model`` is a served-model selector, not a pydantic ``model_``-namespaced
-    # field, so the protected namespace is cleared to name it plainly without a
-    # warning.
-    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     cache_state: Literal["cold", "warm"]
-    model: str | None = None
+    model: Annotated[str, AfterValidator(_require_served_model)] | None = None
 
 
 def load_prefix_cache_scenario(path: Path) -> PrefixCacheScenario:
@@ -219,6 +230,8 @@ def scrape_prefix_cache(
               "source": "bench/results/prefix-cache/cold_pshare90_burst1.0.json",
               "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
               "cache_state": "cold",
+              "request_rate": 8.0,
+              "prefix_share": 90,
               "completed": 16,
               "prefix_cache_queries": 4096,
               "prefix_cache_hits": 0,
