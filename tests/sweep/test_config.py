@@ -112,6 +112,17 @@ def test_request_rate_inf_is_accepted() -> None:
     assert SweepConfig.model_validate(_valid(request_rate="inf")).request_rate == "inf"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(8.5, "8.5"), (float("inf"), "inf")],
+)
+def test_request_rate_coerces_a_yaml_float(value: float, expected: str) -> None:
+    """A YAML float (finite or .inf) is coerced to the string the flag carries."""
+    assert (
+        SweepConfig.model_validate(_valid(request_rate=value)).request_rate == expected
+    )
+
+
 @pytest.mark.parametrize("blank", ["", "   ", "\t"])
 def test_commercial_arm_rejects_a_blank_tokenizer(blank: str) -> None:
     """A whitespace-only tokenizer pins no real ruler; the commercial arm rejects it."""
@@ -169,6 +180,31 @@ def test_load_reports_a_missing_config(tmp_path: Path) -> None:
             model="m",
             out_dir="/out",
             commercial=False,
+        )
+
+
+def test_load_reports_an_unreadable_config(tmp_path: Path) -> None:
+    """A path that is a directory, not a file, fails as unreadable with the path."""
+    with pytest.raises(SweepError, match="could not be read"):
+        load_sweep_config(
+            tmp_path, base_url="u", model="m", out_dir="/out", commercial=False
+        )
+
+
+@pytest.mark.parametrize(
+    ("document", "match"),
+    [("- 1\n- 2\n", "must be a mapping"), ("hello\n", "must be a mapping")],
+)
+def test_load_rejects_a_non_mapping_config(
+    tmp_path: Path, document: str, match: str
+) -> None:
+    """A top-level list or scalar is named a mapping error, not an opaque one."""
+    path = tmp_path / "not-a-map.yaml"
+    path.write_text(document)
+
+    with pytest.raises(SweepError, match=match):
+        load_sweep_config(
+            path, base_url="u", model="m", out_dir="/out", commercial=False
         )
 
 
