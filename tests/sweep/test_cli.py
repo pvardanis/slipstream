@@ -13,8 +13,8 @@ import pytest
 from typer.testing import CliRunner
 
 from slipstream_bench.cli import app
-from slipstream_bench.cli_helpers import resolve_api_key_env, run_cell
-from slipstream_bench.serve_sweep import SweepError
+from slipstream_bench.sweep.cli import resolve_api_key_env, run_cell
+from slipstream_bench.sweep.config import SweepError
 
 runner = CliRunner()
 
@@ -355,7 +355,7 @@ def test_live_sweep_threads_the_resolved_key_into_the_runner(
         Path(result_file).write_text(json.dumps({"model_id": "m"}))
         return 0
 
-    monkeypatch.setattr("slipstream_bench.cli.run_cell", stub_run_cell)
+    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
 
     result = runner.invoke(
         app,
@@ -387,7 +387,7 @@ def test_live_commercial_sweep_without_a_tokenizer_is_rejected(monkeypatch) -> N
             "no cell should run when the tokenizer guard rejects the sweep"
         )
 
-    monkeypatch.setattr("slipstream_bench.cli.run_cell", stub_run_cell)
+    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
 
     result = runner.invoke(app, ["serve-sweep", "--api-key-env", "MY_PROVIDER_KEY"])
 

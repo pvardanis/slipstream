@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from slipstream_bench.commercial_cost import (
+from slipstream_bench.cost.commercial import (
     CommercialCostError,
     CommercialCostInputs,
     price_commercial_files,

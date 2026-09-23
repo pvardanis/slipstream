@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from slipstream_bench.sweep_grid import (
+from slipstream_bench.sweep.grid import (
     SweepGrid,
     SweepGridError,
     load_grid,

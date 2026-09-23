@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from slipstream_bench.results import ResultError
-from slipstream_bench.sweep_aggregation import (
+from slipstream_bench.sweep.aggregation import (
     EnginePoint,
     LoadCell,
     SweepAggregationError,

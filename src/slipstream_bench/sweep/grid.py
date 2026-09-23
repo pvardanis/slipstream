@@ -6,7 +6,7 @@ pydantic model, so a malformed or out-of-range value fails here, before any GPU
 redeploy, rather than mid-sweep on live hardware (ADR-0009). The `sweep-grid` CLI
 emits three things the recipe loop reads: the Tier-1 points (one per row, keyed by
 the slug an EnginePoint names), the Tier-2 --max-concurrency ladder, and the pinned
-burstiness. Points reuse EnginePoint from sweep_aggregation so the grid emits, the
+burstiness. Points reuse EnginePoint from sweep.aggregation so the grid emits, the
 recipe writes, and the aggregator parses one slug format from one place.
 """
 
@@ -25,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from slipstream_bench.sweep_aggregation import EnginePoint
+from slipstream_bench.sweep.aggregation import EnginePoint
 
 # The KV-cache dtype and prefix-caching arms are keyed by their chart labels, the
 # same tokens EnginePoint.from_dirname parses off a slug. The grid carries only the

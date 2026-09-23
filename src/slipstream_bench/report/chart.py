@@ -4,10 +4,10 @@ The tables are the durable artifacts and the PNGs disposable (ADR-0009), so each
 Markdown and JSON are written from the same rows the aggregator emits — Markdown the
 human-readable view, JSON the structured table later layers re-read. Two charts, a pair:
 the primary plots the concurrency ceiling per engine point
-(:func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`) — x = max-num-seqs,
+(:func:`slipstream_bench.sweep.aggregation.aggregate_ceilings`) — x = max-num-seqs,
 series = kv-cache-dtype, faceted by the combined caching/share condition; the diagnostic
 plots the goodput cliff each ceiling was read off
-(:func:`slipstream_bench.sweep_aggregation.aggregate_rungs`) — x = --max-concurrency,
+(:func:`slipstream_bench.sweep.aggregation.aggregate_rungs`) — x = --max-concurrency,
 y = goodput fraction, series = prefix-share, one facet per engine point, with the 95%
 floor drawn as a reference line. Both render offline through matplotlib's Agg backend.
 Caching-off carries only its single share-0 baseline, so it holds one primary facet while
@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
-from slipstream_bench.sweep_aggregation import (
+from slipstream_bench.sweep.aggregation import (
     _GOODPUT_FLOOR,
     CeilingRow,
     RungRow,
@@ -48,7 +48,7 @@ _TABLE_COLUMNS = (
 
 # The ceiling axis names its SLO predicate: the KB pairs a goodput/ceiling number with
 # the SLO it was read at, never bare. The ttft/tpot thresholds mirror the harness's
-# cli_helpers.DEFAULT_GOODPUT and the 95% floor mirrors sweep_aggregation._GOODPUT_FLOOR
+# sweep.cli.DEFAULT_GOODPUT and the 95% floor mirrors sweep.aggregation._GOODPUT_FLOOR
 # (ADR-0009). The title also names the pinned burstiness the whole grid ran at — the
 # aggregated rows do not carry it, so it is asserted here from the grid's pin, not read
 # from the data. This label is a manual copy of those constants, kept in sync by hand.
@@ -59,7 +59,7 @@ _SLO_TITLE = (
 )
 
 # The diagnostic cliff reads the same SLO. The reference line is drawn at
-# sweep_aggregation._GOODPUT_FLOOR itself (imported, not copied), so the line the cliff
+# sweep.aggregation._GOODPUT_FLOOR itself (imported, not copied), so the line the cliff
 # crosses always marks the aggregator's true floor. The title's "0.95"/"floor" text and
 # the ttft/tpot thresholds stay hand-mirrored prose — the rung rows carry the goodput
 # fraction, not the SLO it was read at.
@@ -90,7 +90,7 @@ def rows_to_markdown(rows: list[CeilingRow]) -> str:
     The human-readable durable artifact: it renders inline in a PR or a run's notes,
     the failure cohorts flattened into columns and a not-captured None left blank.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`
+    :param rows: the rows :func:`slipstream_bench.sweep.aggregation.aggregate_ceilings`
         emitted, already sorted by point then prefix-share.
     :return: the table as one string: header, separator, one row per ceiling row.
     """
@@ -107,7 +107,7 @@ def rows_to_json(rows: list[CeilingRow]) -> str:
     so the table re-reads as the same objects the aggregator emitted, unlike the
     flattened Markdown meant for a human reader.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`
+    :param rows: the rows :func:`slipstream_bench.sweep.aggregation.aggregate_ceilings`
         emitted, already sorted by point then prefix-share.
     :return: the rows as an indented JSON array.
     """
@@ -121,7 +121,7 @@ def rungs_to_markdown(rungs: list[RungRow]) -> str:
     goodput fraction rounded for reading. The full-precision fraction stays in the
     JSON artifact.
 
-    :param rungs: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_rungs`
+    :param rungs: the rows :func:`slipstream_bench.sweep.aggregation.aggregate_rungs`
         emitted, already sorted by point, then prefix-share, then offered concurrency.
     :return: the table as one string: header, separator, one row per rung.
     """
@@ -137,7 +137,7 @@ def rungs_to_json(rungs: list[RungRow]) -> str:
     Keeps the full-precision goodput fraction the Markdown rounds, so the diagnostic
     table re-reads as the same objects the aggregator emitted.
 
-    :param rungs: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_rungs`
+    :param rungs: the rows :func:`slipstream_bench.sweep.aggregation.aggregate_rungs`
         emitted, already sorted by point, then prefix-share, then offered concurrency.
     :return: the rows as an indented JSON array.
     """
@@ -154,9 +154,9 @@ def write_artifacts(
     goodput cliff each ceiling was read off. The directory is created on the way out,
     so the run directory need not pre-hold it.
 
-    :param rows: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_ceilings`
+    :param rows: the rows :func:`slipstream_bench.sweep.aggregation.aggregate_ceilings`
         emitted.
-    :param rungs: the rows :func:`slipstream_bench.sweep_aggregation.aggregate_rungs`
+    :param rungs: the rows :func:`slipstream_bench.sweep.aggregation.aggregate_rungs`
         emitted.
     :param charts_dir: the ``bench/results/<run_id>/charts`` directory to write into.
     :return: the written paths, keyed ``markdown`` / ``json`` / ``png`` for the ceiling

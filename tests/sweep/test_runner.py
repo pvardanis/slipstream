@@ -12,9 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from slipstream_bench.serve_sweep import (
-    SweepConfig,
-    SweepError,
+from slipstream_bench.sweep.config import SweepConfig, SweepError
+from slipstream_bench.sweep.runner import (
     cell_command,
     grid,
     run_sweep,
