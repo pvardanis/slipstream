@@ -86,16 +86,44 @@ Everything else in ADR-0010 stands:
 
 - The pydantic-guarded boundary now covers four config files, not one:
   `sweep-grid.yaml` plus the per-command experiment definitions for `load-sweep`,
-  `cost`, and `commercial-cost` (and `prefix-cache`, per the epic). A run is a
-  directory of small, reviewable YAMLs.
+  `cost`, and `commercial-cost`. (`prefix-cache` was scoped into this group by the
+  epic but is the exception — see the Amendment below.) A run is a directory of
+  small, reviewable YAMLs.
 - Callers of these commands reason about a single validation layer. The Typer
   option constraints and the `__post_init__` re-checks collapse into one pydantic
   model per command.
 - This ADR is the written trail the epic requires before the seam pull requests
   land; it is documentation-only and blocks nothing. The model conversions
-  themselves arrive in the per-concept pull requests (issues #129, #130, #131),
-  each test-first against the CLI seam and the model's `model_validate`.
+  themselves arrive in the per-concept pull requests (issues #129, #130; issue
+  #131 is amended below), each test-first against the CLI seam and the model's
+  `model_validate`.
 - The pydantic / dataclass split stays governed by input category, not by module:
   new config-file parsing reaches for pydantic, new machine-record parsing reaches
   for a frozen dataclass, and this ADR is the precedent for reclassifying a value
   object when the input it parses moves across that line.
+
+## Amendment (2026-09-23): `prefix-cache` stays a CLI flag
+
+The Decision above scoped `prefix-cache` (issue #131) into the config-file group
+alongside `load-sweep`, `cost`, and `commercial-cost`. Building it showed that
+scope was wrong for this one command, and it is revised here: **`prefix-cache`
+keeps its run-defining input as CLI flags — `--cache-state` (typed as an enum) and
+an optional `--model` — and grows no YAML config file or pydantic model.**
+
+The config-file boundary earns its keep on a *multi-field* human-authored schema,
+where `extra="forbid"` catches a typo among many keys and one pydantic layer
+replaces a Typer layer plus a `__post_init__` layer. That is `load-sweep` (18
+fields), `cost`, and `commercial-cost` (six each). `prefix-cache` is not that: its
+only run-defining input is a single enumerated label, `cold` or `warm`. Typer's
+own choice constraint validates an enum option in one layer — there is no second
+layer to collapse, no clump of fields to forbid unknown keys among, and the
+snapshot and result-file paths were already CLI arguments. A YAML file plus a
+pydantic model for one scalar is ceremony the boundary's rationale does not buy;
+the whole invocation stays CLI flags.
+
+This narrows, and does not overturn, the line the Decision draws. The temporal and
+category seams are unchanged: a *multi-field* experiment definition crosses into
+pydantic; machine-emitted result JSON stays a frozen dataclass. What the amendment
+records is that a single-scalar run label does not become a config file merely for
+being knowable before the run — the file-boundary test is the multi-field schema,
+not the temporal line alone.

@@ -92,12 +92,6 @@ def test_no_args_shows_help() -> None:
     assert "prefix-cache" in result.output
 
 
-def _scenario_config(tmp_path: Path, **overrides: object) -> Path:
-    path = tmp_path / "scenario.yaml"
-    path.write_text(yaml.safe_dump({"cache_state": "cold", **overrides}))
-    return path
-
-
 def _prefix_cache_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     before = tmp_path / "before.prom"
     before.write_text(
@@ -115,16 +109,15 @@ def _prefix_cache_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def test_prefix_cache_joins_the_delta_rate_to_stdout(tmp_path: Path) -> None:
-    """The prefix-cache command reads the scenario from --config and emits JSON."""
+    """The prefix-cache command emits the joined record as JSON to stdout."""
     result, before, after = _prefix_cache_fixture(tmp_path)
-    config = _scenario_config(tmp_path)
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--config",
-            str(config),
+            "--cache-state",
+            "cold",
             "--metrics-before",
             str(before),
             "--metrics-after",
@@ -140,8 +133,8 @@ def test_prefix_cache_joins_the_delta_rate_to_stdout(tmp_path: Path) -> None:
     assert record["cache_state"] == "cold"
 
 
-def test_prefix_cache_selects_the_configs_model_series(tmp_path: Path) -> None:
-    """A model selector in the config reaches scrape and picks that series' rate."""
+def test_prefix_cache_selects_the_model_series(tmp_path: Path) -> None:
+    """The --model selector reaches scrape and picks that series' rate."""
     result = _result_file(tmp_path)
     before = tmp_path / "before.prom"
     before.write_text(
@@ -159,14 +152,15 @@ def test_prefix_cache_selects_the_configs_model_series(tmp_path: Path) -> None:
         'vllm:prefix_cache_queries{model_name="other"} 700.0\n'
         'vllm:prefix_cache_hits{model_name="other"} 450.0\n'
     )
-    config = _scenario_config(tmp_path, model="other")
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--config",
-            str(config),
+            "--cache-state",
+            "cold",
+            "--model",
+            "other",
             "--metrics-before",
             str(before),
             "--metrics-after",
@@ -179,22 +173,20 @@ def test_prefix_cache_selects_the_configs_model_series(tmp_path: Path) -> None:
     assert invoked.exit_code == 0, invoked.output
     record = json.loads(invoked.stdout)
     # The "other" series advanced 200 hits over 200 queries (1.0); the result's own
-    # "m" series would read 0.1, so a passthrough regression to the default would
-    # flip this assertion.
+    # "m" series would read 0.1, so a regression that dropped the selector flips this.
     assert record["prefix_cache_hit_rate"] == 1.0
 
 
 def test_prefix_cache_rejects_a_bad_cache_state(tmp_path: Path) -> None:
-    """A cache_state outside cold/warm in the config exits 2 with a diagnostic."""
+    """A cache-state outside cold/warm exits 2 with a diagnostic on stderr."""
     result, before, after = _prefix_cache_fixture(tmp_path)
-    config = _scenario_config(tmp_path, cache_state="lukewarm")
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--config",
-            str(config),
+            "--cache-state",
+            "lukewarm",
             "--metrics-before",
             str(before),
             "--metrics-after",
@@ -205,11 +197,11 @@ def test_prefix_cache_rejects_a_bad_cache_state(tmp_path: Path) -> None:
     )
 
     assert invoked.exit_code == 2
-    assert "cache_state" in invoked.output
+    assert "cache-state" in _plain(invoked.output)
 
 
-def test_prefix_cache_requires_a_config(tmp_path: Path) -> None:
-    """Omitting --config exits 2: the scenario is not optional."""
+def test_prefix_cache_requires_a_cache_state(tmp_path: Path) -> None:
+    """Omitting --cache-state exits 2: the regime is not optional."""
     result, before, after = _prefix_cache_fixture(tmp_path)
 
     invoked = runner.invoke(
@@ -226,20 +218,19 @@ def test_prefix_cache_requires_a_config(tmp_path: Path) -> None:
     )
 
     assert invoked.exit_code == 2
-    assert "--config" in _plain(invoked.output)
+    assert "--cache-state" in _plain(invoked.output)
 
 
 def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
     """A metrics-before path that does not exist is rejected before any parsing."""
     result, _, after = _prefix_cache_fixture(tmp_path)
-    config = _scenario_config(tmp_path)
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--config",
-            str(config),
+            "--cache-state",
+            "cold",
             "--metrics-before",
             str(tmp_path / "nope.prom"),
             "--metrics-after",
