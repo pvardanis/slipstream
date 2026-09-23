@@ -548,15 +548,14 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     aws s3 sync "s3://${bucket}/prefix-cache/${run_id}" "${out}" --region "${region}"
 
     cell="pshare{{ prefix_share }}_burst{{ burstiness }}.json"
-    # The scenario definition (cache regime) crosses the pydantic boundary as a per-run
-    # YAML (ADR-0011); the snapshot and cell paths stay CLI arguments. The model selector
-    # is omitted so the join counts under the result's own model_id.
-    printf 'cache_state: cold\n' >"${out}/cold_scenario.yaml"
-    printf 'cache_state: warm\n' >"${out}/warm_scenario.yaml"
-    uv run slipstream-bench prefix-cache --config "${out}/cold_scenario.yaml" \
+    # The scenario definition (cache regime) crosses the pydantic boundary as a
+    # committed per-regime YAML (bench/prefix-cache-{cold,warm}.yaml, ADR-0011); the
+    # snapshot and cell paths stay CLI arguments. The scenarios omit the model
+    # selector, so the join counts under the result's own model_id.
+    uv run slipstream-bench prefix-cache --config bench/prefix-cache-cold.yaml \
       --metrics-before "${out}/cold_before.prom" --metrics-after "${out}/cold_after.prom" \
       --result "${out}/cold_${cell}" | tee "${out}/cold_hit_rate.json"
-    uv run slipstream-bench prefix-cache --config "${out}/warm_scenario.yaml" \
+    uv run slipstream-bench prefix-cache --config bench/prefix-cache-warm.yaml \
       --metrics-before "${out}/warm_before.prom" --metrics-after "${out}/warm_after.prom" \
       --result "${out}/warm_${cell}" | tee "${out}/warm_hit_rate.json"
     echo "prefix-cache results in ${out}/"
