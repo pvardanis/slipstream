@@ -5,6 +5,7 @@ subcommands and keeps them wired and discoverable via --help.
 """
 
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -13,6 +14,16 @@ from typer.testing import CliRunner
 from slipstream_bench.cli import app
 
 runner = CliRunner()
+
+# Typer colours an option name when a terminal forces colour (CI does), rendering
+# ``--config`` as ``-\x1b[0m\x1b[..m-config`` so the reset between the dashes hides
+# the literal from a substring check. Strip the escapes before asserting on text.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(output: str) -> str:
+    return _ANSI.sub("", output)
+
 
 _COST_PROVENANCE = {
     "price_per_hour": 2.0,
@@ -215,7 +226,7 @@ def test_prefix_cache_requires_a_config(tmp_path: Path) -> None:
     )
 
     assert invoked.exit_code == 2
-    assert "--config" in invoked.output
+    assert "--config" in _plain(invoked.output)
 
 
 def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
