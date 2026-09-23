@@ -4,8 +4,8 @@ Seeded from the checklist mined off the deleted bash test (ADR-0003): the delta
 over the run window rather than the polluted lifetime ratio, the cold/warm label,
 the join onto the client JSON with its SLO numbers, per-model_name series
 selection, the _total-suffix rendering prometheus_client emits, large counters
-without precision loss, run-to-run reproducibility, and the fail-fast guards on a
-bad cache-state, an absent/disabled metric, a non-finite counter, a backwards or
+without precision loss, run-to-run reproducibility, and the fail-fast guards on
+an absent/disabled metric, a non-finite counter, a backwards or
 asymmetric counter window (server restart), an empty query window, a hits-exceed-
 queries window, a missing model selector, a truncated or zero-completed client
 JSON, and an unparseable snapshot.
@@ -299,18 +299,6 @@ def test_counts_are_emitted_as_integers(tmp_path: Path) -> None:
 
     assert isinstance(record["prefix_cache_queries"], int)
     assert isinstance(record["prefix_cache_hits"], int)
-
-
-@pytest.mark.parametrize("state", ["lukewarm", "", "COLD"])
-def test_bad_cache_state_is_rejected(tmp_path: Path, state: str) -> None:
-    """The label is the whole cold-vs-warm basis; a free-text value is rejected."""
-    with pytest.raises(PrefixCacheError, match="cache-state"):
-        scrape_prefix_cache(
-            metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
-            metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
-            result=_result(tmp_path),
-            cache_state=state,
-        )
 
 
 def test_absent_metric_is_rejected(tmp_path: Path) -> None:

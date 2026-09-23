@@ -81,6 +81,12 @@ def test_no_args_shows_help() -> None:
     assert "prefix-cache" in result.output
 
 
+def _scenario_config(tmp_path: Path, **overrides: object) -> Path:
+    path = tmp_path / "scenario.yaml"
+    path.write_text(yaml.safe_dump({"cache_state": "cold", **overrides}))
+    return path
+
+
 def _prefix_cache_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     before = tmp_path / "before.prom"
     before.write_text(
@@ -98,15 +104,16 @@ def _prefix_cache_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def test_prefix_cache_joins_the_delta_rate_to_stdout(tmp_path: Path) -> None:
-    """The prefix-cache command emits the joined record as JSON to stdout."""
+    """The prefix-cache command reads the scenario from --config and emits JSON."""
     result, before, after = _prefix_cache_fixture(tmp_path)
+    config = _scenario_config(tmp_path)
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--cache-state",
-            "cold",
+            "--config",
+            str(config),
             "--metrics-before",
             str(before),
             "--metrics-after",
@@ -123,15 +130,16 @@ def test_prefix_cache_joins_the_delta_rate_to_stdout(tmp_path: Path) -> None:
 
 
 def test_prefix_cache_rejects_a_bad_cache_state(tmp_path: Path) -> None:
-    """A cache-state outside cold/warm exits 2 with a diagnostic on stderr."""
+    """A cache_state outside cold/warm in the config exits 2 with a diagnostic."""
     result, before, after = _prefix_cache_fixture(tmp_path)
+    config = _scenario_config(tmp_path, cache_state="lukewarm")
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--cache-state",
-            "lukewarm",
+            "--config",
+            str(config),
             "--metrics-before",
             str(before),
             "--metrics-after",
@@ -142,19 +150,41 @@ def test_prefix_cache_rejects_a_bad_cache_state(tmp_path: Path) -> None:
     )
 
     assert invoked.exit_code == 2
-    assert "cache-state" in invoked.output
+    assert "cache_state" in invoked.output
 
 
-def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
-    """A metrics-before path that does not exist is rejected before any parsing."""
-    result, _, after = _prefix_cache_fixture(tmp_path)
+def test_prefix_cache_requires_a_config(tmp_path: Path) -> None:
+    """Omitting --config exits 2: the scenario is not optional."""
+    result, before, after = _prefix_cache_fixture(tmp_path)
 
     invoked = runner.invoke(
         app,
         [
             "prefix-cache",
-            "--cache-state",
-            "cold",
+            "--metrics-before",
+            str(before),
+            "--metrics-after",
+            str(after),
+            "--result",
+            str(result),
+        ],
+    )
+
+    assert invoked.exit_code == 2
+    assert "--config" in invoked.output
+
+
+def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
+    """A metrics-before path that does not exist is rejected before any parsing."""
+    result, _, after = _prefix_cache_fixture(tmp_path)
+    config = _scenario_config(tmp_path)
+
+    invoked = runner.invoke(
+        app,
+        [
+            "prefix-cache",
+            "--config",
+            str(config),
             "--metrics-before",
             str(tmp_path / "nope.prom"),
             "--metrics-after",
