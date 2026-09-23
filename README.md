@@ -20,6 +20,8 @@ traces every choice back to its ticket.
 
 All infrastructure is Terraform; the AWS console is never touched. A `justfile`
 drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles them.
+Run `just` (or `just --list`) to see the recipes, sectioned by lifecycle concern —
+cluster, serve, bench, obs, test, and orchestrate.
 
 Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
 `AWS_PROFILE` that can create VPC/EKS resources (see [AWS access](#aws-access)).
