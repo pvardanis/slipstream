@@ -73,3 +73,8 @@ source-file metadata: `just --dump --dump-format json` yields identical `recipes
   omits imported bodies under `import`.
 - Adding a recipe means editing its concern's file, not the root; the root changes
   only when a new lifecycle concern (and its `import` line) is added.
+- `just --list` sections by lifecycle concern through a `[group('<concern>')]`
+  attribute on each public recipe. `import` flattens every recipe into one namespace
+  with no source-file metadata, and `just` has no file-level default group, so the
+  concern is repeated on each recipe by hand: adding a public recipe means adding its
+  `[group()]` line, and renaming a concern touches every recipe in that file.
