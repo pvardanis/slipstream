@@ -2,7 +2,7 @@
 
 # ADR-0010: The result-JSON parse seam stays a frozen dataclass, not pydantic
 
-- Status: Accepted
+- Status: Accepted (the CLI-argument classification of `SweepConfig`, `CostInputs`, and `CommercialCostInputs` is superseded by [ADR-0011](0011-config-inputs-cross-the-pydantic-boundary.md); the result-JSON parse-seam decision stands)
 - Date: 2026-09-22
 
 ## Context
