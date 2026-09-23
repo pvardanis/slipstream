@@ -11,7 +11,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pytest
 
-from slipstream_bench.chart import (
+from slipstream_bench.report.chart import (
     _ceiling_frame,
     _cliff_frame,
     _condition_label,
@@ -26,7 +26,7 @@ from slipstream_bench.chart import (
     rungs_to_markdown,
     write_artifacts,
 )
-from slipstream_bench.sweep_aggregation import _GOODPUT_FLOOR
+from slipstream_bench.sweep.aggregation import _GOODPUT_FLOOR
 
 
 def _row(

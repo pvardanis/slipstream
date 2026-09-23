@@ -13,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from slipstream_bench.cost import CostError, CostInputs, price_files, price_result
+from slipstream_bench.cost.self_hosted import (
+    CostError,
+    CostInputs,
+    price_files,
+    price_result,
+)
 
 PINS = {
     "weight_checksum": "sha256:deadbeef",
