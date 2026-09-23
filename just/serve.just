@@ -31,11 +31,13 @@ _read-api-key:
     printf '%s' "${key}"
 
 # Deploy the CPU vLLM replica and wait for it to serve.
+[group('serve')]
 cpu-deploy: _ensure-api-key
     kubectl apply -f {{ manifests }}
     kubectl -n slipstream rollout status deploy/vllm --timeout=600s
 
 # Remove the vLLM workload (leaves the cluster running).
+[group('serve')]
 undeploy:
     kubectl delete -f {{ manifests }} --ignore-not-found
 
@@ -61,6 +63,7 @@ _render-gpu-manifest:
 # vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses. The
 # manifest is rendered (see `_render-gpu-manifest`) so the swept engine knobs
 # default to the committed rig unless the knob sweep overrides them.
+[group('serve')]
 gpu-deploy: _ensure-api-key
     #!/usr/bin/env bash
     set -euo pipefail
@@ -69,16 +72,19 @@ gpu-deploy: _ensure-api-key
 
 # Scale the GPU replica up to one and wait for it to serve. Karpenter brings a g5
 # node up to place it.
+[group('serve')]
 gpu-up:
     kubectl -n slipstream scale deploy/vllm-gpu --replicas=1
     kubectl -n slipstream rollout status deploy/vllm-gpu --timeout=1200s
 
 # Scale the GPU replica to zero. The g5 node goes empty and Karpenter reaps it
 # after its consolidation window, returning GPU spend to zero (ADR-0006).
+[group('serve')]
 gpu-down:
     kubectl -n slipstream scale deploy/vllm-gpu --replicas=0
 
 # Port-forward the service and curl a completion out of it.
+[group('serve')]
 cpu-completion:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -102,6 +108,7 @@ cpu-completion:
 # from the live engine (ADR-0002 item 5, for the GPU path). Proves the deploy →
 # service → engine → token path end-to-end; it does not judge answer quality
 # (out of scope, spec §5). This is the "harness green" step of `just cloud-verify`.
+[group('serve')]
 gpu-completion:
     #!/usr/bin/env bash
     set -euo pipefail

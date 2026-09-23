@@ -4,6 +4,7 @@
 # GPU replica, and the ephemeral mTLS bench endpoint. Everything `just bench`
 # and `just prefix-cache` need — run them against it as often as you like, then
 # `just stack-down` at the end of the day to return spend to zero.
+[group('orchestrate')]
 stack-up: cluster-up gpu-pool-up gpu-deploy bench-endpoint-up
 
 # Tear the whole benchmark stack down, returning GPU and cluster spend to zero,
@@ -16,6 +17,7 @@ stack-up: cluster-up gpu-pool-up gpu-deploy bench-endpoint-up
 # endpoint wedges the destroy on a DependencyViolation and orphans a billing load
 # balancer. The GPU scale/pool steps are in-cluster and orthogonal, so they run
 # regardless to stop the g5. The leak sweep always runs to report whatever survived.
+[group('orchestrate')]
 stack-down:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -45,6 +47,7 @@ stack-down:
 # and the sweep run even when the smoke fails, so a failed check never orbits a
 # live g5. Exits non-zero if the smoke failed, teardown failed, or a leftover
 # survived. Every fallible step is guarded so `set -e` cannot skip the teardown.
+[group('orchestrate')]
 cloud-verify:
     #!/usr/bin/env bash
     set -euo pipefail

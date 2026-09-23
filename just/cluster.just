@@ -8,6 +8,7 @@ _bootstrap-init:
     terraform -chdir={{ bootstrap_dir }} init -input=false >&2
 
 # Create the cluster and point kubectl at it.
+[group('cluster')]
 cluster-up: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
@@ -22,6 +23,7 @@ cluster-up: _bootstrap-init
     kubectl get nodes
 
 # Show the cluster changes `just cluster-up` would apply, without provisioning anything.
+[group('cluster')]
 cluster-plan: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
@@ -34,6 +36,7 @@ cluster-plan: _bootstrap-init
 # Apply the GPU node pool (NodePool + EC2NodeClass) and the NVIDIA device plugin.
 # Karpenter provisions no node until a pod tolerates the GPU taint and requests
 # nvidia.com/gpu — the GPU replica (`just gpu-deploy`, #91) does that.
+[group('cluster')]
 gpu-pool-up:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -60,16 +63,19 @@ gpu-pool-up:
 # and orphaning a billing g5. Objects delete by name, so the manifest's unsubstituted
 # placeholders are irrelevant and no terraform lookup is needed — teardown never
 # blocks on eks state being reachable.
+[group('cluster')]
 gpu-pool-down:
     kubectl delete -f {{ gpu_pool_manifests }} --ignore-not-found
 
 # Destroy the cluster (the bootstrap state bucket is left intact).
+[group('cluster')]
 cluster-down:
     terraform -chdir={{ eks_dir }} destroy -auto-approve
 
 # Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new
 # environment bootstraps the bucket first with the two-step in ADR-0005.
+[group('cluster')]
 bootstrap:
     terraform -chdir={{ bootstrap_dir }} init -input=false
     terraform -chdir={{ bootstrap_dir }} apply -auto-approve
