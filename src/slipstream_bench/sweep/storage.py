@@ -23,14 +23,32 @@ class StorageError(Exception):
     """A storage configuration that cannot point Prefect at S3."""
 
 
+def _require_bucket(bucket: str) -> str:
+    """Reject a blank bucket name at any builder entry, not only the env reader.
+
+    The bucket's existence and write permissions are not checked here; those
+    resolve at first write, when Prefect persists a result to S3.
+    """
+    name = bucket.strip()
+    if not name:
+        raise StorageError(
+            "bucket name is blank: Prefect result and cache-key storage must point "
+            "at an S3 bucket, not the local ~/.prefect/storage/ default"
+        )
+    return name
+
+
 def result_storage(bucket: str) -> S3Bucket:
     """Build the S3 block Prefect persists task results into.
 
     :param bucket: the results bucket (``RESULTS_BUCKET``), shared with the sweep's
         own ``s3://<bucket>/sweeps/…`` output under a separate prefix.
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the result prefix.
+    :raise StorageError: when ``bucket`` is blank.
     """
-    return S3Bucket(bucket_name=bucket, bucket_folder=_RESULT_STORAGE_PREFIX)
+    return S3Bucket(
+        bucket_name=_require_bucket(bucket), bucket_folder=_RESULT_STORAGE_PREFIX
+    )
 
 
 def cache_key_storage(bucket: str) -> S3Bucket:
@@ -41,8 +59,11 @@ def cache_key_storage(bucket: str) -> S3Bucket:
 
     :param bucket: the results bucket (``RESULTS_BUCKET``).
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the cache-key prefix.
+    :raise StorageError: when ``bucket`` is blank.
     """
-    return S3Bucket(bucket_name=bucket, bucket_folder=_CACHE_KEY_STORAGE_PREFIX)
+    return S3Bucket(
+        bucket_name=_require_bucket(bucket), bucket_folder=_CACHE_KEY_STORAGE_PREFIX
+    )
 
 
 def results_bucket_from_env() -> str:
