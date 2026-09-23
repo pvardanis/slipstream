@@ -17,7 +17,7 @@ reuse the warmed cache for the warm run, and pass the matching cache_state.
 """
 
 import math
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from prometheus_client.parser import text_string_to_metric_families
@@ -40,7 +40,7 @@ class PrefixCacheError(Exception):
     """A prefix-cache input that cannot produce a meaningful hit rate."""
 
 
-class CacheState(str, Enum):
+class CacheState(StrEnum):
     """Which cache regime a prefix-cache run measured.
 
     The two labels are the whole cold-vs-warm basis; typing the CLI option as this
