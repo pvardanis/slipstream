@@ -10,7 +10,7 @@ burstiness. Points reuse EnginePoint from sweep.aggregation so the grid emits, t
 recipe writes, and the aggregator parses one slug format from one place.
 """
 
-from enum import Enum
+from enum import StrEnum
 from itertools import product
 from pathlib import Path
 from typing import Annotated, Literal
@@ -49,7 +49,7 @@ class SweepGridError(Exception):
     """A sweep grid that cannot be read or does not validate."""
 
 
-class SweepGridPart(str, Enum):
+class SweepGridPart(StrEnum):
     """A slice of the grid the knob-sweep loop asks the `sweep-grid` CLI for.
 
     - ``engine_points``: the Tier-1 engine points as TSV, one manifest redeploy per

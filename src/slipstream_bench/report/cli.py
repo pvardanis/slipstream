@@ -5,7 +5,7 @@ tables plus plots) commands.
 """
 
 import json
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -28,7 +28,7 @@ from slipstream_bench.sweep.aggregation import (
 app = typer.Typer()
 
 
-class ReportFormat(str, Enum):
+class ReportFormat(StrEnum):
     """The format the baseline report is emitted in."""
 
     json = "json"
