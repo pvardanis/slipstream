@@ -296,7 +296,7 @@ bench-image: _bootstrap-init
     {{ build_image_tool }} "${repo}:${sha_tag}"
     docker push "${repo}:${sha_tag}"
 
-# Sweep `vllm bench serve` (prefix-share % x burstiness) from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
+# Sweep `vllm bench serve` across the prefix-share x burstiness grid a --config YAML defines, from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
 bench *args:
     #!/usr/bin/env bash
     set -euo pipefail

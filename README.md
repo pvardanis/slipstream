@@ -90,14 +90,16 @@ subcommands (plus `zero-leak`, the teardown sweep `just cloud-verify` classifies
 The rewrite from bash is recorded in
 [`docs/adr/0003`](docs/adr/0003-l0-bench-harness-in-python.md).
 
-- **`serve-sweep`** — fire `vllm bench serve` across a prefix-share × burstiness
-  grid, writing one result JSON per cell. The grid is set by repeatable
-  `--prefix-share` (default `10 50 90`) and `--burstiness` (default `0.2 1.0`,
-  where `1.0` is Poisson and lower is burstier); `--num-prompts`, `--num-prefixes`,
-  `--total-len` and `--output-len` shape each cell, `--seed` fixes prompt
-  synthesis so runs replay identically, and `--dry-run` prints the `vllm` commands
-  without running them. This is the recipe `just bench` drives on the bench host.
-- **`cost`** — price a `serve-sweep` result JSON into $/1M input and output tokens
+- **`load-sweep`** — fire `vllm bench serve` across a prefix-share × burstiness
+  grid, writing one result JSON per cell. The grid axes (`prefix-share` default
+  `10 50 90`, `burstiness` default `0.2 1.0`, where `1.0` is Poisson and lower is
+  burstier), the per-cell lengths and prompt counts, and the `seed` that fixes
+  prompt synthesis so runs replay identically all come from the experiment YAML
+  passed as `--config` (default `bench/load-sweep.yaml`); `--base-url`, `--model`,
+  `--out-dir` and `--api-key-env` set the execution context, and `--dry-run`
+  prints the `vllm` commands without running them. This is the recipe `just bench`
+  drives on the bench host.
+- **`cost`** — price a `load-sweep` result JSON into $/1M input and output tokens
   from an instance's `--price-per-hour`, tagging the output with the weight
   checksum, vLLM version and quantization recipe that produced the run.
 - **`commercial-cost`** — price the same tokens at a commercial API's quoted
@@ -115,7 +117,7 @@ Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
 
 ```sh
 uv run slipstream-bench --help              # list the subcommands
-uv run slipstream-bench serve-sweep --help  # options for one subcommand
+uv run slipstream-bench load-sweep --help   # options for one subcommand
 just cli-test                               # run the package test suite (uv run pytest)
 ```
 
