@@ -20,8 +20,25 @@ traces every choice back to its ticket.
 
 All infrastructure is Terraform; the AWS console is never touched. A `justfile`
 drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles them.
-Run `just` (or `just --list`) to see the recipes, sectioned by lifecycle concern —
-cluster, serve, bench, obs, test, and orchestrate.
+Run `just` (or `just --list`) to see the recipes. Each lives in a file under
+`just/` named for its lifecycle concern, and `just --list` sections them under that
+concern's heading:
+
+| Concern | Covers |
+| --- | --- |
+| `cluster` | Remote-state bootstrap, EKS create/plan/destroy, the GPU node pool. |
+| `serve` | The vLLM api-key Secret, CPU and GPU replicas, their scale and completion smokes. |
+| `bench` | The bench-client image, the load and knob sweeps, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
+| `obs` | The OTel Collector spine stub — deploy, teardown, trace pivot. |
+| `test` | Local smokes: the Python suite and the shell tests for the OTel spine and bench image (no cluster). |
+| `orchestrate` | Whole-stack up/down, the one-shot cloud verification, the zero-leak spend sweep. |
+
+The sections are display-only: `just` imports the six files into one flat
+namespace, so any recipe calls any other unqualified (`just stack-up` chains
+`cluster-up gpu-pool-up gpu-deploy bench-endpoint-up`) regardless of concern. The
+`[group()]` attribute only tells `--list` where to file each recipe. The split and
+the flat-namespace choice are recorded in
+[`docs/adr/0013`](docs/adr/0013-justfile-imported-lifecycle-modules.md).
 
 Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
 `AWS_PROFILE` that can create VPC/EKS resources (see [AWS access](#aws-access)).
