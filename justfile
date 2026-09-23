@@ -327,19 +327,25 @@ bench *args:
     # own ~210s smoke-retry budget so its clear failure message wins over a generic wait.
     run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
 
-    # Pass the per-run values as environment prefixed to the host command. The plain
-    # values carry no shell-special characters, so single-quoting suffices; the free-form
-    # extra flags are base64-encoded so they cross the SSM command line without quoting
-    # the host shell (not necessarily bash) could misparse. The api-key is fetched
-    # host-side from Secrets Manager, never sent from here. serve-sweep only exits
-    # non-zero at the end of the grid, so a partial failure still leaves cells worth
-    # keeping: sync whatever landed regardless, then surface the sweep's status.
+    # The experiment definition crosses to the host as a file: knob-sweep composes a
+    # per-point config and points BENCH_CONFIG at it, a standalone run uses the checked-in
+    # default. Its bytes are base64-encoded so the YAML (newlines, quotes) crosses the SSM
+    # command line intact, decoded host-side into a file bench-sweep.sh mounts and passes
+    # as --config. The api-key is fetched host-side from Secrets Manager, never sent from
+    # here. load-sweep only exits non-zero at the end of the grid, so a partial failure
+    # still leaves cells worth keeping: sync whatever landed regardless, then surface the
+    # sweep's status.
+    config="${BENCH_CONFIG:-bench/load-sweep.yaml}"
+    config_b64="$(base64 <"${config}" | tr -d '\n')"
+    # Any extra load-sweep flags (--dry-run, --api-key-env) appended to `just bench`, also
+    # base64-encoded so they cross SSM without quoting the host shell could misparse.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
     # The sweep counts tokens under the served model's name; read it from the same
     # model.yaml the pulled image baked its tokenizer from, so the two agree.
     model="$({{ image_tag_tool }} hf-id)"
     sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
-    sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_ARGS_B64='${args_b64}'"
+    sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_CONFIG_B64='${config_b64}'"
+    sweep_env="${sweep_env} SWEEP_ARGS_B64='${args_b64}'"
     sweep_rc=0
     run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
 
@@ -361,7 +367,7 @@ bench *args:
 #   max-num-seqs (mns) {16,32,64,128,256} x KV dtype {fp8,fp16} x prefix caching
 #   {on,off} = 20 points, one grid row each.
 # Tier 2 = client load ladder, no redeploy. Against each already-running Tier-1
-# point, `just bench` walks --max-concurrency {8..256} to find the highest rung
+# point, `just bench` walks the concurrency ladder {8..256} to find the highest rung
 # that holds goodput at the SLO — the sustained concurrency ceiling for that point.
 # The prefix-share axis rides along, but only where it can matter: {10,50,90} when
 # prefix caching is on, a single 0 baseline when off. With caching off vLLM reuses
@@ -373,8 +379,8 @@ bench *args:
 # Each point's ladder JSON lands under bench/results/<run>/mns{N}_kv{fp8|fp16}_pc{on|off}/,
 # and the predicted ceilings are tabulated alongside. FP8 is the committed rig; fp16
 # is swept only as a counterfactual baseline. Burstiness is pinned to one value: the
-# Tier-2 ladder is closed-loop (--max-concurrency caps in-flight requests and releases
-# a new one as each completes), not open-loop (--request-rate drives arrivals on a
+# Tier-2 ladder is closed-loop (the concurrency cap limits in-flight requests and releases
+# a new one as each completes), not open-loop (the request rate drives arrivals on a
 # clock, and burstiness shapes their inter-arrival gaps). Under closed-loop there is no
 # arrival process for burstiness to shape, so it is inert here. A point that fails to
 # deploy or whose ladder reports failures is recorded and the sweep continues, exiting
@@ -389,8 +395,10 @@ knob-sweep:
     engine_points="$(uv run slipstream-bench sweep-grid engine-points)"
     concurrency_ladder="$(uv run slipstream-bench sweep-grid concurrency-ladder)"
     burstiness="$(uv run slipstream-bench sweep-grid burstiness)"
-    conc_flags=()
-    while IFS= read -r rung; do conc_flags+=(--max-concurrency "${rung}"); done <<<"${concurrency_ladder}"
+    # The ladder rungs and the pinned burstiness are the same for every point, so fold
+    # them to YAML flow lists once, up front, to override into each point's config below.
+    ladder_yaml="[$(paste -sd, - <<<"${concurrency_ladder}")]"
+    burst_yaml="[${burstiness}]"
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
     run_dir="bench/results/${run_id}"
     mkdir -p "${run_dir}"
@@ -402,9 +410,6 @@ knob-sweep:
     # mapped the KV label to the engine token (fp16 -> float16) and picked the shares
     # per caching arm, so the recipe just deploys the point and drives the ladder.
     while IFS=$'\t' read -r point mns kv_dtype pc_flag shares_csv; do
-      share_flags=()
-      IFS=',' read -r -a shares <<<"${shares_csv}"
-      for share in "${shares[@]}"; do share_flags+=(--prefix-share "${share}"); done
       echo "==> knob-sweep point ${point}" >&2
       # Render + redeploy the GPU replica for this engine-knob point. A failed
       # deploy leaves the point unmeasurable; record it and move on rather than
@@ -432,15 +437,23 @@ knob-sweep:
       fi
       printf '%s\t%s\n' "${point}" "${predicted}" >>"${ledger}"
       echo "    predicted: ${predicted}" >&2
+      # Compose this point's Tier-2 experiment config: the base experiment definition
+      # (token budget, SLO, seed) from bench/load-sweep.yaml, with the swept axes this
+      # point varies overridden in — its prefix shares, the pinned burstiness, and the
+      # concurrency ladder. Written into the point's result dir as the record of what was
+      # swept, then handed to `just bench` as its --config.
+      point_dir="${run_dir}/${point}"
+      mkdir -p "${point_dir}"
+      point_config="${point_dir}/sweep-config.yaml"
+      SHARES="[${shares_csv}]" BURST="${burst_yaml}" LADDER="${ladder_yaml}" \
+        yq '.prefix_shares = env(SHARES) | .burstiness_values = env(BURST) | .max_concurrency_values = env(LADDER)' \
+        bench/load-sweep.yaml >"${point_config}"
       # Tier 2: client load ladder against this point, no redeploy. The nested
       # BENCH_RUN_ID lands the per-point JSON under ${run_dir}/${point}/ (see
-      # `bench`). serve-sweep survives per-cell failures and only exits non-zero at
+      # `bench`). load-sweep survives per-cell failures and only exits non-zero at
       # the end, so a non-zero here means some cells failed — keep the partial
       # results and flag the run.
-      if ! BENCH_RUN_ID="${run_id}/${point}" just bench \
-          --burstiness "${burstiness}" \
-          "${share_flags[@]}" \
-          "${conc_flags[@]}"; then
+      if ! BENCH_CONFIG="${point_config}" BENCH_RUN_ID="${run_id}/${point}" just bench; then
         echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
         overall=1
       fi
@@ -491,26 +504,47 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # budget so its clear failure message wins over a generic wait.
     run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
 
+    # Compose the cold/warm cell's experiment config: the base definition from
+    # bench/load-sweep.yaml, narrowed to this one cell — a single prefix share and
+    # burstiness, no concurrency ladder — with the residency-isolating overrides. A seed
+    # unique to this invocation makes the cold run emit prefixes the server has never
+    # cached, so it genuinely misses; the cold and warm runs share it, so the warm run
+    # replays against the now-warm cache (this build exposes no cache-reset route).
+    #   align_blocks 16 floors the prefix to whole 16-token blocks — vLLM's prefix cache
+    #     reuses whole blocks only, so a ragged tail recomputes every time in both regimes
+    #     and dilutes the gap. 16 is vLLM's default block_size; revisit if the served
+    #     backend runs a different one.
+    #   num_prefixes 16 raises the share of the cold run that is a genuine first exposure
+    #     rather than a self-hit on a prefix the run just planted, widening the cold/warm
+    #     gap (full isolation would need num_prefixes near num_prompts).
+    out="bench/results/prefix-cache/${run_id}"
+    mkdir -p "${out}"
+    seed="$(date -u +%s)"
+    prefix_config="${out}/sweep-config.yaml"
+    SHARE="[{{ prefix_share }}]" BURST="[{{ burstiness }}]" SEED="${seed}" \
+      yq '.prefix_shares = env(SHARE) | .burstiness_values = env(BURST) | .max_concurrency_values = [] | .align_blocks = 16 | .num_prefixes = 16 | .seed = env(SEED)' \
+      bench/load-sweep.yaml >"${prefix_config}"
+
     # Pass the per-run values as environment prefixed to the host command. The plain
-    # values carry no shell-special characters, so single-quoting suffices; the free-form
-    # extra flags are base64-encoded so they cross the SSM command line without quoting
-    # the host shell (not necessarily bash) could misparse. The api-key is fetched
-    # host-side from Secrets Manager, never sent from here. A cold/warm comparison needs
-    # both cells, so the host script hard-fails on a cell failure rather than leaving a
-    # half result — a non-zero here means nothing worth joining was produced.
+    # values carry no shell-special characters, so single-quoting suffices; the config
+    # bytes and the free-form extra flags are base64-encoded so they cross the SSM command
+    # line without quoting the host shell (not necessarily bash) could misparse. The
+    # api-key is fetched host-side from Secrets Manager, never sent from here. A cold/warm
+    # comparison needs both cells, so the host script hard-fails on a cell failure rather
+    # than leaving a half result — a non-zero here means nothing worth joining was produced.
+    config_b64="$(base64 <"${prefix_config}" | tr -d '\n')"
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
     # Count tokens under the served model's name, read from the same model.yaml the
     # pulled image baked its tokenizer from, so the cold and warm cells agree with it.
     model="$({{ image_tag_tool }} hf-id)"
     prefix_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
     prefix_env="${prefix_env} RUN_ID='${run_id}' PREFIX_SHARE='{{ prefix_share }}'"
-    prefix_env="${prefix_env} BURSTINESS='{{ burstiness }}' PREFIX_ARGS_B64='${args_b64}'"
+    prefix_env="${prefix_env} BURSTINESS='{{ burstiness }}' PREFIX_CONFIG_B64='${config_b64}'"
+    prefix_env="${prefix_env} PREFIX_ARGS_B64='${args_b64}'"
     run_on_host "prefix-cache" "${prefix_env} /usr/local/bin/bench-prefix-cache.sh" 3600
 
-    # Sync just this run's objects into a per-run subdir, then join locally. The join is
+    # Sync just this run's objects into the per-run subdir, then join locally. The join is
     # a pure function of the synced snapshots and cell JSON (slipstream_bench.prefix_cache).
-    out="bench/results/prefix-cache/${run_id}"
-    mkdir -p "${out}"
     aws s3 sync "s3://${bucket}/prefix-cache/${run_id}" "${out}" --region "${region}"
 
     cell="pshare{{ prefix_share }}_burst{{ burstiness }}.json"
