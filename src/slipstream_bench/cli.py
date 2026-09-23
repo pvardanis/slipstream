@@ -46,7 +46,7 @@ def prefix_cache(
             exists=True,
             dir_okay=False,
             help="Scenario YAML: cache_state (cold or warm) and an optional "
-            "model_name selector.",
+            "model selector.",
         ),
     ],
     metrics_before: Annotated[

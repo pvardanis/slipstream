@@ -129,6 +129,50 @@ def test_prefix_cache_joins_the_delta_rate_to_stdout(tmp_path: Path) -> None:
     assert record["cache_state"] == "cold"
 
 
+def test_prefix_cache_selects_the_configs_model_series(tmp_path: Path) -> None:
+    """A model selector in the config reaches scrape and picks that series' rate."""
+    result = _result_file(tmp_path)
+    before = tmp_path / "before.prom"
+    before.write_text(
+        "# TYPE vllm:prefix_cache_queries counter\n"
+        'vllm:prefix_cache_queries{model_name="m"} 1000.0\n'
+        'vllm:prefix_cache_hits{model_name="m"} 200.0\n'
+        'vllm:prefix_cache_queries{model_name="other"} 500.0\n'
+        'vllm:prefix_cache_hits{model_name="other"} 250.0\n'
+    )
+    after = tmp_path / "after.prom"
+    after.write_text(
+        "# TYPE vllm:prefix_cache_queries counter\n"
+        'vllm:prefix_cache_queries{model_name="m"} 1100.0\n'
+        'vllm:prefix_cache_hits{model_name="m"} 210.0\n'
+        'vllm:prefix_cache_queries{model_name="other"} 700.0\n'
+        'vllm:prefix_cache_hits{model_name="other"} 450.0\n'
+    )
+    config = _scenario_config(tmp_path, model="other")
+
+    invoked = runner.invoke(
+        app,
+        [
+            "prefix-cache",
+            "--config",
+            str(config),
+            "--metrics-before",
+            str(before),
+            "--metrics-after",
+            str(after),
+            "--result",
+            str(result),
+        ],
+    )
+
+    assert invoked.exit_code == 0, invoked.output
+    record = json.loads(invoked.stdout)
+    # The "other" series advanced 200 hits over 200 queries (1.0); the result's own
+    # "m" series would read 0.1, so a passthrough regression to the default would
+    # flip this assertion.
+    assert record["prefix_cache_hit_rate"] == 1.0
+
+
 def test_prefix_cache_rejects_a_bad_cache_state(tmp_path: Path) -> None:
     """A cache_state outside cold/warm in the config exits 2 with a diagnostic."""
     result, before, after = _prefix_cache_fixture(tmp_path)
