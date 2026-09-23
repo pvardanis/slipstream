@@ -54,14 +54,17 @@ if [[ -z "${slug}" ]]; then
 fi
 
 # The short hash of the last commit touching any image input. A change to any of
-# these is what a new content tag must capture. This names committed state only:
-# uncommitted edits to the inputs are not reflected, since the image is built from
-# the committed tree (in CI, from the pushed commit). Empty means nothing is
-# committed yet — a content tag would be a lie, so fail loudly rather than tag `-`.
+# these is what a new content tag must capture. bench/load-sweep.yaml is excluded:
+# it is the experiment config mounted into the container at sweep time, not baked
+# into the image, so editing it leaves the tokenizer-and-harness image unchanged and
+# must not roll the tag. This names committed state only: uncommitted edits to the
+# inputs are not reflected, since the image is built from the committed tree (in CI,
+# from the pushed commit). Empty means nothing is committed yet — a content tag would
+# be a lie, so fail loudly rather than tag `-`.
 image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
-    bench src pyproject.toml model.yaml)"
+    bench src pyproject.toml model.yaml ':(exclude)bench/load-sweep.yaml')"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2
