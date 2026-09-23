@@ -17,12 +17,10 @@ reuse the warmed cache for the warm run, and pass the matching cache_state.
 """
 
 import math
+from enum import Enum
 from pathlib import Path
-from typing import Annotated, Literal
 
-import yaml
 from prometheus_client.parser import text_string_to_metric_families
-from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
 
 from slipstream_bench.results import read_result
 
@@ -42,74 +40,16 @@ class PrefixCacheError(Exception):
     """A prefix-cache input that cannot produce a meaningful hit rate."""
 
 
-def _require_served_model(value: str) -> str:
-    """Reject a model selector blank once surrounding whitespace is stripped.
+class CacheState(str, Enum):
+    """Which cache regime a prefix-cache run measured.
 
-    A whitespace-only selector is truthy, so it would slip past scrape's
-    ``model or model_id`` default and become a real selector that matches no series;
-    reject it here at the boundary rather than defer to a confusing scrape miss.
-
-    :raise ValueError: when the selector is blank after stripping.
-    """
-    if not value.strip():
-        raise ValueError("model selector must not be blank")
-    return value
-
-
-class PrefixCacheScenario(BaseModel):
-    """The scenario one prefix-cache run measures, from its YAML definition.
-
-    Authored in a per-command YAML file and validated once here at the boundary it
-    crosses (ADR-0011): the cache regime is one of the two defined labels — a
-    free-text value would let a typo mislabel a regime, the whole cold-vs-warm
-    basis — and the optional model selector reaches past the result's model_id to a
-    differently-served series. The /metrics snapshots and the result JSON stay CLI
-    path arguments, since they exist only after the run. Unknown keys are forbidden
-    so a typo in the reviewed artifact fails loudly.
+    The two labels are the whole cold-vs-warm basis; typing the CLI option as this
+    enum lets Typer reject any other value at the boundary, so the join never has to
+    guard a free-text regime.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    cache_state: Literal["cold", "warm"]
-    model: Annotated[str, AfterValidator(_require_served_model)] | None = None
-
-
-def load_prefix_cache_scenario(path: Path) -> PrefixCacheScenario:
-    """Read the scenario definition at ``path`` into a validated model.
-
-    A missing, unreadable, non-YAML, empty, or non-mapping file, or a config that
-    fails the model's validation, is rejected here as the command's own
-    :class:`PrefixCacheError`, so the CLI surfaces one exception type rather than a
-    raw :class:`pydantic.ValidationError`.
-
-    :param path: the scenario YAML file (cache_state, optional model selector).
-    :return: the validated scenario.
-    :raise PrefixCacheError: when the file is missing, unreadable, not YAML, empty,
-        not a mapping, or fails validation.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError as error:
-        raise PrefixCacheError(f"scenario config not found: {path}") from error
-    except (OSError, UnicodeDecodeError) as error:
-        raise PrefixCacheError(
-            f"scenario config could not be read: {path}: {error}"
-        ) from error
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as error:
-        raise PrefixCacheError(f"{path} is not valid YAML: {error}") from error
-    # safe_load returns None for an empty or comment-only file without raising; name
-    # that here so the command aborts on a clear message, not an opaque "input should
-    # be a mapping" from validating None.
-    if data is None:
-        raise PrefixCacheError(f"scenario config is empty: {path}")
-    if not isinstance(data, dict):
-        raise PrefixCacheError(f"scenario config must be a mapping: {path}")
-    try:
-        return PrefixCacheScenario.model_validate(data)
-    except ValidationError as error:
-        raise PrefixCacheError(f"invalid scenario config ({path}):\n{error}") from error
+    cold = "cold"
+    warm = "warm"
 
 
 def _read_metrics_snapshot(path: Path) -> str:
@@ -210,7 +150,7 @@ def scrape_prefix_cache(
     metrics_before: Path,
     metrics_after: Path,
     result: Path,
-    cache_state: str,
+    cache_state: CacheState,
     model: str | None = None,
 ) -> dict:
     """Compute the per-run prefix-cache hit rate and join it onto the client JSON.
