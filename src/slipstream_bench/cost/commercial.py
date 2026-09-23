@@ -25,11 +25,14 @@ r_out in $/1M: run cost C = (I * r_in + O * r_out) / 1e6; the reported
 $/1M-input and $/1M-output are r_in and r_out unchanged.
 """
 
-import math
-from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from typing import Annotated
 
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict
+
+from slipstream_bench.cost.config import load_provenance
+from slipstream_bench.cost.fields import NonEmptyStr, PositiveFiniteFloat
 from slipstream_bench.results import read_result, to_numeric_metric
 
 _TOKENS_PER_MILLION = 1_000_000
@@ -39,9 +42,49 @@ class CommercialCostError(Exception):
     """A commercial-cost input that cannot produce a meaningful $/1M figure."""
 
 
-@dataclass(frozen=True)
-class CommercialCostInputs:
+def _coerce_yaml_date_to_iso(value: object) -> object:
+    """Render an unquoted YAML date back to its ISO text before the format check.
+
+    PyYAML reads an unquoted ``price_quoted_on: 2026-09-11`` as a ``datetime.date``.
+    The record echoes the quote date as a string, so a parsed date is coerced to its
+    ISO text; a quoted string passes through untouched for the validator to judge.
+    """
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def _require_iso_date(value: str) -> str:
+    """Reject a quote date that is not an ISO date.
+
+    A free-text date pins nothing reproducible; an ISO date is a real day the
+    published rate can be checked against.
+
+    :raise ValueError: when the value is not an ISO date like 2026-09-11.
+    """
+    try:
+        date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(
+            f"price_quoted_on '{value}' is not an ISO date like 2026-09-11"
+        ) from error
+    return value
+
+
+# The quote date: an unquoted YAML date is coerced to its ISO text, then the string
+# is required to parse as an ISO date so the quote provenance is a real day.
+IsoDateStr = Annotated[
+    str, BeforeValidator(_coerce_yaml_date_to_iso), AfterValidator(_require_iso_date)
+]
+
+
+class CommercialCostInputs(BaseModel):
     """The quoted rates and the provenance every priced record is pinned to.
+
+    Authored in a per-command YAML file and validated once here at the boundary it
+    crosses (ADR-0011): each rate must be positive and finite, the provider and
+    model pins non-blank, and the quote date a real ISO day. Unknown keys are
+    forbidden so a typo in the reviewed artifact fails loudly.
 
     The rates are the provider's published $/1M numbers; pinning who quoted them
     (``api``, ``model``) and when (``price_quoted_on``) is what keeps the figure
@@ -49,50 +92,26 @@ class CommercialCostInputs:
     used.
     """
 
-    input_price_per_1m: float
-    output_price_per_1m: float
-    api: str
-    model: str
-    price_quoted_on: str
+    # ``model`` is a provider model id, not a pydantic ``model_``-namespaced field,
+    # so the protected namespace is cleared to name it plainly without a warning.
+    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
 
-    def __post_init__(self) -> None:
-        """Reject a non-positive rate or unpinned quote provenance.
+    input_price_per_1m: PositiveFiniteFloat
+    output_price_per_1m: PositiveFiniteFloat
+    api: NonEmptyStr
+    model: NonEmptyStr
+    price_quoted_on: IsoDateStr
 
-        A non-positive rate is a free-token fiction, and a rate detached from the
-        provider, model, and date it was quoted at is a list price with no
-        provenance — the very thing this arm exists to avoid — so both fail fast.
 
-        :raise CommercialCostError: when a rate is not strictly positive, a
-            provenance field is blank, or the quote date is not an ISO date.
-        """
-        rates = (
-            ("input-price-per-1m", self.input_price_per_1m),
-            ("output-price-per-1m", self.output_price_per_1m),
-        )
-        for name, value in rates:
-            # NaN and Infinity slip past a bare <= 0 check (NaN <= 0 is False,
-            # inf <= 0 is False) and would poison every run cost; reject them too.
-            if not math.isfinite(value) or value <= 0:
-                raise CommercialCostError(
-                    f"invalid {name} {value}: want a positive, finite number"
-                )
-        provenance = (
-            ("api", self.api),
-            ("model", self.model),
-            ("price-quoted-on", self.price_quoted_on),
-        )
-        for name, value in provenance:
-            if not value:
-                raise CommercialCostError(f"missing {name}: the quote must be pinned")
-        # A free-text date pins nothing reproducible; require an ISO date so the
-        # quote provenance is a real day the published rate can be checked against.
-        try:
-            date.fromisoformat(self.price_quoted_on)
-        except ValueError as error:
-            raise CommercialCostError(
-                f"invalid price-quoted-on '{self.price_quoted_on}': "
-                f"want an ISO date like 2026-09-11"
-            ) from error
+def load_commercial_cost_inputs(path: Path) -> CommercialCostInputs:
+    """Read a run's commercial provenance YAML into :class:`CommercialCostInputs`.
+
+    :param path: the provenance YAML file (api, model, quote date, $/1M rates).
+    :return: the validated inputs.
+    :raise CommercialCostError: on any read/parse/validate failure (see
+        :func:`slipstream_bench.cost.config.load_provenance`).
+    """
+    return load_provenance(path, CommercialCostInputs, error_cls=CommercialCostError)
 
 
 def _read_tokenizer_id(record: dict, source: Path) -> str:

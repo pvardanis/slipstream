@@ -15,9 +15,12 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 1e6.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
+from slipstream_bench.cost.config import load_provenance
+from slipstream_bench.cost.fields import NonEmptyStr, PositiveFiniteFloat
 from slipstream_bench.results import read_result, to_numeric_metric
 
 _SECONDS_PER_HOUR = 3600
@@ -28,9 +31,13 @@ class CostError(Exception):
     """A cost input that cannot produce a meaningful $/1M figure."""
 
 
-@dataclass(frozen=True)
-class CostInputs:
+class CostInputs(BaseModel):
     """The price and provenance every priced record is pinned to.
+
+    Authored in a per-command YAML file and validated once here at the boundary it
+    crosses (ADR-0011): the price and ratio must be positive and finite, and the
+    provenance triple must be pinned, or the figure is a lie waiting to happen.
+    Unknown keys are forbidden so a typo in the reviewed artifact fails loudly.
 
     The ratio is required, not defaulted: leaving it to default 1 would silently
     price input and output equally and report the very blended figure the
@@ -38,39 +45,25 @@ class CostInputs:
     like the provenance pins.
     """
 
-    price_per_hour: float
-    output_input_ratio: float
-    weight_checksum: str
-    vllm_version: str
-    quant_recipe: str
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    def __post_init__(self) -> None:
-        """Reject a non-positive price or ratio before any division.
+    price_per_hour: PositiveFiniteFloat
+    output_input_ratio: PositiveFiniteFloat
+    weight_checksum: NonEmptyStr
+    vllm_version: NonEmptyStr
+    quant_recipe: NonEmptyStr
 
-        A zero price is a free-GPU fiction and a non-positive ratio inverts the
-        input/output split, so both fail fast rather than emit a nonsense figure.
 
-        :raise CostError: when the price or ratio is not strictly positive.
-        """
-        if self.price_per_hour <= 0:
-            raise CostError(
-                f"invalid price-per-hour {self.price_per_hour}: want a positive number"
-            )
-        if self.output_input_ratio <= 0:
-            raise CostError(
-                f"invalid output-input-ratio {self.output_input_ratio}: "
-                f"want a positive number"
-            )
-        # A cost figure detached from what produced it is a lie waiting to happen:
-        # refuse one without the full provenance triple pinned.
-        provenance = (
-            ("weight-checksum", self.weight_checksum),
-            ("vllm-version", self.vllm_version),
-            ("quant-recipe", self.quant_recipe),
-        )
-        for name, value in provenance:
-            if not value:
-                raise CostError(f"missing {name}: provenance must be pinned")
+def load_cost_inputs(path: Path) -> CostInputs:
+    """Read a run's cost provenance YAML into validated :class:`CostInputs`.
+
+    :param path: the provenance YAML file (price/hr, output:input ratio, weight
+        checksum, vLLM version, quant recipe).
+    :return: the validated inputs.
+    :raise CostError: on any read/parse/validate failure (see
+        :func:`slipstream_bench.cost.config.load_provenance`).
+    """
+    return load_provenance(path, CostInputs, error_cls=CostError)
 
 
 def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
