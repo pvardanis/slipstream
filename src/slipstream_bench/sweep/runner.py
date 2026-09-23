@@ -54,9 +54,9 @@ def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int
         aligned = prefix_len // align_blocks * align_blocks
         if aligned == 0:
             raise SweepError(
-                f"--align-blocks {align_blocks} floors prefix {prefix_len} "
-                f"(share {share}% of {total_len}) to 0 — raise --total-len or "
-                f"--prefix-share, or lower --align-blocks"
+                f"align_blocks {align_blocks} floors prefix {prefix_len} "
+                f"(share {share}% of {total_len}) to 0 — raise total_len or the "
+                f"prefix_shares entry, or lower align_blocks"
             )
         prefix_len = aligned
     return prefix_len, total_len - prefix_len
