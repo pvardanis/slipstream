@@ -12,7 +12,11 @@ from typing import Annotated
 import typer
 
 from slipstream_bench.cost.cli import app as cost_app
-from slipstream_bench.prefix_cache import PrefixCacheError, scrape_prefix_cache
+from slipstream_bench.prefix_cache import (
+    PrefixCacheError,
+    load_prefix_cache_scenario,
+    scrape_prefix_cache,
+)
 from slipstream_bench.report.cli import app as report_app
 from slipstream_bench.results import ResultError
 from slipstream_bench.sweep.cli import app as sweep_app
@@ -36,8 +40,14 @@ app.add_typer(report_app)
 @app.command("prefix-cache")
 def prefix_cache(
     *,
-    cache_state: Annotated[
-        str, typer.Option(help="Which cache regime this run measured: cold or warm.")
+    config: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="Scenario YAML: cache_state (cold or warm) and an optional "
+            "model_name selector.",
+        ),
     ],
     metrics_before: Annotated[
         Path,
@@ -63,21 +73,16 @@ def prefix_cache(
             help="The run's vllm bench serve --save-result JSON.",
         ),
     ],
-    model: Annotated[
-        str | None,
-        typer.Option(
-            help="model_name label to select (default: the result's model_id)."
-        ),
-    ] = None,
 ) -> None:
     """Compute the cold/warm prefix-cache hit-rate delta for a bench run."""
     try:
+        scenario = load_prefix_cache_scenario(config)
         record = scrape_prefix_cache(
             metrics_before=metrics_before,
             metrics_after=metrics_after,
             result=result,
-            cache_state=cache_state,
-            model=model,
+            cache_state=scenario.cache_state,
+            model=scenario.model,
         )
     except (PrefixCacheError, ResultError) as error:
         typer.echo(str(error), err=True)

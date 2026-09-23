@@ -18,14 +18,16 @@ reuse the warmed cache for the warm run, and pass the matching cache_state.
 
 import math
 from pathlib import Path
+from typing import Literal
 
+import yaml
 from prometheus_client.parser import text_string_to_metric_families
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from slipstream_bench.results import read_result
 
 _QUERIES_METRIC = "vllm:prefix_cache_queries"
 _HITS_METRIC = "vllm:prefix_cache_hits"
-_CACHE_STATES = ("cold", "warm")
 _SLO_METRICS = (
     "request_throughput",
     "request_goodput",
@@ -38,6 +40,65 @@ _SLO_METRICS = (
 
 class PrefixCacheError(Exception):
     """A prefix-cache input that cannot produce a meaningful hit rate."""
+
+
+class PrefixCacheScenario(BaseModel):
+    """The scenario one prefix-cache run measures, from its YAML definition.
+
+    Authored in a per-command YAML file and validated once here at the boundary it
+    crosses (ADR-0011): the cache regime is one of the two defined labels — a
+    free-text value would let a typo mislabel a regime, the whole cold-vs-warm
+    basis — and the optional model selector reaches past the result's model_id to a
+    differently-served series. The /metrics snapshots and the result JSON stay CLI
+    path arguments, since they exist only after the run. Unknown keys are forbidden
+    so a typo in the reviewed artifact fails loudly.
+    """
+
+    # ``model`` is a served-model selector, not a pydantic ``model_``-namespaced
+    # field, so the protected namespace is cleared to name it plainly without a
+    # warning.
+    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+
+    cache_state: Literal["cold", "warm"]
+    model: str | None = None
+
+
+def load_prefix_cache_scenario(path: Path) -> PrefixCacheScenario:
+    """Read the scenario definition at ``path`` into a validated model.
+
+    A missing, unreadable, non-YAML, empty, or non-mapping file, or a config that
+    fails the model's validation, is rejected here as the command's own
+    :class:`PrefixCacheError`, so the CLI surfaces one exception type rather than a
+    raw :class:`pydantic.ValidationError`.
+
+    :param path: the scenario YAML file (cache_state, optional model selector).
+    :return: the validated scenario.
+    :raise PrefixCacheError: when the file is missing, unreadable, not YAML, empty,
+        not a mapping, or fails validation.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise PrefixCacheError(f"scenario config not found: {path}") from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise PrefixCacheError(
+            f"scenario config could not be read: {path}: {error}"
+        ) from error
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise PrefixCacheError(f"{path} is not valid YAML: {error}") from error
+    # safe_load returns None for an empty or comment-only file without raising; name
+    # that here so the command aborts on a clear message, not an opaque "input should
+    # be a mapping" from validating None.
+    if data is None:
+        raise PrefixCacheError(f"scenario config is empty: {path}")
+    if not isinstance(data, dict):
+        raise PrefixCacheError(f"scenario config must be a mapping: {path}")
+    try:
+        return PrefixCacheScenario.model_validate(data)
+    except ValidationError as error:
+        raise PrefixCacheError(f"invalid scenario config ({path}):\n{error}") from error
 
 
 def _read_metrics_snapshot(path: Path) -> str:
@@ -172,20 +233,13 @@ def scrape_prefix_cache(
               }
             }
 
-    :raise PrefixCacheError: on a bad cache-state, an absent/disabled metric, a
+    :raise PrefixCacheError: on an absent/disabled metric, a
         non-finite, backwards, empty, or hits-exceed-queries counter window, a
         missing model selector, a truncated or zero-completed client JSON, or an
         unreadable/unparseable snapshot.
     :raise ResultError: when the result file cannot be read (see
         :func:`slipstream_bench.results.read_result`).
     """
-    # The label is the whole basis of the cold-vs-warm distinction; a free-text
-    # value would let a typo mislabel a regime, so accept only the two defined.
-    if cache_state not in _CACHE_STATES:
-        raise PrefixCacheError(
-            f"invalid cache-state {cache_state!r}: want one of {_CACHE_STATES}"
-        )
-
     record = read_result(result)
     # A per-cell failure can leave a syntactically-valid but empty/stub result JSON;
     # the join would then emit null model_id behind a real-looking rate. A run that
