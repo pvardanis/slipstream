@@ -31,7 +31,7 @@ def load_provenance(path: Path, model: type[M], *, error_cls: type[Exception]) -
         mapping, or fails validation.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError as error:
         raise error_cls(f"provenance config not found: {path}") from error
     except (OSError, UnicodeDecodeError) as error:

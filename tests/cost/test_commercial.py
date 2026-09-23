@@ -195,6 +195,19 @@ def test_unquoted_iso_date_is_coerced_from_a_yaml_date() -> None:
     assert inputs.price_quoted_on == "2026-09-11"
 
 
+def test_unquoted_yaml_datetime_is_rejected() -> None:
+    """An unquoted `2026-09-11 10:00:00` parses to a datetime, not a bare date, and
+    is left for the validator to reject rather than coerced to an ISO day."""
+    from datetime import datetime
+
+    # A naive datetime is exactly what PyYAML yields for an unquoted timestamp.
+    quoted = datetime(2026, 9, 11, 10, 0, 0)  # noqa: DTZ001
+    with pytest.raises(ValidationError, match="price_quoted_on"):
+        CommercialCostInputs.model_validate(
+            {**_VALID_PAYLOAD, "price_quoted_on": quoted}
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -209,9 +222,11 @@ def test_unquoted_iso_date_is_coerced_from_a_yaml_date() -> None:
         ("output_price_per_1m", float("nan")),
         ("output_price_per_1m", float("inf")),
         # A quoted figure detached from provider/model/date is a list price with no
-        # provenance; blank fields and a non-ISO quote date both fail.
+        # provenance; empty or whitespace-only fields and a non-ISO quote date fail.
         ("api", ""),
+        ("api", "   "),
         ("model", ""),
+        ("model", "   "),
         ("price_quoted_on", ""),
         ("price_quoted_on", "last tuesday"),
     ],

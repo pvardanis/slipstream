@@ -48,6 +48,10 @@ def _coerce_yaml_date_to_iso(value: object) -> object:
     PyYAML reads an unquoted ``price_quoted_on: 2026-09-11`` as a ``datetime.date``.
     The record echoes the quote date as a string, so a parsed date is coerced to its
     ISO text; a quoted string passes through untouched for the validator to judge.
+
+    Only a plain date is coerced. An unquoted ``2026-09-11 10:00:00`` parses to a
+    ``datetime`` (a ``date`` subclass); it is left untouched so the ``str`` field
+    rejects it rather than a bare timestamp being read as a quote day.
     """
     if isinstance(value, date) and not isinstance(value, datetime):
         return value.isoformat()

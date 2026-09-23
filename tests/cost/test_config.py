@@ -78,6 +78,15 @@ def test_missing_file_raises_domain_error(tmp_path: Path) -> None:
         load_cost_inputs(tmp_path / "absent.yaml")
 
 
+def test_unreadable_file_raises_domain_error(tmp_path: Path) -> None:
+    """A non-UTF-8 file surfaces as the domain error, not a raw UnicodeDecodeError."""
+    path = tmp_path / "provenance.yaml"
+    path.write_bytes(b"\xff\xfe\x00 not utf-8")
+
+    with pytest.raises(CostError, match="could not be read"):
+        load_cost_inputs(path)
+
+
 def test_empty_config_is_rejected(tmp_path: Path) -> None:
     """An empty file names itself rather than failing opaquely on a None validate."""
     path = tmp_path / "provenance.yaml"
