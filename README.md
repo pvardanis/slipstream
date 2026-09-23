@@ -156,13 +156,23 @@ just cli-test                               # run the package test suite (uv run
 ```
 
 Runtime dependencies are `typer` (CLI), `pydantic` + `pyyaml` (validate the
-`--config` YAMLs), `prometheus-client` (parse `/metrics`), and `pandas` + `seaborn`
-(the `chart` tables and plots); `pytest` and `ruff` are dev-only, and the repo's
+`--config` YAMLs), `prometheus-client` (parse `/metrics`), `pandas` + `seaborn`
+(the `chart` tables and plots), and `prefect` + `prefect-aws` (the sweep cache/retry
+layer, [`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md));
+`pytest` and `ruff` are dev-only, and the repo's
 pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
 run inside a baked bench-client image on an external EC2 bench host, which drives
 them against vLLM through an ephemeral public mutual-TLS load balancer, so the
 latency recorded is what an off-cluster client sees. That measurement path is
 recorded in [`docs/adr/0004`](docs/adr/0004-bench-vantage-external-path.md).
+
+Prefect's result and cache-key storage point at S3, not its local
+`~/.prefect/storage/` default: `slipstream_bench.sweep.storage` builds two
+`S3Bucket` blocks under distinct prefixes (`prefect/results`, `prefect/cache-keys`)
+of the same `RESULTS_BUCKET` the sweep already writes to, with AWS credentials from
+the ambient default chain. Resume survives a server or laptop death only with both
+on S3 — the hinge recorded in
+[`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md).
 
 The bench-client image (`bench/Dockerfile`) layers the package and the model
 tokenizer onto the same pinned vLLM engine build the server runs, so the two

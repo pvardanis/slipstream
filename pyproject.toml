@@ -5,6 +5,8 @@ description = "L0 benchmark harness for the slipstream platform: serve sweeps, c
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=3",
+    "prefect>=3",
+    "prefect-aws>=0.7.12",
     "prometheus-client>=0.26.0",
     "pydantic>=2",
     "pyyaml>=6",
