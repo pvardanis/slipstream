@@ -122,6 +122,13 @@ classifies with). The rewrite from bash is recorded in
   `--out-dir` and `--api-key-env` set the execution context, and `--dry-run`
   prints the `vllm` commands without running them. This is the recipe `just bench`
   drives on the bench host.
+- **`load-cell`** — run one `vllm bench serve` cell: the coordinate
+  (`--share`, `--burstiness`, and an optional `--max-concurrency` cap) is passed
+  explicitly, the shared knobs (lengths, SLO, seed) come from the same `--config`
+  YAML as `load-sweep`, and one result JSON is written. This is the grain the
+  bench-client container executes now that the per-cell loop lives in the
+  orchestration layer ([`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)
+  §Amendment).
 - **`sweep-grid`** — emit one validated slice (`engine-points`,
   `concurrency-ladder`, `burstiness`) of the knob grid in `bench/sweep-grid.yaml`
   for `just knob-sweep` to read, so every swept value is validated up front and
