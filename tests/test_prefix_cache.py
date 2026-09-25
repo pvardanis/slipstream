@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from slipstream_bench.prefix_cache import PrefixCacheError, scrape_prefix_cache
+from slipstream_bench.prefix_cache import (
+    CacheState,
+    PrefixCacheError,
+    scrape_prefix_cache,
+)
 from slipstream_bench.results import ResultError
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -59,7 +63,7 @@ def test_hit_rate_is_the_window_delta_not_the_lifetime_ratio(tmp_path: Path) -> 
         metrics_before=before,
         metrics_after=after,
         result=_result(tmp_path),
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert record["prefix_cache_queries"] == 100
@@ -75,7 +79,7 @@ def test_client_json_and_slo_numbers_ride_on_the_record(tmp_path: Path) -> None:
         metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
         result=result,
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert record["source"] == str(result)
@@ -98,7 +102,7 @@ def test_join_carries_the_segment_keys_the_report_groups_on(tmp_path: Path) -> N
         metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
         result=result,
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert record["request_rate"] == 8.0
@@ -111,7 +115,7 @@ def test_absent_segment_keys_join_as_null(tmp_path: Path) -> None:
         metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
         result=_result(tmp_path),
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert record["prefix_share"] is None
@@ -126,7 +130,7 @@ def test_missing_client_metric_joins_as_null(tmp_path: Path) -> None:
         metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
         result=result,
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert record["client_metrics"]["request_goodput"] is None
@@ -138,7 +142,7 @@ def test_warm_rate_exceeds_cold_and_is_labelled(tmp_path: Path) -> None:
         metrics_before=_snapshot(tmp_path, "b.prom", 1100.0, 210.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1200.0, 300.0),
         result=_result(tmp_path),
-        cache_state="warm",
+        cache_state=CacheState.warm,
     )
 
     assert record["prefix_cache_queries"] == 100
@@ -169,7 +173,7 @@ def test_other_models_series_are_not_folded_in(tmp_path: Path) -> None:
         metrics_before=before,
         metrics_after=after,
         result=_result(tmp_path),
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert record["prefix_cache_queries"] == 100
@@ -196,7 +200,7 @@ def test_total_suffix_rendering_is_read(tmp_path: Path) -> None:
         metrics_before=before,
         metrics_after=after,
         result=_result(tmp_path),
-        cache_state="warm",
+        cache_state=CacheState.warm,
     )
 
     assert record["prefix_cache_queries"] == 100
@@ -225,7 +229,7 @@ def test_model_override_selects_a_series_the_model_id_would_not(tmp_path: Path) 
         metrics_before=before,
         metrics_after=after,
         result=_result(tmp_path),
-        cache_state="cold",
+        cache_state=CacheState.cold,
         model="served-name",
     )
 
@@ -241,7 +245,7 @@ def test_large_counters_keep_full_integer_precision(tmp_path: Path) -> None:
         metrics_before=before,
         metrics_after=after,
         result=_result(tmp_path),
-        cache_state="warm",
+        cache_state=CacheState.warm,
     )
 
     assert record["prefix_cache_queries"] == 100
@@ -258,7 +262,7 @@ def test_non_finite_counter_is_rejected(tmp_path: Path, bad: str) -> None:
             metrics_before=before,
             metrics_after=after,
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -273,7 +277,7 @@ def test_same_input_reproduces_identical_output(tmp_path: Path) -> None:
             metrics_before=before,
             metrics_after=after,
             result=result,
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
     )
     run_b = json.dumps(
@@ -281,7 +285,7 @@ def test_same_input_reproduces_identical_output(tmp_path: Path) -> None:
             metrics_before=before,
             metrics_after=after,
             result=result,
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
     )
 
@@ -294,7 +298,7 @@ def test_counts_are_emitted_as_integers(tmp_path: Path) -> None:
         metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
         metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
         result=_result(tmp_path),
-        cache_state="cold",
+        cache_state=CacheState.cold,
     )
 
     assert isinstance(record["prefix_cache_queries"], int)
@@ -313,7 +317,7 @@ def test_absent_metric_is_rejected(tmp_path: Path) -> None:
             metrics_before=nocache,
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -330,7 +334,7 @@ def test_metric_present_only_for_another_model_is_rejected(tmp_path: Path) -> No
             metrics_before=before,
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -343,7 +347,7 @@ def test_backwards_counter_window_is_rejected(tmp_path: Path) -> None:
             metrics_before=before,
             metrics_after=after,
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -356,7 +360,7 @@ def test_asymmetric_counter_regression_is_rejected(tmp_path: Path) -> None:
             metrics_before=before,
             metrics_after=after,
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -368,7 +372,7 @@ def test_empty_query_window_is_rejected(tmp_path: Path) -> None:
             metrics_before=before,
             metrics_after=before,
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -381,7 +385,7 @@ def test_hits_exceeding_queries_is_rejected(tmp_path: Path) -> None:
             metrics_before=before,
             metrics_after=after,
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -394,7 +398,7 @@ def test_missing_model_selector_is_rejected(tmp_path: Path) -> None:
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=blank,
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -407,7 +411,7 @@ def test_stub_client_json_is_rejected(tmp_path: Path) -> None:
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=stub,
-            cache_state="cold",
+            cache_state=CacheState.cold,
             model=MODEL,
         )
 
@@ -421,7 +425,7 @@ def test_missing_completed_is_rejected(tmp_path: Path) -> None:
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=partial,
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -434,7 +438,7 @@ def test_zero_completed_run_is_rejected(tmp_path: Path) -> None:
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=empty,
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -447,7 +451,7 @@ def test_malformed_exposition_is_rejected(tmp_path: Path) -> None:
             metrics_before=corrupt,
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -458,7 +462,7 @@ def test_missing_snapshot_file_is_rejected(tmp_path: Path) -> None:
             metrics_before=tmp_path / "nope.prom",
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=_result(tmp_path),
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
 
 
@@ -471,5 +475,5 @@ def test_unreadable_result_raises_result_error(tmp_path: Path) -> None:
             metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
             metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
             result=bad,
-            cache_state="cold",
+            cache_state=CacheState.cold,
         )
