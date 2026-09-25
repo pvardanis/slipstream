@@ -51,7 +51,8 @@ OPENAI_API_KEY="$(aws secretsmanager get-secret-value \
 export OPENAI_API_KEY
 
 # load-cell writes one JSON for the cell it is handed and exits 0 on success, 1 when the
-# cell fails to run or its result cannot be stamped. Bind-mount a host dir as the cell's
+# cell fails to run or its result cannot be stamped, 2 on a config/setup error (a bad
+# config, an out-of-range coordinate, an unset key). Bind-mount a host dir as the cell's
 # output; run the container as the invoking user so the JSON is not root-owned if this is
 # ever run as non-root (it runs as root under SSM today, where id -u is 0 and the mapping
 # is a no-op).
@@ -69,8 +70,19 @@ mkdir -p "${config_dir}"
 printf '%s' "${SWEEP_CONFIG_B64}" | base64 -d >"${config_dir}/sweep-config.yaml"
 
 # Decode the optional flags and split on whitespace into an array; load-cell flags
-# carry no spaces, so word-splitting the decoded string reconstructs them.
-read -ra sweep_args <<<"$(printf '%s' "${sweep_args_b64}" | base64 -d)"
+# carry no spaces, so word-splitting the decoded string reconstructs them. The decode
+# is its own statement, not a command substitution feeding the read here-string: a
+# substitution's failure does not trip set -e, so a truncated SWEEP_ARGS_B64 would
+# otherwise be swallowed and the caller's extra flags silently dropped. Guarding it
+# aborts before the cell runs, mirroring the config decode above.
+sweep_args=()
+if [[ -n "${sweep_args_b64}" ]]; then
+  if ! decoded_args="$(printf '%s' "${sweep_args_b64}" | base64 -d)"; then
+    echo "bench-cell: SWEEP_ARGS_B64 is not valid base64" >&2
+    exit 1
+  fi
+  read -ra sweep_args <<<"${decoded_args}"
+fi
 
 # A set max-concurrency caps in-flight requests (closed-loop); an empty one omits the
 # flag so the cell runs open-loop, arrival-rate bound.
