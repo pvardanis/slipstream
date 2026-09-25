@@ -18,13 +18,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
-_SLO_KEYS = (
-    "request_goodput",
-    "p95_ttft_ms",
-    "p99_ttft_ms",
-    "p95_tpot_ms",
-    "p99_tpot_ms",
-)
+
+class UnitCost(TypedDict):
+    """A priced arm's $/1M at SLO: its input and output rates."""
+
+    input: object
+    output: object
+
+
+class CommercialCost(UnitCost):
+    """A commercial arm's $/1M plus the api and model it was quoted for."""
+
+    api: object
+    model: object
+
+
+class Slo(TypedDict):
+    """A row's SLO tail: goodput and the ttft/tpot p95/p99 the run held."""
+
+    request_goodput: object
+    p95_ttft_ms: object
+    p99_ttft_ms: object
+    p95_tpot_ms: object
+    p99_tpot_ms: object
 
 
 class ReportError(Exception):
@@ -46,21 +62,27 @@ class Segment:
 
     @classmethod
     def from_record(cls, record: dict[str, object], source: object) -> "Segment":
-        """Read a run's segment off its record, rejecting an absent key.
+        """Read a run's segment off its record, rejecting an absent or wrong-typed key.
 
         :param record: the prefix-cache record the segment is read from.
         :param source: the run's result-file, for the error message.
         :return: the run's segment.
-        :raise ReportError: when request_rate or prefix_share is absent — the run
-            cannot be placed in a concurrency/prefix-share bucket and the report
-            would blend it.
+        :raise ReportError: when request_rate is not a number or prefix_share is not
+            a whole number (absent included) — the run cannot be placed in a
+            concurrency/prefix-share bucket and the report would blend it.
         """
         request_rate = record.get("request_rate")
         prefix_share = record.get("prefix_share")
         if not isinstance(request_rate, (int, float)):
-            raise ReportError(f"prefix-cache record {source!r} has no request_rate")
+            raise ReportError(
+                f"prefix-cache record {source!r} has no numeric request_rate: "
+                f"{request_rate!r}"
+            )
         if not isinstance(prefix_share, int):
-            raise ReportError(f"prefix-cache record {source!r} has no prefix_share")
+            raise ReportError(
+                f"prefix-cache record {source!r} has no integer prefix_share: "
+                f"{prefix_share!r}"
+            )
         return cls(float(request_rate), prefix_share)
 
 
@@ -94,9 +116,9 @@ class Row(TypedDict):
     concurrency: float
     prefix_share: int
     cache_state: str
-    slo: dict[str, object]
-    self_hosted_usd_per_1m: dict[str, object]
-    commercial_usd_per_1m: dict[str, object]
+    slo: Slo
+    self_hosted_usd_per_1m: UnitCost
+    commercial_usd_per_1m: CommercialCost
 
 
 def build_report(
@@ -158,7 +180,7 @@ def _require(record: dict[str, object], key: str, arm: str, source: object) -> o
     return record[key]
 
 
-def _slo_tail(record: dict[str, object], source: object) -> dict[str, object]:
+def _slo_tail(record: dict[str, object], source: object) -> Slo:
     """Read the SLO tail off a spine record, rejecting an absent or null figure.
 
     A ``$/1M at SLO`` row with no SLO is not a baseline row, so a missing
@@ -167,13 +189,19 @@ def _slo_tail(record: dict[str, object], source: object) -> dict[str, object]:
 
     :param record: the prefix-cache spine record.
     :param source: the run's result-file, for the error message.
-    :return: the SLO metrics keyed by :data:`_SLO_KEYS`.
+    :return: the SLO metrics as a :class:`Slo`.
     :raise ReportError: when the SLO block or any of its figures is absent or null.
     """
     client_metrics = record.get("client_metrics")
     if not isinstance(client_metrics, dict):
         raise ReportError(f"prefix-cache record {source!r} has no client_metrics block")
-    tail = {key: client_metrics.get(key) for key in _SLO_KEYS}
+    tail: Slo = {
+        "request_goodput": client_metrics.get("request_goodput"),
+        "p95_ttft_ms": client_metrics.get("p95_ttft_ms"),
+        "p99_ttft_ms": client_metrics.get("p99_ttft_ms"),
+        "p95_tpot_ms": client_metrics.get("p95_tpot_ms"),
+        "p99_tpot_ms": client_metrics.get("p99_tpot_ms"),
+    }
     for key, value in tail.items():
         if value is None:
             raise ReportError(f"prefix-cache record {source!r} has no SLO {key}")

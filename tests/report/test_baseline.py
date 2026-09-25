@@ -176,7 +176,7 @@ def test_missing_request_rate_is_rejected() -> None:
 def test_non_numeric_request_rate_is_rejected() -> None:
     """A request_rate present but not a number cannot be a concurrency — fail fast."""
     source = "bench/results/prefix-cache/cold_ratebad.json"
-    with pytest.raises(ReportError, match="has no request_rate"):
+    with pytest.raises(ReportError, match="has no numeric request_rate"):
         build_report(
             self_hosted_cost=[_self_hosted(source=source)],
             commercial_cost=[_commercial()],
@@ -189,11 +189,22 @@ def test_non_integer_prefix_share_is_rejected() -> None:
     source = "bench/results/prefix-cache/cold_psharebad.json"
     # A commercial record on the same segment would join if the guard let the run
     # through, so matching on the guard's own message isolates the type check.
-    with pytest.raises(ReportError, match="has no prefix_share"):
+    with pytest.raises(ReportError, match="has no integer prefix_share"):
         build_report(
             self_hosted_cost=[_self_hosted(source=source)],
             commercial_cost=[_commercial(prefix_share="ninety")],
             prefix_cache=[_prefix_cache(source=source, prefix_share="ninety")],
+        )
+
+
+def test_float_prefix_share_is_rejected() -> None:
+    """prefix_share is an integer bucket; a float like 90.0 is not one — fail fast."""
+    source = "bench/results/prefix-cache/cold_psharefloat.json"
+    with pytest.raises(ReportError, match="has no integer prefix_share"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial(prefix_share=90.0)],
+            prefix_cache=[_prefix_cache(source=source, prefix_share=90.0)],
         )
 
 
