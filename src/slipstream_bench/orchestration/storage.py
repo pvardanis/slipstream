@@ -27,7 +27,7 @@ class StorageError(Exception):
     """A storage configuration that cannot point Prefect at S3."""
 
 
-def _s3_bucket_class() -> type[S3Bucket]:
+def _get_s3_bucket_class() -> type[S3Bucket]:
     """Import ``prefect_aws.S3Bucket`` lazily, naming the extra when it is absent.
 
     Prefect ships only in the ``orchestration`` extra (ADR-0012 §Amendment), so the
@@ -70,7 +70,7 @@ def result_storage(bucket: str) -> S3Bucket:
     :raise StorageError: when ``bucket`` is blank or the ``orchestration`` extra
         is not installed.
     """
-    return _s3_bucket_class()(
+    return _get_s3_bucket_class()(
         bucket_name=_require_bucket(bucket), bucket_folder=_RESULT_STORAGE_PREFIX
     )
 
@@ -86,7 +86,7 @@ def cache_key_storage(bucket: str) -> S3Bucket:
     :raise StorageError: when ``bucket`` is blank or the ``orchestration`` extra
         is not installed.
     """
-    return _s3_bucket_class()(
+    return _get_s3_bucket_class()(
         bucket_name=_require_bucket(bucket), bucket_folder=_CACHE_KEY_STORAGE_PREFIX
     )
 
