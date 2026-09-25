@@ -179,6 +179,191 @@ def test_request_rate_inf_from_config_is_accepted(tmp_path: Path) -> None:
     assert result.stdout.count("--request-rate inf") == 6
 
 
+# --- load-cell: one cell of the grid, handed its coordinate ------------------
+
+
+def _cell_dry_run(config: Path, *args: str):
+    """Invoke load-cell with the given config, --dry-run, and extra arguments."""
+    return runner.invoke(
+        app, ["load-cell", "--config", str(config), "--dry-run", *args]
+    )
+
+
+def test_load_cell_dry_run_emits_one_command_for_its_coordinate(
+    tmp_path: Path,
+) -> None:
+    """load-cell builds exactly one vllm command for the coordinate it is handed."""
+    result = _cell_dry_run(
+        _write_config(tmp_path), "--share", "90", "--burstiness", "1.0"
+    )
+
+    assert result.exit_code == 0, plain(result)
+    assert result.stdout.count("vllm bench serve") == 1
+    assert "--prefix-repetition-prefix-len 900" in result.stdout
+    assert "--burstiness 1.0" in result.stdout
+    assert "pshare90_burst1.0.json" in result.stdout
+
+
+def test_load_cell_carries_the_cap_when_closed_loop(tmp_path: Path) -> None:
+    """A --max-concurrency cell caps in-flight requests and names its _mc file."""
+    result = _cell_dry_run(
+        _write_config(tmp_path),
+        "--share",
+        "90",
+        "--burstiness",
+        "1.0",
+        "--max-concurrency",
+        "32",
+    )
+
+    assert result.exit_code == 0, plain(result)
+    assert result.stdout.count("vllm bench serve") == 1
+    assert "--max-concurrency 32" in result.stdout
+    assert "pshare90_burst1.0_mc32.json" in result.stdout
+
+
+def test_load_cell_omits_the_cap_when_open_loop(tmp_path: Path) -> None:
+    """A cell handed no cap runs open-loop, emitting no --max-concurrency."""
+    result = _cell_dry_run(
+        _write_config(tmp_path), "--share", "90", "--burstiness", "1.0"
+    )
+
+    assert result.exit_code == 0, plain(result)
+    assert "--max-concurrency" not in result.stdout
+
+
+def test_load_cell_injects_context_from_the_cli(tmp_path: Path) -> None:
+    """The endpoint, served model, and out-dir come from the CLI, not the config."""
+    result = _cell_dry_run(
+        _write_config(tmp_path),
+        "--share",
+        "50",
+        "--burstiness",
+        "0.2",
+        "--base-url",
+        "http://127.0.0.1:9",
+        "--model",
+        "Qwen/Qwen3-8B-AWQ",
+        "--out-dir",
+        "/out",
+    )
+
+    assert result.exit_code == 0, plain(result)
+    assert "--base-url http://127.0.0.1:9" in result.stdout
+    assert "--model Qwen/Qwen3-8B-AWQ" in result.stdout
+    assert "/out/pshare50_burst0.2.json" in result.stdout
+
+
+def test_load_cell_runs_one_cell_and_stamps_its_share(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A live load-cell runs one command, stamps its share, and exits 0."""
+    commands: list[list[str]] = []
+
+    def stub_run_cell(command, *, extra_env=None):
+        commands.append(command)
+        result_file = command[command.index("--result-filename") + 1]
+        Path(result_file).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
+    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
+
+    result = runner.invoke(
+        app,
+        [
+            "load-cell",
+            "--config",
+            str(_write_config(tmp_path)),
+            "--share",
+            "90",
+            "--burstiness",
+            "1.0",
+            "--out-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(commands) == 1
+    written = json.loads((tmp_path / "pshare90_burst1.0.json").read_text())
+    assert written["prefix_share"] == 90
+
+
+def test_load_cell_fails_when_the_cell_errors(monkeypatch, tmp_path: Path) -> None:
+    """A cell whose command exits non-zero makes load-cell exit 1."""
+    monkeypatch.setattr(
+        "slipstream_bench.sweep.cli.run_cell",
+        lambda command, *, extra_env=None: 7,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "load-cell",
+            "--config",
+            str(_write_config(tmp_path)),
+            "--share",
+            "90",
+            "--burstiness",
+            "1.0",
+            "--out-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+
+
+def test_load_cell_rejects_a_bad_config(tmp_path: Path) -> None:
+    """A malformed config exits 2 before any cell runs."""
+    result = _cell_dry_run(
+        _write_config(tmp_path, request_rate="quick"),
+        "--share",
+        "90",
+        "--burstiness",
+        "1.0",
+    )
+
+    assert result.exit_code == 2
+    assert "non-negative number or 'inf'" in plain(result)
+
+
+def test_load_cell_threads_the_resolved_key_into_the_runner(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A commercial cell hands the resolved key to run_cell as extra_env, not argv."""
+    monkeypatch.setenv("MY_PROVIDER_KEY", "sk-live-abc")
+    seen: list[dict[str, str] | None] = []
+
+    def stub_run_cell(command, *, extra_env=None):
+        seen.append(extra_env)
+        result_file = command[command.index("--result-filename") + 1]
+        Path(result_file).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
+    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
+
+    result = runner.invoke(
+        app,
+        [
+            "load-cell",
+            "--config",
+            str(_write_config(tmp_path, tokenizer="Qwen/Qwen2.5-0.5B-Instruct")),
+            "--share",
+            "50",
+            "--burstiness",
+            "1.0",
+            "--api-key-env",
+            "MY_PROVIDER_KEY",
+            "--out-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [{"OPENAI_API_KEY": "sk-live-abc"}]
+
+
 # --- a malformed config is rejected before any command is built --------------
 
 

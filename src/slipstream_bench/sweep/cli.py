@@ -1,7 +1,10 @@
 """The sweep concept's Typer sub-app: run, aggregate, and emit the grid.
 
-Owns the ``load-sweep``, ``aggregate-sweep``, and ``sweep-grid`` commands, plus the
-api-key resolver and cell runner that guard ``load-sweep``.
+Owns the ``load-sweep``, ``load-cell``, ``aggregate-sweep``, and ``sweep-grid``
+commands, plus the api-key resolver and cell runner that guard them. ``load-cell``
+runs the single cell it is handed — one ``vllm bench serve`` per invocation, the
+grain the container executes now that the grid loop lives in the orchestration
+layer (ADR-0012 §Amendment); ``load-sweep`` still drives the whole grid.
 """
 
 import json
@@ -25,7 +28,13 @@ from slipstream_bench.sweep.grid import (
     load_grid,
     render_part,
 )
-from slipstream_bench.sweep.runner import run_sweep
+from slipstream_bench.sweep.runner import (
+    CellOutcome,
+    cell_command,
+    ensure_out_dir,
+    execute_cell,
+    run_sweep,
+)
 
 app = typer.Typer()
 
@@ -135,6 +144,102 @@ def load_sweep(
         typer.echo(str(error), err=True)
         raise typer.Exit(code=2) from error
     raise typer.Exit(code=code)
+
+
+@app.command("load-cell")
+def load_cell(
+    *,
+    share: Annotated[
+        int, typer.Option(help="This cell's prefix-share percentage (0..100).")
+    ],
+    burstiness: Annotated[
+        float,
+        typer.Option(help="This cell's burstiness (low = bursty, 1.0 = Poisson)."),
+    ],
+    max_concurrency: Annotated[
+        int | None,
+        typer.Option(
+            help="This cell's in-flight cap (closed-loop); omit for open-loop."
+        ),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="The experiment-definition YAML: the lengths, SLO, seed (its grid "
+            "axes are unused — the cell's coordinate is passed explicitly).",
+        ),
+    ] = Path("bench/load-sweep.yaml"),
+    base_url: Annotated[
+        str, typer.Option(help="OpenAI-compatible endpoint the cell targets.")
+    ] = "http://localhost:8000",
+    model: Annotated[
+        str,
+        typer.Option(help="Served model id (model.yaml is its source of truth)."),
+    ] = "Qwen/Qwen2.5-0.5B-Instruct",
+    out_dir: Annotated[
+        str, typer.Option(help="Directory for this cell's result JSON.")
+    ] = "bench/results",
+    api_key_env: Annotated[
+        str | None,
+        typer.Option(
+            help="Env var holding the commercial API key, sent as OPENAI_API_KEY "
+            "(kept off the command line). Omit for an unauthenticated endpoint."
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option(help="Print the vllm command instead of running it.")
+    ] = False,
+) -> None:
+    """Run one vllm bench serve cell — the grid coordinate it is handed.
+
+    The container executes one cell per ``docker run`` now that the per-cell loop
+    lives in the orchestration layer (ADR-0012 §Amendment): the coordinate
+    (``--share``/``--burstiness``/``--max-concurrency``) is passed in, the shared
+    knobs (lengths, SLO, seed) come from ``--config``, and one result JSON is
+    written. Exits 0 when the cell ran and was stamped, 1 when it failed to run or
+    could not be stamped, 2 on an invalid config or unset key.
+    """
+    try:
+        # A dry run builds no cell and touches no endpoint, so it does not need the
+        # key resolved — preview a commercial cell without exporting a secret.
+        extra_env = (
+            resolve_api_key_env(api_key_env) if api_key_env and not dry_run else None
+        )
+        cfg = load_sweep_config(
+            config,
+            base_url=base_url,
+            model=model,
+            out_dir=out_dir,
+            commercial=api_key_env is not None,
+        )
+        if dry_run:
+            typer.echo(
+                " ".join(
+                    cell_command(
+                        cfg,
+                        share=share,
+                        burstiness=burstiness,
+                        max_concurrency=max_concurrency,
+                    )
+                )
+            )
+            raise typer.Exit(code=0)
+        ensure_out_dir(cfg.out_dir)
+        outcome = execute_cell(
+            cfg,
+            share=share,
+            burstiness=burstiness,
+            max_concurrency=max_concurrency,
+            runner=lambda command: run_cell(command, extra_env=extra_env),
+            echo=typer.echo,
+            warn=lambda line: typer.echo(line, err=True),
+        )
+    except SweepError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    raise typer.Exit(code=0 if outcome is CellOutcome.OK else 1)
 
 
 @app.command("aggregate-sweep")

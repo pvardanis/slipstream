@@ -14,7 +14,9 @@ import pytest
 
 from slipstream_bench.sweep.config import SweepConfig, SweepError
 from slipstream_bench.sweep.runner import (
+    CellOutcome,
     cell_command,
+    execute_cell,
     grid,
     run_sweep,
     split_lengths,
@@ -213,6 +215,97 @@ def test_cell_command_omits_max_concurrency_when_open_loop() -> None:
 
     assert "--max-concurrency" not in joined
     assert "pshare90_burst1.0.json" in joined
+
+
+# --- execute_cell: one cell's build, run, stamp, and outcome -----------------
+
+
+def test_execute_cell_runs_stamps_and_reports_ok(tmp_path) -> None:
+    """A clean cell runs its command once, stamps its share, and reports OK."""
+    cfg = _config(out_dir=str(tmp_path))
+    calls: list[list[str]] = []
+
+    def runner(command: list[str]) -> int:
+        calls.append(command)
+        Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
+    outcome = execute_cell(
+        cfg,
+        share=90,
+        burstiness=1.0,
+        max_concurrency=None,
+        runner=runner,
+        echo=lambda _line: None,
+        warn=lambda _line: None,
+    )
+
+    assert outcome is CellOutcome.OK
+    assert len(calls) == 1
+    written = json.loads((tmp_path / "pshare90_burst1.0.json").read_text())
+    assert written["prefix_share"] == 90
+    # The metric vLLM wrote survives the injection.
+    assert written["model_id"] == "m"
+
+
+def test_execute_cell_reports_failed_on_a_nonzero_exit(tmp_path) -> None:
+    """A cell whose command exits non-zero reports FAILED and warns with the code."""
+    cfg = _config(out_dir=str(tmp_path))
+    warned: list[str] = []
+
+    outcome = execute_cell(
+        cfg,
+        share=90,
+        burstiness=1.0,
+        max_concurrency=None,
+        runner=lambda _cmd: 7,
+        echo=lambda _line: None,
+        warn=warned.append,
+    )
+
+    assert outcome is CellOutcome.FAILED
+    assert any("burstiness 1.0 failed (exit 7)" in line for line in warned)
+
+
+def test_execute_cell_reports_unannotated_when_no_result_file(tmp_path) -> None:
+    """A cell that ran but wrote no result file cannot be stamped: UNANNOTATED."""
+    cfg = _config(out_dir=str(tmp_path))
+    warned: list[str] = []
+
+    outcome = execute_cell(
+        cfg,
+        share=90,
+        burstiness=1.0,
+        max_concurrency=None,
+        runner=lambda _cmd: 0,
+        echo=lambda _line: None,
+        warn=warned.append,
+    )
+
+    assert outcome is CellOutcome.UNANNOTATED
+    assert any("prefix-share" in line for line in warned)
+
+
+def test_execute_cell_names_the_closed_loop_file_by_its_cap(tmp_path) -> None:
+    """A closed-loop cell writes and stamps the ``_mc{N}`` file its cap names."""
+    cfg = _config(out_dir=str(tmp_path))
+
+    def runner(command: list[str]) -> int:
+        Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
+        return 0
+
+    outcome = execute_cell(
+        cfg,
+        share=90,
+        burstiness=1.0,
+        max_concurrency=32,
+        runner=runner,
+        echo=lambda _line: None,
+        warn=lambda _line: None,
+    )
+
+    assert outcome is CellOutcome.OK
+    assert (tmp_path / "pshare90_burst1.0_mc32.json").exists()
 
 
 # --- run_sweep: dry run, survival, and per-cell tally ------------------------

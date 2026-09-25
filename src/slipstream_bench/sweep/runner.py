@@ -18,6 +18,7 @@ what ``--base-url`` it targets is orchestration, not tool logic.
 
 import json
 from collections.abc import Callable, Iterator, Sequence
+from enum import Enum
 from itertools import product
 from pathlib import Path
 
@@ -28,6 +29,21 @@ CellRunner = Callable[[list[str]], int]
 
 # Where the built command line and per-cell progress lines are emitted.
 Echo = Callable[[str], None]
+
+
+class CellOutcome(Enum):
+    """How one cell's run ended, so the caller tallies and exits on it.
+
+    A cell is a clean success only when it ran and was stamped. Both a non-zero
+    exit and a stamp that could not be written are failures — the second because a
+    result the report will later reject is not a measurement — so both fail the
+    caller, but they are counted apart: a failed cell never ran to completion, an
+    un-annotated one did but is unusable.
+    """
+
+    OK = "ok"
+    FAILED = "failed"
+    UNANNOTATED = "unannotated"
 
 
 def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int, int]:
@@ -221,6 +237,70 @@ def _cell_label(share: int, burstiness: float, max_concurrency: int | None) -> s
     return f"prefix-share {share}% burstiness {burstiness}{cap}"
 
 
+def ensure_out_dir(out_dir: str) -> None:
+    """Create the result directory, including missing parents.
+
+    Both the grid sweep and the single-cell executor call this before running any
+    cell, so the same missing-directory failure reads the same way whichever drives
+    the run.
+
+    :param out_dir: the directory the cells' result JSON is written into.
+    :raise SweepError: when the directory cannot be created.
+    """
+    try:
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise SweepError(
+            f"cannot create out-dir '{out_dir}': {error.strerror}"
+        ) from error
+
+
+def execute_cell(
+    config: SweepConfig,
+    *,
+    share: int,
+    burstiness: float,
+    max_concurrency: int | None,
+    runner: CellRunner,
+    echo: Echo,
+    warn: Echo,
+) -> CellOutcome:
+    """Run one grid cell: build its command, run it, stamp its prefix-share.
+
+    The unit of resume is the cell (ADR-0012 §Amendment): the grid loop lives in
+    the orchestration layer and hands each cell here, one ``vllm bench serve`` per
+    call. ``run_sweep`` drives the whole grid through this same body, so the two
+    paths run a cell identically.
+
+    :param config: the sweep knobs shared across every cell.
+    :param share: this cell's prefix-share percentage.
+    :param burstiness: this cell's burstiness (low = bursty, 1.0 = Poisson).
+    :param max_concurrency: this cell's in-flight cap, or None for open-loop.
+    :param runner: runs the cell's command and returns its process exit code.
+    :param echo: sink for the per-cell progress line.
+    :param warn: sink for the failure and stamp-failure lines.
+    :return: OK when the cell ran and was stamped, FAILED on a non-zero exit,
+        UNANNOTATED when it ran but its prefix-share could not be stamped.
+    :raise SweepError: when block alignment would erase the prefix (see
+        :func:`split_lengths`).
+    """
+    command = cell_command(
+        config, share=share, burstiness=burstiness, max_concurrency=max_concurrency
+    )
+    result_file = _result_file(config, share, burstiness, max_concurrency)
+    label = _cell_label(share, burstiness, max_concurrency)
+    echo(f"==> {label} -> {result_file}")
+    code = runner(command)
+    if code != 0:
+        warn(f"!! cell {label} failed (exit {code})")
+        return CellOutcome.FAILED
+    # A cell that ran but cannot be stamped yields a result the report will reject,
+    # so it is not a clean success.
+    if not _annotate_prefix_share(result_file, share, warn):
+        return CellOutcome.UNANNOTATED
+    return CellOutcome.OK
+
+
 def run_sweep(
     config: SweepConfig,
     *,
@@ -247,35 +327,40 @@ def run_sweep(
         :func:`split_lengths`), or the out-dir cannot be created.
     """
     if not dry_run:
-        try:
-            Path(config.out_dir).mkdir(parents=True, exist_ok=True)
-        except OSError as error:
-            raise SweepError(
-                f"cannot create out-dir '{config.out_dir}': {error.strerror}"
-            ) from error
+        ensure_out_dir(config.out_dir)
 
     completed = 0
     failed = 0
     unannotated = 0
     for share, burstiness, max_concurrency in grid(config):
-        command = cell_command(
-            config, share=share, burstiness=burstiness, max_concurrency=max_concurrency
-        )
         if dry_run:
-            echo(" ".join(command))
+            echo(
+                " ".join(
+                    cell_command(
+                        config,
+                        share=share,
+                        burstiness=burstiness,
+                        max_concurrency=max_concurrency,
+                    )
+                )
+            )
             continue
-        result_file = _result_file(config, share, burstiness, max_concurrency)
-        label = _cell_label(share, burstiness, max_concurrency)
-        echo(f"==> {label} -> {result_file}")
-        code = runner(command)
-        if code != 0:
+        outcome = execute_cell(
+            config,
+            share=share,
+            burstiness=burstiness,
+            max_concurrency=max_concurrency,
+            runner=runner,
+            echo=echo,
+            warn=warn,
+        )
+        if outcome is CellOutcome.FAILED:
             failed += 1
-            warn(f"!! cell {label} failed (exit {code})")
             continue
+        # A cell that ran counts completed even when its stamp failed; an
+        # un-annotated one is tallied on top so the sweep still fails.
         completed += 1
-        # A cell that ran but cannot be stamped yields a result the report will
-        # reject, so it is not a clean success — tally it and fail the sweep.
-        if not _annotate_prefix_share(result_file, share, warn):
+        if outcome is CellOutcome.UNANNOTATED:
             unannotated += 1
 
     if failed > 0 or unannotated > 0:
