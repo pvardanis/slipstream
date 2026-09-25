@@ -118,7 +118,7 @@ def load_commercial_cost_inputs(path: Path) -> CommercialCostInputs:
     return load_provenance(path, CommercialCostInputs, error_cls=CommercialCostError)
 
 
-def _read_tokenizer_id(record: dict, source: Path) -> str:
+def _read_tokenizer_id(record: dict[str, object], source: Path) -> str:
     """Read the tokenizer vLLM synthesised the run's workload with.
 
     ``vllm bench serve`` writes ``tokenizer_id`` (``--tokenizer`` or, defaulted,
@@ -146,8 +146,8 @@ def _read_tokenizer_id(record: dict, source: Path) -> str:
 
 
 def price_commercial_result(
-    record: dict, source: Path, inputs: CommercialCostInputs
-) -> dict:
+    record: dict[str, object], source: Path, inputs: CommercialCostInputs
+) -> dict[str, object]:
     """Price one result record at the quoted rates into a single cost record.
 
     :param record: the parsed ``vllm bench serve`` result.
@@ -202,7 +202,7 @@ def price_commercial_result(
 
 def price_commercial_files(
     files: list[Path], inputs: CommercialCostInputs
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Price each result file at the quoted rates, order preserved.
 
     :param files: the result JSON files to price, in report order.

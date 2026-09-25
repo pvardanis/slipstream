@@ -28,7 +28,7 @@ def _prefix_cache(
     cache_state: str = "cold",
     request_rate: object = 8.0,
     prefix_share: object = 90,
-) -> dict:
+) -> dict[str, object]:
     return {
         "source": source,
         "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
@@ -52,7 +52,7 @@ def _prefix_cache(
 
 def _self_hosted(
     *, source: str, price_in: float = 0.12, price_out: float = 0.36
-) -> dict:
+) -> dict[str, object]:
     return {
         "source": source,
         "cost_per_1m_input_usd": price_in,
@@ -66,7 +66,7 @@ def _commercial(
     prefix_share: object = 90,
     price_in: float = 0.15,
     price_out: float = 0.60,
-) -> dict:
+) -> dict[str, object]:
     return {
         "source": "bench/results/commercial/pshare90_burst1.0.json",
         "request_rate": request_rate,
@@ -173,6 +173,30 @@ def test_missing_request_rate_is_rejected() -> None:
         )
 
 
+def test_non_numeric_request_rate_is_rejected() -> None:
+    """A request_rate present but not a number cannot be a concurrency — fail fast."""
+    source = "bench/results/prefix-cache/cold_ratebad.json"
+    with pytest.raises(ReportError, match="has no request_rate"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial()],
+            prefix_cache=[_prefix_cache(source=source, request_rate="fast")],
+        )
+
+
+def test_non_integer_prefix_share_is_rejected() -> None:
+    """A prefix_share present but not a whole number cannot bucket a run — fail fast."""
+    source = "bench/results/prefix-cache/cold_psharebad.json"
+    # A commercial record on the same segment would join if the guard let the run
+    # through, so matching on the guard's own message isolates the type check.
+    with pytest.raises(ReportError, match="has no prefix_share"):
+        build_report(
+            self_hosted_cost=[_self_hosted(source=source)],
+            commercial_cost=[_commercial(prefix_share="ninety")],
+            prefix_cache=[_prefix_cache(source=source, prefix_share="ninety")],
+        )
+
+
 def test_missing_slo_block_is_rejected() -> None:
     """A baseline-at-SLO row with no SLO tail is not a baseline row — fail fast."""
     source = "bench/results/prefix-cache/cold_noslo.json"
@@ -190,7 +214,9 @@ def test_null_slo_metric_is_rejected() -> None:
     """A run fired without --goodput has a null goodput; it is not a baseline row."""
     source = "bench/results/prefix-cache/cold_nogoodput.json"
     record = _prefix_cache(source=source)
-    record["client_metrics"]["request_goodput"] = None
+    client_metrics = record["client_metrics"]
+    assert isinstance(client_metrics, dict)
+    client_metrics["request_goodput"] = None
     with pytest.raises(ReportError, match="request_goodput"):
         build_report(
             self_hosted_cost=[_self_hosted(source=source)],

@@ -16,6 +16,7 @@ API with no result-file in common. The output is a pure function of its inputs.
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 _SLO_KEYS = (
     "request_goodput",
@@ -44,7 +45,7 @@ class Segment:
     prefix_share: int
 
     @classmethod
-    def from_record(cls, record: dict, source: object) -> "Segment":
+    def from_record(cls, record: dict[str, object], source: object) -> "Segment":
         """Read a run's segment off its record, rejecting an absent key.
 
         :param record: the prefix-cache record the segment is read from.
@@ -56,14 +57,14 @@ class Segment:
         """
         request_rate = record.get("request_rate")
         prefix_share = record.get("prefix_share")
-        if request_rate is None:
+        if not isinstance(request_rate, (int, float)):
             raise ReportError(f"prefix-cache record {source!r} has no request_rate")
-        if prefix_share is None:
+        if not isinstance(prefix_share, int):
             raise ReportError(f"prefix-cache record {source!r} has no prefix_share")
-        return cls(request_rate, prefix_share)
+        return cls(float(request_rate), prefix_share)
 
 
-def load_records(path: Path) -> list[dict]:
+def load_records(path: Path) -> list[dict[str, object]]:
     """Load one arm's tool output into its list of records.
 
     The ``cost`` and ``commercial-cost`` tools emit a JSON array; ``prefix-cache``
@@ -87,12 +88,23 @@ def load_records(path: Path) -> list[dict]:
     return records
 
 
+class Row(TypedDict):
+    """One baseline row: a segment's self-hosted vs commercial $/1M at SLO."""
+
+    concurrency: float
+    prefix_share: int
+    cache_state: str
+    slo: dict[str, object]
+    self_hosted_usd_per_1m: dict[str, object]
+    commercial_usd_per_1m: dict[str, object]
+
+
 def build_report(
     *,
-    self_hosted_cost: list[dict],
-    commercial_cost: list[dict],
-    prefix_cache: list[dict],
-) -> list[dict]:
+    self_hosted_cost: list[dict[str, object]],
+    commercial_cost: list[dict[str, object]],
+    prefix_cache: list[dict[str, object]],
+) -> list[Row]:
     """Join the three arms into one baseline row per prefix-cache run.
 
     :param self_hosted_cost: the ``cost`` tool's records, joined by ``source``.
@@ -117,7 +129,7 @@ def build_report(
 _CACHE_ORDER = ("cold", "warm")
 
 
-def _sort_key(row: dict) -> tuple:
+def _sort_key(row: Row) -> tuple[float, int, int]:
     """Order rows by concurrency, then prefix-share, then cold before warm."""
     return (
         row["concurrency"],
@@ -126,7 +138,7 @@ def _sort_key(row: dict) -> tuple:
     )
 
 
-def _require(record: dict, key: str, arm: str, source: object) -> object:
+def _require(record: dict[str, object], key: str, arm: str, source: object) -> object:
     """Read a field a joined record must carry, or fail with context.
 
     The arms are matched by source or segment, but a matched record can still
@@ -146,7 +158,7 @@ def _require(record: dict, key: str, arm: str, source: object) -> object:
     return record[key]
 
 
-def _slo_tail(record: dict, source: object) -> dict:
+def _slo_tail(record: dict[str, object], source: object) -> dict[str, object]:
     """Read the SLO tail off a spine record, rejecting an absent or null figure.
 
     A ``$/1M at SLO`` row with no SLO is not a baseline row, so a missing
@@ -169,8 +181,10 @@ def _slo_tail(record: dict, source: object) -> dict:
 
 
 def _build_row(
-    record: dict, self_hosted_cost: list[dict], commercial_cost: list[dict]
-) -> dict:
+    record: dict[str, object],
+    self_hosted_cost: list[dict[str, object]],
+    commercial_cost: list[dict[str, object]],
+) -> Row:
     """Join one prefix-cache record to its self-hosted and commercial arms.
 
     :param record: the prefix-cache spine record for one run.
@@ -185,7 +199,7 @@ def _build_row(
     segment = Segment.from_record(record, source)
     # The cold/warm label is the whole point of the report; an unlabelled run
     # would render and sort as a nothing, so reject it rather than pass it through.
-    if cache_state not in _CACHE_ORDER:
+    if not isinstance(cache_state, str) or cache_state not in _CACHE_ORDER:
         raise ReportError(
             f"prefix-cache record {source!r} has invalid cache_state "
             f"{cache_state!r}: want one of {_CACHE_ORDER}"
@@ -219,7 +233,9 @@ def _build_row(
     }
 
 
-def _match_by_source(records: list[dict], source: object) -> dict:
+def _match_by_source(
+    records: list[dict[str, object]], source: object
+) -> dict[str, object]:
     """Find the one cost record sharing this run's result-file source.
 
     :param records: the self-hosted cost records.
@@ -233,7 +249,9 @@ def _match_by_source(records: list[dict], source: object) -> dict:
     raise ReportError(f"no self-hosted cost record for source {source!r}")
 
 
-def _match_by_segment(records: list[dict], segment: Segment) -> dict:
+def _match_by_segment(
+    records: list[dict[str, object]], segment: Segment
+) -> dict[str, object]:
     """Find the commercial record for this run's segment.
 
     :param records: the commercial cost records.
@@ -279,7 +297,7 @@ def _num(value: object) -> str:
     return f"{value:.1f}" if isinstance(value, (int, float)) else "-"
 
 
-def _row_cells(row: dict) -> list[str]:
+def _row_cells(row: Row) -> list[str]:
     """Flatten one report row into its Markdown cells, column order."""
     self_hosted = row["self_hosted_usd_per_1m"]
     commercial = row["commercial_usd_per_1m"]
@@ -300,7 +318,7 @@ def _row_cells(row: dict) -> list[str]:
     ]
 
 
-def render_markdown(rows: list[dict]) -> str:
+def render_markdown(rows: list[Row]) -> str:
     """Render report rows as a GitHub-flavored Markdown table.
 
     :param rows: the rows :func:`build_report` produced, already segmented and

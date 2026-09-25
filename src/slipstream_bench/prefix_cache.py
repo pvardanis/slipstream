@@ -152,7 +152,7 @@ def scrape_prefix_cache(
     result: Path,
     cache_state: CacheState,
     model: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Compute the per-run prefix-cache hit rate and join it onto the client JSON.
 
     :param metrics_before: vLLM Prometheus /metrics snapshot captured just before
@@ -210,7 +210,7 @@ def scrape_prefix_cache(
     # Default the series selector to the model the client ran against, so a
     # multi-model server's other series never fold into this run's counters.
     selected_model = model or record.get("model_id")
-    if not selected_model:
+    if not isinstance(selected_model, str) or not selected_model:
         raise PrefixCacheError(
             f"could not determine model from {result}: no model_id and no model given"
         )

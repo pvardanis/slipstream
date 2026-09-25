@@ -47,7 +47,7 @@ def _record(
     total_output_tokens: object = 1_000_000,
     tokenizer_id: object = "Qwen/Qwen2.5-0.5B-Instruct",
     **extra: object,
-) -> dict:
+) -> dict[str, object]:
     record = {
         "model_id": "gpt-4o-mini",
         "tokenizer_id": tokenizer_id,

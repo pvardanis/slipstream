@@ -66,7 +66,9 @@ def load_cost_inputs(path: Path) -> CostInputs:
     return load_provenance(path, CostInputs, error_cls=CostError)
 
 
-def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
+def price_result(
+    record: dict[str, object], source: Path, inputs: CostInputs
+) -> dict[str, object]:
     """Price one result record into a single cost record.
 
     :param record: the parsed ``vllm bench serve`` result.
@@ -117,7 +119,7 @@ def price_result(record: dict, source: Path, inputs: CostInputs) -> dict:
     }
 
 
-def price_files(files: list[Path], inputs: CostInputs) -> list[dict]:
+def price_files(files: list[Path], inputs: CostInputs) -> list[dict[str, object]]:
     """Price each result file into a cost record, order preserved.
 
     :param files: the result JSON files to price, in report order.
