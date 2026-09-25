@@ -242,8 +242,9 @@ def _match_by_segment(records: list[dict], segment: Segment) -> dict:
     :raise ReportError: when no record shares the segment.
     """
     for candidate in records:
-        if Segment(candidate.get("request_rate"), candidate.get("prefix_share")) == (
-            segment
+        if (candidate.get("request_rate"), candidate.get("prefix_share")) == (
+            segment.request_rate,
+            segment.prefix_share,
         ):
             return candidate
     raise ReportError(

@@ -282,7 +282,7 @@ def test_reads_the_rung_share_goodput_and_cohorts(tmp_path: Path) -> None:
 @pytest.mark.parametrize("key", ["max_concurrency", "prefix_share"])
 def test_rejects_a_cell_missing_its_join_key(tmp_path: Path, key: str) -> None:
     """An open-loop or un-stamped cell has no ceiling axis — fail fast."""
-    path = _write_cell(tmp_path, **{key: None})
+    path = _write_cell(tmp_path, **{key: None})  # ty: ignore[invalid-argument-type]  # null join key on purpose to assert the guard rejects it
     with pytest.raises(SweepAggregationError, match=key):
         read_cell(path)
 
@@ -291,7 +291,7 @@ def test_rejects_a_cell_missing_its_join_key(tmp_path: Path, key: str) -> None:
 def test_rejects_a_boolean_join_key(tmp_path: Path, key: str) -> None:
     """bool is an int subclass, so a JSON true must not slip through as a 1 cap
     or share — the guard rejects it."""
-    path = _write_cell(tmp_path, **{key: True})
+    path = _write_cell(tmp_path, **{key: True})  # ty: ignore[invalid-argument-type]  # boolean join key on purpose to assert the guard rejects it
     with pytest.raises(SweepAggregationError, match=key):
         read_cell(path)
 

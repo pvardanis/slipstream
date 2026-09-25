@@ -17,7 +17,7 @@ what ``--base-url`` it targets is orchestration, not tool logic.
 """
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from itertools import product
 from pathlib import Path
 
@@ -73,7 +73,7 @@ def grid(config: SweepConfig) -> Iterator[tuple[int, float, int | None]]:
     # An empty ladder is open-loop: fall back to a single ``None`` rung so the grid
     # still yields one cell per (share, burstiness) pair. The Cartesian product then
     # walks shares outermost and the ladder innermost.
-    ladder: tuple[int | None, ...] = config.max_concurrency_values or (None,)
+    ladder: Sequence[int | None] = config.max_concurrency_values or (None,)
     yield from product(config.prefix_shares, config.burstiness_values, ladder)
 
 

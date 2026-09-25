@@ -72,7 +72,7 @@ def test_the_model_is_frozen() -> None:
     """A validated config cannot be mutated after construction."""
     config = SweepConfig.model_validate(_valid())
     with pytest.raises(ValidationError):
-        config.seed = 1  # type: ignore[misc]
+        config.seed = 1  # ty: ignore[invalid-assignment]  # asserting the frozen model rejects the write
 
 
 # --- the rejection matrix ----------------------------------------------------
