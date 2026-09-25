@@ -250,9 +250,40 @@ def ensure_out_dir(out_dir: str) -> None:
     try:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
     except OSError as error:
+        raise SweepError(f"cannot create out-dir '{out_dir}': {error}") from error
+
+
+def validate_cell_coordinate(
+    share: int, burstiness: float, max_concurrency: int | None
+) -> None:
+    """Range-check one cell's coordinate the way the grid config checks its axes.
+
+    The grid path range-checks its axes as ``SweepConfig`` validates (share 0..100,
+    positive burstiness, a positive cap); ``load-cell`` is handed the coordinate
+    straight from the command line and never touches that layer, so it guards the
+    same ranges here. An out-of-range share would hand vLLM a negative suffix length,
+    a non-positive burstiness or cap a cell that measures nothing — fail fast with an
+    actionable message rather than run it.
+
+    :param share: this cell's prefix-share percentage.
+    :param burstiness: this cell's burstiness (low = bursty, 1.0 = Poisson).
+    :param max_concurrency: this cell's in-flight cap, or None for open-loop.
+    :raise SweepError: when any coordinate value is out of range.
+    """
+    if not 0 <= share <= 100:
         raise SweepError(
-            f"cannot create out-dir '{out_dir}': {error.strerror}"
-        ) from error
+            f"--share {share} out of range: a prefix-share is a percent in 0..100"
+        )
+    if burstiness <= 0:
+        raise SweepError(
+            f"--burstiness {burstiness} out of range: burstiness must be positive "
+            f"(low = bursty, 1.0 = Poisson)"
+        )
+    if max_concurrency is not None and max_concurrency <= 0:
+        raise SweepError(
+            f"--max-concurrency {max_concurrency} out of range: an in-flight cap "
+            f"must be positive"
+        )
 
 
 def execute_cell(

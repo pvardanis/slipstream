@@ -328,6 +328,32 @@ def test_load_cell_rejects_a_bad_config(tmp_path: Path) -> None:
     assert "non-negative number or 'inf'" in plain(result)
 
 
+def test_load_cell_rejects_an_out_of_range_share(tmp_path: Path) -> None:
+    """A share outside 0..100 exits 2 before a cell is built, not a negative suffix."""
+    result = _cell_dry_run(
+        _write_config(tmp_path), "--share", "150", "--burstiness", "1.0"
+    )
+
+    assert result.exit_code == 2
+    assert "--share 150 out of range" in plain(result)
+
+
+def test_load_cell_rejects_a_non_positive_cap(tmp_path: Path) -> None:
+    """A non-positive --max-concurrency exits 2 rather than run a meaningless cell."""
+    result = _cell_dry_run(
+        _write_config(tmp_path),
+        "--share",
+        "50",
+        "--burstiness",
+        "1.0",
+        "--max-concurrency",
+        "0",
+    )
+
+    assert result.exit_code == 2
+    assert "--max-concurrency 0 out of range" in plain(result)
+
+
 def test_load_cell_threads_the_resolved_key_into_the_runner(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -421,8 +447,18 @@ def test_missing_config_exits_two(tmp_path: Path) -> None:
 
 def test_run_cell_reports_a_missing_binary_clearly() -> None:
     """A missing binary fails fast with an actionable message, not a traceback."""
-    with pytest.raises(SweepError, match="not found on PATH"):
+    with pytest.raises(SweepError, match="cannot run 'definitely-not-a-real-binary"):
         run_cell(["definitely-not-a-real-binary-xyz", "--flag"])
+
+
+def test_run_cell_reports_a_non_executable_binary_clearly(tmp_path: Path) -> None:
+    """A present-but-not-executable binary fails fast, not as a raw traceback."""
+    not_exec = tmp_path / "vllm"
+    not_exec.write_text("#!/bin/sh\n", encoding="utf-8")
+    not_exec.chmod(0o644)
+
+    with pytest.raises(SweepError, match=f"cannot run '{not_exec}'"):
+        run_cell([str(not_exec), "bench", "serve"])
 
 
 def test_run_cell_injects_extra_env_into_the_child() -> None:

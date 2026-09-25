@@ -38,6 +38,7 @@ from slipstream_bench.sweep.runner import (
     ensure_out_dir,
     execute_cell,
     run_sweep,
+    validate_cell_coordinate,
 )
 
 app = typer.Typer()
@@ -70,23 +71,25 @@ def resolve_api_key_env(env_var: str) -> dict[str, str]:
 def run_cell(command: list[str], *, extra_env: Mapping[str, str] | None = None) -> int:
     """Run one cell's command, returning its exit code.
 
-    A missing ``vllm`` binary is not a per-cell transient — every cell would fail
-    the same way — so it fails fast with an actionable message rather than a raw
-    traceback that would abort the grid before the tally.
+    A binary that cannot be executed — missing from PATH, not executable, a bad PATH
+    component — is not a per-cell transient; every cell would fail the same way. So it
+    fails fast with an actionable message rather than a raw traceback that would abort
+    the grid before the tally. ``check=False`` means the child's own non-zero exit is
+    returned, not raised, so the only exceptions here are exec-setup ``OSError``\\ s.
 
     :param command: the fully assembled cell command.
     :param extra_env: variables overlaid on the inherited environment for the
         child, e.g. a resolved API key; ``None`` inherits the parent unchanged.
     :return: the process exit code.
-    :raise SweepError: when the command's binary is not on PATH.
+    :raise SweepError: when the command's binary cannot be executed.
     """
     env = {**os.environ, **extra_env} if extra_env else None
     try:
         return subprocess.run(command, check=False, env=env).returncode
-    except FileNotFoundError as error:
+    except OSError as error:
         raise SweepError(
-            f"cannot run '{command[0]}': not found on PATH — the sweep runs inside "
-            f"the baked bench-client image where vllm is installed"
+            f"cannot run '{command[0]}': {error.strerror or error} — the sweep runs "
+            f"inside the baked bench-client image where vllm is installed"
         ) from error
 
 
@@ -237,7 +240,9 @@ def load_cell(
     (``--share``/``--burstiness``/``--max-concurrency``) is passed in, the shared
     knobs (lengths, SLO, seed) come from ``--config``, and one result JSON is
     written. Exits 0 when the cell ran and was stamped, 1 when it failed to run or
-    could not be stamped, 2 on an invalid config or unset key.
+    could not be stamped, 2 on any SweepError (an invalid config, an unset key, an
+    out-of-range coordinate, an un-creatable out-dir, or block alignment erasing the
+    prefix).
     """
     try:
         cfg, extra_env = _load_config_and_key(
@@ -248,6 +253,7 @@ def load_cell(
             api_key_env=api_key_env,
             dry_run=dry_run,
         )
+        validate_cell_coordinate(share, burstiness, max_concurrency)
         if dry_run:
             typer.echo(
                 " ".join(

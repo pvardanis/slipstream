@@ -16,10 +16,12 @@ from slipstream_bench.sweep.config import SweepConfig, SweepError
 from slipstream_bench.sweep.runner import (
     CellOutcome,
     cell_command,
+    ensure_out_dir,
     execute_cell,
     grid,
     run_sweep,
     split_lengths,
+    validate_cell_coordinate,
 )
 
 
@@ -473,6 +475,47 @@ def test_run_sweep_creates_a_nested_out_dir(tmp_path) -> None:
     )
 
     assert out_dir.is_dir()
+
+
+def test_ensure_out_dir_reports_an_uncreatable_directory(tmp_path) -> None:
+    """An out-dir that cannot be created fails fast, naming the path."""
+    a_file = tmp_path / "afile"
+    a_file.write_text("not a dir", encoding="utf-8")
+    # A child of a regular file cannot be a directory, so mkdir raises OSError.
+    out_dir = a_file / "sub"
+
+    with pytest.raises(SweepError, match=f"cannot create out-dir '{out_dir}'"):
+        ensure_out_dir(str(out_dir))
+
+
+@pytest.mark.parametrize(
+    ("share", "burstiness", "max_concurrency", "expected"),
+    [
+        (150, 1.0, None, "--share 150 out of range"),
+        (-10, 1.0, None, "--share -10 out of range"),
+        (50, 0.0, None, "--burstiness 0.0 out of range"),
+        (50, -0.5, None, "--burstiness -0.5 out of range"),
+        (50, 1.0, 0, "--max-concurrency 0 out of range"),
+        (50, 1.0, -4, "--max-concurrency -4 out of range"),
+    ],
+)
+def test_validate_cell_coordinate_rejects_out_of_range(
+    share: int, burstiness: float, max_concurrency: int | None, expected: str
+) -> None:
+    """A coordinate outside the grid's ranges fails fast before a cell is built."""
+    with pytest.raises(SweepError, match=expected):
+        validate_cell_coordinate(share, burstiness, max_concurrency)
+
+
+@pytest.mark.parametrize(
+    ("share", "burstiness", "max_concurrency"),
+    [(0, 1.0, None), (100, 0.2, None), (50, 1.0, 64), (0, 0.001, 1)],
+)
+def test_validate_cell_coordinate_accepts_in_range(
+    share: int, burstiness: float, max_concurrency: int | None
+) -> None:
+    """The grid's edge coordinates pass: share 0 and 100, a positive cap, low burstiness."""
+    validate_cell_coordinate(share, burstiness, max_concurrency)
 
 
 def test_failing_cell_does_not_abort_the_grid(tmp_path) -> None:
