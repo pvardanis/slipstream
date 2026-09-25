@@ -21,6 +21,7 @@ slipstream-bench = "slipstream_bench.cli:app"
 dev = [
     "pytest>=8",
     "ruff>=0.16.7",
+    "ty==0.0.84",
 ]
 
 [build-system]
@@ -32,3 +33,9 @@ line-length = 88
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+include = ["src", "tests"]
