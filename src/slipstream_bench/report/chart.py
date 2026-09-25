@@ -15,8 +15,9 @@ caching-on spans the swept shares: a ragged grid, no duplicated null cells.
 """
 
 import json
+from collections.abc import Hashable
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import matplotlib
 
@@ -276,7 +277,7 @@ def _condition_order(frame: pd.DataFrame) -> list[str]:
         ["condition", "prefix_caching", "prefix_share"]
     ].drop_duplicates()
 
-    def sort_key(row: dict) -> tuple[int, int]:
+    def sort_key(row: dict[Hashable, Any]) -> tuple[int, int]:
         caching_rank = 0 if row["prefix_caching"] == "off" else 1
         share_rank = (
             -1 if row["prefix_share"] == _NO_SHARE_LABEL else int(row["prefix_share"])

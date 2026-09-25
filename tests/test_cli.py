@@ -485,7 +485,9 @@ def test_report_rejects_an_unjoinable_segment(tmp_path: Path) -> None:
     assert "commercial" in invoked.output
 
 
-def _sweep_files(tmp_path: Path, instances: dict, volumes: dict) -> tuple[Path, Path]:
+def _sweep_files(
+    tmp_path: Path, instances: dict[str, object], volumes: dict[str, object]
+) -> tuple[Path, Path]:
     inst = tmp_path / "instances.json"
     inst.write_text(json.dumps(instances))
     vols = tmp_path / "volumes.json"

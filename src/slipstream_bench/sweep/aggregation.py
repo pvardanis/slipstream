@@ -136,7 +136,7 @@ class EnginePoint:
         return f"mns{self.max_num_seqs}_kv{self.kv_cache_dtype}_pc{caching}"
 
 
-def goodput_fraction(record: dict, source: Path) -> float:
+def goodput_fraction(record: dict[str, object], source: Path) -> float:
     """Read the fraction of a cell's completed requests that met the SLO.
 
     vLLM reports goodput and throughput as rates (req/s) over the same run window,
@@ -162,7 +162,7 @@ def goodput_fraction(record: dict, source: Path) -> float:
     return goodput / throughput
 
 
-def classify_failures(record: dict, source: Path) -> dict:
+def classify_failures(record: dict[str, object], source: Path) -> FailureCohorts:
     """Cohort a cell's failed requests into {timeout, oom, other} (ADR-0009).
 
     ``--save-detailed`` records one error string per request (empty on success), so
@@ -195,7 +195,9 @@ def classify_failures(record: dict, source: Path) -> dict:
     return {"timeout": timeout, "other": other, "oom": None}
 
 
-def _get_cohorts_from_shortfall(record: dict, source: Path) -> dict:
+def _get_cohorts_from_shortfall(
+    record: dict[str, object], source: Path
+) -> FailureCohorts:
     """Cohort failures a no-detail result only knows as attempted-minus-completed.
 
     Without a per-request ``errors`` array the kind of each failure is unknown, so
@@ -231,10 +233,10 @@ class LoadCell:
     max_concurrency: int
     prefix_share: int
     goodput_fraction: float
-    failures: dict
+    failures: FailureCohorts
 
     @classmethod
-    def from_record(cls, record: dict, source: Path) -> "LoadCell":
+    def from_record(cls, record: dict[str, object], source: Path) -> "LoadCell":
         """Build a cell from a parsed client JSON, validating each field at the seam.
 
         :param record: the cell's parsed ``vllm bench serve --save-result`` record.
@@ -252,7 +254,7 @@ class LoadCell:
         )
 
 
-def _require_int(record: dict, source: Path, key: str) -> int:
+def _require_int(record: dict[str, object], source: Path, key: str) -> int:
     """Read a whole-number join key a ladder cell must carry.
 
     :param record: the cell's parsed result record.

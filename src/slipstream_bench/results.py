@@ -16,7 +16,7 @@ class ResultError(Exception):
 
 
 def to_numeric_metric(
-    record: dict, source: Path, name: str, *, error_cls: type[Exception]
+    record: dict[str, object], source: Path, name: str, *, error_cls: type[Exception]
 ) -> float:
     """Read one metric as a number, rejecting a missing, null, or non-numeric value.
 
@@ -48,7 +48,7 @@ def to_numeric_metric(
     return float(value)
 
 
-def read_result(path: Path) -> dict:
+def read_result(path: Path) -> dict[str, object]:
     """Read one result file into its parsed record.
 
     :param path: the result JSON file to read.

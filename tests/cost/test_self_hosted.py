@@ -44,7 +44,7 @@ def _record(
     total_input_tokens: object = 1_000_000,
     total_output_tokens: object = 0,
     **extra: object,
-) -> dict:
+) -> dict[str, object]:
     record = {
         "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
         "duration": duration,

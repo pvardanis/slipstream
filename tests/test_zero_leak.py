@@ -13,12 +13,12 @@ import pytest
 from slipstream_bench.zero_leak import Leak, LeakError, find_leaks, read_aws_json
 
 
-def _instances(*instances: dict) -> dict:
+def _instances(*instances: dict[str, object]) -> dict[str, object]:
     """Wrap instance records in a describe-instances-shaped document."""
     return {"Reservations": [{"Instances": list(instances)}]}
 
 
-def _volumes(*volumes: dict) -> dict:
+def _volumes(*volumes: dict[str, object]) -> dict[str, object]:
     """Wrap volume records in a describe-volumes-shaped document."""
     return {"Volumes": list(volumes)}
 

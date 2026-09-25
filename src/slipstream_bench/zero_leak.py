@@ -41,21 +41,21 @@ class Leak:
     detail: str
 
 
-def _require_dict(document: object, name: str) -> dict:
+def _require_dict(document: object, name: str) -> dict[str, object]:
     """Return the document as a dict or fail loud — a scalar cannot read as clean."""
     if not isinstance(document, dict):
         raise LeakError(f"{name} is not a JSON object")
     return document
 
 
-def _require_list(value: object, name: str) -> list:
+def _require_list(value: object, name: str) -> list[object]:
     """Return the value as a list or fail loud — a wrong shape must not scan as empty."""
     if not isinstance(value, list):
         raise LeakError(f"{name} is not a list")
     return value
 
 
-def _instance_leaks(instances_doc: dict) -> list[Leak]:
+def _instance_leaks(instances_doc: dict[str, object]) -> list[Leak]:
     """Name every still-billing instance across all reservations."""
     reservations = _require_list(instances_doc.get("Reservations", []), "Reservations")
     leaks: list[Leak] = []
@@ -86,7 +86,7 @@ def _instance_leaks(instances_doc: dict) -> list[Leak]:
     return leaks
 
 
-def _volume_leaks(volumes_doc: dict) -> list[Leak]:
+def _volume_leaks(volumes_doc: dict[str, object]) -> list[Leak]:
     """Name every still-billing volume."""
     leaks: list[Leak] = []
     for volume in _require_list(volumes_doc.get("Volumes", []), "Volumes"):
@@ -110,7 +110,7 @@ def _volume_leaks(volumes_doc: dict) -> list[Leak]:
     return leaks
 
 
-def read_aws_json(path: Path) -> dict:
+def read_aws_json(path: Path) -> dict[str, object]:
     """Read one ``aws ec2 describe-*`` document the sweep captured.
 
     :param path: the JSON file ``aws`` wrote.

@@ -133,7 +133,9 @@ def test_missing_client_metric_joins_as_null(tmp_path: Path) -> None:
         cache_state=CacheState.cold,
     )
 
-    assert record["client_metrics"]["request_goodput"] is None
+    client_metrics = record["client_metrics"]
+    assert isinstance(client_metrics, dict)
+    assert client_metrics["request_goodput"] is None
 
 
 def test_warm_rate_exceeds_cold_and_is_labelled(tmp_path: Path) -> None:

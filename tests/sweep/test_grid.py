@@ -24,7 +24,7 @@ from slipstream_bench.sweep.grid import (
 REPO_GRID = Path("bench/sweep-grid.yaml")
 
 
-def _valid_grid() -> dict:
+def _valid_grid() -> dict[str, object]:
     return {
         "tier1": {
             "max_num_seqs": [16, 32, 64, 128, 256],
@@ -38,7 +38,7 @@ def _valid_grid() -> dict:
     }
 
 
-def _write_grid(tmp_path: Path, grid: dict) -> Path:
+def _write_grid(tmp_path: Path, grid: dict[str, object]) -> Path:
     path = tmp_path / "grid.yaml"
     path.write_text(yaml.safe_dump(grid))
     return path

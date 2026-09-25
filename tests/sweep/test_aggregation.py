@@ -154,7 +154,7 @@ def test_a_cell_that_completed_nothing_holds_no_goodput() -> None:
 @pytest.mark.parametrize("metric", ["request_goodput", "request_throughput"])
 def test_rejects_a_missing_or_non_numeric_metric(metric: str) -> None:
     """A metric absent or null cannot be priced into a fraction — fail fast."""
-    record = {"request_goodput": 7.5, "request_throughput": 8.0}
+    record: dict[str, object] = {"request_goodput": 7.5, "request_throughput": 8.0}
     record[metric] = None
     with pytest.raises(SweepAggregationError, match=metric):
         goodput_fraction(record, Path("cell.json"))
@@ -165,7 +165,7 @@ def test_rejects_a_missing_or_non_numeric_metric(metric: str) -> None:
 
 def test_splits_timeout_from_other_by_the_error_string() -> None:
     """A deadline-shaped error is a timeout; any other non-empty error is other."""
-    record = {
+    record: dict[str, object] = {
         "errors": [
             "",
             "asyncio.exceptions.TimeoutError",
@@ -194,7 +194,7 @@ def test_oom_is_not_captured_from_the_client_json() -> None:
 
 def test_failures_without_a_detailed_errors_array_fall_to_other() -> None:
     """A result missing --save-detailed errors still knows completed vs attempted."""
-    record = {"num_prompts": 10, "completed": 8}
+    record: dict[str, object] = {"num_prompts": 10, "completed": 8}
     cohorts = classify_failures(record, Path("cell.json"))
     assert cohorts["timeout"] == 0
     assert cohorts["other"] == 2
@@ -204,7 +204,7 @@ def test_failures_without_a_detailed_errors_array_fall_to_other() -> None:
 def test_a_shortfall_count_that_is_missing_or_non_int_is_rejected(key: str) -> None:
     """A no-detail result with a bad prompt/completed count fails fast with context,
     not an uncaught TypeError past the CLI's exit-2 path."""
-    record = {"num_prompts": 10, "completed": 8}
+    record: dict[str, object] = {"num_prompts": 10, "completed": 8}
     record[key] = "10"
     with pytest.raises(SweepAggregationError, match=key):
         classify_failures(record, Path("cell.json"))
@@ -213,7 +213,7 @@ def test_a_shortfall_count_that_is_missing_or_non_int_is_rejected(key: str) -> N
 def test_completed_above_attempted_is_rejected_as_inconsistent() -> None:
     """More completed than attempted is corrupt counting — fail fast, not a
     clamped-to-zero shortfall that hides the inconsistency."""
-    record = {"num_prompts": 8, "completed": 10}
+    record: dict[str, object] = {"num_prompts": 8, "completed": 10}
     with pytest.raises(SweepAggregationError, match="completed"):
         classify_failures(record, Path("cell.json"))
 
