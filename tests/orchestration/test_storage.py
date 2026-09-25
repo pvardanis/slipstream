@@ -9,7 +9,7 @@ pin that fact and the env-var boundary that supplies the bucket.
 import pytest
 from prefect_aws import S3Bucket
 
-from slipstream_bench.sweep.storage import (
+from slipstream_bench.orchestration.storage import (
     StorageError,
     cache_key_storage,
     result_storage,

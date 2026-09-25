@@ -10,9 +10,13 @@ S3 blocks the later sweep task binds to ``result_storage`` and a cache policy's
 CLI already uses in ``just bench``.
 """
 
-import os
+from __future__ import annotations
 
-from prefect_aws import S3Bucket
+import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from prefect_aws import S3Bucket
 
 _RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
 _RESULT_STORAGE_PREFIX = "prefect/results"
@@ -46,6 +50,8 @@ def result_storage(bucket: str) -> S3Bucket:
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the result prefix.
     :raise StorageError: when ``bucket`` is blank.
     """
+    from prefect_aws import S3Bucket
+
     return S3Bucket(
         bucket_name=_require_bucket(bucket), bucket_folder=_RESULT_STORAGE_PREFIX
     )
@@ -61,6 +67,8 @@ def cache_key_storage(bucket: str) -> S3Bucket:
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the cache-key prefix.
     :raise StorageError: when ``bucket`` is blank.
     """
+    from prefect_aws import S3Bucket
+
     return S3Bucket(
         bucket_name=_require_bucket(bucket), bucket_folder=_CACHE_KEY_STORAGE_PREFIX
     )

@@ -56,7 +56,9 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       - name: Run pytest
-        run: uv run pytest
+        # The suite covers the orchestration layer's storage builders, which need
+        # the Prefect extra the bench-client image omits (ADR-0012 §Amendment).
+        run: uv run --extra orchestration pytest
 
   terraform:
     name: terraform tests (offline)
