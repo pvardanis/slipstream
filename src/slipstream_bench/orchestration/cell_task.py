@@ -73,8 +73,11 @@ def _bench_cell(
 ) -> str:
     """Run one cell and return its pointer — the function Prefect wraps as a task.
 
-    ``digest``, ``point_slug``, and ``cell_name`` are the cache-key parameters
-    :func:`get_cell_cache_key` reads off the call; they do not otherwise steer the run.
+    ``digest``, ``point_slug``, and ``cell_name`` are unread by this body: they address
+    the cell, they do not steer its run. They are declared as parameters because Prefect
+    hands :func:`get_cell_cache_key` only a task's call parameters, so a value can shape
+    the cache key only by arriving as one — the key is built from the three before the
+    body runs, then a hit skips the body entirely (ADR-0012:90-94).
 
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, a cache-key part.
