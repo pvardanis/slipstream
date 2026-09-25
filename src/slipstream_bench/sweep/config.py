@@ -115,7 +115,7 @@ class CellConfig(Knobs):
     open-loop, arrival-rate bound by ``request_rate``.
     """
 
-    share: PrefixShare
+    prefix_share: PrefixShare
     burstiness: Burstiness
     max_concurrency: PositiveInt | None = None
 
@@ -152,7 +152,7 @@ class SweepConfig(Knobs):
         ):
             yield CellConfig(
                 **knobs,
-                share=share,
+                prefix_share=share,
                 burstiness=burstiness,
                 max_concurrency=max_concurrency,
             )
@@ -285,7 +285,7 @@ def load_cell_config(
     """Read the single-cell definition at ``path`` (coordinate + shared knobs).
 
     The YAML carries the shared knobs (lengths, SLO, seed) and the one coordinate the
-    cell runs (share, burstiness, optional max_concurrency); the execution context is
+    cell runs (prefix_share, burstiness, optional max_concurrency); the execution context is
     injected from the CLI. The coordinate is range-checked as the ``CellConfig`` fields
     validate. See :func:`_load_config`.
 

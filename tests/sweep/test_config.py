@@ -260,7 +260,7 @@ def _valid_cell(**overrides: object) -> dict[str, object]:
     return {
         **_CELL_KNOBS,
         **_CONTEXT,
-        "share": 50,
+        "prefix_share": 50,
         "burstiness": 1.0,
         **overrides,
     }
@@ -269,7 +269,7 @@ def _valid_cell(**overrides: object) -> dict[str, object]:
 def _write_cell(tmp_path: Path, **overrides: object) -> Path:
     """Write a cell-only config YAML (no reserved keys) and return its path."""
     path = tmp_path / "cell.yaml"
-    payload = {**_CELL_KNOBS, "share": 50, "burstiness": 1.0, **overrides}
+    payload = {**_CELL_KNOBS, "prefix_share": 50, "burstiness": 1.0, **overrides}
     path.write_text(yaml.safe_dump(payload))
     return path
 
@@ -281,7 +281,7 @@ def test_a_full_cell_validates() -> None:
     """A cell with a valid coordinate validates into a frozen config."""
     cell = CellConfig.model_validate(_valid_cell())
 
-    assert cell.share == 50
+    assert cell.prefix_share == 50
     assert cell.burstiness == 1.0
     assert cell.max_concurrency is None  # open-loop unless a cap is given
 
@@ -296,8 +296,8 @@ def test_a_closed_loop_cell_carries_its_cap() -> None:
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
-        ({"share": 150}, "less than or equal to 100"),
-        ({"share": -5}, "greater than or equal to 0"),
+        ({"prefix_share": 150}, "less than or equal to 100"),
+        ({"prefix_share": -5}, "greater than or equal to 0"),
         ({"burstiness": 0}, "greater than 0"),
         ({"burstiness": -0.5}, "greater than 0"),
         ({"max_concurrency": 0}, "greater than 0"),
@@ -316,8 +316,8 @@ def test_cell_rejects_a_bad_config(overrides: dict[str, object], match: str) -> 
 
 def test_cell_edges_validate() -> None:
     """The grid's edge coordinates pass: share 0 and 100, a positive cap."""
-    CellConfig.model_validate(_valid_cell(share=0, burstiness=0.001))
-    CellConfig.model_validate(_valid_cell(share=100, max_concurrency=1))
+    CellConfig.model_validate(_valid_cell(prefix_share=0, burstiness=0.001))
+    CellConfig.model_validate(_valid_cell(prefix_share=100, max_concurrency=1))
 
 
 # --- SweepConfig.cells(): the grid derives one CellConfig per point ------------
@@ -329,7 +329,7 @@ def test_cells_yields_one_open_loop_cell_per_share_burstiness() -> None:
         _valid(prefix_shares=[10, 90], burstiness_values=[0.2, 1.0])
     )
 
-    coords = [(c.share, c.burstiness, c.max_concurrency) for c in config.cells()]
+    coords = [(c.prefix_share, c.burstiness, c.max_concurrency) for c in config.cells()]
     assert coords == [
         (10, 0.2, None),
         (10, 1.0, None),
@@ -348,7 +348,7 @@ def test_cells_ladders_max_concurrency_innermost() -> None:
         )
     )
 
-    coords = [(c.share, c.burstiness, c.max_concurrency) for c in config.cells()]
+    coords = [(c.prefix_share, c.burstiness, c.max_concurrency) for c in config.cells()]
     assert coords == [
         (10, 0.2, 8),
         (10, 0.2, 16),
@@ -402,7 +402,7 @@ def test_laddered_cells_carry_the_shared_knobs_and_commercial_flag() -> None:
 
 def test_load_cell_binds_the_cli_injected_context(tmp_path: Path) -> None:
     """The cell loader injects base_url/model/out_dir/commercial onto the YAML knobs."""
-    path = _write_cell(tmp_path, share=90, burstiness=0.2)
+    path = _write_cell(tmp_path, prefix_share=90, burstiness=0.2)
 
     cell = load_cell_config(
         path,
@@ -415,7 +415,7 @@ def test_load_cell_binds_the_cli_injected_context(tmp_path: Path) -> None:
     assert cell.base_url == "http://127.0.0.1:9"
     assert cell.model == "Qwen/Qwen3-8B-AWQ"
     assert cell.out_dir == "/out"
-    assert cell.share == 90
+    assert cell.prefix_share == 90
     assert cell.burstiness == 0.2
 
 
@@ -444,7 +444,7 @@ def test_load_cell_reports_a_missing_config(tmp_path: Path) -> None:
 
 def test_load_cell_wraps_a_validation_failure(tmp_path: Path) -> None:
     """A schema-invalid cell config is wrapped in a SweepError naming the file."""
-    path = _write_cell(tmp_path, share=150)
+    path = _write_cell(tmp_path, prefix_share=150)
 
     with pytest.raises(SweepError, match="invalid cell config"):
         load_cell_config(

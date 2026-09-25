@@ -84,7 +84,7 @@ def _result_file(cell: CellConfig) -> str:
     an open-loop cell (no cap) is left un-suffixed.
     """
     cap = f"_mc{cell.max_concurrency}" if cell.max_concurrency is not None else ""
-    return f"{cell.out_dir}/pshare{cell.share}_burst{cell.burstiness}{cap}.json"
+    return f"{cell.out_dir}/pshare{cell.prefix_share}_burst{cell.burstiness}{cap}.json"
 
 
 def cell_command(cell: CellConfig) -> list[str]:
@@ -102,7 +102,7 @@ def cell_command(cell: CellConfig) -> list[str]:
         :func:`split_lengths`).
     """
     prefix_len, suffix_len = split_lengths(
-        cell.total_len, cell.share, align_blocks=cell.align_blocks
+        cell.total_len, cell.prefix_share, align_blocks=cell.align_blocks
     )
     # A local tokenizer for prompt synthesis; vLLM defaults it to --model when
     # omitted, which only works for the self-hosted arm's HF model id. The
@@ -211,7 +211,7 @@ def _cell_label(cell: CellConfig) -> str:
         if cell.max_concurrency is None
         else f" max-concurrency {cell.max_concurrency}"
     )
-    return f"prefix-share {cell.share}% burstiness {cell.burstiness}{cap}"
+    return f"prefix-share {cell.prefix_share}% burstiness {cell.burstiness}{cap}"
 
 
 def ensure_out_dir(out_dir: str) -> None:
@@ -263,7 +263,7 @@ def execute_cell(
         return CellOutcome.FAILED
     # A cell that ran but cannot be stamped yields a result the report will reject,
     # so it is not a clean success.
-    if not _annotate_prefix_share(result_file, cell.share, warn):
+    if not _annotate_prefix_share(result_file, cell.prefix_share, warn):
         return CellOutcome.UNANNOTATED
     return CellOutcome.OK
 

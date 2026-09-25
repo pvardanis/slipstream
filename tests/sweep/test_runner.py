@@ -39,7 +39,7 @@ _SHARED_KNOBS = {
 
 def _cell(**overrides: object) -> CellConfig:
     """Build a CellConfig from the documented defaults, with overrides applied."""
-    base = {**_SHARED_KNOBS, "share": 90, "burstiness": 1.0}
+    base = {**_SHARED_KNOBS, "prefix_share": 90, "burstiness": 1.0}
     base.update(overrides)
     return CellConfig(**base)  # ty: ignore[invalid-argument-type]  # dynamic kwargs spread from an object-valued dict
 
@@ -125,7 +125,7 @@ def test_cell_command_omits_the_tokenizer_when_unset() -> None:
 
 def test_cell_command_carries_the_split_slo_and_result_file() -> None:
     """A cell command wires the split, the SLO, and a distinct result file."""
-    cmd = cell_command(_cell(share=90, burstiness=1.0))
+    cmd = cell_command(_cell(prefix_share=90, burstiness=1.0))
     joined = " ".join(cmd)
 
     assert "vllm bench serve" in joined
@@ -150,8 +150,8 @@ def test_cell_command_carries_the_split_slo_and_result_file() -> None:
 
 def test_cell_command_is_reproducible_for_a_fixed_config() -> None:
     """The same cell builds identical commands, carrying the same fixed seed."""
-    first = cell_command(_cell(share=90, burstiness=1.0))
-    second = cell_command(_cell(share=90, burstiness=1.0))
+    first = cell_command(_cell(prefix_share=90, burstiness=1.0))
+    second = cell_command(_cell(prefix_share=90, burstiness=1.0))
 
     assert first == second
     assert "--seed 0" in " ".join(first)
@@ -160,10 +160,14 @@ def test_cell_command_is_reproducible_for_a_fixed_config() -> None:
 def test_cell_command_result_file_is_distinct_per_cell() -> None:
     """Each cell names a result file from its share and burstiness."""
     low = " ".join(
-        cell_command(_cell(out_dir="/tmp/slipstream-bench", share=25, burstiness=0.2))
+        cell_command(
+            _cell(out_dir="/tmp/slipstream-bench", prefix_share=25, burstiness=0.2)
+        )
     )
     high = " ".join(
-        cell_command(_cell(out_dir="/tmp/slipstream-bench", share=90, burstiness=1.0))
+        cell_command(
+            _cell(out_dir="/tmp/slipstream-bench", prefix_share=90, burstiness=1.0)
+        )
     )
 
     assert "/tmp/slipstream-bench/pshare25_burst0.2.json" in low
@@ -173,7 +177,10 @@ def test_cell_command_result_file_is_distinct_per_cell() -> None:
 def test_cell_command_carries_max_concurrency_when_set() -> None:
     """A closed-loop cell caps in-flight requests and names a result file by the cap."""
     cell = _cell(
-        out_dir="/tmp/slipstream-bench", share=90, burstiness=1.0, max_concurrency=32
+        out_dir="/tmp/slipstream-bench",
+        prefix_share=90,
+        burstiness=1.0,
+        max_concurrency=32,
     )
     joined = " ".join(cell_command(cell))
 
@@ -183,7 +190,7 @@ def test_cell_command_carries_max_concurrency_when_set() -> None:
 
 def test_cell_command_omits_max_concurrency_when_open_loop() -> None:
     """An open-loop cell (no cap) leaves --max-concurrency off and its file un-suffixed."""
-    joined = " ".join(cell_command(_cell(share=90, burstiness=1.0)))
+    joined = " ".join(cell_command(_cell(prefix_share=90, burstiness=1.0)))
 
     assert "--max-concurrency" not in joined
     assert "pshare90_burst1.0.json" in joined
@@ -194,7 +201,7 @@ def test_cell_command_omits_max_concurrency_when_open_loop() -> None:
 
 def test_execute_cell_runs_stamps_and_reports_ok(tmp_path) -> None:
     """A clean cell runs its command once, stamps its share, and reports OK."""
-    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0)
+    cell = _cell(out_dir=str(tmp_path), prefix_share=90, burstiness=1.0)
     calls: list[list[str]] = []
 
     def runner(command: list[str]) -> int:
@@ -219,7 +226,7 @@ def test_execute_cell_runs_stamps_and_reports_ok(tmp_path) -> None:
 
 def test_execute_cell_reports_failed_on_a_nonzero_exit(tmp_path) -> None:
     """A cell whose command exits non-zero reports FAILED and warns with the code."""
-    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0)
+    cell = _cell(out_dir=str(tmp_path), prefix_share=90, burstiness=1.0)
     warned: list[str] = []
 
     outcome = execute_cell(
@@ -235,7 +242,7 @@ def test_execute_cell_reports_failed_on_a_nonzero_exit(tmp_path) -> None:
 
 def test_execute_cell_reports_unannotated_when_no_result_file(tmp_path) -> None:
     """A cell that ran but wrote no result file cannot be stamped: UNANNOTATED."""
-    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0)
+    cell = _cell(out_dir=str(tmp_path), prefix_share=90, burstiness=1.0)
     warned: list[str] = []
 
     outcome = execute_cell(
@@ -251,7 +258,9 @@ def test_execute_cell_reports_unannotated_when_no_result_file(tmp_path) -> None:
 
 def test_execute_cell_names_the_closed_loop_file_by_its_cap(tmp_path) -> None:
     """A closed-loop cell writes and stamps the ``_mc{N}`` file its cap names."""
-    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0, max_concurrency=32)
+    cell = _cell(
+        out_dir=str(tmp_path), prefix_share=90, burstiness=1.0, max_concurrency=32
+    )
 
     def runner(command: list[str]) -> int:
         Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
