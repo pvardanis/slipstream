@@ -26,7 +26,7 @@ from slipstream_bench.report.chart import (
     rungs_to_markdown,
     write_artifacts,
 )
-from slipstream_bench.sweep.aggregation import _GOODPUT_FLOOR
+from slipstream_bench.sweep.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 
 
 def _row(
@@ -38,7 +38,7 @@ def _row(
     ceiling: int | None = 32,
     timeout: int = 0,
     other: int = 0,
-) -> dict:
+) -> CeilingRow:
     return {
         "max_num_seqs": max_num_seqs,
         "kv_cache_dtype": kv_cache_dtype,
@@ -159,7 +159,7 @@ def _rung(
     prefix_share: int = 50,
     max_concurrency: int = 32,
     goodput_fraction: float = 0.98,
-) -> dict:
+) -> RungRow:
     return {
         "max_num_seqs": max_num_seqs,
         "kv_cache_dtype": kv_cache_dtype,
@@ -231,7 +231,7 @@ def test_point_order_keeps_the_aggregators_point_key_order() -> None:
     ]
 
 
-def _grid_rungs() -> list[dict]:
+def _grid_rungs() -> list[RungRow]:
     """A ragged run's rungs: caching-on spans shares {10,50,90}, off pins share 0.
 
     Each point holds a two-rung ladder with a cliff — the high rung dips below the
@@ -265,7 +265,7 @@ def _grid_rungs() -> list[dict]:
     return rungs
 
 
-def _grid_rows() -> list[dict]:
+def _grid_rows() -> list[CeilingRow]:
     """A ragged run: caching-on spans shares {10,50,90}, caching-off pins share 0.
 
     One caching-on point holds no rung (ceiling None), so the frame and plot exercise
