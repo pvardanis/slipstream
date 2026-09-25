@@ -55,11 +55,11 @@ fi
 
 # The short hash of the last commit touching any image input. A change to any of
 # these is what a new content tag must capture. The pathspec watches the whole bench/
-# directory, and bench/load-sweep.yaml lives under it — but that file is the experiment
-# config mounted into the container at sweep time, not baked into the image, so it is
-# excluded: editing it leaves the tokenizer-and-harness image unchanged and must not
-# roll the tag or force a rebuild of identical bits. The PR build gate in
-# .github/workflows/ci.yml (bench-image-build) mirrors this pathspec as a
+# directory, and bench/load-sweep.yaml and bench/cell.yaml live under it — but those
+# files are the experiment/cell config mounted into the container at run time, not baked
+# into the image, so they are excluded: editing them leaves the tokenizer-and-harness
+# image unchanged and must not roll the tag or force a rebuild of identical bits. The PR
+# build gate in .github/workflows/ci.yml (bench-image-build) mirrors this pathspec as a
 # dorny/paths-filter list: keep the two in sync. This names committed state only:
 # uncommitted edits to the inputs are not reflected, since the image is built from the
 # committed tree (in CI, from the pushed commit). Empty means nothing is committed yet —
@@ -67,7 +67,8 @@ fi
 image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
-    bench src pyproject.toml model.yaml ':(exclude)bench/load-sweep.yaml')"
+    bench src pyproject.toml model.yaml \
+    ':(exclude)bench/load-sweep.yaml' ':(exclude)bench/cell.yaml')"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2

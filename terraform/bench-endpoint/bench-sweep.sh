@@ -5,11 +5,12 @@
 # orchestration layer, the container runs one cell). It drives the baked bench-client
 # image against that proxy (which speaks mTLS to the ALB), so the latency it records is
 # what an off-cluster client sees, then copies the one result JSON to the results
-# bucket where it outlives the host. The caller passes the per-run values (image,
-# bucket, model, run id, the cell's share/burstiness/max-concurrency, extra flags) as
-# environment assignments prefixed to the SSM command; the secret ARN, region and
-# loopback port come from the proxy env the boot script drops. Re-running a RUN_ID with
-# the same cell overwrites that cell's object under the prefix.
+# bucket where it outlives the host. The caller renders the cell (one point of a
+# SweepConfig via SweepConfig.cells()) to a CellConfig and passes it, plus the per-run
+# values (image, bucket, model, run id, extra flags), as environment assignments
+# prefixed to the SSM command; the secret ARN, region and loopback port come from the
+# proxy env the boot script drops. Re-running a RUN_ID with the same cell overwrites
+# that cell's object under the prefix.
 set -euo pipefail
 
 # Secret ARN, region and the loopback port the proxy listens on, dropped at boot.
@@ -20,18 +21,13 @@ source /etc/bench-proxy/proxy.env
 : "${RESULTS_BUCKET:?bench cell needs RESULTS_BUCKET (where results are copied)}"
 : "${MODEL:?bench cell needs MODEL (the served model id to measure)}"
 : "${RUN_ID:?bench cell needs RUN_ID (the results-bucket prefix for this run)}"
-# The cell's grid coordinate: prefix-share percent and burstiness are required; the
-# max-concurrency cap is optional (its absence runs the cell open-loop).
-: "${SHARE:?bench cell needs SHARE (the cell prefix-share percent)}"
-: "${BURSTINESS:?bench cell needs BURSTINESS (the cell burstiness)}"
-max_concurrency="${MAX_CONCURRENCY:-}"
-# The experiment-definition YAML, base64-encoded by the caller so it crosses the SSM
-# command line intact; decoded to a file below, mounted into the container and passed as
-# load-cell's --config. It carries the shared knobs (lengths, SLO, seed); the cell's
-# coordinate is passed explicitly above, not read from its grid axes. Required — the
-# caller always sends one (a per-point config from knob-sweep, else the checked-in
-# default).
-: "${SWEEP_CONFIG_B64:?bench cell needs SWEEP_CONFIG_B64 (the base64 load-cell config)}"
+# The cell-definition YAML, base64-encoded by the caller so it crosses the SSM command
+# line intact; decoded to a file below, mounted into the container and passed as
+# load-cell's --config. It carries the cell's grid coordinate (share, burstiness,
+# optional max_concurrency) alongside the shared knobs (lengths, SLO, seed). Required —
+# the caller always sends one (a per-point config the orchestrator renders from a
+# SweepConfig, else the checked-in default).
+: "${CELL_CONFIG_B64:?bench cell needs CELL_CONFIG_B64 (the base64 load-cell config)}"
 # SWEEP_ARGS_B64 is optional: extra load-cell flags the caller appended, base64-encoded
 # so they cross the SSM command line without any quoting that the host shell (not
 # necessarily bash) would misparse.
@@ -67,7 +63,7 @@ mkdir -p "${results_dir}"
 config_dir="/tmp/bench-config/${RUN_ID}"
 rm -rf "${config_dir}"
 mkdir -p "${config_dir}"
-printf '%s' "${SWEEP_CONFIG_B64}" | base64 -d >"${config_dir}/sweep-config.yaml"
+printf '%s' "${CELL_CONFIG_B64}" | base64 -d >"${config_dir}/cell-config.yaml"
 
 # Decode the optional flags and split on whitespace into an array; load-cell flags
 # carry no spaces, so word-splitting the decoded string reconstructs them. The decode
@@ -84,17 +80,12 @@ if [[ -n "${sweep_args_b64}" ]]; then
   read -ra sweep_args <<<"${decoded_args}"
 fi
 
-# A set max-concurrency caps in-flight requests (closed-loop); an empty one omits the
-# flag so the cell runs open-loop, arrival-rate bound.
-cap_args=()
-if [[ -n "${max_concurrency}" ]]; then
-  cap_args=(--max-concurrency "${max_concurrency}")
-fi
-
 echo "bench-cell: running the cell against the loopback proxy" >&2
 # --network host so the container reaches the proxy on 127.0.0.1; --rm for a one-shot.
 # --entrypoint slipstream-bench overrides the base image's `vllm serve` entrypoint so
-# the container runs the bench harness, not the server; load-cell is then its arg.
+# the container runs the bench harness, not the server; load-cell is then its arg. The
+# cell's coordinate (share, burstiness, optional max_concurrency) rides in the mounted
+# --config, not as flags.
 cell_rc=0
 docker run --rm --network host --user "$(id -u):$(id -g)" \
   --entrypoint slipstream-bench \
@@ -103,12 +94,9 @@ docker run --rm --network host --user "$(id -u):$(id -g)" \
   -v "${config_dir}:/config:ro" \
   "${IMAGE_REF}" \
   load-cell \
-  --config /config/sweep-config.yaml \
+  --config /config/cell-config.yaml \
   --base-url "http://127.0.0.1:${PROXY_PORT}" \
   --model "${MODEL}" \
-  --share "${SHARE}" \
-  --burstiness "${BURSTINESS}" \
-  "${cap_args[@]}" \
   --out-dir /out "${sweep_args[@]}" || cell_rc=$?
 
 # No JSON landed: either a clean dry run (cell exited 0) or a real failure — a failed

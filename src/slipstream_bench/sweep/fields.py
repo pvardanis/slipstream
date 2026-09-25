@@ -65,16 +65,16 @@ RequestRate = Annotated[
 UniquePositiveInts = Annotated[
     list[PositiveInt], Field(min_length=1), AfterValidator(unique)
 ]
-# A non-empty, no-duplicates sweep axis of positive floats (e.g. burstiness).
+# One cell's burstiness: a positive scalar (low = bursty, 1.0 = Poisson).
+Burstiness = Annotated[float, Field(gt=0)]
+# A non-empty, no-duplicates sweep axis of burstiness scalars.
 UniquePositiveFloats = Annotated[
-    list[Annotated[float, Field(gt=0)]], Field(min_length=1), AfterValidator(unique)
+    list[Burstiness], Field(min_length=1), AfterValidator(unique)
 ]
+# One cell's prefix-share: a percent in 0..100.
+PrefixShare = Annotated[int, Field(ge=0, le=100)]
 # Prefix-share percentages, each in 0..100, non-empty and no duplicates.
-PrefixShares = Annotated[
-    list[Annotated[int, Field(ge=0, le=100)]],
-    Field(min_length=1),
-    AfterValidator(unique),
-]
+PrefixShares = Annotated[list[PrefixShare], Field(min_length=1), AfterValidator(unique)]
 # The closed-loop in-flight cap ladder; may be empty (open-loop), never repeats.
 ConcurrencyLadder = Annotated[list[PositiveInt], AfterValidator(unique)]
 # A non-empty SLO, each token a non-empty string (e.g. ttft:1000).
