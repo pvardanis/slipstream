@@ -106,10 +106,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Only the bench image's inputs make this build worth running. A PR that
+      # leaves them untouched cannot change what the image bakes, so skip the
+      # build and let the job pass. The path list mirrors the git pathspec in
+      # bench/image-tag.sh (image_sha) — keep the two lists in sync. The
+      # detection differs (this gates on the PR's base..head diff; image_sha
+      # tags from committed history), but the set of paths watched is the same.
+      - name: Detect bench image input changes
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # Excludes must be final, matching the git pathspec's :(exclude): under the
+          # default 'some' quantifier a lone '!' pattern ORs in as match-all-but-that-file,
+          # so bench/load-sweep.yaml (or any unrelated file) would still trip the build.
+          predicate-quantifier: some-with-excludes
+          filters: |
+            bench:
+              - 'bench/**'
+              - '!bench/load-sweep.yaml'
+              - 'src/**'
+              - 'pyproject.toml'
+              - 'model.yaml'
       # Build the image model.yaml describes (hfId + revision via image-tag.sh, yq
       # preinstalled on the runner), so a broken Dockerfile or an unfetchable
       # revision fails the PR. No tag, no push: the build succeeding is the check.
       - name: Build the bench image (no push)
+        if: steps.filter.outputs.bench == 'true'
         run: bench/build-image.sh
 
   shell-tests:
