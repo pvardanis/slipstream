@@ -39,7 +39,7 @@ def _config(**overrides: object) -> SweepConfig:
         "goodput": ["ttft:1000", "tpot:50"],
     }
     base.update(overrides)
-    return SweepConfig(**base)  # type: ignore[arg-type]
+    return SweepConfig(**base)  # ty: ignore[invalid-argument-type]  # dynamic kwargs spread from an object-valued dict
 
 
 # --- split_lengths: integer truncation and block alignment -------------------

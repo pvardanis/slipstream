@@ -203,7 +203,7 @@ def test_missing_metric_is_rejected(metric: str) -> None:
 def test_null_metric_is_rejected(metric: str) -> None:
     """A metric present but null would price as 0 in bare arithmetic; reject it."""
     with pytest.raises(CostError, match=metric):
-        price_result(_record(**{metric: None}), Path("cell.json"), _inputs())
+        price_result(_record(**{metric: None}), Path("cell.json"), _inputs())  # ty: ignore[invalid-argument-type]  # null metric on purpose to assert the guard rejects it
 
 
 def test_non_numeric_metric_is_rejected() -> None:
