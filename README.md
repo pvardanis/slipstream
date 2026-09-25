@@ -167,7 +167,7 @@ latency recorded is what an off-cluster client sees. That measurement path is
 recorded in [`docs/adr/0004`](docs/adr/0004-bench-vantage-external-path.md).
 
 Prefect's result and cache-key storage point at S3, not its local
-`~/.prefect/storage/` default: `slipstream_bench.sweep.storage` builds two
+`~/.prefect/storage/` default: `slipstream_bench.orchestration.storage` builds two
 `S3Bucket` blocks under distinct prefixes (`prefect/results`, `prefect/cache-keys`)
 of the same `RESULTS_BUCKET` the sweep already writes to, with AWS credentials from
 the ambient default chain. Resume survives a server or laptop death only with both

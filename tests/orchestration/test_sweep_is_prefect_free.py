@@ -1,11 +1,14 @@
-"""The ``sweep`` package must never import Prefect — the container's import contract.
+"""The ``sweep`` package's own source must name no Prefect import — the fast guard.
 
 ADR-0012 §Amendment: the bench-client image installs ``.`` (Prefect-free) and its only
 import path is ``load-sweep`` → ``sweep/``. If any ``sweep`` module imports ``prefect``
 or ``prefect_aws``, that path pulls a dependency the image does not ship and the
 container breaks at import. This walks every ``sweep`` source file's AST and fails on
-any such import, so the split cannot silently regress. Prefect-touching code lives in
-``slipstream_bench.orchestration`` instead, imported lazily inside functions.
+any such import — a fast, precise check that names the offending file. It sees only
+static ``import`` statements in ``sweep/``'s own files, not dynamic imports or the
+transitive closure through other packages; ``test_import_contract`` covers that whole
+contract by importing ``sweep`` in a Prefect-free interpreter. Prefect-touching code
+lives in ``slipstream_bench.orchestration`` instead, imported lazily inside functions.
 """
 
 import ast
@@ -14,6 +17,7 @@ from pathlib import Path
 import slipstream_bench.sweep as sweep_pkg
 
 _SWEEP_DIR = Path(sweep_pkg.__file__).parent
+_PREFECT_ROOTS = frozenset({"prefect", "prefect_aws"})
 
 
 def _imports_prefect(source: str) -> bool:
@@ -21,13 +25,11 @@ def _imports_prefect(source: str) -> bool:
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(
-                alias.name.split(".")[0].startswith("prefect") for alias in node.names
-            ):
+            if any(alias.name.split(".")[0] in _PREFECT_ROOTS for alias in node.names):
                 return True
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if module.split(".")[0].startswith("prefect"):
+            if module.split(".")[0] in _PREFECT_ROOTS:
                 return True
     return False
 
