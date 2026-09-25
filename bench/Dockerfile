@@ -3,8 +3,10 @@
 # onto the same pinned vLLM engine build the server runs (k8s/vllm.yaml). Building
 # on that base means the client's transformers/tokenizers versions match the
 # server's exactly, so the two tokenize identically, and it keeps the `vllm bench
-# serve` CLI that load-sweep drives. Launched in-cluster, the client reaches vLLM
-# over ClusterIP. Keep the base tag in sync with k8s/vllm.yaml.
+# serve` CLI the harness drives. The container runs one cell per `docker run` —
+# `load-cell` fires a single `vllm bench serve` (the grid loop lives in the
+# orchestration layer, ADR-0012 §Amendment). Launched in-cluster, the client
+# reaches vLLM over ClusterIP. Keep the base tag in sync with k8s/vllm.yaml.
 FROM vllm/vllm-openai-cpu:v0.29.0-x86_64
 
 # The model whose tokenizer is baked in, and the Hugging Face revision to bake it
@@ -27,10 +29,10 @@ COPY src ./src
 RUN python3 -m pip install --no-cache-dir .
 
 # The experiment config is not baked: knob-sweep and prefix-cache compose a per-point
-# config on the operator's laptop and mount it in as load-sweep's --config, so the
+# config on the operator's laptop and mount it in as the harness's --config, so the
 # image carries the tokenizer and harness only and stays identical across config
-# edits. A bare `load-sweep` with no --config exits 2 on the missing default, which
-# no deployed path hits — every sweep passes --config.
+# edits. A bare `load-cell`/`load-sweep` with no --config exits 2 on the missing
+# default, which no deployed path hits — every invocation passes --config.
 
 # Bake the tokenizer into HF_HOME at build time, pinned to the model's revision so
 # the baked tokenizer matches the weights the server loads. This fetch is the last
