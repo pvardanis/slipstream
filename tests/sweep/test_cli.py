@@ -184,7 +184,7 @@ def test_request_rate_inf_from_config_is_accepted(tmp_path: Path) -> None:
 # The shared knobs plus one coordinate a cell YAML carries; the CLI injects base_url,
 # model, and out_dir on top. Mirrors bench/load-cell.yaml's documented defaults.
 _CELL: dict[str, object] = {
-    "share": 90,
+    "prefix_share": 90,
     "burstiness": 1.0,
     "total_len": 1000,
     "num_prompts": 500,
@@ -228,7 +228,7 @@ def test_load_cell_dry_run_emits_one_command_for_its_coordinate(
     tmp_path: Path,
 ) -> None:
     """load-cell builds exactly one vllm command for the coordinate its config defines."""
-    result = _cell_dry_run(_write_cell(tmp_path, share=90, burstiness=1.0))
+    result = _cell_dry_run(_write_cell(tmp_path, prefix_share=90, burstiness=1.0))
 
     assert result.exit_code == 0, plain(result)
     assert result.stdout.count("vllm bench serve") == 1
@@ -240,7 +240,7 @@ def test_load_cell_dry_run_emits_one_command_for_its_coordinate(
 def test_load_cell_carries_the_cap_when_closed_loop(tmp_path: Path) -> None:
     """A max_concurrency cell caps in-flight requests and names its _mc file."""
     result = _cell_dry_run(
-        _write_cell(tmp_path, share=90, burstiness=1.0, max_concurrency=32)
+        _write_cell(tmp_path, prefix_share=90, burstiness=1.0, max_concurrency=32)
     )
 
     assert result.exit_code == 0, plain(result)
@@ -251,7 +251,7 @@ def test_load_cell_carries_the_cap_when_closed_loop(tmp_path: Path) -> None:
 
 def test_load_cell_omits_the_cap_when_open_loop(tmp_path: Path) -> None:
     """A cell config with no cap runs open-loop, emitting no --max-concurrency."""
-    result = _cell_dry_run(_write_cell(tmp_path, share=90, burstiness=1.0))
+    result = _cell_dry_run(_write_cell(tmp_path, prefix_share=90, burstiness=1.0))
 
     assert result.exit_code == 0, plain(result)
     assert "--max-concurrency" not in result.stdout
@@ -260,7 +260,7 @@ def test_load_cell_omits_the_cap_when_open_loop(tmp_path: Path) -> None:
 def test_load_cell_injects_context_from_the_cli(tmp_path: Path) -> None:
     """The endpoint, served model, and out-dir come from the CLI, not the config."""
     result = _cell_dry_run(
-        _write_cell(tmp_path, share=50, burstiness=0.2),
+        _write_cell(tmp_path, prefix_share=50, burstiness=0.2),
         "--base-url",
         "http://127.0.0.1:9",
         "--model",
@@ -294,7 +294,7 @@ def test_load_cell_runs_one_cell_and_stamps_its_share(
         [
             "load-cell",
             "--config",
-            str(_write_cell(tmp_path, share=90, burstiness=1.0)),
+            str(_write_cell(tmp_path, prefix_share=90, burstiness=1.0)),
             "--out-dir",
             str(tmp_path),
         ],
@@ -318,7 +318,7 @@ def test_load_cell_fails_when_the_cell_errors(monkeypatch, tmp_path: Path) -> No
         [
             "load-cell",
             "--config",
-            str(_write_cell(tmp_path, share=90, burstiness=1.0)),
+            str(_write_cell(tmp_path, prefix_share=90, burstiness=1.0)),
             "--out-dir",
             str(tmp_path),
         ],
@@ -337,7 +337,7 @@ def test_load_cell_rejects_a_bad_config(tmp_path: Path) -> None:
 
 def test_load_cell_rejects_an_out_of_range_share(tmp_path: Path) -> None:
     """A share outside 0..100 exits 2 before a cell is built, not a negative suffix."""
-    result = _cell_dry_run(_write_cell(tmp_path, share=150))
+    result = _cell_dry_run(_write_cell(tmp_path, prefix_share=150))
 
     assert result.exit_code == 2
     assert "less than or equal to 100" in plain(result)
@@ -345,7 +345,7 @@ def test_load_cell_rejects_an_out_of_range_share(tmp_path: Path) -> None:
 
 def test_load_cell_rejects_a_non_positive_cap(tmp_path: Path) -> None:
     """A non-positive max_concurrency exits 2 rather than run a meaningless cell."""
-    result = _cell_dry_run(_write_cell(tmp_path, share=50, max_concurrency=0))
+    result = _cell_dry_run(_write_cell(tmp_path, prefix_share=50, max_concurrency=0))
 
     assert result.exit_code == 2
     assert "greater than 0" in plain(result)
@@ -374,7 +374,7 @@ def test_load_cell_threads_the_resolved_key_into_the_runner(
             str(
                 _write_cell(
                     tmp_path,
-                    share=50,
+                    prefix_share=50,
                     burstiness=1.0,
                     tokenizer="Qwen/Qwen2.5-0.5B-Instruct",
                 )

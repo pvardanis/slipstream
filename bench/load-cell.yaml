@@ -6,7 +6,7 @@
 # a SweepConfig (SweepConfig.cells()) and ships it as this --config.
 
 # Prefix-share %: splits the token budget into shared prefix and suffix.
-share: 50
+prefix_share: 50
 
 # Burstiness: low = bursty, 1.0 = Poisson arrivals.
 burstiness: 1.0
