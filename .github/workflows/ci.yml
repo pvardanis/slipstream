@@ -120,14 +120,14 @@ jobs:
         with:
           # Excludes must be final, matching the git pathspec's :(exclude): under the
           # default 'some' quantifier a lone '!' pattern ORs in as match-all-but-that-file,
-          # so bench/load-sweep.yaml or bench/cell.yaml (or any unrelated file) would still
+          # so bench/load-sweep.yaml or bench/load-cell.yaml (or any unrelated file) would still
           # trip the build.
           predicate-quantifier: some-with-excludes
           filters: |
             bench:
               - 'bench/**'
               - '!bench/load-sweep.yaml'
-              - '!bench/cell.yaml'
+              - '!bench/load-cell.yaml'
               - 'src/**'
               - 'pyproject.toml'
               - 'model.yaml'
