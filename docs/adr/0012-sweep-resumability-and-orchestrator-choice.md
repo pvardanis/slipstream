@@ -164,3 +164,58 @@ for a serial, low-task-rate sweep.
 - The UI is local and solo — no shared run links, no history beyond the local SQLite file. That is
   accepted for a single-operator harness and is the first thing the reopen triggers above would
   change.
+
+## Amendment (2026-09-24): execution topology and the packaging split
+
+The deps stack landed (Prefect + `prefect-aws`, S3 `result_storage` + `key_storage`; the storage
+builders live in `sweep/storage.py`). Designing the code stack surfaced three things the original
+ADR left implicit. They are recorded here rather than in a new ADR because they refine this
+decision's own boundaries, not a new problem.
+
+### Trigger topology is the control point, and the bench-client executes only benchmarks
+
+The flow is triggered **at the control point**: a person on a workstation today (local
+`prefect server start`, SQLite, UI up during the sweep), and by **CI/CD later**, when the Prefect
+server moves to AWS and deployments are versioned. This sharpens "flows run from the workstation"
+above: the *driver/orchestration* runs at the control point; the **bench-client is ephemeral** —
+it spins up and down within the sweep and runs `vllm bench serve` and nothing DAG-related. The
+future-CI arm is not specced here; it stays reopen-trigger territory (promoting the flow-runner to
+an always-up host, above).
+
+### The per-cell loop lives in the orchestration layer; the container runs one cell
+
+Per-cell resume forces the task boundary to be the cell: a Prefect `@task` caches, commits its
+transaction, and retries at whatever grain it wraps. So the Tier-2 grid loop (`sweep/runner.py`
+`run_sweep`, ~240 cells on the current grid) **relocates out of the bench-client into the
+orchestration layer**, where each cell becomes one `@task` keyed
+`digest:point-slug:cell-name`. The container's entrypoint changes from "loop the whole grid"
+(`load-sweep`) to **execute the single cell it is handed** — one `vllm bench serve` per
+`docker run`. `cell_command` (the pure argv builder) stays shared, unmoved.
+
+Wrapping the whole `load-sweep` as one task was rejected: it makes resume per-*sweep*, forfeits the
+per-cell transaction commit (§"single source of truth"), and defeats per-cell retries and the live
+per-cell UI — the three features Prefect was adopted for, each defined at cell grain.
+
+Overhead of a `docker run` per cell is accepted. `vllm bench serve` is already a fresh subprocess
+per cell, so the vllm/torch import cost is not new; the added cost is container start + one SSM
+round-trip, ~3–6s against a ~60–120s cell (~3–8%), and negligible beside the 20 Tier-1 GPU
+redeploys that dominate a sweep. Two constraints keep it there: the mTLS loopback proxy starts
+**once per flow**, not per cell, and the image stays host-resident (no per-cell pull); per-cell SSM
+latency is to be measured once the code lands, not a blocker.
+
+### Prefect stays out of the bench-client image
+
+The bench-client must not carry Prefect. The split is two-part:
+
+- **Dependency:** Prefect and `prefect-aws` move to `[project.optional-dependencies].orchestration`.
+  The image installs `.` (Prefect-free); the driver/CI installs `.[orchestration]`.
+- **Import path:** the Prefect-touching modules (the flow, the digest, `cache_key_fn`, and
+  `storage.py`) move into a `slipstream_bench/orchestration/` subpackage with Prefect imported
+  lazily inside functions, so no container import path (`load-sweep` → `sweep/`) can reach a
+  `prefect_aws` import. `sweep/` stays Prefect-free. (`storage.py`, shipped under `sweep/` with a
+  module-top `from prefect_aws import S3Bucket`, relocates here — the code ticket's first move.)
+
+Dependencies flow inward: orchestration depends on core bench-execution, never the reverse. A hard
+two-distribution split or a uv workspace is **not** taken now (YAGNI): both ship together at one
+version. Reopen that only at its trigger — orchestration gaining an independent release cadence, or
+being consumed from outside this repo.
