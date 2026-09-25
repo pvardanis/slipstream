@@ -2,9 +2,10 @@
 
 Owns the ``load-sweep``, ``load-cell``, ``aggregate-sweep``, and ``sweep-grid``
 commands, plus the api-key resolver and cell runner that guard them. ``load-cell``
-runs the single cell it is handed — one ``vllm bench serve`` per invocation, the
-grain the container executes now that the grid loop lives in the orchestration
-layer (ADR-0012 §Amendment); ``load-sweep`` still drives the whole grid.
+runs the single cell its ``--config`` defines — one ``vllm bench serve`` per
+invocation, the grain the container executes now that the grid loop lives in the
+orchestration layer (ADR-0012 §Amendment); ``load-sweep`` still drives the whole
+grid.
 """
 
 import json
@@ -22,8 +23,8 @@ from slipstream_bench.sweep.aggregation import (
     aggregate_ceilings,
 )
 from slipstream_bench.sweep.config import (
-    SweepConfig,
     SweepError,
+    load_cell_config,
     load_sweep_config,
 )
 from slipstream_bench.sweep.grid import (
@@ -38,7 +39,6 @@ from slipstream_bench.sweep.runner import (
     ensure_out_dir,
     execute_cell,
     run_sweep,
-    validate_cell_coordinate,
 )
 
 app = typer.Typer()
@@ -93,42 +93,24 @@ def run_cell(command: list[str], *, extra_env: Mapping[str, str] | None = None) 
         ) from error
 
 
-def _load_config_and_key(
-    config: Path,
-    *,
-    base_url: str,
-    model: str,
-    out_dir: str,
-    api_key_env: str | None,
-    dry_run: bool,
-) -> tuple[SweepConfig, dict[str, str] | None]:
-    """Resolve the api-key and load the config both load-sweep and load-cell share.
+def _resolve_extra_env(
+    api_key_env: str | None, *, dry_run: bool
+) -> dict[str, str] | None:
+    """Resolve the child-process env overlay both load-sweep and load-cell share.
 
     A dry run builds no cells and touches no endpoint, so it does not need the key
     resolved — preview a commercial run without exporting a secret.
 
-    :param config: the experiment-definition YAML.
-    :param base_url: the endpoint the run targets.
-    :param model: the served model id (from model.yaml).
-    :param out_dir: the directory for the per-cell result JSON.
     :param api_key_env: env var holding the commercial key, or None for the
         self-hosted arm.
     :param dry_run: when true, skip resolving the key.
-    :return: the validated config and the child-process env overlay (the resolved
-        key, or None for a self-hosted or dry run).
-    :raise SweepError: on an invalid config, or an unset key var on a live run.
+    :return: the child-process env overlay (the resolved key, or None for a
+        self-hosted or dry run).
+    :raise SweepError: on an unset key var on a live commercial run.
     """
-    extra_env = (
-        resolve_api_key_env(api_key_env) if api_key_env and not dry_run else None
-    )
-    cfg = load_sweep_config(
-        config,
-        base_url=base_url,
-        model=model,
-        out_dir=out_dir,
-        commercial=api_key_env is not None,
-    )
-    return cfg, extra_env
+    if api_key_env and not dry_run:
+        return resolve_api_key_env(api_key_env)
+    return None
 
 
 @app.command("load-sweep")
@@ -166,13 +148,13 @@ def load_sweep(
     """Sweep vllm bench serve across the prefix-share x burstiness grid a config
     defines."""
     try:
-        cfg, extra_env = _load_config_and_key(
+        extra_env = _resolve_extra_env(api_key_env, dry_run=dry_run)
+        cfg = load_sweep_config(
             config,
             base_url=base_url,
             model=model,
             out_dir=out_dir,
-            api_key_env=api_key_env,
-            dry_run=dry_run,
+            commercial=api_key_env is not None,
         )
         code = run_sweep(
             cfg,
@@ -190,28 +172,15 @@ def load_sweep(
 @app.command("load-cell")
 def load_cell(
     *,
-    share: Annotated[
-        int, typer.Option(help="This cell's prefix-share percentage (0..100).")
-    ],
-    burstiness: Annotated[
-        float,
-        typer.Option(help="This cell's burstiness (low = bursty, 1.0 = Poisson)."),
-    ],
-    max_concurrency: Annotated[
-        int | None,
-        typer.Option(
-            help="This cell's in-flight cap (closed-loop); omit for open-loop."
-        ),
-    ] = None,
     config: Annotated[
         Path,
         typer.Option(
             exists=True,
             dir_okay=False,
-            help="The experiment-definition YAML: the lengths, SLO, seed (its grid "
-            "axes are unused — the cell's coordinate is passed explicitly).",
+            help="The cell-definition YAML: the coordinate (share, burstiness, "
+            "optional max_concurrency) plus the shared lengths, SLO, seed.",
         ),
-    ] = Path("bench/load-sweep.yaml"),
+    ] = Path("bench/cell.yaml"),
     base_url: Annotated[
         str, typer.Option(help="OpenAI-compatible endpoint the cell targets.")
     ] = "http://localhost:8000",
@@ -233,45 +202,31 @@ def load_cell(
         bool, typer.Option(help="Print the vllm command instead of running it.")
     ] = False,
 ) -> None:
-    """Run one vllm bench serve cell — the grid coordinate it is handed.
+    """Run one vllm bench serve cell — the coordinate its ``--config`` defines.
 
     The container executes one cell per ``docker run`` now that the per-cell loop
-    lives in the orchestration layer (ADR-0012 §Amendment): the coordinate
-    (``--share``/``--burstiness``/``--max-concurrency``) is passed in, the shared
-    knobs (lengths, SLO, seed) come from ``--config``, and one result JSON is
-    written. Exits 0 when the cell ran and was stamped, 1 when it failed to run or
-    could not be stamped, 2 on any SweepError (an invalid config, an unset key, an
-    out-of-range coordinate, an un-creatable out-dir, or block alignment erasing the
-    prefix).
+    lives in the orchestration layer (ADR-0012 §Amendment): the coordinate (share,
+    burstiness, optional max_concurrency) and the shared knobs (lengths, SLO, seed)
+    both come from ``--config``, and one result JSON is written. Exits 0 when the
+    cell ran and was stamped, 1 when it failed to run or could not be stamped, 2 on
+    any SweepError (an invalid config, an out-of-range coordinate, an unset key, an
+    un-creatable out-dir, or block alignment erasing the prefix).
     """
     try:
-        cfg, extra_env = _load_config_and_key(
+        extra_env = _resolve_extra_env(api_key_env, dry_run=dry_run)
+        cell = load_cell_config(
             config,
             base_url=base_url,
             model=model,
             out_dir=out_dir,
-            api_key_env=api_key_env,
-            dry_run=dry_run,
+            commercial=api_key_env is not None,
         )
-        validate_cell_coordinate(share, burstiness, max_concurrency)
         if dry_run:
-            typer.echo(
-                " ".join(
-                    cell_command(
-                        cfg,
-                        share=share,
-                        burstiness=burstiness,
-                        max_concurrency=max_concurrency,
-                    )
-                )
-            )
+            typer.echo(" ".join(cell_command(cell)))
             raise typer.Exit(code=0)
-        ensure_out_dir(cfg.out_dir)
+        ensure_out_dir(cell.out_dir)
         outcome = execute_cell(
-            cfg,
-            share=share,
-            burstiness=burstiness,
-            max_concurrency=max_concurrency,
+            cell,
             runner=lambda command: run_cell(command, extra_env=extra_env),
             echo=typer.echo,
             warn=lambda line: typer.echo(line, err=True),

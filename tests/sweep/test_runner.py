@@ -1,10 +1,10 @@
-"""Tests for the load-sweep command builder, split math, and grid orchestration.
+"""Tests for the cell command builder, split math, and grid orchestration.
 
 Covers the edge cases: integer prefix/suffix truncation, block alignment and its
 collapse guard, a fixed seed replaying every cell, one ``vllm bench serve`` per
-grid cell, the SLO on every cell, distinct per-cell result files, and
-partial-failure survival. The command-assembly seam is driven through the pure
-builder functions, with no vLLM server.
+cell, the SLO on every cell, distinct per-cell result files, and partial-failure
+survival. The command-assembly seam is driven through the pure builder functions,
+with no vLLM server.
 """
 
 import json
@@ -12,35 +12,44 @@ from pathlib import Path
 
 import pytest
 
-from slipstream_bench.sweep.config import SweepConfig, SweepError
+from slipstream_bench.sweep.config import CellConfig, SweepConfig, SweepError
 from slipstream_bench.sweep.runner import (
     CellOutcome,
     cell_command,
     ensure_out_dir,
     execute_cell,
-    grid,
     run_sweep,
     split_lengths,
-    validate_cell_coordinate,
 )
 
+_SHARED_KNOBS = {
+    "base_url": "http://localhost:8000",
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "total_len": 1000,
+    "num_prompts": 100,
+    "num_prefixes": 5,
+    "output_len": 128,
+    "align_blocks": 0,
+    "request_rate": "8",
+    "seed": 0,
+    "out_dir": "bench/results",
+    "goodput": ["ttft:1000", "tpot:50"],
+}
 
-def _config(**overrides: object) -> SweepConfig:
+
+def _cell(**overrides: object) -> CellConfig:
+    """Build a CellConfig from the documented defaults, with overrides applied."""
+    base = {**_SHARED_KNOBS, "share": 90, "burstiness": 1.0}
+    base.update(overrides)
+    return CellConfig(**base)  # ty: ignore[invalid-argument-type]  # dynamic kwargs spread from an object-valued dict
+
+
+def _sweep(**overrides: object) -> SweepConfig:
     """Build a SweepConfig from the documented defaults, with overrides applied."""
     base = {
-        "base_url": "http://localhost:8000",
-        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        **_SHARED_KNOBS,
         "prefix_shares": [10, 50, 90],
         "burstiness_values": [0.2, 1.0],
-        "total_len": 1000,
-        "num_prompts": 100,
-        "num_prefixes": 5,
-        "output_len": 128,
-        "align_blocks": 0,
-        "request_rate": "8",
-        "seed": 0,
-        "out_dir": "bench/results",
-        "goodput": ["ttft:1000", "tpot:50"],
     }
     base.update(overrides)
     return SweepConfig(**base)  # ty: ignore[invalid-argument-type]  # dynamic kwargs spread from an object-valued dict
@@ -100,57 +109,15 @@ def test_alignment_that_erases_prefix_fails_fast() -> None:
 
 def test_cell_command_carries_the_tokenizer_when_set() -> None:
     """A configured tokenizer reaches the command so vLLM synthesises against it."""
-    cfg = _config(tokenizer="Qwen/Qwen2.5-0.5B-Instruct")
-    joined = " ".join(cell_command(cfg, share=90, burstiness=1.0))
+    cell = _cell(tokenizer="Qwen/Qwen2.5-0.5B-Instruct")
+    joined = " ".join(cell_command(cell))
     assert "--tokenizer Qwen/Qwen2.5-0.5B-Instruct" in joined
 
 
 def test_cell_command_omits_the_tokenizer_when_unset() -> None:
     """The self-hosted arm leaves --tokenizer off; vLLM defaults it to --model."""
-    joined = " ".join(cell_command(_config(), share=90, burstiness=1.0))
+    joined = " ".join(cell_command(_cell()))
     assert "--tokenizer" not in joined
-
-
-# --- grid: one cell per (share, burstiness) ----------------------------------
-
-
-def test_grid_is_the_cartesian_product_in_order() -> None:
-    """The grid yields every (share, burstiness, max-concurrency) cell, shares outermost.
-
-    With no closed-loop ladder configured, the max-concurrency axis contributes a
-    single open-loop ``None``, so the grid is one cell per (share, burstiness) pair.
-    """
-    cfg = _config(prefix_shares=[10, 90], burstiness_values=[0.2, 1.0])
-    assert list(grid(cfg)) == [
-        (10, 0.2, None),
-        (10, 1.0, None),
-        (90, 0.2, None),
-        (90, 1.0, None),
-    ]
-
-
-def test_grid_ladders_max_concurrency_innermost() -> None:
-    """The ladder is innermost: its rungs run contiguously within one (share, burstiness).
-
-    Varying all three axes (2 shares x 2 burstiness x 2 rungs) is what pins the
-    nesting — with a single value on the other two axes the ladder's position in
-    the product would be unobservable. Shares stay outermost, ladder innermost.
-    """
-    cfg = _config(
-        prefix_shares=[10, 90],
-        burstiness_values=[0.2, 1.0],
-        max_concurrency_values=[8, 16],
-    )
-    assert list(grid(cfg)) == [
-        (10, 0.2, 8),
-        (10, 0.2, 16),
-        (10, 1.0, 8),
-        (10, 1.0, 16),
-        (90, 0.2, 8),
-        (90, 0.2, 16),
-        (90, 1.0, 8),
-        (90, 1.0, 16),
-    ]
 
 
 # --- cell_command: the flag assembly the retired bash test pinned ------------
@@ -158,8 +125,7 @@ def test_grid_ladders_max_concurrency_innermost() -> None:
 
 def test_cell_command_carries_the_split_slo_and_result_file() -> None:
     """A cell command wires the split, the SLO, and a distinct result file."""
-    cfg = _config()
-    cmd = cell_command(cfg, share=90, burstiness=1.0)
+    cmd = cell_command(_cell(share=90, burstiness=1.0))
     joined = " ".join(cmd)
 
     assert "vllm bench serve" in joined
@@ -183,10 +149,9 @@ def test_cell_command_carries_the_split_slo_and_result_file() -> None:
 
 
 def test_cell_command_is_reproducible_for_a_fixed_config() -> None:
-    """The same config builds identical commands, carrying the same fixed seed."""
-    cfg = _config()
-    first = cell_command(cfg, share=90, burstiness=1.0)
-    second = cell_command(cfg, share=90, burstiness=1.0)
+    """The same cell builds identical commands, carrying the same fixed seed."""
+    first = cell_command(_cell(share=90, burstiness=1.0))
+    second = cell_command(_cell(share=90, burstiness=1.0))
 
     assert first == second
     assert "--seed 0" in " ".join(first)
@@ -194,9 +159,12 @@ def test_cell_command_is_reproducible_for_a_fixed_config() -> None:
 
 def test_cell_command_result_file_is_distinct_per_cell() -> None:
     """Each cell names a result file from its share and burstiness."""
-    cfg = _config(out_dir="/tmp/slipstream-bench")
-    low = " ".join(cell_command(cfg, share=25, burstiness=0.2))
-    high = " ".join(cell_command(cfg, share=90, burstiness=1.0))
+    low = " ".join(
+        cell_command(_cell(out_dir="/tmp/slipstream-bench", share=25, burstiness=0.2))
+    )
+    high = " ".join(
+        cell_command(_cell(out_dir="/tmp/slipstream-bench", share=90, burstiness=1.0))
+    )
 
     assert "/tmp/slipstream-bench/pshare25_burst0.2.json" in low
     assert "/tmp/slipstream-bench/pshare90_burst1.0.json" in high
@@ -204,8 +172,10 @@ def test_cell_command_result_file_is_distinct_per_cell() -> None:
 
 def test_cell_command_carries_max_concurrency_when_set() -> None:
     """A closed-loop cell caps in-flight requests and names a result file by the cap."""
-    cfg = _config(out_dir="/tmp/slipstream-bench")
-    joined = " ".join(cell_command(cfg, share=90, burstiness=1.0, max_concurrency=32))
+    cell = _cell(
+        out_dir="/tmp/slipstream-bench", share=90, burstiness=1.0, max_concurrency=32
+    )
+    joined = " ".join(cell_command(cell))
 
     assert "--max-concurrency 32" in joined
     assert "/tmp/slipstream-bench/pshare90_burst1.0_mc32.json" in joined
@@ -213,7 +183,7 @@ def test_cell_command_carries_max_concurrency_when_set() -> None:
 
 def test_cell_command_omits_max_concurrency_when_open_loop() -> None:
     """An open-loop cell (no cap) leaves --max-concurrency off and its file un-suffixed."""
-    joined = " ".join(cell_command(_config(), share=90, burstiness=1.0))
+    joined = " ".join(cell_command(_cell(share=90, burstiness=1.0)))
 
     assert "--max-concurrency" not in joined
     assert "pshare90_burst1.0.json" in joined
@@ -224,7 +194,7 @@ def test_cell_command_omits_max_concurrency_when_open_loop() -> None:
 
 def test_execute_cell_runs_stamps_and_reports_ok(tmp_path) -> None:
     """A clean cell runs its command once, stamps its share, and reports OK."""
-    cfg = _config(out_dir=str(tmp_path))
+    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0)
     calls: list[list[str]] = []
 
     def runner(command: list[str]) -> int:
@@ -233,10 +203,7 @@ def test_execute_cell_runs_stamps_and_reports_ok(tmp_path) -> None:
         return 0
 
     outcome = execute_cell(
-        cfg,
-        share=90,
-        burstiness=1.0,
-        max_concurrency=None,
+        cell,
         runner=runner,
         echo=lambda _line: None,
         warn=lambda _line: None,
@@ -252,14 +219,11 @@ def test_execute_cell_runs_stamps_and_reports_ok(tmp_path) -> None:
 
 def test_execute_cell_reports_failed_on_a_nonzero_exit(tmp_path) -> None:
     """A cell whose command exits non-zero reports FAILED and warns with the code."""
-    cfg = _config(out_dir=str(tmp_path))
+    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0)
     warned: list[str] = []
 
     outcome = execute_cell(
-        cfg,
-        share=90,
-        burstiness=1.0,
-        max_concurrency=None,
+        cell,
         runner=lambda _cmd: 7,
         echo=lambda _line: None,
         warn=warned.append,
@@ -271,14 +235,11 @@ def test_execute_cell_reports_failed_on_a_nonzero_exit(tmp_path) -> None:
 
 def test_execute_cell_reports_unannotated_when_no_result_file(tmp_path) -> None:
     """A cell that ran but wrote no result file cannot be stamped: UNANNOTATED."""
-    cfg = _config(out_dir=str(tmp_path))
+    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0)
     warned: list[str] = []
 
     outcome = execute_cell(
-        cfg,
-        share=90,
-        burstiness=1.0,
-        max_concurrency=None,
+        cell,
         runner=lambda _cmd: 0,
         echo=lambda _line: None,
         warn=warned.append,
@@ -290,17 +251,14 @@ def test_execute_cell_reports_unannotated_when_no_result_file(tmp_path) -> None:
 
 def test_execute_cell_names_the_closed_loop_file_by_its_cap(tmp_path) -> None:
     """A closed-loop cell writes and stamps the ``_mc{N}`` file its cap names."""
-    cfg = _config(out_dir=str(tmp_path))
+    cell = _cell(out_dir=str(tmp_path), share=90, burstiness=1.0, max_concurrency=32)
 
     def runner(command: list[str]) -> int:
         Path(_result_filename(command)).write_text(json.dumps({"model_id": "m"}))
         return 0
 
     outcome = execute_cell(
-        cfg,
-        share=90,
-        burstiness=1.0,
-        max_concurrency=32,
+        cell,
         runner=runner,
         echo=lambda _line: None,
         warn=lambda _line: None,
@@ -315,7 +273,7 @@ def test_execute_cell_names_the_closed_loop_file_by_its_cap(tmp_path) -> None:
 
 def test_dry_run_prints_every_cell_and_runs_none() -> None:
     """--dry-run echoes one command per cell and never invokes the runner."""
-    cfg = _config()
+    cfg = _sweep()
     printed: list[str] = []
     calls: list[list[str]] = []
 
@@ -336,7 +294,7 @@ def test_dry_run_prints_every_cell_and_runs_none() -> None:
 
 def test_run_sweep_invokes_the_runner_once_per_cell(tmp_path) -> None:
     """A live run fires one runner call per grid cell and succeeds when all pass."""
-    cfg = _config(out_dir=str(tmp_path))
+    cfg = _sweep(out_dir=str(tmp_path))
     calls: list[list[str]] = []
 
     def runner(command: list[str]) -> int:
@@ -364,7 +322,7 @@ def test_run_sweep_ladders_max_concurrency_into_distinct_files(tmp_path) -> None
     of one (share, burstiness) pair write distinct ``_mc{N}`` files (never colliding)
     and the operator's progress line carries the cap it is running.
     """
-    cfg = _config(
+    cfg = _sweep(
         prefix_shares=[90],
         burstiness_values=[1.0],
         max_concurrency_values=[8, 64],
@@ -399,7 +357,7 @@ def _result_filename(command: list[str]) -> str:
 
 def test_successful_cell_gets_its_prefix_share_injected(tmp_path) -> None:
     """After a cell writes its result JSON, the sweep injects that cell's share."""
-    cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
+    cfg = _sweep(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
 
     def runner(command: list[str]) -> int:
         # Stand in for vLLM: write the raw client JSON the flag names, no share.
@@ -423,7 +381,7 @@ def test_successful_cell_gets_its_prefix_share_injected(tmp_path) -> None:
 
 def test_unannotatable_cell_warns_and_fails_the_sweep(tmp_path) -> None:
     """A cell that ran but could not be stamped is not a clean success: warn + fail."""
-    cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
+    cfg = _sweep(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
     warned: list[str] = []
 
     code = run_sweep(
@@ -442,7 +400,7 @@ def test_unannotatable_cell_warns_and_fails_the_sweep(tmp_path) -> None:
 
 def test_non_object_result_file_is_not_annotated(tmp_path) -> None:
     """A result file that is a JSON array, not an object, warns and fails the sweep."""
-    cfg = _config(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
+    cfg = _sweep(prefix_shares=[90], burstiness_values=[1.0], out_dir=str(tmp_path))
     warned: list[str] = []
 
     def runner(command: list[str]) -> int:
@@ -464,7 +422,7 @@ def test_non_object_result_file_is_not_annotated(tmp_path) -> None:
 def test_run_sweep_creates_a_nested_out_dir(tmp_path) -> None:
     """A live run creates the out-dir, including missing parents."""
     out_dir = tmp_path / "results" / "run1"
-    cfg = _config(out_dir=str(out_dir))
+    cfg = _sweep(out_dir=str(out_dir))
 
     run_sweep(
         cfg,
@@ -488,39 +446,9 @@ def test_ensure_out_dir_reports_an_uncreatable_directory(tmp_path) -> None:
         ensure_out_dir(str(out_dir))
 
 
-@pytest.mark.parametrize(
-    ("share", "burstiness", "max_concurrency", "expected"),
-    [
-        (150, 1.0, None, "--share 150 out of range"),
-        (-10, 1.0, None, "--share -10 out of range"),
-        (50, 0.0, None, "--burstiness 0.0 out of range"),
-        (50, -0.5, None, "--burstiness -0.5 out of range"),
-        (50, 1.0, 0, "--max-concurrency 0 out of range"),
-        (50, 1.0, -4, "--max-concurrency -4 out of range"),
-    ],
-)
-def test_validate_cell_coordinate_rejects_out_of_range(
-    share: int, burstiness: float, max_concurrency: int | None, expected: str
-) -> None:
-    """A coordinate outside the grid's ranges fails fast before a cell is built."""
-    with pytest.raises(SweepError, match=expected):
-        validate_cell_coordinate(share, burstiness, max_concurrency)
-
-
-@pytest.mark.parametrize(
-    ("share", "burstiness", "max_concurrency"),
-    [(0, 1.0, None), (100, 0.2, None), (50, 1.0, 64), (0, 0.001, 1)],
-)
-def test_validate_cell_coordinate_accepts_in_range(
-    share: int, burstiness: float, max_concurrency: int | None
-) -> None:
-    """The grid's edge coordinates pass: share 0 and 100, a positive cap, low burstiness."""
-    validate_cell_coordinate(share, burstiness, max_concurrency)
-
-
 def test_failing_cell_does_not_abort_the_grid(tmp_path) -> None:
     """A cell's failure is tallied; the remaining cells still run; exit is non-zero."""
-    cfg = _config(
+    cfg = _sweep(
         prefix_shares=[10, 50, 90], burstiness_values=[1.0], out_dir=str(tmp_path)
     )
     attempted: list[str] = []

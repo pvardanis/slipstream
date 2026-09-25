@@ -16,8 +16,10 @@ import yaml
 from pydantic import ValidationError
 
 from slipstream_bench.sweep.config import (
+    CellConfig,
     SweepConfig,
     SweepError,
+    load_cell_config,
     load_sweep_config,
 )
 
@@ -236,5 +238,215 @@ def test_load_wraps_a_validation_failure(tmp_path: Path) -> None:
 
     with pytest.raises(SweepError, match="invalid sweep config"):
         load_sweep_config(
+            path, base_url="u", model="m", out_dir="/out", commercial=False
+        )
+
+
+# The shared knobs a cell YAML carries (no grid axes); the coordinate is layered on.
+_CELL_KNOBS = {
+    "total_len": 1000,
+    "num_prompts": 100,
+    "num_prefixes": 5,
+    "output_len": 128,
+    "align_blocks": 0,
+    "request_rate": 8,
+    "seed": 0,
+    "goodput": ["ttft:1000", "tpot:50"],
+}
+
+
+def _valid_cell(**overrides: object) -> dict[str, object]:
+    """A full, valid CellConfig payload (knobs + coordinate + context) with overrides."""
+    return {
+        **_CELL_KNOBS,
+        **_CONTEXT,
+        "share": 50,
+        "burstiness": 1.0,
+        **overrides,
+    }
+
+
+def _write_cell(tmp_path: Path, **overrides: object) -> Path:
+    """Write a cell-only config YAML (no reserved keys) and return its path."""
+    path = tmp_path / "cell.yaml"
+    payload = {**_CELL_KNOBS, "share": 50, "burstiness": 1.0, **overrides}
+    path.write_text(yaml.safe_dump(payload))
+    return path
+
+
+# --- CellConfig: the coordinate is the type's job to range-check ---------------
+
+
+def test_a_full_cell_validates() -> None:
+    """A cell with a valid coordinate validates into a frozen config."""
+    cell = CellConfig.model_validate(_valid_cell())
+
+    assert cell.share == 50
+    assert cell.burstiness == 1.0
+    assert cell.max_concurrency is None  # open-loop unless a cap is given
+
+
+def test_a_closed_loop_cell_carries_its_cap() -> None:
+    """A max_concurrency cap validates as a positive in-flight cap."""
+    assert (
+        CellConfig.model_validate(_valid_cell(max_concurrency=64)).max_concurrency == 64
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"share": 150}, "less than or equal to 100"),
+        ({"share": -5}, "greater than or equal to 0"),
+        ({"burstiness": 0}, "greater than 0"),
+        ({"burstiness": -0.5}, "greater than 0"),
+        ({"max_concurrency": 0}, "greater than 0"),
+        ({"max_concurrency": -4}, "greater than 0"),
+        ({"num_prompts": 2, "num_prefixes": 5}, "below num_prefixes"),
+        ({"commercial": True}, "tokenizer"),
+        ({"prefix_shares": [10, 50]}, "Extra inputs are not permitted"),
+        ({"unknown_knob": 1}, "Extra inputs are not permitted"),
+    ],
+)
+def test_cell_rejects_a_bad_config(overrides: dict[str, object], match: str) -> None:
+    """A coordinate out of range, or a bad shared knob, fails validation."""
+    with pytest.raises(ValidationError, match=match):
+        CellConfig.model_validate(_valid_cell(**overrides))
+
+
+def test_cell_edges_validate() -> None:
+    """The grid's edge coordinates pass: share 0 and 100, a positive cap."""
+    CellConfig.model_validate(_valid_cell(share=0, burstiness=0.001))
+    CellConfig.model_validate(_valid_cell(share=100, max_concurrency=1))
+
+
+# --- SweepConfig.cells(): the grid derives one CellConfig per point ------------
+
+
+def test_cells_yields_one_open_loop_cell_per_share_burstiness() -> None:
+    """With no ladder the grid is one open-loop cell per (share, burstiness), ordered."""
+    config = SweepConfig.model_validate(
+        _valid(prefix_shares=[10, 90], burstiness_values=[0.2, 1.0])
+    )
+
+    coords = [(c.share, c.burstiness, c.max_concurrency) for c in config.cells()]
+    assert coords == [
+        (10, 0.2, None),
+        (10, 1.0, None),
+        (90, 0.2, None),
+        (90, 1.0, None),
+    ]
+
+
+def test_cells_ladders_max_concurrency_innermost() -> None:
+    """The ladder is innermost: its rungs run contiguously within one (share, burstiness)."""
+    config = SweepConfig.model_validate(
+        _valid(
+            prefix_shares=[10, 90],
+            burstiness_values=[0.2, 1.0],
+            max_concurrency_values=[8, 16],
+        )
+    )
+
+    coords = [(c.share, c.burstiness, c.max_concurrency) for c in config.cells()]
+    assert coords == [
+        (10, 0.2, 8),
+        (10, 0.2, 16),
+        (10, 1.0, 8),
+        (10, 1.0, 16),
+        (90, 0.2, 8),
+        (90, 0.2, 16),
+        (90, 1.0, 8),
+        (90, 1.0, 16),
+    ]
+
+
+def test_cells_carry_the_shared_knobs() -> None:
+    """Each derived cell carries the sweep's shared knobs and execution context."""
+    config = SweepConfig.model_validate(
+        _valid(prefix_shares=[90], burstiness_values=[1.0], tokenizer="tok")
+    )
+
+    (cell,) = list(config.cells())
+    assert isinstance(cell, CellConfig)
+    assert cell.total_len == 1000
+    assert cell.seed == 0
+    assert cell.base_url == "http://localhost:8000"
+    assert cell.model == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert cell.out_dir == "bench/results"
+    assert cell.tokenizer == "tok"
+
+
+def test_laddered_cells_carry_the_shared_knobs_and_commercial_flag() -> None:
+    """Every laddered cell carries the shared knobs and the commercial flag verbatim."""
+    config = SweepConfig.model_validate(
+        _valid(
+            prefix_shares=[10, 90],
+            burstiness_values=[1.0],
+            max_concurrency_values=[8, 16],
+            commercial=True,
+            tokenizer="tok",
+        )
+    )
+
+    cells = list(config.cells())
+    assert len(cells) == 4  # 2 shares x 1 burstiness x 2 ladder rungs
+    # The commercial flag and shared knobs survive model_dump onto every derived cell.
+    assert all(c.commercial is True for c in cells)
+    assert all(c.tokenizer == "tok" for c in cells)
+    assert all(c.total_len == 1000 and c.seed == 0 for c in cells)
+
+
+# --- load_cell_config: bind context, guard reserved keys, wrap failures --------
+
+
+def test_load_cell_binds_the_cli_injected_context(tmp_path: Path) -> None:
+    """The cell loader injects base_url/model/out_dir/commercial onto the YAML knobs."""
+    path = _write_cell(tmp_path, share=90, burstiness=0.2)
+
+    cell = load_cell_config(
+        path,
+        base_url="http://127.0.0.1:9",
+        model="Qwen/Qwen3-8B-AWQ",
+        out_dir="/out",
+        commercial=False,
+    )
+
+    assert cell.base_url == "http://127.0.0.1:9"
+    assert cell.model == "Qwen/Qwen3-8B-AWQ"
+    assert cell.out_dir == "/out"
+    assert cell.share == 90
+    assert cell.burstiness == 0.2
+
+
+@pytest.mark.parametrize("key", ["base_url", "model", "out_dir", "commercial"])
+def test_load_cell_rejects_a_reserved_key(tmp_path: Path, key: str) -> None:
+    """A cell config may not set a CLI-injected key; model.yaml is the model SoT."""
+    path = _write_cell(tmp_path, **{key: "x"})
+
+    with pytest.raises(SweepError, match=key):
+        load_cell_config(
+            path, base_url="u", model="m", out_dir="/out", commercial=False
+        )
+
+
+def test_load_cell_reports_a_missing_config(tmp_path: Path) -> None:
+    """A missing cell config fails fast with the path, not a traceback."""
+    with pytest.raises(SweepError, match="not found"):
+        load_cell_config(
+            tmp_path / "absent.yaml",
+            base_url="u",
+            model="m",
+            out_dir="/out",
+            commercial=False,
+        )
+
+
+def test_load_cell_wraps_a_validation_failure(tmp_path: Path) -> None:
+    """A schema-invalid cell config is wrapped in a SweepError naming the file."""
+    path = _write_cell(tmp_path, share=150)
+
+    with pytest.raises(SweepError, match="invalid cell config"):
+        load_cell_config(
             path, base_url="u", model="m", out_dir="/out", commercial=False
         )
