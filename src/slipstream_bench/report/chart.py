@@ -16,6 +16,7 @@ caching-on spans the swept shares: a ragged grid, no duplicated null cells.
 
 import json
 from pathlib import Path
+from typing import TypedDict
 
 import matplotlib
 
@@ -225,7 +226,14 @@ def _row_cells(row: CeilingRow) -> list[str]:
     ]
 
 
-def _share_label(row: CeilingRow) -> str:
+class _ShareRow(TypedDict):
+    """The caching/share pair a share label reads, shared by ceiling and rung rows."""
+
+    prefix_caching: bool
+    prefix_share: int
+
+
+def _share_label(row: _ShareRow) -> str:
     """Label a row's share: the swept share, or n/a when caching is off."""
     return _NO_SHARE_LABEL if not row["prefix_caching"] else str(row["prefix_share"])
 
@@ -268,15 +276,15 @@ def _condition_order(frame: pd.DataFrame) -> list[str]:
         ["condition", "prefix_caching", "prefix_share"]
     ].drop_duplicates()
 
-    def sort_key(row: tuple) -> tuple[int, int]:
-        caching_rank = 0 if row.prefix_caching == "off" else 1
+    def sort_key(row: dict) -> tuple[int, int]:
+        caching_rank = 0 if row["prefix_caching"] == "off" else 1
         share_rank = (
-            -1 if row.prefix_share == _NO_SHARE_LABEL else int(row.prefix_share)
+            -1 if row["prefix_share"] == _NO_SHARE_LABEL else int(row["prefix_share"])
         )
         return (caching_rank, share_rank)
 
-    ordered = sorted(conditions.itertuples(index=False), key=sort_key)
-    return [row.condition for row in ordered]
+    ordered = sorted(conditions.to_dict("records"), key=sort_key)
+    return [str(row["condition"]) for row in ordered]
 
 
 def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
