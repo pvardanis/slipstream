@@ -21,7 +21,11 @@ from slipstream_bench.sweep.aggregation import (
     SweepAggregationError,
     aggregate_ceilings,
 )
-from slipstream_bench.sweep.config import SweepError, load_sweep_config
+from slipstream_bench.sweep.config import (
+    SweepConfig,
+    SweepError,
+    load_sweep_config,
+)
 from slipstream_bench.sweep.grid import (
     SweepGridError,
     SweepGridPart,
@@ -86,6 +90,44 @@ def run_cell(command: list[str], *, extra_env: Mapping[str, str] | None = None) 
         ) from error
 
 
+def _load_config_and_key(
+    config: Path,
+    *,
+    base_url: str,
+    model: str,
+    out_dir: str,
+    api_key_env: str | None,
+    dry_run: bool,
+) -> tuple[SweepConfig, dict[str, str] | None]:
+    """Resolve the api-key and load the config both load-sweep and load-cell share.
+
+    A dry run builds no cells and touches no endpoint, so it does not need the key
+    resolved — preview a commercial run without exporting a secret.
+
+    :param config: the experiment-definition YAML.
+    :param base_url: the endpoint the run targets.
+    :param model: the served model id (from model.yaml).
+    :param out_dir: the directory for the per-cell result JSON.
+    :param api_key_env: env var holding the commercial key, or None for the
+        self-hosted arm.
+    :param dry_run: when true, skip resolving the key.
+    :return: the validated config and the child-process env overlay (the resolved
+        key, or None for a self-hosted or dry run).
+    :raise SweepError: on an invalid config, or an unset key var on a live run.
+    """
+    extra_env = (
+        resolve_api_key_env(api_key_env) if api_key_env and not dry_run else None
+    )
+    cfg = load_sweep_config(
+        config,
+        base_url=base_url,
+        model=model,
+        out_dir=out_dir,
+        commercial=api_key_env is not None,
+    )
+    return cfg, extra_env
+
+
 @app.command("load-sweep")
 def load_sweep(
     *,
@@ -121,17 +163,13 @@ def load_sweep(
     """Sweep vllm bench serve across the prefix-share x burstiness grid a config
     defines."""
     try:
-        # A dry run builds no cells and touches no endpoint, so it does not need
-        # the key resolved — preview a commercial sweep without exporting a secret.
-        extra_env = (
-            resolve_api_key_env(api_key_env) if api_key_env and not dry_run else None
-        )
-        cfg = load_sweep_config(
+        cfg, extra_env = _load_config_and_key(
             config,
             base_url=base_url,
             model=model,
             out_dir=out_dir,
-            commercial=api_key_env is not None,
+            api_key_env=api_key_env,
+            dry_run=dry_run,
         )
         code = run_sweep(
             cfg,
@@ -202,17 +240,13 @@ def load_cell(
     could not be stamped, 2 on an invalid config or unset key.
     """
     try:
-        # A dry run builds no cell and touches no endpoint, so it does not need the
-        # key resolved — preview a commercial cell without exporting a secret.
-        extra_env = (
-            resolve_api_key_env(api_key_env) if api_key_env and not dry_run else None
-        )
-        cfg = load_sweep_config(
+        cfg, extra_env = _load_config_and_key(
             config,
             base_url=base_url,
             model=model,
             out_dir=out_dir,
-            commercial=api_key_env is not None,
+            api_key_env=api_key_env,
+            dry_run=dry_run,
         )
         if dry_run:
             typer.echo(
