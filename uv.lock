@@ -3550,13 +3550,17 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "pandas" },
-    { name = "prefect" },
-    { name = "prefect-aws" },
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "seaborn" },
     { name = "typer" },
+]
+
+[package.optional-dependencies]
+orchestration = [
+    { name = "prefect" },
+    { name = "prefect-aws" },
 ]
 
 [package.dev-dependencies]
@@ -3569,14 +3573,15 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pandas", specifier = ">=3" },
-    { name = "prefect", specifier = ">=3" },
-    { name = "prefect-aws", specifier = ">=0.7.12" },
+    { name = "prefect", marker = "extra == 'orchestration'", specifier = ">=3" },
+    { name = "prefect-aws", marker = "extra == 'orchestration'", specifier = ">=0.7.12" },
     { name = "prometheus-client", specifier = ">=0.26.0" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "seaborn", specifier = ">=0.13" },
     { name = "typer", specifier = ">=0.12" },
 ]
+provides-extras = ["orchestration"]
 
 [package.metadata.requires-dev]
 dev = [
