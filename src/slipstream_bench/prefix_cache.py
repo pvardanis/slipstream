@@ -212,7 +212,8 @@ def scrape_prefix_cache(
     selected_model = model or record.get("model_id")
     if not isinstance(selected_model, str) or not selected_model:
         raise PrefixCacheError(
-            f"could not determine model from {result}: no model_id and no model given"
+            f"could not determine model from {result}: model_id {selected_model!r} "
+            f"is not a usable string and no model given"
         )
 
     before = _read_metrics_snapshot(metrics_before)

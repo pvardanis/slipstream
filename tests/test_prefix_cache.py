@@ -404,6 +404,20 @@ def test_missing_model_selector_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_non_string_model_id_is_rejected(tmp_path: Path) -> None:
+    """A non-string model_id cannot select a Prometheus series; reject it, not a
+    truthy non-str slipping into the selector."""
+    numeric = tmp_path / "numeric.json"
+    numeric.write_text(json.dumps({"model_id": 123, "completed": 5}))
+    with pytest.raises(PrefixCacheError, match="could not determine model"):
+        scrape_prefix_cache(
+            metrics_before=_snapshot(tmp_path, "b.prom", 1000.0, 200.0),
+            metrics_after=_snapshot(tmp_path, "a.prom", 1100.0, 210.0),
+            result=numeric,
+            cache_state=CacheState.cold,
+        )
+
+
 def test_stub_client_json_is_rejected(tmp_path: Path) -> None:
     """A truncated run leaves valid JSON with no model_id; reject it."""
     stub = tmp_path / "stub.json"
