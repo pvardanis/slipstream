@@ -55,7 +55,7 @@ fi
 
 # The short hash of the last commit touching any image input. A change to any of
 # these is what a new content tag must capture. The pathspec watches the whole bench/
-# directory, and bench/load-sweep.yaml and bench/cell.yaml live under it — but those
+# directory, and bench/load-sweep.yaml and bench/load-cell.yaml live under it — but those
 # files are the experiment/cell config mounted into the container at run time, not baked
 # into the image, so they are excluded: editing them leaves the tokenizer-and-harness
 # image unchanged and must not roll the tag or force a rebuild of identical bits. The PR
@@ -68,7 +68,7 @@ image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
     bench src pyproject.toml model.yaml \
-    ':(exclude)bench/load-sweep.yaml' ':(exclude)bench/cell.yaml')"
+    ':(exclude)bench/load-sweep.yaml' ':(exclude)bench/load-cell.yaml')"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2

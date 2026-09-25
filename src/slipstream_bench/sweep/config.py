@@ -289,7 +289,7 @@ def load_cell_config(
     injected from the CLI. The coordinate is range-checked as the ``CellConfig`` fields
     validate. See :func:`_load_config`.
 
-    :param path: the config YAML file, e.g. bench/cell.yaml.
+    :param path: the config YAML file, e.g. bench/load-cell.yaml.
     :param base_url: the endpoint the cell targets.
     :param model: the served model id (from model.yaml via image-tag.sh hf-id).
     :param out_dir: the directory for this cell's result JSON.

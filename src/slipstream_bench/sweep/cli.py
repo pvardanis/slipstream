@@ -180,7 +180,7 @@ def load_cell(
             help="The cell-definition YAML: the coordinate (share, burstiness, "
             "optional max_concurrency) plus the shared lengths, SLO, seed.",
         ),
-    ] = Path("bench/cell.yaml"),
+    ] = Path("bench/load-cell.yaml"),
     base_url: Annotated[
         str, typer.Option(help="OpenAI-compatible endpoint the cell targets.")
     ] = "http://localhost:8000",

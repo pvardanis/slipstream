@@ -125,7 +125,7 @@ classifies with). The rewrite from bash is recorded in
 - **`load-cell`** — run one `vllm bench serve` cell: its coordinate (`share`,
   `burstiness`, and an optional `max_concurrency` cap) and the shared knobs
   (lengths, SLO, seed) both come from a cell YAML passed as `--config` (default
-  `bench/cell.yaml`), and one result JSON is written. The orchestrator renders one
+  `bench/load-cell.yaml`), and one result JSON is written. The orchestrator renders one
   such cell per grid point from a `load-sweep` config; this is the grain the
   bench-client container executes now that the per-cell loop lives in the
   orchestration layer ([`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)
