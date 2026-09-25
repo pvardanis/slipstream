@@ -58,7 +58,9 @@ fi
 # directory, and bench/load-sweep.yaml lives under it — but that file is the experiment
 # config mounted into the container at sweep time, not baked into the image, so it is
 # excluded: editing it leaves the tokenizer-and-harness image unchanged and must not
-# roll the tag or force a rebuild of identical bits. This names committed state only:
+# roll the tag or force a rebuild of identical bits. The PR build gate in
+# .github/workflows/ci.yml (bench-image-build) mirrors this pathspec as a
+# dorny/paths-filter list: keep the two in sync. This names committed state only:
 # uncommitted edits to the inputs are not reflected, since the image is built from the
 # committed tree (in CI, from the pushed commit). Empty means nothing is committed yet —
 # a content tag would be a lie, so fail loudly rather than tag `-`.
