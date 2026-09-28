@@ -4,7 +4,7 @@ Covers the tier1 knobs parsed off the point slug, the tier2 knobs read off the c
 and the open-loop cell whose absent concurrency cap tags ``mc=open``.
 """
 
-from slipstream_bench.orchestration.task_labels import cell_run_tags
+from slipstream_bench.orchestration.task_labels import get_cell_run_tags
 from slipstream_bench.sweep.config import CellConfig
 
 _SHARED_KNOBS = {
@@ -29,7 +29,7 @@ def _cell(**overrides: object) -> CellConfig:
 
 
 def test_a_closed_loop_cell_tags_each_tier1_and_tier2_knob() -> None:
-    tags = cell_run_tags("mns64_kvfp8_pcon", _cell(max_concurrency=64))
+    tags = get_cell_run_tags("mns64_kvfp8_pcon", _cell(max_concurrency=64))
 
     assert tags == [
         "mns=64",
@@ -42,7 +42,7 @@ def test_a_closed_loop_cell_tags_each_tier1_and_tier2_knob() -> None:
 
 
 def test_prefix_caching_off_tags_pc_off() -> None:
-    tags = cell_run_tags("mns128_kvfp16_pcoff", _cell(prefix_share=0))
+    tags = get_cell_run_tags("mns128_kvfp16_pcoff", _cell(prefix_share=0))
 
     assert "pc=off" in tags
     assert "kv=fp16" in tags
@@ -50,6 +50,6 @@ def test_prefix_caching_off_tags_pc_off() -> None:
 
 
 def test_an_open_loop_cell_tags_mc_open() -> None:
-    tags = cell_run_tags("mns64_kvfp8_pcon", _cell(max_concurrency=None))
+    tags = get_cell_run_tags("mns64_kvfp8_pcon", _cell(max_concurrency=None))
 
     assert "mc=open" in tags
