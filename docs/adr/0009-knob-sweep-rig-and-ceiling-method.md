@@ -144,6 +144,14 @@ single-config cost×prefix economics join, a different key and output.
   rate — and is parked at a neutral `1.0`. The open-loop workload — finite `request_rate` with
   bursty arrivals (`burstiness < 1`) to exercise scale-up/down — is deferred to the autoscaler
   epic and is not swept here.
+- **Industry-standard synthetic lengths, ceiling reported at that context.** The workload uses
+  standard synthetic lengths — `total_len ≈ 1000` input, `output_len = 128` — matching vLLM's
+  documented `prefix_repetition` example and the ~550–1024 input / 128–150 output band every
+  serving benchmark (vLLM, GenAI-Perf, LLMPerf) uses. The concurrency ceiling is therefore
+  reported **at ~1k context**. This is a showcase of standard serving benchmarks, not a capacity
+  study of the §3.1 "~50 seqs @4k" envelope: that figure is the config's theoretical KV headroom,
+  a different quantity from the measured ceiling, which scales roughly inversely with per-request
+  context length. Lengths are pinned representative points, not swept.
 - **Offline batch artifact, not telemetry.** The chart is a decision document, not a Grafana
   panel. Grafana (epic #19) later reads live Prometheus — TTFT/TPOT/throughput/prefix-cache-hits
   directly, goodput as a derived PromQL panel over the *same* shared SLO thresholds.
