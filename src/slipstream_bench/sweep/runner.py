@@ -77,7 +77,7 @@ def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int
     return prefix_len, total_len - prefix_len
 
 
-def cell_basename(cell: CellConfig) -> str:
+def get_cell_basename(cell: CellConfig) -> str:
     """Name the result JSON one cell writes, without its directory.
 
     A closed-loop cell carries its cap in the name so ladder rungs never collide;
@@ -88,9 +88,9 @@ def cell_basename(cell: CellConfig) -> str:
     return f"pshare{cell.prefix_share}_burst{cell.burstiness}{cap}.json"
 
 
-def _result_file(cell: CellConfig) -> str:
+def _get_result_file(cell: CellConfig) -> str:
     """Name a distinct result JSON for one cell, under its output dir."""
-    return f"{cell.out_dir}/{cell_basename(cell)}"
+    return f"{cell.out_dir}/{get_cell_basename(cell)}"
 
 
 def cell_command(cell: CellConfig) -> list[str]:
@@ -169,7 +169,7 @@ def cell_command(cell: CellConfig) -> list[str]:
         "--save-result",
         "--save-detailed",
         "--result-filename",
-        _result_file(cell),
+        _get_result_file(cell),
     ]
 
 
@@ -260,7 +260,7 @@ def execute_cell(
         :func:`split_lengths`).
     """
     command = cell_command(cell)
-    result_file = _result_file(cell)
+    result_file = _get_result_file(cell)
     label = _cell_label(cell)
     echo(f"==> {label} -> {result_file}")
     code = runner(command)

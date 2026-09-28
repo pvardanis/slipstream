@@ -16,7 +16,7 @@ from typing import Annotated
 
 import typer
 
-from slipstream_bench.orchestration.digest import config_digest, read_image_ref
+from slipstream_bench.orchestration.digest import DigestInputs
 from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
 
 app = typer.Typer(
@@ -35,9 +35,7 @@ def build_sweep_context(
     image_ref: str,
     bucket: str,
     model: str,
-    model_yaml: Path,
-    sweep_grid: Path,
-    vllm_manifest: Path,
+    digest_inputs: DigestInputs,
     commercial: bool = False,
     sweep_args_b64: str = "",
 ) -> SweepContext:
@@ -53,22 +51,15 @@ def build_sweep_context(
     :param image_ref: the bench-client image the cells run.
     :param bucket: the results bucket.
     :param model: the served model id.
-    :param model_yaml: ``model.yaml`` (model identity), a digest input.
-    :param sweep_grid: ``sweep-grid.yaml`` (swept knobs), a digest input.
-    :param vllm_manifest: ``k8s/vllm-gpu.yaml``, holding the serving image ref.
+    :param digest_inputs: the three files the deep config digest is folded from.
     :param commercial: whether this is the commercial arm.
     :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
     :return: the fully-populated :class:`SweepContext`.
     """
-    digest = config_digest(
-        model_yaml=model_yaml.read_bytes(),
-        sweep_grid_yaml=sweep_grid.read_bytes(),
-        image_ref=read_image_ref(vllm_manifest),
-    )
     return SweepContext(
         run_id=run_id,
         point_slug=point_slug,
-        digest=digest,
+        digest=digest_inputs.digest(),
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
@@ -140,9 +131,11 @@ def point_sweep(
         image_ref=image_ref,
         bucket=bucket,
         model=model,
-        model_yaml=model_yaml,
-        sweep_grid=sweep_grid,
-        vllm_manifest=vllm_manifest,
+        digest_inputs=DigestInputs(
+            model_yaml=model_yaml,
+            sweep_grid=sweep_grid,
+            vllm_manifest=vllm_manifest,
+        ),
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )

@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import app, build_sweep_context
-from slipstream_bench.orchestration.digest import config_digest
+from slipstream_bench.orchestration.digest import DigestInputs, config_digest
 from slipstream_bench.orchestration.flow import SweepContext
 
 _MODEL_YAML = b"hfId: Qwen/Qwen2.5-0.5B-Instruct\n"
@@ -52,9 +52,11 @@ def test_build_sweep_context_folds_the_deep_digest(tmp_path: Path) -> None:
         image_ref="repo:tag",
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
-        model_yaml=model_yaml,
-        sweep_grid=grid_yaml,
-        vllm_manifest=manifest,
+        digest_inputs=DigestInputs(
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        ),
     )
 
     assert context.digest == config_digest(

@@ -15,15 +15,16 @@ from pathlib import Path
 import pytest
 
 from slipstream_bench.orchestration.cell_run import (
+    CellExecutionContext,
     CellResultError,
     build_cell_command,
     build_cell_execution,
-    cell_result_uri,
-    cell_s3_key,
+    get_cell_result_uri,
+    get_cell_s3_key,
     render_cell_config,
 )
 from slipstream_bench.sweep.config import load_cell_config, load_sweep_config
-from slipstream_bench.sweep.runner import cell_basename
+from slipstream_bench.sweep.runner import get_cell_basename
 
 
 def _first_cell():
@@ -68,13 +69,13 @@ def test_render_cell_config_omits_the_cli_injected_keys() -> None:
 def test_cell_result_uri_addresses_the_run_prefix() -> None:
     cell = _first_cell()
 
-    uri = cell_result_uri("bench-bucket", "20260101T000000Z/mns64", cell)
+    uri = get_cell_result_uri("bench-bucket", "20260101T000000Z/mns64", cell)
 
     assert uri == (
-        f"s3://bench-bucket/sweeps/20260101T000000Z/mns64/{cell_basename(cell)}"
+        f"s3://bench-bucket/sweeps/20260101T000000Z/mns64/{get_cell_basename(cell)}"
     )
-    assert cell_s3_key("20260101T000000Z/mns64", cell) == (
-        f"sweeps/20260101T000000Z/mns64/{cell_basename(cell)}"
+    assert get_cell_s3_key("20260101T000000Z/mns64", cell) == (
+        f"sweeps/20260101T000000Z/mns64/{get_cell_basename(cell)}"
     )
 
 
@@ -139,17 +140,19 @@ def test_build_cell_execution_runs_then_downloads(tmp_path: Path) -> None:
     dest = tmp_path / "cell.json"
 
     execute = build_cell_execution(
-        cell=cell,
-        ssm_client=ssm,
-        s3_client=s3,
-        instance_id="i-1",
-        image_ref="repo:tag",
-        bucket="bench-bucket",
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        run_id="run1/mns64",
+        cell,
+        context=CellExecutionContext(
+            ssm_client=ssm,
+            s3_client=s3,
+            instance_id="i-1",
+            image_ref="repo:tag",
+            bucket="bench-bucket",
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            run_id="run1/mns64",
+            poll_interval_s=0.0,
+            sleep=lambda _s: None,
+        ),
         dest=dest,
-        poll_interval_s=0.0,
-        sleep=lambda _s: None,
     )
     execute()
 
@@ -160,7 +163,7 @@ def test_build_cell_execution_runs_then_downloads(tmp_path: Path) -> None:
         sent.split("CELL_CONFIG_B64='")[1].split("'")[0]
     ).decode()
     assert f"prefix_share: {cell.prefix_share}" in decoded
-    assert s3.downloads == [("bench-bucket", cell_s3_key("run1/mns64", cell))]
+    assert s3.downloads == [("bench-bucket", get_cell_s3_key("run1/mns64", cell))]
     assert dest.read_text(encoding="utf-8") == '{"completed": 1}'
 
 
@@ -171,17 +174,19 @@ class _DownloadFails:
 
 def test_build_cell_execution_wraps_a_missing_result(tmp_path: Path) -> None:
     execute = build_cell_execution(
-        cell=_first_cell(),
-        ssm_client=_FakeSsm(),
-        s3_client=_DownloadFails(),
-        instance_id="i-1",
-        image_ref="repo:tag",
-        bucket="bench-bucket",
-        model="Qwen/Qwen2.5-0.5B-Instruct",
-        run_id="run1/mns64",
+        _first_cell(),
+        context=CellExecutionContext(
+            ssm_client=_FakeSsm(),
+            s3_client=_DownloadFails(),
+            instance_id="i-1",
+            image_ref="repo:tag",
+            bucket="bench-bucket",
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            run_id="run1/mns64",
+            poll_interval_s=0.0,
+            sleep=lambda _s: None,
+        ),
         dest=tmp_path / "cell.json",
-        poll_interval_s=0.0,
-        sleep=lambda _s: None,
     )
 
     with pytest.raises(CellResultError, match="could not be downloaded"):
