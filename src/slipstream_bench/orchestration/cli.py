@@ -31,6 +31,17 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def _group() -> None:
+    """Keep the app a command group so its commands stay named subcommands.
+
+    Typer collapses a single-command app into a nameless root command, which would
+    make ``slipstream-orchestrate --run-id ...`` the invocation and reject the
+    documented ``slipstream-orchestrate point-sweep ...``. A callback holds the group
+    open so ``point-sweep`` stays a subcommand and further commands can be added.
+    """
+
+
 def build_sweep_context(
     *,
     run_id: str,
