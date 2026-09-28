@@ -48,20 +48,20 @@ RESERVED_KEYS = ("base_url", "model", "out_dir", "commercial")
 _KnobsT = TypeVar("_KnobsT", bound="Knobs")
 
 
-class Knobs(BaseModel):
-    """The knobs a sweep and a single cell share, minus the grid axes and coordinate.
+class LoadKnobs(BaseModel):
+    """The experiment-defining client-load knobs a sweep and a single cell share.
 
-    A whole-grid ``SweepConfig`` adds the axes it sweeps; a single ``CellConfig`` adds
-    the one coordinate it runs. Both range-check these shared knobs the same way, from
-    this one base, so the two paths never drift.
+    The knobs that define the workload independent of where it runs: token budget,
+    prompt and prefix counts, output length, arrival rate, SLO, seed, and the optional
+    prompt-synthesis tokenizer. The knob grid (``SweepGrid``) and a standalone
+    ``SweepConfig``/``CellConfig`` both carry these; ``Knobs`` layers the CLI-injected
+    execution context on top. Split out so ``SweepGrid`` can hold the fixed load knobs
+    without the injected fields (endpoint, served model, out dir) it has no business
+    setting.
     """
 
-    # ``model`` is a served-model id, not a pydantic ``model_``-namespaced field, so
-    # the protected namespace is cleared to name it plainly without a warning.
-    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    base_url: NonEmptyStr
-    model: NonEmptyStr
     total_len: PositiveInt
     num_prompts: PositiveInt
     num_prefixes: PositiveInt
@@ -69,10 +69,8 @@ class Knobs(BaseModel):
     align_blocks: NonNegativeInt
     request_rate: RequestRate
     seed: NonNegativeInt
-    out_dir: NonEmptyStr
     goodput: GoodputSlo
     tokenizer: str | None = None
-    commercial: bool = False
 
     @model_validator(mode="after")
     def _reject_fewer_prompts_than_prefixes(self) -> Self:
@@ -88,6 +86,26 @@ class Knobs(BaseModel):
                 f"{self.num_prefixes}: raise prompts or lower prefixes"
             )
         return self
+
+
+class Knobs(LoadKnobs):
+    """The load knobs plus the execution context injected from the CLI.
+
+    ``LoadKnobs`` defines the experiment; this adds where it runs: the endpoint, the
+    served model (model.yaml is its single source of truth), the output dir, and the
+    commercial-arm flag. A whole-grid ``SweepConfig`` and a single ``CellConfig``
+    extend this full model, so both range-check load knobs and context the same way;
+    a config YAML never authors the injected fields (see ``RESERVED_KEYS``).
+    """
+
+    # ``model`` is a served-model id, not a pydantic ``model_``-namespaced field, so
+    # the protected namespace is cleared to name it plainly without a warning.
+    model_config = ConfigDict(protected_namespaces=())
+
+    base_url: NonEmptyStr
+    model: NonEmptyStr
+    out_dir: NonEmptyStr
+    commercial: bool = False
 
     @model_validator(mode="after")
     def _require_tokenizer_when_commercial(self) -> Self:
