@@ -78,9 +78,18 @@ gpu-up:
     kubectl -n slipstream rollout status deploy/vllm-gpu --timeout=1200s
 
 # Scale the GPU replica to zero. The g5 node goes empty and Karpenter reaps it
-# after its consolidation window, returning GPU spend to zero (ADR-0006).
+# after its consolidation window, returning GPU spend to zero (ADR-0006). A run after
+# cluster-down leaves the API endpoint no longer resolving; kubectl then dies on a dial
+# error rather than no-op'ing. A gone cluster has no replica to scale and no g5 to reap,
+# so probe reachability and skip when it is gone.
 [group('serve')]
 gpu-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! kubectl cluster-info --request-timeout=5s >/dev/null 2>&1; then
+      echo "gpu-down: cluster API unreachable; nothing to scale (already torn down)" >&2
+      exit 0
+    fi
     kubectl -n slipstream scale deploy/vllm-gpu --replicas=0
 
 # Port-forward the service and curl a completion out of it.

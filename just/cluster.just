@@ -62,9 +62,18 @@ gpu-pool-up:
 # Terraform state, so reaping them here keeps `just cluster-down` from racing the controller
 # and orphaning a billing g5. Objects delete by name, so the manifest's unsubstituted
 # placeholders are irrelevant and no terraform lookup is needed — teardown never
-# blocks on eks state being reachable.
+# blocks on eks state being reachable. A re-run after cluster-down leaves the API
+# endpoint no longer resolving; kubectl then dies on a dial error rather than the no-op
+# --ignore-not-found gives for a missing object. A gone cluster has no NodePool to
+# delete and no g5 for Karpenter to reap, so probe reachability and skip when it is gone.
 [group('cluster')]
 gpu-pool-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! kubectl cluster-info --request-timeout=5s >/dev/null 2>&1; then
+      echo "gpu-pool-down: cluster API unreachable; nothing to reap (already torn down)" >&2
+      exit 0
+    fi
     kubectl delete -f {{ gpu_pool_manifests }} --ignore-not-found
 
 # Destroy the cluster (the bootstrap state bucket is left intact).
