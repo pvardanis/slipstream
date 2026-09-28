@@ -226,8 +226,11 @@ resource "aws_instance" "bench_host" {
   instance_type = var.bench_host_instance_type
   # First eks public subnet: the host needs its IGW route so the public IP can
   # reach ECR, Secrets Manager, SSM, S3 and the internet-facing ALB. This trusts
-  # the eks stack to keep those subnets internet-routable.
-  subnet_id                   = var.public_subnets[0]
+  # the eks stack to keep those subnets internet-routable. try() tolerates the empty
+  # default the destroy recipe leaves the var at: terraform still evaluates this index
+  # while building the destroy graph, and a bare public_subnets[0] on an empty list is
+  # an "Invalid index" that would block teardown from state.
+  subnet_id                   = try(var.public_subnets[0], null)
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.bench_host.id]
   iam_instance_profile        = aws_iam_instance_profile.bench_host.name
