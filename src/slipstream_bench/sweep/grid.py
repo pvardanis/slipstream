@@ -180,6 +180,7 @@ def build_point_sweep_config(
     model: str,
     out_dir: str,
     commercial: bool,
+    revision: str | None = None,
 ) -> SweepConfig:
     """Build one engine point's Tier-2 sweep from the grid, the point's single source.
 
@@ -197,6 +198,8 @@ def build_point_sweep_config(
     :param model: the served model id (from model.yaml, the model source of truth).
     :param out_dir: the directory for each cell's result JSON.
     :param commercial: whether this is the commercial arm (drives the tokenizer guard).
+    :param revision: the model's pinned Hugging Face commit (from model.yaml); None
+        floats ``main``.
     :return: the point's ``SweepConfig``: its arm's shares x the pinned burstiness x
         the concurrency ladder, carrying the grid's load knobs and the injected context.
     :raise SweepGridError: when the slug is not a point subdir name, names Tier-1
@@ -211,6 +214,7 @@ def build_point_sweep_config(
             **grid.load.model_dump(),
             base_url=base_url,
             model=model,
+            revision=revision,
             out_dir=out_dir,
             commercial=commercial,
             prefix_shares=arm.prefix_share,

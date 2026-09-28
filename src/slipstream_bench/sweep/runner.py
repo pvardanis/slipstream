@@ -121,6 +121,15 @@ def cell_command(cell: CellConfig) -> list[str]:
         if cell.tokenizer and cell.tokenizer.strip()
         else []
     )
+    # The image bakes the tokenizer under the model's commit sha with no refs/main, so
+    # an offline run asking for the default main ref cannot resolve it. Pinning the
+    # revision resolves the baked snapshot without a network call; a model that floats
+    # main pins none and the flag is left off.
+    revision_args = (
+        ["--tokenizer-revision", cell.revision]
+        if cell.revision and cell.revision.strip()
+        else []
+    )
     # A closed-loop cell caps in-flight requests with the client-side semaphore;
     # an open-loop cell omits the flag and lets the arrival rate alone limit load.
     concurrency_args = (
@@ -139,6 +148,7 @@ def cell_command(cell: CellConfig) -> list[str]:
         "--model",
         cell.model,
         *tokenizer_args,
+        *revision_args,
         "--endpoint",
         "/v1/completions",
         "--dataset-name",

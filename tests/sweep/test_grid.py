@@ -84,6 +84,7 @@ def _point_config(tmp_path: Path, point_slug: str) -> SweepConfig:
         model="Qwen/Qwen2.5-0.5B-Instruct",
         out_dir="/out",
         commercial=False,
+        revision="4da05a8edb55c6046cce958586c33b61da07bb79",
     )
 
 
@@ -122,6 +123,7 @@ def test_point_sweep_config_cells_carry_grid_load_knobs_and_context(
     assert cell.seed == 0
     assert cell.base_url == "http://127.0.0.1:0"
     assert cell.model == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert cell.revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
     assert cell.out_dir == "/out"
 
 

@@ -260,6 +260,30 @@ def test_load_cell_omits_the_cap_when_open_loop(tmp_path: Path) -> None:
     assert "--max-concurrency" not in result.stdout
 
 
+def test_load_cell_pins_the_tokenizer_revision_from_the_cli(tmp_path: Path) -> None:
+    """The injected revision reaches the command so vLLM resolves the baked tokenizer."""
+    result = _cell_dry_run(
+        _write_cell(tmp_path, prefix_share=90, burstiness=1.0),
+        "--revision",
+        "4da05a8edb55c6046cce958586c33b61da07bb79",
+    )
+
+    assert result.exit_code == 0, plain(result)
+    assert (
+        "--tokenizer-revision 4da05a8edb55c6046cce958586c33b61da07bb79" in result.stdout
+    )
+
+
+def test_load_cell_omits_the_revision_when_the_model_floats_main(
+    tmp_path: Path,
+) -> None:
+    """With no --revision the cell command pins none, letting vLLM float ``main``."""
+    result = _cell_dry_run(_write_cell(tmp_path, prefix_share=90, burstiness=1.0))
+
+    assert result.exit_code == 0, plain(result)
+    assert "--tokenizer-revision" not in result.stdout
+
+
 def test_load_cell_injects_context_from_the_cli(tmp_path: Path) -> None:
     """The endpoint, served model, and out-dir come from the CLI, not the config."""
     result = _cell_dry_run(
