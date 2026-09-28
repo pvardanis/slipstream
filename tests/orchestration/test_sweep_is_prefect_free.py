@@ -8,7 +8,8 @@ any such import — a fast, precise check that names the offending file. It sees
 static ``import`` statements in ``sweep/``'s own files, not dynamic imports or the
 transitive closure through other packages; ``test_import_contract`` covers that whole
 contract by importing ``sweep`` in a Prefect-free interpreter. Prefect-touching code
-lives in ``slipstream_bench.orchestration`` instead, imported lazily inside functions.
+lives in ``slipstream_bench.orchestration`` instead, imported only behind the
+``slipstream-orchestrate`` entry, which guards the extra first.
 """
 
 import ast

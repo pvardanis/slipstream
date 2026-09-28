@@ -7,9 +7,9 @@ per-cell ``execute_func`` calls: send the command, poll the invocation to a term
 state, return on ``Success`` and raise :class:`SsmError` (carrying the host's stderr)
 on any other outcome so the failure propagates out of the cell task uncached.
 
-``boto3`` ships in the ``orchestration`` extra (via ``prefect-aws``); it is imported
-lazily in :func:`build_ssm_client` so this module imports without it, matching the
-lazy-Prefect pattern the rest of the subpackage follows.
+``boto3`` ships in the ``orchestration`` extra (via ``prefect-aws``); the
+``slipstream-orchestrate`` entry (:mod:`slipstream_bench.orchestration.__main__`)
+guards that extra before this module is imported.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from typing import Any
+
+import boto3
 
 # Invocation states SSM settles into; any other, non-terminal state — Pending,
 # InProgress, Delayed, Cancelling, and so on — is still running and keeps the poll
@@ -76,6 +78,15 @@ def run_command(
         sleep(poll_interval_s)
 
 
+def build_ssm_client(region: str) -> Any:
+    """Build a boto3 SSM client for ``region`` from the ambient credential chain.
+
+    :param region: the AWS region the bench host runs in.
+    :return: a boto3 SSM client.
+    """
+    return boto3.client("ssm", region_name=region)
+
+
 def _send(client: Any, *, instance_id: str, command: str) -> str:
     """Send the shell command and return its command id."""
     try:
@@ -129,20 +140,3 @@ def _is_not_ready(error: Exception) -> bool:
     if isinstance(response, dict):
         return response.get("Error", {}).get("Code") == _NOT_READY
     return False
-
-
-def build_ssm_client(region: str) -> Any:
-    """Build a boto3 SSM client for ``region`` from the ambient credential chain.
-
-    :param region: the AWS region the bench host runs in.
-    :return: a boto3 SSM client.
-    :raise SsmError: when ``boto3`` (the ``orchestration`` extra) is not installed.
-    """
-    try:
-        import boto3
-    except ImportError as error:
-        raise SsmError(
-            "boto3 is not installed: the SSM transport needs the 'orchestration' "
-            "extra (pip install 'slipstream-bench[orchestration]')"
-        ) from error
-    return boto3.client("ssm", region_name=region)

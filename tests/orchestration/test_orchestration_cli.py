@@ -79,18 +79,9 @@ def test_point_sweep_echoes_each_cell_pointer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
-    monkeypatch.setattr(
-        "slipstream_bench.orchestration.ssm.build_ssm_client",
-        lambda _region: object(),
-    )
-    monkeypatch.setattr(
-        "slipstream_bench.orchestration.cell_run.build_s3_client",
-        lambda _region: object(),
-    )
-    monkeypatch.setattr(
-        "slipstream_bench.orchestration.cell_task.cell_task",
-        lambda _bucket, *, retries=0: object(),
-    )
+    monkeypatch.setattr(cli_module, "build_ssm_client", lambda _region: object())
+    monkeypatch.setattr(cli_module, "build_s3_client", lambda _region: object())
+    monkeypatch.setattr(cli_module, "cell_task", lambda _bucket, *, retries=0: object())
     captured: dict[str, object] = {}
 
     def _fake_run(**kwargs: object) -> list[str]:

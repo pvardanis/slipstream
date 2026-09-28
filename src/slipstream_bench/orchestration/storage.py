@@ -13,10 +13,8 @@ CLI already uses in ``just bench``.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from prefect_aws import S3Bucket
+from prefect_aws import S3Bucket
 
 _RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
 _RESULT_STORAGE_PREFIX = "prefect/results"
@@ -27,50 +25,15 @@ class StorageError(Exception):
     """A storage configuration that cannot point Prefect at S3."""
 
 
-def _get_s3_bucket_class() -> type[S3Bucket]:
-    """Import ``prefect_aws.S3Bucket`` lazily, naming the extra when it is absent.
-
-    Prefect ships only in the ``orchestration`` extra (ADR-0012 §Amendment), so the
-    likeliest failure here is calling a builder in an image that installed ``.``
-    without it. Turn Python's bare ``ModuleNotFoundError`` into a StorageError that
-    names the extra to install, matching the actionable messages the rest of this
-    module raises.
-    """
-    try:
-        from prefect_aws import S3Bucket
-    except ImportError as error:
-        raise StorageError(
-            "prefect_aws is not installed: orchestration storage needs the "
-            "'orchestration' extra (pip install 'slipstream-bench[orchestration]')"
-        ) from error
-    return S3Bucket
-
-
-def _require_bucket(bucket: str) -> str:
-    """Reject a blank bucket name at any builder entry, not only the env reader.
-
-    The bucket's existence and write permissions are not checked here; those
-    resolve at first write, when Prefect persists a result to S3.
-    """
-    name = bucket.strip()
-    if not name:
-        raise StorageError(
-            "bucket name is blank: Prefect result and cache-key storage must point "
-            "at an S3 bucket, not the local ~/.prefect/storage/ default"
-        )
-    return name
-
-
 def result_storage(bucket: str) -> S3Bucket:
     """Build the S3 block Prefect persists task results into.
 
     :param bucket: the results bucket (``RESULTS_BUCKET``), shared with the sweep's
         own ``s3://<bucket>/sweeps/…`` output under a separate prefix.
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the result prefix.
-    :raise StorageError: when ``bucket`` is blank or the ``orchestration`` extra
-        is not installed.
+    :raise StorageError: when ``bucket`` is blank.
     """
-    return _get_s3_bucket_class()(
+    return S3Bucket(
         bucket_name=_require_bucket(bucket), bucket_folder=_RESULT_STORAGE_PREFIX
     )
 
@@ -83,10 +46,9 @@ def cache_key_storage(bucket: str) -> S3Bucket:
 
     :param bucket: the results bucket (``RESULTS_BUCKET``).
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the cache-key prefix.
-    :raise StorageError: when ``bucket`` is blank or the ``orchestration`` extra
-        is not installed.
+    :raise StorageError: when ``bucket`` is blank.
     """
-    return _get_s3_bucket_class()(
+    return S3Bucket(
         bucket_name=_require_bucket(bucket), bucket_folder=_CACHE_KEY_STORAGE_PREFIX
     )
 
@@ -109,3 +71,18 @@ def results_bucket_from_env() -> str:
             "set it to the sweep results bucket (terraform results_bucket_name)"
         )
     return bucket
+
+
+def _require_bucket(bucket: str) -> str:
+    """Reject a blank bucket name at any builder entry, not only the env reader.
+
+    The bucket's existence and write permissions are not checked here; those
+    resolve at first write, when Prefect persists a result to S3.
+    """
+    name = bucket.strip()
+    if not name:
+        raise StorageError(
+            "bucket name is blank: Prefect result and cache-key storage must point "
+            "at an S3 bucket, not the local ~/.prefect/storage/ default"
+        )
+    return name

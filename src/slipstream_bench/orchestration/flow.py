@@ -15,8 +15,9 @@ the validity gate uncached and is re-attempted on the next whole-sweep run, not 
 in place. The proxy is a shared once-per-flow resource: a fully-resumed run still brings
 it up (cheap, idempotent) even though every cached cell skips its SSM side effects.
 
-Prefect is imported lazily inside :func:`run_point_sweep`, so this module imports
-without the ``orchestration`` optional deps, matching the rest of the subpackage.
+The ``orchestration`` extra Prefect ships in is guarded once, at the
+``slipstream-orchestrate`` entry (:mod:`slipstream_bench.orchestration.__main__`),
+before this module is imported.
 """
 
 from __future__ import annotations
@@ -24,18 +25,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+from prefect import Task, flow
 
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
     build_cell_execution,
     get_cell_result_uri,
 )
+from slipstream_bench.orchestration.ssm import run_command
 from slipstream_bench.sweep.config import load_sweep_config
 from slipstream_bench.sweep.runner import get_cell_basename
-
-if TYPE_CHECKING:
-    from prefect import Task
 
 # The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
 # per flow, before any cell, so the whole point's ladder shares one proxy.
@@ -125,7 +126,6 @@ def run_point_sweep(
     :param sleep: the wait function, injected for tests.
     :return: the S3 pointer for each cell, in enumeration order.
     """
-    from prefect import flow
 
     @flow(name="point-sweep")
     def _flow() -> list[str]:
@@ -157,8 +157,6 @@ def _drive_point_sweep(
     sleep: Callable[[float], None] | None,
 ) -> list[str]:
     """Bring the proxy up once, then run each enumerated cell through the task."""
-    from slipstream_bench.orchestration.ssm import run_command
-
     proxy_kwargs: dict[str, Any] = {
         "instance_id": context.instance_id,
         "command": proxy_command,
@@ -169,7 +167,7 @@ def _drive_point_sweep(
         proxy_kwargs["sleep"] = sleep
     run_command(ssm_client, **proxy_kwargs)
 
-    sweep = load_sweep_config(
+    sweep_config = load_sweep_config(
         config_path,
         base_url=_PLACEHOLDER_BASE_URL,
         model=context.model,
@@ -192,7 +190,7 @@ def _drive_point_sweep(
     )
 
     pointers: list[str] = []
-    for cell in sweep.cells():
+    for cell in sweep_config.cells():
         name = get_cell_basename(cell)
         dest = results_dir / name
         execute = build_cell_execution(cell, context=execution_context, dest=dest)
