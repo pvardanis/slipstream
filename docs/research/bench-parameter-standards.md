@@ -10,10 +10,10 @@ source (source code, official docs, or the MLPerf rules spec).
 
 | Knob | Our value |
 | --- | --- |
-| `num_prompts` (requests per grid cell) | 100 |
+| `num_prompts` (requests per grid cell) | 1000 |
 | `num_prefixes` (distinct shared prefixes) | 5 |
 | `output_len` | 128 tokens |
-| `request_rate` | 8 req/s |
+| `request_rate` | inf (closed-loop; the `--max-concurrency` ladder is the limiter) |
 | goodput SLO | TTFT p95 ≤ 1000 ms, TPOT ≤ 50 ms |
 
 ---
@@ -183,21 +183,19 @@ and no prefix-cache / shared-prefix dataset. No built-in TTFT/TPOT SLO gate.
 
 | Knob | Our value | Verdict vs norms |
 | --- | --- | --- |
-| `num_prompts = 100` | requests/cell | **Low for a stable p95/p99.** Matches vLLM's *example* (100) but is 1/10 of vLLM's argparse default (1000) and orders of magnitude below MLPerf's thousands. A p95 on 100 samples is the 5th-worst request; a p99 is barely defined. Fine for a p50/mean or a rough p95 trend; not defensible for a hard p99 gate. |
+| `num_prompts = 1000` | requests/cell | **Matches vLLM's argparse default (1000).** Gives ~50 samples above p95, enough for the stable p95 TTFT/TPOT gate this rig runs; still an order below MLPerf's thousands, which exist to stabilise a p99. Ample for a p95 gate, not sized for a p99. |
 | `num_prefixes = 5` | distinct prefixes | **Reasonable / on-spec.** Exactly vLLM's documented `prefix_repetition` example; half of vLLM's argparse default (10). Low prefix count = high cache reuse, which is the intended stress for a prefix-cache workload. |
 | `output_len = 128` | tokens | **Reasonable, on the short side.** Equals vLLM's `--random-output-len` and `--prefix-repetition-output-len` defaults (128) and GenAI-Perf's neighbourhood, but shorter than LLMPerf (150) and much shorter than MLPerf's dataset-driven ~294. Short outputs mean fewer decode steps, so TPOT is averaged over a short tail — acceptable but don't over-read TPOT stability. |
-| `request_rate = 8 req/s` | fixed | **Reasonable as a single operating point, but note nobody else fixes a single rate.** vLLM defaults to `inf` (saturation); GenAI-Perf and LLMPerf sweep concurrency; MLPerf searches for max QPS under the SLO. A single 8 req/s point gives one slice of the latency-vs-load curve; the standard practice is to sweep rate/concurrency and report the curve or the max sustainable rate. |
+| `request_rate = inf` | closed-loop | **Matches vLLM's default and standard practice.** vLLM defaults to `inf` (saturation); GenAI-Perf and LLMPerf sweep concurrency; MLPerf searches for max QPS under the SLO. The rig fires arrivals unthrottled and sweeps the `--max-concurrency` ladder, reading the ceiling off the concurrency axis (ADR-0009). |
 | SLO: TTFT p95 ≤ 1000 ms, TPOT ≤ 50 ms | goodput gate | **In a sane band, and stricter on TPOT than MLPerf's conversational tier.** MLPerf conversational TTFT is 2000 ms (ours 1000 is tighter); MLPerf interactive TTFT is 450–500 ms (ours is looser). Our TPOT 50 ms sits between MLPerf interactive (30–40 ms) and conversational (100–200 ms) — a reasonable "interactive-ish" target. Two caveats: (a) we gate on **p95**, whereas MLPerf gates on **p99** — p95 is the more forgiving and the more estimable at low N; (b) our TPOT gate reads as a mean/threshold, not a percentile — confirm which we compute. |
 
 ### Headline
 
-Our per-knob values are individually sane and clearly modelled on vLLM's published
-`prefix_repetition` example (num_prompts 100 / num_prefixes 5 / output_len 128 line
-up one-for-one). The one real weakness is **sample size**: `num_prompts = 100` is too
-small for a trustworthy p95, and far too small for any p99, by the standard every
-serious benchmark sets — vLLM defaults to 1000, and MLPerf runs thousands precisely
-because tail percentiles need them. If the p95 TTFT / TPOT gate is load-bearing,
-raise requests-per-cell (≥500–1000) or relax the reported statistic to p50/mean with
-a p95 shown only as a trend. Fixing a single 8 req/s point (rather than sweeping
-rate/concurrency like every tool here) is a deliberate simplification worth stating
-explicitly, since it captures one slice of the load curve rather than the curve.
+The per-knob values are individually sane and modelled on vLLM's published
+`prefix_repetition` example (num_prefixes 5 / output_len 128 line up one-for-one),
+with `num_prompts` raised to vLLM's argparse default of 1000 so the p95 TTFT / TPOT
+gate rests on ~50 tail samples. That still trails MLPerf's thousands, which exist to
+stabilise a p99, so the gate stays scoped to p95, not p99. Load is generated the way
+every tool here does it: fire arrivals unthrottled (`request_rate = inf`) and sweep
+the `--max-concurrency` ladder, reading the ceiling off the concurrency axis rather
+than fixing a single arrival rate (ADR-0009).
