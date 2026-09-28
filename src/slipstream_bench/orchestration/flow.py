@@ -3,8 +3,9 @@
 ADR-0012 §Amendment: the Tier-2 grid loop lives in the orchestration layer, and each
 cell is one ``docker run`` on the bench host over SSM. :func:`run_point_sweep` drives
 **one engine point**'s cells (the Tier-1 GPU redeploy stays in the justfile, ADR-0012
-§"Scope boundaries"): it brings the loopback mTLS proxy up once, enumerates the point's
-cells from a ``SweepConfig``, and runs each through the cell task keyed
+§"Scope boundaries"): it brings the loopback mTLS proxy up once, derives the point's
+cells from ``sweep-grid.yaml`` (the single source of the grid and load knobs), and runs
+each through the cell task keyed
 ``digest:point-slug:cell-name`` so an interrupted run re-runs only the cells that do not
 already hold a valid measurement.
 
@@ -35,7 +36,7 @@ from slipstream_bench.orchestration.cell_run import (
     get_cell_result_uri,
 )
 from slipstream_bench.orchestration.ssm import run_command
-from slipstream_bench.sweep.config import load_sweep_config
+from slipstream_bench.sweep.grid import load_grid, point_sweep_config
 from slipstream_bench.sweep.runner import get_cell_basename
 
 # The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
@@ -101,7 +102,7 @@ class SweepContext:
 
 def run_point_sweep(
     *,
-    config_path: Path,
+    grid_path: Path,
     results_dir: Path,
     context: SweepContext,
     ssm_client: Any,
@@ -113,7 +114,8 @@ def run_point_sweep(
 ) -> list[str]:
     """Run one engine point's Tier-2 cells as resumable tasks, returning their pointers.
 
-    :param config_path: the point's ``SweepConfig`` YAML (grid axes + shared knobs).
+    :param grid_path: the ``sweep-grid.yaml`` the point's cells are derived from — the
+        single source of the grid axes and load knobs, and the file the digest is over.
     :param results_dir: the local directory each cell's result JSON downloads into
         (the validity gate's input).
     :param context: the per-run context (run id, point slug, digest, host, bucket).
@@ -136,7 +138,7 @@ def run_point_sweep(
     @flow(name="point-sweep")
     def _flow() -> list[str]:
         return _drive_point_sweep(
-            config_path=config_path,
+            grid_path=grid_path,
             results_dir=results_dir,
             context=context,
             ssm_client=ssm_client,
@@ -152,7 +154,7 @@ def run_point_sweep(
 
 def _drive_point_sweep(
     *,
-    config_path: Path,
+    grid_path: Path,
     results_dir: Path,
     context: SweepContext,
     ssm_client: Any,
@@ -173,8 +175,9 @@ def _drive_point_sweep(
         proxy_kwargs["sleep"] = sleep
     run_command(ssm_client, **proxy_kwargs)
 
-    sweep_config = load_sweep_config(
-        config_path,
+    sweep_config = point_sweep_config(
+        load_grid(grid_path),
+        context.point_slug,
         base_url=_PLACEHOLDER_BASE_URL,
         model=context.model,
         out_dir=str(results_dir),

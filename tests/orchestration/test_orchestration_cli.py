@@ -96,8 +96,6 @@ def test_point_sweep_echoes_each_cell_pointer(
     result = CliRunner().invoke(
         app,
         [
-            "--config",
-            str(grid_yaml),
             "--run-id",
             "run1/mns64",
             "--point-slug",

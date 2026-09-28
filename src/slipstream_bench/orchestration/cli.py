@@ -76,10 +76,6 @@ def build_sweep_context(
 @app.command("point-sweep")
 def point_sweep(
     *,
-    config: Annotated[
-        Path,
-        typer.Option(exists=True, dir_okay=False, help="The point's SweepConfig YAML."),
-    ],
     run_id: Annotated[
         str, typer.Option(help="Point-nested bucket prefix (<run>/<point-slug>).")
     ],
@@ -99,7 +95,9 @@ def point_sweep(
     sweep_grid: Annotated[
         Path,
         typer.Option(
-            exists=True, dir_okay=False, help="sweep-grid.yaml (digest input)."
+            exists=True,
+            dir_okay=False,
+            help="sweep-grid.yaml: the point's cells and a digest input.",
         ),
     ],
     vllm_manifest: Annotated[
@@ -143,7 +141,7 @@ def point_sweep(
         sweep_args_b64=sweep_args_b64,
     )
     cell_result_uris = run_point_sweep(
-        config_path=config,
+        grid_path=sweep_grid,
         results_dir=results_dir,
         context=context,
         ssm_client=build_ssm_client(region),

@@ -38,20 +38,33 @@ _VALID_RESULT = {
 # but an unhealthy-server result the validity gate rejects.
 _UNHEALTHY_RESULT = {**_VALID_RESULT, "completed": 50}
 
-# A closed-loop point config: the gate reuses the aggregate-sweep parser, which
-# requires each cell's max_concurrency cap — the knob sweep's Tier-2 ladder shape.
-_CLOSED_LOOP_CONFIG = """
-prefix_shares: [10, 50]
-burstiness_values: [1.0]
-max_concurrency_values: [64, 128]
-total_len: 1000
-num_prompts: 500
-num_prefixes: 5
-output_len: 128
-align_blocks: 0
-request_rate: 8
-seed: 0
-goodput: ["ttft:1000", "tpot:50"]
+# A closed-loop grid for the mns64_kvfp8_pcon point the context names: its 'on' arm
+# sweeps shares [10, 50] across the [64, 128] ladder at the pinned burstiness. The gate
+# reuses the aggregate-sweep parser, which requires each cell's max_concurrency cap —
+# the knob sweep's Tier-2 ladder shape.
+_CLOSED_LOOP_GRID = """
+tier1:
+  max_num_seqs: [64]
+  kv_cache_dtype: [fp8]
+  prefix_caching:
+    "on":
+      flag: --enable-prefix-caching
+      prefix_share: [10, 50]
+    "off":
+      flag: --no-enable-prefix-caching
+      prefix_share: [0]
+tier2:
+  max_concurrency: [64, 128]
+  burstiness: 1.0
+load:
+  total_len: 1000
+  num_prompts: 500
+  num_prefixes: 5
+  output_len: 128
+  align_blocks: 0
+  request_rate: 8
+  seed: 0
+  goodput: ["ttft:1000", "tpot:50"]
 """
 
 
@@ -121,15 +134,15 @@ def _context() -> SweepContext:
     )
 
 
-def _config(tmp_path: Path) -> Path:
-    path = tmp_path / "point-config.yaml"
-    path.write_text(_CLOSED_LOOP_CONFIG, encoding="utf-8")
+def _grid(tmp_path: Path) -> Path:
+    path = tmp_path / "sweep-grid.yaml"
+    path.write_text(_CLOSED_LOOP_GRID, encoding="utf-8")
     return path
 
 
 def _drive(tmp_path: Path, ssm: _FakeSsm, task, s3=None) -> list[str]:
     return run_point_sweep(
-        config_path=_config(tmp_path),
+        grid_path=_grid(tmp_path),
         results_dir=tmp_path / "results-local",
         context=_context(),
         ssm_client=ssm,
