@@ -125,12 +125,72 @@ def test_point_sweep_config_cells_carry_grid_load_knobs_and_context(
     assert cell.out_dir == "/out"
 
 
+@pytest.mark.parametrize(
+    ("slug", "mutate"),
+    [
+        # max_num_seqs the grid does not sweep.
+        ("mns999_kvfp8_pcon", lambda g: None),
+        # kv_cache_dtype the grid does not sweep.
+        ("mns64_kvfp16_pcon", lambda g: g["tier1"].update(kv_cache_dtype=["fp8"])),
+        # caching arm the grid does not carry.
+        ("mns64_kvfp8_pcoff", lambda g: g["tier1"]["prefix_caching"].pop("off")),
+    ],
+)
 def test_point_sweep_config_rejects_a_point_absent_from_the_grid(
-    tmp_path: Path,
+    tmp_path: Path, slug: str, mutate
 ) -> None:
     """A slug naming knobs the grid does not sweep fails fast, not with wrong cells."""
+    grid_dict = _valid_grid()
+    mutate(grid_dict)
+    grid = load_grid(_write_grid(tmp_path, grid_dict))
     with pytest.raises(SweepGridError, match="not a point this grid sweeps"):
-        _point_config(tmp_path, "mns999_kvfp8_pcon")
+        build_point_sweep_config(
+            grid,
+            slug,
+            base_url="http://127.0.0.1:0",
+            model="Qwen/Qwen2.5-0.5B-Instruct",
+            out_dir="/out",
+            commercial=False,
+        )
+
+
+def test_point_sweep_config_rejects_a_commercial_arm_without_a_tokenizer(
+    tmp_path: Path,
+) -> None:
+    """A commercial point whose grid load pins no tokenizer fails as a grid error."""
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    with pytest.raises(SweepGridError, match="tokenizer"):
+        build_point_sweep_config(
+            grid,
+            "mns64_kvfp8_pcon",
+            base_url="http://127.0.0.1:0",
+            model="gpt-4o-mini",
+            out_dir="/out",
+            commercial=True,
+        )
+
+
+def test_point_sweep_config_builds_a_commercial_arm_with_a_tokenizer(
+    tmp_path: Path,
+) -> None:
+    """A commercial point whose grid load pins a tokenizer builds its cells."""
+    load: dict[str, object] = dict(_LOAD)
+    load["tokenizer"] = "Qwen/Qwen2.5-0.5B-Instruct"
+    grid_dict = _valid_grid()
+    grid_dict["load"] = load
+    grid = load_grid(_write_grid(tmp_path, grid_dict))
+
+    config = build_point_sweep_config(
+        grid,
+        "mns64_kvfp8_pcon",
+        base_url="http://127.0.0.1:0",
+        model="gpt-4o-mini",
+        out_dir="/out",
+        commercial=True,
+    )
+
+    assert config.commercial is True
+    assert config.tokenizer == "Qwen/Qwen2.5-0.5B-Instruct"
 
 
 def test_point_sweep_config_rejects_a_malformed_slug(tmp_path: Path) -> None:

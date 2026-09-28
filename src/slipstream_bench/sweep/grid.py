@@ -199,23 +199,28 @@ def build_point_sweep_config(
     :param commercial: whether this is the commercial arm (drives the tokenizer guard).
     :return: the point's ``SweepConfig``: its arm's shares x the pinned burstiness x
         the concurrency ladder, carrying the grid's load knobs and the injected context.
-    :raise SweepGridError: when the slug is not a point subdir name, or names Tier-1
-        knobs this grid does not sweep — a mismatch would otherwise run the wrong cells.
-    :raise pydantic.ValidationError: when the derived config fails ``SweepConfig``
-        validation — e.g. a commercial arm whose ``grid.load`` pins no tokenizer.
+    :raise SweepGridError: when the slug is not a point subdir name, names Tier-1
+        knobs this grid does not sweep (a mismatch would otherwise run the wrong
+        cells), or the grid's load knobs cannot build a valid sweep for the point —
+        e.g. a commercial arm whose ``grid.load`` pins no tokenizer.
     """
     point = _parse_point_slug(point_slug)
     arm = _require_grid_arm(grid, point, point_slug)
-    return SweepConfig(
-        **grid.load.model_dump(),
-        base_url=base_url,
-        model=model,
-        out_dir=out_dir,
-        commercial=commercial,
-        prefix_shares=arm.prefix_share,
-        burstiness_values=[grid.tier2.burstiness],
-        max_concurrency_values=grid.tier2.max_concurrency,
-    )
+    try:
+        return SweepConfig(
+            **grid.load.model_dump(),
+            base_url=base_url,
+            model=model,
+            out_dir=out_dir,
+            commercial=commercial,
+            prefix_shares=arm.prefix_share,
+            burstiness_values=[grid.tier2.burstiness],
+            max_concurrency_values=grid.tier2.max_concurrency,
+        )
+    except ValidationError as error:
+        raise SweepGridError(
+            f"grid load knobs cannot build a valid sweep for {point_slug!r}:\n{error}"
+        ) from error
 
 
 def render_points(grid: SweepGrid) -> str:
