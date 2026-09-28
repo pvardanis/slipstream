@@ -36,7 +36,7 @@ from slipstream_bench.orchestration.cell_run import (
     get_cell_result_uri,
 )
 from slipstream_bench.orchestration.ssm import run_command
-from slipstream_bench.sweep.grid import load_grid, point_sweep_config
+from slipstream_bench.sweep.grid import build_point_sweep_config, load_grid
 from slipstream_bench.sweep.runner import get_cell_basename
 
 # The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
@@ -175,7 +175,7 @@ def _drive_point_sweep(
         proxy_kwargs["sleep"] = sleep
     run_command(ssm_client, **proxy_kwargs)
 
-    sweep_config = point_sweep_config(
+    sweep_config = build_point_sweep_config(
         load_grid(grid_path),
         context.point_slug,
         base_url=_PLACEHOLDER_BASE_URL,

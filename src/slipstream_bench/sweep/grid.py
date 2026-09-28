@@ -8,6 +8,12 @@ emits three things the recipe loop reads: the Tier-1 points (one per row, keyed 
 the slug an EnginePoint names), the Tier-2 --max-concurrency ladder, and the pinned
 burstiness. Points reuse EnginePoint from sweep.aggregation so the grid emits, the
 recipe writes, and the aggregator parses one slug format from one place.
+
+The grid also carries the fixed client-load knobs (a ``load`` section) every cell runs
+with, so :func:`build_point_sweep_config` can fold a single engine point's caching-arm
+shares, pinned burstiness, and concurrency ladder into the ``SweepConfig`` the
+orchestration driver enumerates — the grid alone, not a second load-sweep file, being
+the single source of a point's cells (ADR-0012).
 """
 
 from enum import StrEnum
@@ -166,7 +172,7 @@ def load_grid(path: Path) -> SweepGrid:
         raise SweepGridError(f"invalid sweep grid ({path}):\n{error}") from error
 
 
-def point_sweep_config(
+def build_point_sweep_config(
     grid: SweepGrid,
     point_slug: str,
     *,
@@ -195,6 +201,8 @@ def point_sweep_config(
         the concurrency ladder, carrying the grid's load knobs and the injected context.
     :raise SweepGridError: when the slug is not a point subdir name, or names Tier-1
         knobs this grid does not sweep — a mismatch would otherwise run the wrong cells.
+    :raise pydantic.ValidationError: when the derived config fails ``SweepConfig``
+        validation — e.g. a commercial arm whose ``grid.load`` pins no tokenizer.
     """
     point = _parse_point_slug(point_slug)
     arm = _require_grid_arm(grid, point, point_slug)
