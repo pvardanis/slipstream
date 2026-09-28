@@ -165,3 +165,32 @@ def test_the_task_run_name_reads_the_point_slug_and_cell_name(tmp_path: Path) ->
     # Prefect fills the template from the task's call parameters, so a run reads its
     # grid coordinate — tier1 point slug, then tier2 cell name — in the run list.
     assert task.task_run_name == "{point_slug}:{cell_name}"
+
+
+def test_the_task_run_name_renders_from_the_call_parameters(tmp_path: Path) -> None:
+    from prefect.runtime import task_run
+
+    task = _isolated_task(tmp_path)
+    path = tmp_path / "cell.json"
+    rendered: list[str | None] = []
+
+    def execute() -> None:
+        # Read the name Prefect rendered for this run, so a drift between the
+        # template's placeholders and the task's call parameters fails here.
+        rendered.append(task_run.get_name())
+        path.write_text(json.dumps(_VALID), encoding="utf-8")
+
+    @flow
+    def drive() -> str:
+        return task(
+            digest="d1",
+            point_slug="mns64_kvfp8_pcon",
+            cell_name="pshare50_burst1.0_mc64",
+            execute_func=execute,
+            result_path=path,
+            result_uri="s3://b/cell.json",
+        )
+
+    drive()
+
+    assert rendered == ["mns64_kvfp8_pcon:pshare50_burst1.0_mc64"]
