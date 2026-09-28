@@ -42,8 +42,10 @@ load:
   num_prefixes: 5
   # Output tokens per request.
   output_len: 128
-  # Floor the prefix to a multiple of N tokens; 0 disables alignment.
-  align_blocks: 0
+  # Floor the prefix to a multiple of vLLM's 16-token KV block so the shared prefix
+  # lands on block boundaries and the caching-on arm scores clean cache hits (an
+  # unaligned prefix recomputes its trailing tokens). 0 disables alignment.
+  align_blocks: 16
   # Unthrottled arrivals so the --max-concurrency ladder is the sole limiter: the
   # closed-loop ceiling method (ADR-0009) measures a count of simultaneous requests,
   # not an arrival rate. A finite rate would let the in-flight count float and queue
