@@ -6,6 +6,8 @@
 # already listening it is reused, else one is started in the background, waited on, and
 # stopped by an EXIT trap when the recipe's shell exits. The resumable cell cache lives
 # in S3 (ADR-0012), so a fresh local server per run still resumes already-valid cells.
+# Mid-run liveness is the orchestrator's concern: it fails loud if the API becomes
+# unreachable, so this only guarantees a reachable server at bring-up.
 #
 # shellcheck shell=bash
 prefect_server_up() {
@@ -17,20 +19,23 @@ prefect_server_up() {
   fi
   local host=127.0.0.1 port=4200
   export PREFECT_API_URL="http://${host}:${port}/api"
-  # A server the operator left running is reused rather than started a second time
-  # (a second bind on the port would fail).
+  # A server already listening (one the operator left running, or a concurrent run's on
+  # the shared local port) is reused rather than started a second time — a second bind
+  # would fail. Reuse trusts a healthy /health as a compatible Prefect server.
   if curl -sf "${PREFECT_API_URL}/health" >/dev/null 2>&1; then
     echo "reusing Prefect server at ${PREFECT_API_URL}" >&2
     return 0
   fi
   echo "starting local Prefect server at ${PREFECT_API_URL}..." >&2
-  local log=/tmp/prefect-server.log
+  # Per-run log name so concurrent runs do not clobber each other's startup log.
+  local log="/tmp/prefect-server.$$.log"
   uv run --extra orchestration prefect server start --host "${host}" --port "${port}" \
     >"${log}" 2>&1 &
   local pid=$!
-  # Stop only the server this run started, whatever the recipe's outcome. A sourced
-  # trap sets EXIT for the calling recipe shell, so the server does not outlive the run.
-  trap 'kill "'"${pid}"'" 2>/dev/null || true' EXIT
+  # Stop only the server this run started, whatever the recipe's outcome, reaping its
+  # child (the API worker) too so nothing is orphaned on the port. A sourced trap sets
+  # EXIT for the calling recipe shell, so the server does not outlive the run.
+  trap 'pkill -P "'"${pid}"'" 2>/dev/null; kill "'"${pid}"'" 2>/dev/null || true' EXIT
   # First start runs schema migrations, so allow a generous ceiling.
   local deadline=$((SECONDS + 120))
   while ((SECONDS < deadline)); do
