@@ -37,12 +37,6 @@ class SweepError(Exception):
     """A sweep input that cannot produce a meaningful measurement."""
 
 
-# Injected from the CLI, never authored in the config YAML: the endpoint, the served
-# model (model.yaml is its single source of truth, read via image-tag.sh hf-id), the
-# output dir, and whether this is the commercial arm. The loader rejects a config that
-# sets any of these, so the model SoT is never duplicated into the experiment file.
-RESERVED_KEYS = ("base_url", "model", "out_dir", "commercial")
-
 # The config model a loader validates against: a whole-grid SweepConfig or a single
 # CellConfig, both Knobs subclasses. Binds _load_config's return to the model passed in.
 _KnobsT = TypeVar("_KnobsT", bound="Knobs")
@@ -52,12 +46,12 @@ class LoadKnobs(BaseModel):
     """The experiment-defining client-load knobs a sweep and a single cell share.
 
     The knobs that define the workload independent of where it runs: token budget,
-    prompt and prefix counts, output length, arrival rate, SLO, seed, and the optional
-    prompt-synthesis tokenizer. The knob grid (``SweepGrid``) and a standalone
-    ``SweepConfig``/``CellConfig`` both carry these; ``Knobs`` layers the CLI-injected
-    execution context on top. Split out so ``SweepGrid`` can hold the fixed load knobs
-    without the injected fields (endpoint, served model, out dir) it has no business
-    setting.
+    prompt and prefix counts, output length, prefix block alignment, arrival rate, SLO,
+    seed, and the optional prompt-synthesis tokenizer. The knob grid (``SweepGrid``) and
+    a standalone ``SweepConfig``/``CellConfig`` both carry these; ``Knobs`` layers the
+    CLI-injected execution context on top. Separate from ``Knobs`` so ``SweepGrid`` can
+    hold the fixed load knobs without the injected fields (endpoint, served model, out
+    dir) it has no business setting.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -122,6 +116,17 @@ class Knobs(LoadKnobs):
                 "model will not resolve as a local tokenizer for prompt synthesis"
             )
         return self
+
+
+# Injected from the CLI, never authored in the config YAML: the fields ``Knobs`` adds
+# on top of ``LoadKnobs`` — the endpoint, the served model (model.yaml is its single
+# source of truth, read via image-tag.sh hf-id), the output dir, and the commercial
+# flag. Derived from the type delta so it cannot drift from the split: the loader
+# rejects a config that sets any of these, so the model SoT is never duplicated into
+# the experiment file.
+RESERVED_KEYS = tuple(
+    name for name in Knobs.model_fields if name not in LoadKnobs.model_fields
+)
 
 
 class CellConfig(Knobs):
