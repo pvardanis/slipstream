@@ -41,7 +41,7 @@ class SweepError(Exception):
 # model (model.yaml is its single source of truth, read via image-tag.sh hf-id), the
 # output dir, and whether this is the commercial arm. The loader rejects a config that
 # sets any of these, so the model SoT is never duplicated into the experiment file.
-_RESERVED_KEYS = ("base_url", "model", "out_dir", "commercial")
+RESERVED_KEYS = ("base_url", "model", "out_dir", "commercial")
 
 # The config model a loader validates against: a whole-grid SweepConfig or a single
 # CellConfig, both Knobs subclasses. Binds _load_config's return to the model passed in.
@@ -189,7 +189,7 @@ def _read_config_mapping(path: Path, *, label: str) -> dict[str, object]:
         raise SweepError(f"{label} is empty: {path}")
     if not isinstance(data, dict):
         raise SweepError(f"{label} must be a mapping: {path}")
-    reserved = [key for key in _RESERVED_KEYS if key in data]
+    reserved = [key for key in RESERVED_KEYS if key in data]
     if reserved:
         raise SweepError(
             f"{path} sets CLI-injected key(s) {', '.join(reserved)}: these come from "
