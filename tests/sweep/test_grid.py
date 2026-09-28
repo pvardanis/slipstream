@@ -12,16 +12,29 @@ from pathlib import Path
 import pytest
 import yaml
 
+from slipstream_bench.sweep.config import CellConfig, SweepConfig
 from slipstream_bench.sweep.grid import (
     SweepGrid,
     SweepGridError,
     load_grid,
+    point_sweep_config,
     render_burstiness,
     render_ladder,
     render_points,
 )
 
 REPO_GRID = Path("bench/sweep-grid.yaml")
+
+_LOAD = {
+    "total_len": 1000,
+    "num_prompts": 500,
+    "num_prefixes": 5,
+    "output_len": 128,
+    "align_blocks": 0,
+    "request_rate": 8,
+    "seed": 0,
+    "goodput": ["ttft:1000", "tpot:50"],
+}
 
 
 def _valid_grid() -> dict[str, object]:
@@ -35,6 +48,7 @@ def _valid_grid() -> dict[str, object]:
             },
         },
         "tier2": {"max_concurrency": [8, 16, 32, 64, 128, 256], "burstiness": 1.0},
+        "load": dict(_LOAD),
     }
 
 
@@ -54,6 +68,75 @@ def test_loads_a_valid_grid(tmp_path: Path) -> None:
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
     assert grid.tier1.max_num_seqs == [16, 32, 64, 128, 256]
     assert grid.tier2.burstiness == 1.0
+    assert grid.load.total_len == 1000
+    assert grid.load.goodput == ["ttft:1000", "tpot:50"]
+
+
+# --- point_sweep_config: the grid is the single source of a point's cells -------
+
+
+def _point_config(tmp_path: Path, point_slug: str) -> SweepConfig:
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    return point_sweep_config(
+        grid,
+        point_slug,
+        base_url="http://127.0.0.1:0",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        out_dir="/out",
+        commercial=False,
+    )
+
+
+def test_point_sweep_config_derives_a_caching_on_points_cells(tmp_path: Path) -> None:
+    """A caching-on point sweeps its arm's shares x the pinned burstiness x the ladder."""
+    config = _point_config(tmp_path, "mns64_kvfp8_pcon")
+
+    coords = [(c.prefix_share, c.burstiness, c.max_concurrency) for c in config.cells()]
+    # 3 shares (the 'on' arm) x 1 burstiness x 6 ladder rungs, ladder innermost.
+    assert len(coords) == 18
+    assert coords[0] == (10, 1.0, 8)
+    assert coords[-1] == (90, 1.0, 256)
+
+
+def test_point_sweep_config_pins_a_caching_off_point_to_the_zero_share(
+    tmp_path: Path,
+) -> None:
+    """A caching-off point sweeps only its single [0] baseline share across the ladder."""
+    config = _point_config(tmp_path, "mns32_kvfp16_pcoff")
+
+    shares = {c.prefix_share for c in config.cells()}
+    assert shares == {0}
+    assert len(list(config.cells())) == 6  # 1 share x 1 burstiness x 6 rungs
+
+
+def test_point_sweep_config_cells_carry_grid_load_knobs_and_context(
+    tmp_path: Path,
+) -> None:
+    """Each derived cell carries the grid's load knobs and the injected context."""
+    config = _point_config(tmp_path, "mns16_kvfp8_pcon")
+
+    cell = next(iter(config.cells()))
+    assert isinstance(cell, CellConfig)
+    assert cell.total_len == 1000
+    assert cell.num_prompts == 500
+    assert cell.seed == 0
+    assert cell.base_url == "http://127.0.0.1:0"
+    assert cell.model == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert cell.out_dir == "/out"
+
+
+def test_point_sweep_config_rejects_a_point_absent_from_the_grid(
+    tmp_path: Path,
+) -> None:
+    """A slug naming knobs the grid does not sweep fails fast, not with wrong cells."""
+    with pytest.raises(SweepGridError, match="not a point this grid sweeps"):
+        _point_config(tmp_path, "mns999_kvfp8_pcon")
+
+
+def test_point_sweep_config_rejects_a_malformed_slug(tmp_path: Path) -> None:
+    """A slug that is not a point subdir name fails fast."""
+    with pytest.raises(SweepGridError, match="mns64"):
+        _point_config(tmp_path, "mns64")
 
 
 def test_points_emits_one_row_per_tier1_point(tmp_path: Path) -> None:
@@ -149,6 +232,13 @@ def test_burstiness_emits_the_pinned_scalar(tmp_path: Path) -> None:
         # A typo'd knob name is rejected, not silently ignored (extra="forbid").
         (lambda g: g["tier1"].update(max_num_seq=[16]), "max_num_seq"),
         (lambda g: g.update(tier3={}), "tier3"),
+        # The load section is required: the grid is the single source of a cell's knobs.
+        (lambda g: g.pop("load"), "load"),
+        (
+            lambda g: g["load"].update(num_prompts=2, num_prefixes=5),
+            "below num_prefixes",
+        ),
+        (lambda g: g["load"].update(base_url="x"), "base_url"),
         (
             lambda g: g["tier1"]["prefix_caching"]["on"].update(shares=[10]),
             "shares",

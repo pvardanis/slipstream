@@ -28,6 +28,15 @@ tier1:
 tier2:
   max_concurrency: [8, 16, 32]
   burstiness: 1.0
+load:
+  total_len: 1000
+  num_prompts: 500
+  num_prefixes: 5
+  output_len: 128
+  align_blocks: 0
+  request_rate: 8
+  seed: 0
+  goodput: ["ttft:1000", "tpot:50"]
 """
 
 

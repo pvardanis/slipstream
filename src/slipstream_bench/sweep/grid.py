@@ -25,7 +25,8 @@ from pydantic import (
     model_validator,
 )
 
-from slipstream_bench.sweep.aggregation import EnginePoint
+from slipstream_bench.sweep.aggregation import EnginePoint, SweepAggregationError
+from slipstream_bench.sweep.config import LoadKnobs, SweepConfig
 from slipstream_bench.sweep.fields import (
     NonEmptyStr,
     PrefixShares,
@@ -116,12 +117,18 @@ class Tier2(BaseModel):
 
 
 class SweepGrid(BaseModel):
-    """The whole knob-sweep grid: the Tier-1 engine points and Tier-2 client ladder."""
+    """The whole knob-sweep grid: the Tier-1 engine points and Tier-2 client ladder.
+
+    ``load`` holds the fixed client-load knobs (token budget, SLO, seed) every cell
+    runs with, so the grid alone — not a second load-sweep file — is the single source
+    of a point's cells the orchestration driver enumerates (ADR-0012).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     tier1: Tier1
     tier2: Tier2
+    load: LoadKnobs
 
 
 def load_grid(path: Path) -> SweepGrid:
@@ -157,6 +164,50 @@ def load_grid(path: Path) -> SweepGrid:
         return SweepGrid.model_validate(data)
     except ValidationError as error:
         raise SweepGridError(f"invalid sweep grid ({path}):\n{error}") from error
+
+
+def point_sweep_config(
+    grid: SweepGrid,
+    point_slug: str,
+    *,
+    base_url: str,
+    model: str,
+    out_dir: str,
+    commercial: bool,
+) -> SweepConfig:
+    """Build one engine point's Tier-2 sweep from the grid, the point's single source.
+
+    The grid holds every axis a point's cells span — the prefix shares under the
+    point's caching arm, the pinned burstiness, and the ``--max-concurrency`` ladder —
+    and the fixed load knobs in ``grid.load``. This folds them, for the point the slug
+    names, into the ``SweepConfig`` whose :meth:`SweepConfig.cells` the driver
+    enumerates, so no second load-sweep file can disagree with the grid the digest is
+    taken over (ADR-0012).
+
+    :param grid: the validated knob-sweep grid.
+    :param point_slug: the engine point's slug (``mns{N}_kv{fp8|fp16}_pc{on|off}``),
+        naming the Tier-1 knobs the point was redeployed with.
+    :param base_url: the endpoint the cells target (injected, not in the grid).
+    :param model: the served model id (from model.yaml, the model source of truth).
+    :param out_dir: the directory for each cell's result JSON.
+    :param commercial: whether this is the commercial arm (drives the tokenizer guard).
+    :return: the point's ``SweepConfig``: its arm's shares x the pinned burstiness x
+        the concurrency ladder, carrying the grid's load knobs and the injected context.
+    :raise SweepGridError: when the slug is not a point subdir name, or names Tier-1
+        knobs this grid does not sweep — a mismatch would otherwise run the wrong cells.
+    """
+    point = _parse_point_slug(point_slug)
+    arm = _require_grid_arm(grid, point, point_slug)
+    return SweepConfig(
+        **grid.load.model_dump(),
+        base_url=base_url,
+        model=model,
+        out_dir=out_dir,
+        commercial=commercial,
+        prefix_shares=arm.prefix_share,
+        burstiness_values=[grid.tier2.burstiness],
+        max_concurrency_values=grid.tier2.max_concurrency,
+    )
 
 
 def render_points(grid: SweepGrid) -> str:
@@ -212,3 +263,47 @@ _RENDERERS = {
 def render_part(part: SweepGridPart, grid: SweepGrid) -> str:
     """Emit the grid slice ``part`` names, as the knob-sweep loop reads it."""
     return _RENDERERS[part](grid)
+
+
+def _parse_point_slug(point_slug: str) -> EnginePoint:
+    """Parse an engine point off its slug, as a grid-level fail-fast error.
+
+    :param point_slug: the point subdir slug (``mns{N}_kv{fp8|fp16}_pc{on|off}``).
+    :return: the engine-knob point the slug names.
+    :raise SweepGridError: when the slug is not a valid point subdir name.
+    """
+    try:
+        return EnginePoint.from_dirname(point_slug)
+    except SweepAggregationError as error:
+        raise SweepGridError(str(error)) from error
+
+
+def _require_grid_arm(
+    grid: SweepGrid, point: EnginePoint, point_slug: str
+) -> PrefixCachingArm:
+    """Return the prefix-caching arm for a point the grid actually sweeps.
+
+    The slug's Tier-1 knobs must all be in the grid: a slug naming a max-num-seqs,
+    kv-dtype, or caching arm the grid does not sweep would silently run the wrong
+    cells, so it is rejected here.
+
+    :param grid: the validated knob-sweep grid.
+    :param point: the engine-knob point parsed from the slug.
+    :param point_slug: the original slug, for the error message.
+    :return: the point's prefix-caching arm (its flag and swept shares).
+    :raise SweepGridError: when the point's knobs are not all swept by the grid.
+    """
+    arm_label: PrefixCachingLabel = "on" if point.prefix_caching else "off"
+    arm = grid.tier1.prefix_caching.get(arm_label)
+    if (
+        point.max_num_seqs not in grid.tier1.max_num_seqs
+        or point.kv_cache_dtype not in grid.tier1.kv_cache_dtype
+        or arm is None
+    ):
+        raise SweepGridError(
+            f"{point_slug!r} is not a point this grid sweeps "
+            f"(max_num_seqs {grid.tier1.max_num_seqs}, kv_cache_dtype "
+            f"{grid.tier1.kv_cache_dtype}, prefix_caching "
+            f"{sorted(grid.tier1.prefix_caching)})"
+        )
+    return arm
