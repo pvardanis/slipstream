@@ -14,6 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from prefect import Task
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
@@ -195,3 +196,40 @@ def test_a_failed_cell_re_runs_while_valid_cells_stay_cached(tmp_path: Path) -> 
 
     assert second_ssm.cell_runs() == 1  # only the once-failed cell re-runs
     assert second_ssm.proxy_ups() == 1
+
+
+class _TagRecordingTask:
+    """Wrap the real cell task, recording the tags each cell run is labelled with."""
+
+    def __init__(self, inner: Task[..., str]) -> None:
+        self._inner = inner
+        self.tag_sets: list[list[str]] = []
+
+    def with_options(self, *, tags: list[str]) -> Task[..., str]:
+        self.tag_sets.append(list(tags))
+        return self._inner.with_options(tags=tags)
+
+
+def test_each_cell_run_is_tagged_with_its_tier_knobs(tmp_path: Path) -> None:
+    recorder = _TagRecordingTask(_isolated_task(tmp_path))
+
+    run_point_sweep(
+        grid_path=_grid(tmp_path),
+        results_dir=tmp_path / "results-local",
+        context=_context(),
+        ssm_client=_FakeSsm(),
+        s3_client=_FakeS3(),
+        task=recorder,  # ty: ignore[invalid-argument-type]  # duck-typed task double
+        poll_interval_s=0.0,
+        sleep=lambda _s: None,
+    )
+
+    # 2 shares x 2 concurrency rungs = 4 cells, each carrying the point's shared tier1
+    # tags and its own tier2 tags.
+    assert len(recorder.tag_sets) == 4
+    for tags in recorder.tag_sets:
+        assert {"mns=64", "kv=fp8", "pc=on", "burst=1.0"} <= set(tags)
+    caps = {tag for tags in recorder.tag_sets for tag in tags if tag.startswith("mc=")}
+    shares = {t for tags in recorder.tag_sets for t in tags if t.startswith("pshare=")}
+    assert caps == {"mc=64", "mc=128"}
+    assert shares == {"pshare=10", "pshare=50"}

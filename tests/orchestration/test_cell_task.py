@@ -157,3 +157,11 @@ def test_cell_task_for_a_bucket_wires_s3_result_storage() -> None:
 
     assert isinstance(task.result_storage, S3Bucket)
     assert task.result_storage.bucket_folder == "prefect/results"
+
+
+def test_the_task_run_name_reads_the_point_slug_and_cell_name(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+
+    # Prefect fills the template from the task's call parameters, so a run reads its
+    # grid coordinate — tier1 point slug, then tier2 cell name — in the run list.
+    assert task.task_run_name == "{point_slug}:{cell_name}"
