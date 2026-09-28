@@ -76,9 +76,11 @@ def test_default_dry_run_reads_the_committed_config() -> None:
     assert result.stdout.count("--goodput ttft:1000 tpot:50") == 6
     assert result.stdout.count("--seed 0") == 6
     assert "--model Qwen/Qwen2.5-0.5B-Instruct" in result.stdout
-    assert "--prefix-repetition-prefix-len 100" in result.stdout
-    assert "--prefix-repetition-prefix-len 500" in result.stdout
-    assert "--prefix-repetition-prefix-len 900" in result.stdout
+    # align_blocks: 16 floors each share's prefix to a 16-token block (100/500/900
+    # -> 96/496/896).
+    assert "--prefix-repetition-prefix-len 96" in result.stdout
+    assert "--prefix-repetition-prefix-len 496" in result.stdout
+    assert "--prefix-repetition-prefix-len 896" in result.stdout
     assert result.stdout.count("--burstiness 0.2") == 3
     assert result.stdout.count("--burstiness 1.0") == 3
 
@@ -218,8 +220,9 @@ def test_default_cell_dry_run_reads_the_committed_config() -> None:
     assert result.exit_code == 0, plain(result)
     assert result.stdout.count("vllm bench serve") == 1
     assert "--model Qwen/Qwen2.5-0.5B-Instruct" in result.stdout
-    # bench/load-cell.yaml's documented coordinate: share 50 (500/500 split), burstiness 1.0.
-    assert "--prefix-repetition-prefix-len 500" in result.stdout
+    # bench/load-cell.yaml's documented coordinate: share 50, floored by align_blocks:
+    # 16 to a 496/504 split, burstiness 1.0.
+    assert "--prefix-repetition-prefix-len 496" in result.stdout
     assert "--burstiness 1.0" in result.stdout
     assert "--max-concurrency" not in result.stdout  # default cell is open-loop
 
