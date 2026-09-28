@@ -1,9 +1,9 @@
 """The knob sets a sweep and a single cell run with, loaded from their YAML.
 
-``Knobs`` is the shared validation layer both a whole-grid sweep and a single cell
-carry: the experiment-defining knobs come from a per-command YAML file, the execution
-context (endpoint, served model, output dir, commercial flag) is injected from the
-CLI, and every field is range-checked as the model validates. ``SweepConfig`` adds the
+``LoadKnobs`` is the experiment-defining validation layer both a whole-grid sweep and a
+single cell carry (token budget, SLO, seed); ``Knobs`` adds the execution context
+(endpoint, served model, output dir, commercial flag) injected from the CLI, and every
+field is range-checked as the model validates. ``SweepConfig`` adds the
 grid axes and derives one ``CellConfig`` per point via :meth:`SweepConfig.cells`;
 ``CellConfig`` adds the single coordinate the container runs. ``load_sweep_config`` and
 ``load_cell_config`` are the boundaries that read the file, guard the CLI-injected keys

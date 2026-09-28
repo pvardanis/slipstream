@@ -16,8 +16,8 @@ from slipstream_bench.sweep.config import CellConfig, SweepConfig
 from slipstream_bench.sweep.grid import (
     SweepGrid,
     SweepGridError,
+    build_point_sweep_config,
     load_grid,
-    point_sweep_config,
     render_burstiness,
     render_ladder,
     render_points,
@@ -72,12 +72,12 @@ def test_loads_a_valid_grid(tmp_path: Path) -> None:
     assert grid.load.goodput == ["ttft:1000", "tpot:50"]
 
 
-# --- point_sweep_config: the grid is the single source of a point's cells -------
+# --- build_point_sweep_config: the grid is the single source of a point's cells --
 
 
 def _point_config(tmp_path: Path, point_slug: str) -> SweepConfig:
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    return point_sweep_config(
+    return build_point_sweep_config(
         grid,
         point_slug,
         base_url="http://127.0.0.1:0",
