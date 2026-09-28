@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from prefect import Task, flow
+from prefect import Task, flow, tags
 
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
@@ -100,6 +100,16 @@ class SweepContext:
             if getattr(self, name) <= 0:
                 raise ValueError(f"SweepContext.{name} must be positive")
 
+    @property
+    def run_group(self) -> str:
+        """The shared run every point in one sweep groups under in Prefect.
+
+        ``run_id`` is ``<run>/<point-slug>``; the leading ``<run>`` is the knob sweep's
+        single run, and every point tags its flow run with it so the UI filters the
+        whole sweep — all its engine points — as one group.
+        """
+        return self.run_id.rsplit("/", 1)[0]
+
 
 def run_point_sweep(
     *,
@@ -136,7 +146,7 @@ def run_point_sweep(
     # parameter through serialize_parameters (FastAPI jsonable_encoder) to persist the
     # flow-run record; a live boto3 client (sockets, locks) does not survive that.
     # Only the frozen SweepContext is captured by value, addressed through the closure.
-    @flow(name="point-sweep")
+    @flow(name="point-sweep", flow_run_name=context.point_slug)
     def _flow() -> list[str]:
         return _drive_point_sweep(
             grid_path=grid_path,
@@ -150,7 +160,10 @@ def run_point_sweep(
             sleep=sleep,
         )
 
-    return _flow()
+    # Name each point's flow run for its slug and tag it with the shared run, so the UI
+    # groups the whole knob sweep — every engine point — under one filterable run.
+    with tags(f"run={context.run_group}"):
+        return _flow()
 
 
 def _drive_point_sweep(

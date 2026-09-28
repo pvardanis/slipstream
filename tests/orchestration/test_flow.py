@@ -198,6 +198,55 @@ def test_a_failed_cell_re_runs_while_valid_cells_stay_cached(tmp_path: Path) -> 
     assert second_ssm.proxy_ups() == 1
 
 
+def test_run_group_is_the_run_id_prefix_shared_across_a_sweep() -> None:
+    # run_id is <run>/<point-slug>; the leading <run> is the knob sweep's single run,
+    # the tag every one of its points' flow runs groups under.
+    assert _context().run_group == "run1"
+
+
+class _FlowRunRecordingTask:
+    """Stand in for the cell task, recording the flow run's name and tags per cell.
+
+    Reads :mod:`prefect.runtime` from inside the running flow, so each cell records the
+    parent point-sweep flow run's name and tags — the grouping :func:`run_point_sweep`
+    stamps — and returns the cell's pointer without touching SSM or S3.
+    """
+
+    def __init__(self) -> None:
+        self.names: list[str | None] = []
+        self.tag_sets: list[set[str]] = []
+
+    def with_options(self, *, tags: list[str]) -> "_FlowRunRecordingTask":
+        return self
+
+    def __call__(self, **kwargs: object) -> object:
+        from prefect.runtime import flow_run
+
+        self.names.append(flow_run.name)
+        self.tag_sets.append(set(flow_run.tags))
+        return kwargs["result_uri"]
+
+
+def test_every_point_flow_run_is_named_and_grouped(tmp_path: Path) -> None:
+    recorder = _FlowRunRecordingTask()
+
+    run_point_sweep(
+        grid_path=_grid(tmp_path),
+        results_dir=tmp_path / "results-local",
+        context=_context(),
+        ssm_client=_FakeSsm(),
+        s3_client=_FakeS3(),
+        task=recorder,  # ty: ignore[invalid-argument-type]  # duck-typed task double
+        poll_interval_s=0.0,
+        sleep=lambda _s: None,
+    )
+
+    # Every cell runs under the one point-sweep flow run: named by the point slug and
+    # tagged with the shared run, so the UI groups the whole knob sweep by run=run1.
+    assert recorder.names == ["mns64_kvfp8_pcon"] * 4
+    assert all("run=run1" in tags for tags in recorder.tag_sets)
+
+
 class _TagRecordingTask:
     """Wrap the real cell task, recording the tags each cell run is labelled with."""
 
