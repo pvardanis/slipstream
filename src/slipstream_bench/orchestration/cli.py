@@ -20,6 +20,7 @@ from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cell_task import cell_task
 from slipstream_bench.orchestration.digest import DigestInputs
 from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
+from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
 
 app = typer.Typer(
@@ -87,10 +88,13 @@ def point_sweep(
     region: Annotated[str, typer.Option(help="AWS region of the host and bucket.")],
     bucket: Annotated[str, typer.Option(help="Results bucket (RESULTS_BUCKET).")],
     image_ref: Annotated[str, typer.Option(help="Bench-client image reference.")],
-    model: Annotated[str, typer.Option(help="Served model id (model.yaml SoT).")],
     model_yaml: Annotated[
         Path,
-        typer.Option(exists=True, dir_okay=False, help="model.yaml (digest input)."),
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="model.yaml: the served model id (.model.hfId) and a digest input.",
+        ),
     ],
     sweep_grid: Annotated[
         Path,
@@ -129,7 +133,7 @@ def point_sweep(
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
-        model=model,
+        model=read_model_id(model_yaml),
         digest_inputs=DigestInputs(
             model_yaml=model_yaml,
             sweep_grid=sweep_grid,

@@ -18,7 +18,7 @@ from slipstream_bench.orchestration.cli import app, build_sweep_context
 from slipstream_bench.orchestration.digest import DigestInputs, config_digest
 from slipstream_bench.orchestration.flow import SweepContext
 
-_MODEL_YAML = b"hfId: Qwen/Qwen2.5-0.5B-Instruct\n"
+_MODEL_YAML = b"model:\n  hfId: Qwen/Qwen2.5-0.5B-Instruct\n"
 _GRID_YAML = b"engine_points: []\n"
 _MANIFEST = """
 apiVersion: apps/v1
@@ -110,8 +110,6 @@ def test_point_sweep_echoes_each_cell_pointer(
             "bench-bucket",
             "--image-ref",
             "repo:tag",
-            "--model",
-            "Qwen/Qwen2.5-0.5B-Instruct",
             "--model-yaml",
             str(model_yaml),
             "--sweep-grid",
@@ -127,6 +125,7 @@ def test_point_sweep_echoes_each_cell_pointer(
     assert "pshare10_burst1.0_mc64.json" in result.output
     assert "pshare50_burst1.0_mc64.json" in result.output
     context = cast(SweepContext, captured["context"])
+    assert context.model == "Qwen/Qwen2.5-0.5B-Instruct"
     assert context.digest == config_digest(
         model_yaml=_MODEL_YAML,
         sweep_grid_yaml=_GRID_YAML,
