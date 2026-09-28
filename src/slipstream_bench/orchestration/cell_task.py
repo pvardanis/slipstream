@@ -62,35 +62,6 @@ def run_cell(
     return result_uri
 
 
-def _bench_cell(
-    *,
-    digest: str,
-    point_slug: str,
-    cell_name: str,
-    execute_func: CellExecution,
-    result_path: Path,
-    result_uri: str,
-) -> str:
-    """Run one cell and return its pointer — the function Prefect wraps as a task.
-
-    ``digest``, ``point_slug``, and ``cell_name`` are unread by this body: they address
-    the cell, they do not steer its run. They are declared as parameters because Prefect
-    hands :func:`get_cell_cache_key` only a task's call parameters, so a value can shape
-    the cache key only by arriving as one — the key is built from the three before the
-    body runs, then a hit skips the body entirely (ADR-0012:90-94).
-
-    :param digest: the deep config digest, a cache-key part.
-    :param point_slug: the engine-knob point slug, a cache-key part.
-    :param cell_name: the client-load cell name, a cache-key part.
-    :param execute_func: runs the single cell, raising on process failure.
-    :param result_path: where the executed cell wrote its result JSON.
-    :param result_uri: the cell's S3 pointer, the task's return value.
-    :return: ``result_uri`` once the result passes the validity gate.
-    :raise InvalidCellError: when the produced result is not a measurement.
-    """
-    return run_cell(execute_func, result_path=result_path, result_uri=result_uri)
-
-
 def build_cell_task(
     *,
     result_storage: Any,
@@ -155,3 +126,32 @@ def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
     return build_cell_task(
         result_storage=result, key_storage=cache_keys, retries=retries
     )
+
+
+def _bench_cell(
+    *,
+    digest: str,
+    point_slug: str,
+    cell_name: str,
+    execute_func: CellExecution,
+    result_path: Path,
+    result_uri: str,
+) -> str:
+    """Run one cell and return its pointer — the function Prefect wraps as a task.
+
+    ``digest``, ``point_slug``, and ``cell_name`` are unread by this body: they address
+    the cell, they do not steer its run. They are declared as parameters because Prefect
+    hands :func:`get_cell_cache_key` only a task's call parameters, so a value can shape
+    the cache key only by arriving as one — the key is built from the three before the
+    body runs, then a hit skips the body entirely (ADR-0012:90-94).
+
+    :param digest: the deep config digest, a cache-key part.
+    :param point_slug: the engine-knob point slug, a cache-key part.
+    :param cell_name: the client-load cell name, a cache-key part.
+    :param execute_func: runs the single cell, raising on process failure.
+    :param result_path: where the executed cell wrote its result JSON.
+    :param result_uri: the cell's S3 pointer, the task's return value.
+    :return: ``result_uri`` once the result passes the validity gate.
+    :raise InvalidCellError: when the produced result is not a measurement.
+    """
+    return run_cell(execute_func, result_path=result_path, result_uri=result_uri)
