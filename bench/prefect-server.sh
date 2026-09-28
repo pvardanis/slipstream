@@ -1,8 +1,10 @@
 # Shared Prefect API bring-up for the orchestrated bench recipes (`just bench`,
 # `just knob-sweep`). Sourced into a recipe; defines prefect_server_up, which makes a
 # Prefect API reachable for the run and exports PREFECT_API_URL so the
-# `slipstream-orchestrate` child sees it. If PREFECT_API_URL is already set (a shared or
-# AWS-hosted server, future work) it is used as-is; otherwise, if a local server is
+# `slipstream-orchestrate` child sees it. If PREFECT_API_URL is already set — by the
+# knob-sweep parent, which starts one server and exports it so every point reuses it, or
+# by an operator pointing at a shared or AWS-hosted server — it is used as-is; otherwise,
+# if a local server is
 # already listening it is reused, else one is started in the background, waited on, and
 # stopped by an EXIT trap when the recipe's shell exits. The resumable cell cache lives
 # in S3 (ADR-0012), so a fresh local server per run still resumes already-valid cells.
