@@ -10,7 +10,7 @@ from slipstream_bench.sweep.aggregation import EnginePoint
 from slipstream_bench.sweep.config import CellConfig
 
 
-def cell_run_tags(point_slug: str, cell: CellConfig) -> list[str]:
+def get_cell_run_tags(point_slug: str, cell: CellConfig) -> list[str]:
     """Tag one cell run with each tier1 and tier2 knob as a filterable ``key=value``.
 
     tier1 is parsed off the engine point slug; tier2 is read from the cell. An
