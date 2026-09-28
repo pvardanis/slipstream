@@ -49,8 +49,17 @@ bench point_slug *args:
     image="$(just _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir, so
     # concurrent or repeated runs never overwrite each other. knob-sweep injects
-    # BENCH_RUN_ID to nest one point's ladder under a shared knob-sweep run.
-    run_id="${BENCH_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+    # BENCH_RUN_ID to nest one point's ladder under a shared knob-sweep run; when it is
+    # unset this is a standalone point sweep that mints and announces its own id, so a
+    # failed run can be resumed by passing that id back as BENCH_RUN_ID.
+    if [[ -n "${BENCH_RUN_ID:-}" ]]; then
+      run_id="${BENCH_RUN_ID}"
+      standalone=0
+    else
+      run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+      standalone=1
+      echo "==> bench run ${run_id}" >&2
+    fi
 
     # The cell cache index and flow-run history live in a Prefect API; bring one up
     # (a local server by default, or an operator-set PREFECT_API_URL) for the run.
@@ -88,6 +97,13 @@ bench point_slug *args:
     mkdir -p "bench/results/${run_id}"
     aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
     echo "results synced to bench/results/${run_id}/"
+    # A standalone point sweep that ended non-zero left cells unmeasured; surface the id
+    # to resume it. Under knob-sweep (standalone=0) the parent owns the resume hint, so
+    # the two never print conflicting resume commands.
+    if ((rc != 0)) && ((standalone == 1)); then
+      echo "point sweep ${run_id} incomplete. Resume (re-runs only unmeasured cells):" >&2
+      echo "  BENCH_RUN_ID=${run_id} just bench {{ point_slug }}" >&2
+    fi
     exit "${rc}"
 
 # Two-tier engine-knob sweep (#33, ADR-0009).
@@ -131,6 +147,7 @@ knob-sweep:
     # by the orchestrator, so the recipe reads only the Tier-1 knobs each point redeploys.
     engine_points="$(uv run slipstream-bench sweep-grid engine-points)"
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+    echo "==> knob-sweep run ${run_id}" >&2
     run_dir="bench/results/${run_id}"
     mkdir -p "${run_dir}"
     ledger="${run_dir}/predicted-ceilings.tsv"
@@ -188,6 +205,12 @@ knob-sweep:
       fi
     done <<<"${engine_points}"
     echo "knob sweep ${run_id} complete; results in ${run_dir}/ (ceilings: ${ledger})" >&2
+    # A non-zero overall means a point failed to deploy or left cells unmeasured; surface
+    # the id so the whole sweep can be resumed, re-running only the cells still missing.
+    if ((overall != 0)); then
+      echo "knob sweep ${run_id} incomplete. Resume (re-runs only unmeasured cells):" >&2
+      echo "  BENCH_RUN_ID=${run_id} just knob-sweep" >&2
+    fi
     exit "${overall}"
 
 # Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
