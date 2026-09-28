@@ -65,7 +65,9 @@ bench point_slug *args:
     # The orchestrator brings the loopback proxy up once, enumerates the point's cells
     # from the grid (the single source of the swept axes and load knobs — no --config and
     # no --model here), and runs each as a resumable cell task. The served model id and
-    # the digest read from --model-yaml; the served image ref from --vllm-manifest.
+    # the digest read from --model-yaml; the served image ref from --vllm-manifest. Its
+    # status is captured, not left to abort the recipe, so the sync below always runs.
+    rc=0
     uv run --extra orchestration slipstream-orchestrate point-sweep \
       --run-id "${run_id}/{{ point_slug }}" \
       --point-slug "{{ point_slug }}" \
@@ -77,13 +79,16 @@ bench point_slug *args:
       --sweep-grid bench/sweep-grid.yaml \
       --vllm-manifest {{ gpu_manifests }} \
       --results-dir "bench/results/${run_id}/{{ point_slug }}" \
-      --sweep-args-b64 "${args_b64}"
+      --sweep-args-b64 "${args_b64}" || rc=$?
 
-    # A resumed cell is served from S3 and never re-downloaded locally, so sync the run's
-    # objects into the per-run subdir to complete the local copy for reporting.
+    # Sync regardless of the sweep's status: a resumed cell is served from S3 and never
+    # re-downloaded locally, and a partially-failed point (a permanent cell fault raises
+    # through the flow after earlier cells landed) still leaves valid cells worth pulling
+    # into the per-run subdir. Surface the sweep's status only after the copy is complete.
     mkdir -p "bench/results/${run_id}"
     aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
     echo "results synced to bench/results/${run_id}/"
+    exit "${rc}"
 
 # Two-tier engine-knob sweep (#33, ADR-0009).
 #
