@@ -88,12 +88,19 @@ def build_cell_task(
         key_storage=key_storage
     )
     as_task = task(
+        task_run_name=_CELL_RUN_NAME,
         cache_policy=policy,
         result_storage=result_storage,
         persist_result=True,
         retries=retries,
     )
     return as_task(_bench_cell)
+
+
+# The task-run name template Prefect fills from the task's ``point_slug`` and
+# ``cell_name`` call parameters, so a run reads its grid coordinate — tier1 point slug,
+# then tier2 cell name — in the run list instead of the bare function name.
+_CELL_RUN_NAME = "{point_slug}:{cell_name}"
 
 
 # The block names the two S3 storage blocks register under. Prefect resolves a

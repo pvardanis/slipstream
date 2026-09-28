@@ -36,6 +36,7 @@ from slipstream_bench.orchestration.cell_run import (
     get_cell_result_uri,
 )
 from slipstream_bench.orchestration.ssm import run_command
+from slipstream_bench.orchestration.task_labels import cell_run_tags
 from slipstream_bench.sweep.grid import build_point_sweep_config, load_grid
 from slipstream_bench.sweep.runner import get_cell_basename
 
@@ -203,8 +204,9 @@ def _drive_point_sweep(
         name = get_cell_basename(cell)
         dest = results_dir / name
         execute = build_cell_execution(cell, context=execution_context, dest=dest)
+        labeled = task.with_options(tags=cell_run_tags(context.point_slug, cell))
         pointers.append(
-            task(
+            labeled(
                 digest=context.digest,
                 point_slug=context.point_slug,
                 cell_name=name,
