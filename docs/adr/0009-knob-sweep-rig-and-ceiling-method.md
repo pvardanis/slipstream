@@ -138,6 +138,12 @@ single-config cost×prefix economics join, a different key and output.
   per-replica unit L2 scaling multiplies and L3 routing exploits. No multi-replica or routing
   axis enters this sweep; the aggregated ceiling table is emitted as clean keyed data so those
   later layers read it as input.
+- **Closed-loop now, open-loop deferred.** This sweep runs closed-loop: `request_rate = inf`
+  so the `--max-concurrency` ladder is the sole limiter (see *The ceiling is closed-loop
+  concurrency*). `burstiness` is inert under `inf` — vLLM applies it only to a finite arrival
+  rate — and is parked at a neutral `1.0`. The open-loop workload — finite `request_rate` with
+  bursty arrivals (`burstiness < 1`) to exercise scale-up/down — is deferred to the autoscaler
+  epic and is not swept here.
 - **Offline batch artifact, not telemetry.** The chart is a decision document, not a Grafana
   panel. Grafana (epic #19) later reads live Prometheus — TTFT/TPOT/throughput/prefix-cache-hits
   directly, goodput as a derived PromQL panel over the *same* shared SLO thresholds.
