@@ -36,66 +36,54 @@ bench-image: _bootstrap-init
     {{ build_image_tool }} "${repo}:${sha_tag}"
     docker push "${repo}:${sha_tag}"
 
-# Sweep `vllm bench serve` across the prefix-share x burstiness grid a --config YAML defines, from the external bench host through the mutual-TLS ALB over SSM, saving per-cell JSON to bench/results. Requires a live bench endpoint (`just bench-endpoint-up`).
+# Run one engine point's Tier-2 client-load ladder — the cells bench/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by the deep config digest, so a re-run skips cells that already hold a valid measurement (ADR-0012). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
-bench *args:
+bench point_slug *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    # The host drives the sweep over SSM, which starts the loopback mTLS proxy then
-    # runs the sweep against it, so the latency recorded is what an off-cluster client
-    # sees rather than an in-cluster hop. Results outlive the host in the results
-    # bucket and are synced back here at the end.
-    #
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
     image="$(just _bench-image-ref)"
-    # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
-    # so concurrent or repeated runs never overwrite each other. The knob sweep
-    # (#33) injects BENCH_RUN_ID to nest one Tier-2 ladder per engine-knob point
-    # under a shared run (e.g. <run>/mns16_kvfp8_pcon); RUN_ID is only ever a path
-    # segment host-side (bench-sweep.sh), so a slash gives the nested subdir for free.
+    # A UTC timestamp is the run's prefix in the bucket and the local results subdir, so
+    # concurrent or repeated runs never overwrite each other. knob-sweep injects
+    # BENCH_RUN_ID to nest one point's ladder under a shared knob-sweep run.
     run_id="${BENCH_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 
-    # run_on_host sends one command to the host over SSM, polls to completion and
-    # surfaces its stderr; it reads the region and instance set above.
-    source bench/run-on-host.sh
+    # The cell cache index and flow-run history live in a Prefect API; bring one up
+    # (a local server by default, or an operator-set PREFECT_API_URL) for the run.
+    source bench/prefect-server.sh
+    prefect_server_up
 
-    # The proxy must be listening before the sweep runs; a failed handshake here is a
-    # hard stop, not a partial result to salvage. The ceiling sits above the up-script's
-    # own ~210s smoke-retry budget so its clear failure message wins over a generic wait.
-    run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
-
-    # The experiment definition crosses to the host as a file: knob-sweep composes a
-    # per-point config and points BENCH_CONFIG at it, a standalone run uses the checked-in
-    # default. Its bytes are base64-encoded so the YAML (newlines, quotes) crosses the SSM
-    # command line intact, decoded host-side into a file bench-sweep.sh mounts and passes
-    # as --config. The api-key is fetched host-side from Secrets Manager, never sent from
-    # here. load-sweep only exits non-zero at the end of the grid, so a partial failure
-    # still leaves cells worth keeping: sync whatever landed regardless, then surface the
-    # sweep's status.
-    config="${BENCH_CONFIG:-bench/load-sweep.yaml}"
-    config_b64="$(base64 <"${config}" | tr -d '\n')"
-    # Any extra load-sweep flags (--dry-run, --api-key-env) appended to `just bench`, also
-    # base64-encoded so they cross SSM without quoting the host shell could misparse.
+    # Extra load-cell flags (--dry-run, --api-key-env) appended to `just bench`, base64-
+    # encoded so they cross the SSM command line to the host without quoting the host
+    # shell could misparse.
     args_b64="$(printf '%s' '{{ args }}' | base64 | tr -d '\n')"
-    # The sweep counts tokens under the served model's name; read it from the same
-    # model.yaml the pulled image baked its tokenizer from, so the two agree.
-    model="$({{ image_tag_tool }} hf-id)"
-    sweep_env="IMAGE_REF='${image}' RESULTS_BUCKET='${bucket}' MODEL='${model}'"
-    sweep_env="${sweep_env} RUN_ID='${run_id}' SWEEP_CONFIG_B64='${config_b64}'"
-    sweep_env="${sweep_env} SWEEP_ARGS_B64='${args_b64}'"
-    sweep_rc=0
-    run_on_host "sweep" "${sweep_env} /usr/local/bin/bench-sweep.sh" 3600 || sweep_rc=$?
 
-    # Sync just this run's objects into a per-run subdir so repeated runs never clobber
-    # each other locally, matching the bucket's per-run prefix and bench-results-sync.
+    # The orchestrator brings the loopback proxy up once, enumerates the point's cells
+    # from the grid (the single source of the swept axes and load knobs — no --config and
+    # no --model here), and runs each as a resumable cell task. The served model id and
+    # the digest read from --model-yaml; the served image ref from --vllm-manifest.
+    uv run --extra orchestration slipstream-orchestrate point-sweep \
+      --run-id "${run_id}/{{ point_slug }}" \
+      --point-slug "{{ point_slug }}" \
+      --instance-id "${instance}" \
+      --region "${region}" \
+      --bucket "${bucket}" \
+      --image-ref "${image}" \
+      --model-yaml model.yaml \
+      --sweep-grid bench/sweep-grid.yaml \
+      --vllm-manifest {{ gpu_manifests }} \
+      --results-dir "bench/results/${run_id}/{{ point_slug }}" \
+      --sweep-args-b64 "${args_b64}"
+
+    # A resumed cell is served from S3 and never re-downloaded locally, so sync the run's
+    # objects into the per-run subdir to complete the local copy for reporting.
     mkdir -p "bench/results/${run_id}"
     aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
     echo "results synced to bench/results/${run_id}/"
-    exit "${sweep_rc}"
 
 # Two-tier engine-knob sweep (#33, ADR-0009).
 #
@@ -130,28 +118,33 @@ bench *args:
 knob-sweep:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Read every swept value from the validated grid before touching a GPU. Each
-    # value is captured into a variable so the CLI's exit code is checked and an
-    # invalid grid aborts the sweep here, not mid-run — never `< <(...)`, which
-    # would run the CLI in a subshell and hide its failure under `set -e`.
+    # Read every engine point from the validated grid before touching a GPU. The read is
+    # captured into a variable so the CLI's exit code is checked and an invalid grid
+    # aborts the sweep here, not mid-run — never `< <(...)`, which would run the CLI in a
+    # subshell and hide its failure under `set -e`. The Tier-2 cells (prefix shares,
+    # concurrency ladder, burstiness) live in the grid too and are enumerated per point
+    # by the orchestrator, so the recipe reads only the Tier-1 knobs each point redeploys.
     engine_points="$(uv run slipstream-bench sweep-grid engine-points)"
-    concurrency_ladder="$(uv run slipstream-bench sweep-grid concurrency-ladder)"
-    burstiness="$(uv run slipstream-bench sweep-grid burstiness)"
-    # The ladder rungs and the pinned burstiness are the same for every point, so fold
-    # them to YAML flow lists once, up front, to override into each point's config below.
-    ladder_yaml="[$(paste -sd, - <<<"${concurrency_ladder}")]"
-    burst_yaml="[${burstiness}]"
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
     run_dir="bench/results/${run_id}"
     mkdir -p "${run_dir}"
     ledger="${run_dir}/predicted-ceilings.tsv"
     printf 'point\tpredicted_ceiling\n' >"${ledger}"
     overall=0
-    # One grid row per Tier-1 point: slug, max-num-seqs, KV engine token, prefix-
-    # caching flag, and the CSV of prefix shares to sweep under it. The grid already
-    # mapped the KV label to the engine token (fp16 -> float16) and picked the shares
-    # per caching arm, so the recipe just deploys the point and drives the ladder.
-    while IFS=$'\t' read -r point mns kv_dtype pc_flag shares_csv; do
+
+    # The cell cache and every point's flow run share one Prefect API for the whole
+    # sweep, so all points group under run=<run_id> in the UI. Bring it up once here; each
+    # per-point `just bench` inherits PREFECT_API_URL and reuses it rather than starting
+    # its own, and the EXIT trap set here stops the local server when the sweep ends.
+    source bench/prefect-server.sh
+    prefect_server_up
+
+    # One grid row per Tier-1 point: slug, max-num-seqs, KV engine token, and prefix-
+    # caching flag. The grid already mapped the KV label to the engine token (fp16 ->
+    # float16), so the recipe deploys the point and hands the ladder to `just bench`. The
+    # trailing per-point prefix shares are enumerated from the grid by the orchestrator,
+    # so the row's last field is read past into `_`.
+    while IFS=$'\t' read -r point mns kv_dtype pc_flag _; do
       echo "==> knob-sweep point ${point}" >&2
       # Render + redeploy the GPU replica for this engine-knob point. A failed
       # deploy leaves the point unmeasurable; record it and move on rather than
@@ -179,23 +172,12 @@ knob-sweep:
       fi
       printf '%s\t%s\n' "${point}" "${predicted}" >>"${ledger}"
       echo "    predicted: ${predicted}" >&2
-      # Compose this point's Tier-2 experiment config: the base experiment definition
-      # (token budget, SLO, seed) from bench/load-sweep.yaml, with the swept axes this
-      # point varies overridden in — its prefix shares, the pinned burstiness, and the
-      # concurrency ladder. Written into the point's result dir as the record of what was
-      # swept, then handed to `just bench` as its --config.
-      point_dir="${run_dir}/${point}"
-      mkdir -p "${point_dir}"
-      point_config="${point_dir}/sweep-config.yaml"
-      SHARES="[${shares_csv}]" BURST="${burst_yaml}" LADDER="${ladder_yaml}" \
-        yq '.prefix_shares = env(SHARES) | .burstiness_values = env(BURST) | .max_concurrency_values = env(LADDER)' \
-        bench/load-sweep.yaml >"${point_config}"
-      # Tier 2: client load ladder against this point, no redeploy. The nested
-      # BENCH_RUN_ID lands the per-point JSON under ${run_dir}/${point}/ (see
-      # `bench`). load-sweep survives per-cell failures and only exits non-zero at
-      # the end, so a non-zero here means some cells failed — keep the partial
-      # results and flag the run.
-      if ! BENCH_CONFIG="${point_config}" BENCH_RUN_ID="${run_id}/${point}" just bench; then
+      # Tier 2: drive this point's client-load ladder resumably, no redeploy. BENCH_RUN_ID
+      # nests the point's cells under the shared knob-sweep run (bench appends the slug),
+      # so the point's flow run groups under run=<run_id>. `just bench` resumes cells that
+      # already hold a valid measurement and only fails a point whose cells cannot be
+      # measured; a non-zero here keeps the partial results and flags the run.
+      if ! BENCH_RUN_ID="${run_id}" just bench "${point}"; then
         echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
         overall=1
       fi

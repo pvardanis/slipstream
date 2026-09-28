@@ -1,4 +1,5 @@
-# Shared SSM runner for the bench recipes (`just bench`, `just prefix-cache`). Sourced
+# SSM runner for `just prefix-cache` (the orchestrated `just bench` drives SSM in
+# Python instead). Sourced
 # into a recipe that has already set `region` and `instance` (the bench host's id); it
 # defines run_on_host, which sends one shell command to the host over SSM Run Command,
 # polls until it finishes, then surfaces its stderr. stdout is not retrieved — the host
