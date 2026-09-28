@@ -127,6 +127,12 @@ def run_point_sweep(
     :return: the S3 pointer for each cell, in enumeration order.
     """
 
+    # The @flow wraps a zero-argument closure, not run_point_sweep itself, so the
+    # injected collaborators — the boto3 SSM/S3 clients, the cell Task, the sleep
+    # callable — stay out of the flow's parameter set. Prefect runs every flow
+    # parameter through serialize_parameters (FastAPI jsonable_encoder) to persist the
+    # flow-run record; a live boto3 client (sockets, locks) does not survive that.
+    # Only the frozen SweepContext is captured by value, addressed through the closure.
     @flow(name="point-sweep")
     def _flow() -> list[str]:
         return _drive_point_sweep(
