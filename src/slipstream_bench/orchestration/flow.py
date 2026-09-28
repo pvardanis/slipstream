@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from slipstream_bench.orchestration.cell_run import (
+    CellExecutionContext,
     build_cell_execution,
-    cell_result_uri,
+    get_cell_result_uri,
 )
 from slipstream_bench.sweep.config import load_sweep_config
-from slipstream_bench.sweep.runner import cell_basename
+from slipstream_bench.sweep.runner import get_cell_basename
 
 if TYPE_CHECKING:
     from prefect import Task
@@ -176,25 +177,25 @@ def _drive_point_sweep(
         commercial=context.commercial,
     )
 
+    execution_context = CellExecutionContext(
+        ssm_client=ssm_client,
+        s3_client=s3_client,
+        instance_id=context.instance_id,
+        image_ref=context.image_ref,
+        bucket=context.bucket,
+        model=context.model,
+        run_id=context.run_id,
+        sweep_args_b64=context.sweep_args_b64,
+        timeout_s=context.cell_timeout_s,
+        poll_interval_s=poll_interval_s,
+        sleep=sleep,
+    )
+
     pointers: list[str] = []
     for cell in sweep.cells():
-        name = cell_basename(cell)
+        name = get_cell_basename(cell)
         dest = results_dir / name
-        execute = build_cell_execution(
-            cell=cell,
-            ssm_client=ssm_client,
-            s3_client=s3_client,
-            instance_id=context.instance_id,
-            image_ref=context.image_ref,
-            bucket=context.bucket,
-            model=context.model,
-            run_id=context.run_id,
-            dest=dest,
-            sweep_args_b64=context.sweep_args_b64,
-            timeout_s=context.cell_timeout_s,
-            poll_interval_s=poll_interval_s,
-            sleep=sleep,
-        )
+        execute = build_cell_execution(cell, context=execution_context, dest=dest)
         pointers.append(
             task(
                 digest=context.digest,
@@ -202,7 +203,7 @@ def _drive_point_sweep(
                 cell_name=name,
                 execute_func=execute,
                 result_path=dest,
-                result_uri=cell_result_uri(context.bucket, context.run_id, cell),
+                result_uri=get_cell_result_uri(context.bucket, context.run_id, cell),
             )
         )
     return pointers

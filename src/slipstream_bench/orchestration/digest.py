@@ -12,6 +12,7 @@ wastes a GPU-minute, a spurious reuse silently serves a stale number.
 """
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -23,6 +24,36 @@ _VLLM_CONTAINER = "vllm"
 
 class DigestError(Exception):
     """A config input the deep digest cannot be computed over."""
+
+
+@dataclass(frozen=True)
+class DigestInputs:
+    """The three files the deep config digest is computed over (ADR-0012).
+
+    They travel together — a digest is only ever taken over all three — so they are
+    bundled rather than threaded as separate parameters.
+
+    :param model_yaml: ``model.yaml`` (model identity).
+    :param sweep_grid: ``sweep-grid.yaml`` (swept knobs).
+    :param vllm_manifest: ``k8s/vllm-gpu.yaml``, holding the serving image ref.
+    """
+
+    model_yaml: Path
+    sweep_grid: Path
+    vllm_manifest: Path
+
+    def digest(self) -> str:
+        """Fold the three inputs into the point's deep config digest.
+
+        :return: the 64-char hex sha256 over the model bytes, grid bytes, and the
+            serving image ref read from the vLLM manifest.
+        :raise DigestError: when the vLLM manifest cannot yield a serving image ref.
+        """
+        return config_digest(
+            model_yaml=self.model_yaml.read_bytes(),
+            sweep_grid_yaml=self.sweep_grid.read_bytes(),
+            image_ref=read_image_ref(self.vllm_manifest),
+        )
 
 
 def config_digest(*, model_yaml: bytes, sweep_grid_yaml: bytes, image_ref: str) -> str:
