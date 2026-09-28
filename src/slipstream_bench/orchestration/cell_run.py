@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import boto3
 import yaml
 
 from slipstream_bench.orchestration.cell_task import CellExecution
@@ -140,39 +141,6 @@ class CellExecutionContext:
     sleep: Callable[[float], None] | None = None
 
 
-def _run_and_download(
-    *,
-    context: CellExecutionContext,
-    command: str,
-    key: str,
-    dest: Path,
-) -> None:
-    """Send one cell over SSM, then download its result JSON to ``dest``.
-
-    Sends ``bench-sweep.sh`` (which runs one ``docker run`` against the once-per-flow
-    loopback proxy and copies the result to S3), then downloads that result object so
-    the validity gate reads it locally. Any SSM failure raises, so the cell task never
-    caches it; a missing result object raises :class:`CellResultError`.
-    """
-    run_kwargs: dict[str, Any] = {
-        "instance_id": context.instance_id,
-        "command": command,
-        "timeout_s": context.timeout_s,
-        "poll_interval_s": context.poll_interval_s,
-    }
-    if context.sleep is not None:
-        run_kwargs["sleep"] = context.sleep
-    run_command(context.ssm_client, **run_kwargs)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        context.s3_client.download_file(context.bucket, key, str(dest))
-    except Exception as error:
-        raise CellResultError(
-            f"the cell ran on {context.instance_id} but its result object "
-            f"s3://{context.bucket}/{key} could not be downloaded to {dest}: {error}"
-        ) from error
-
-
 def build_cell_execution(
     cell: CellConfig, *, context: CellExecutionContext, dest: Path
 ) -> CellExecution:
@@ -208,14 +176,38 @@ def build_s3_client(region: str) -> Any:
 
     :param region: the AWS region the results bucket lives in.
     :return: a boto3 S3 client.
-    :raise ImportError: when ``boto3`` (the ``orchestration`` extra) is not installed,
-        re-raised with a message naming the extra to install.
     """
-    try:
-        import boto3
-    except ImportError as error:
-        raise ImportError(
-            "boto3 is not installed: downloading a cell result needs the "
-            "'orchestration' extra (pip install 'slipstream-bench[orchestration]')"
-        ) from error
     return boto3.client("s3", region_name=region)
+
+
+def _run_and_download(
+    *,
+    context: CellExecutionContext,
+    command: str,
+    key: str,
+    dest: Path,
+) -> None:
+    """Send one cell over SSM, then download its result JSON to ``dest``.
+
+    Sends ``bench-sweep.sh`` (which runs one ``docker run`` against the once-per-flow
+    loopback proxy and copies the result to S3), then downloads that result object so
+    the validity gate reads it locally. Any SSM failure raises, so the cell task never
+    caches it; a missing result object raises :class:`CellResultError`.
+    """
+    run_kwargs: dict[str, Any] = {
+        "instance_id": context.instance_id,
+        "command": command,
+        "timeout_s": context.timeout_s,
+        "poll_interval_s": context.poll_interval_s,
+    }
+    if context.sleep is not None:
+        run_kwargs["sleep"] = context.sleep
+    run_command(context.ssm_client, **run_kwargs)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        context.s3_client.download_file(context.bucket, key, str(dest))
+    except Exception as error:
+        raise CellResultError(
+            f"the cell ran on {context.instance_id} but its result object "
+            f"s3://{context.bucket}/{key} could not be downloaded to {dest}: {error}"
+        ) from error

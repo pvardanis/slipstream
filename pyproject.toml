@@ -25,9 +25,9 @@ orchestration = [
 [project.scripts]
 slipstream-bench = "slipstream_bench.cli:app"
 # The orchestration driver runs at the control point with the orchestration extra; the
-# script is installed by `.` too but only runs under `.[orchestration]` (it imports
-# Prefect and boto3 when invoked). ADR-0012 §Amendment.
-slipstream-orchestrate = "slipstream_bench.orchestration.cli:app"
+# script is installed by `.` too, so its entry guards the extra before importing the
+# Prefect-pulling CLI (ADR-0012 §Amendment).
+slipstream-orchestrate = "slipstream_bench.orchestration.__main__:main"
 
 [dependency-groups]
 dev = [

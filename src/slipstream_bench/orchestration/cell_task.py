@@ -8,16 +8,19 @@ and the next run re-attempts it. It is keyed ``digest:point-slug:cell-name`` via
 :func:`get_cell_cache_key`, with ``result_storage`` and cache ``key_storage`` pointed at S3
 so resume survives a server or laptop death.
 
-Prefect is imported lazily inside :func:`build_cell_task`, so this module — and the
-pure :func:`run_cell` core — import without the ``orchestration`` optional deps. Each
-task is its own transaction (Prefect's default): callers **must not** wrap the sweep in
-an enclosing ``transaction()``, which would defer every write to flow end and forfeit
-per-cell resume.
+The ``orchestration`` extra Prefect ships in is guarded once, at the
+``slipstream-orchestrate`` entry (:mod:`slipstream_bench.orchestration.__main__`),
+before this module is imported. Each task is its own transaction (Prefect's default):
+callers **must not** wrap the sweep in an enclosing ``transaction()``, which would defer
+every write to flow end and forfeit per-cell resume.
 """
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+from prefect import Task, task
+from prefect.cache_policies import CachePolicy
 
 from slipstream_bench.orchestration import storage
 from slipstream_bench.orchestration.cache_key import get_cell_cache_key
@@ -25,9 +28,6 @@ from slipstream_bench.orchestration.validity import (
     DEFAULT_MAX_ERROR_RATE,
     validate_cell,
 )
-
-if TYPE_CHECKING:
-    from prefect import Task
 
 # Runs the single cell it wraps — a ``docker run`` of one ``vllm bench serve`` — and
 # raises on process failure. Stateless and single-op, so a typed Callable, not a
@@ -96,11 +96,10 @@ def build_cell_task(
     result_storage: Any,
     key_storage: Any,
     retries: int = 0,
-) -> "Task[..., str]":
+) -> Task[..., str]:
     """Build the Prefect task wrapping one bench cell, keyed for per-cell resume.
 
-    Prefect is imported here, not at module top, so the module stays importable
-    without the orchestration optional deps. The cache policy is the cell's
+    The cache policy is the cell's
     ``digest:point-slug:cell-name`` key; ``key_storage`` points the cache index and
     ``result_storage`` the persisted pointer at durable storage. Both are required —
     left to Prefect's local defaults, resume would silently degrade to the machine the
@@ -114,9 +113,6 @@ def build_cell_task(
     :return: the configured ``@task`` — call it with ``digest``, ``point_slug``,
         ``cell_name``, ``execute_func``, ``result_path``, and ``result_uri``.
     """
-    from prefect import task
-    from prefect.cache_policies import CachePolicy
-
     policy = CachePolicy.from_cache_key_fn(get_cell_cache_key).configure(
         key_storage=key_storage
     )
@@ -136,7 +132,7 @@ _RESULT_BLOCK = "sweep-cell-results"
 _CACHE_KEY_BLOCK = "sweep-cell-cache-keys"
 
 
-def cell_task(bucket: str, *, retries: int = 0) -> "Task[..., str]":
+def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
     """Build the bench-cell task with its result and cache storage on S3.
 
     The production wiring of :func:`build_cell_task`: both storage blocks are rooted

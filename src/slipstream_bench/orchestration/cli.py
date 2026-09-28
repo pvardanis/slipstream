@@ -16,8 +16,11 @@ from typing import Annotated
 
 import typer
 
+from slipstream_bench.orchestration.cell_run import build_s3_client
+from slipstream_bench.orchestration.cell_task import cell_task
 from slipstream_bench.orchestration.digest import DigestInputs
 from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
+from slipstream_bench.orchestration.ssm import build_ssm_client
 
 app = typer.Typer(
     name="slipstream-orchestrate",
@@ -120,10 +123,6 @@ def point_sweep(
     and drives the flow. An interrupted run re-invoked with the same inputs skips the
     cells that already hold a valid measurement and re-attempts the rest.
     """
-    from slipstream_bench.orchestration.cell_run import build_s3_client
-    from slipstream_bench.orchestration.cell_task import cell_task
-    from slipstream_bench.orchestration.ssm import build_ssm_client
-
     context = build_sweep_context(
         run_id=run_id,
         point_slug=point_slug,
@@ -139,7 +138,7 @@ def point_sweep(
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )
-    pointers = run_point_sweep(
+    cell_result_uris = run_point_sweep(
         config_path=config,
         results_dir=results_dir,
         context=context,
@@ -147,8 +146,8 @@ def point_sweep(
         s3_client=build_s3_client(region),
         task=cell_task(bucket, retries=retries),
     )
-    for pointer in pointers:
-        typer.echo(pointer)
+    for uri in cell_result_uris:
+        typer.echo(uri)
 
 
 if __name__ == "__main__":

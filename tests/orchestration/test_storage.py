@@ -6,8 +6,6 @@ distinct prefixes so the cell JSON and the cache index never collide. These test
 pin that fact and the env-var boundary that supplies the bucket.
 """
 
-import sys
-
 import pytest
 from prefect_aws import S3Bucket
 
@@ -52,17 +50,6 @@ def test_builders_reject_a_blank_bucket(build) -> None:
 
 def test_result_storage_trims_surrounding_whitespace() -> None:
     assert result_storage(f"  {_BUCKET}  ").bucket_name == _BUCKET
-
-
-@pytest.mark.parametrize("build", [result_storage, cache_key_storage])
-def test_builders_report_the_missing_orchestration_extra(
-    build, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A build without ``prefect_aws`` names the extra to install, not a bare import."""
-    monkeypatch.setitem(sys.modules, "prefect_aws", None)
-
-    with pytest.raises(StorageError, match="orchestration"):
-        build(_BUCKET)
 
 
 def test_results_bucket_from_env_reads_the_sweep_bucket(

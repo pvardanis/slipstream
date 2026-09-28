@@ -3,13 +3,13 @@
 ADR-0012 §Amendment splits the package so the bench-client image installs ``.`` with
 no Prefect: its only import path, ``load-sweep`` → ``sweep/``, must import cleanly with
 neither ``prefect`` nor ``prefect_aws`` present. The AST guard in
-``test_sweep_is_prefect_free`` checks ``sweep/``'s own source statically; these tests
-check the whole contract — the transitive import closure and any dynamic import — by
+``test_sweep_is_prefect_free`` checks ``sweep/``'s own source statically; this test
+checks the whole contract — the transitive import closure and any dynamic import — by
 running a subprocess whose ``prefect`` and ``prefect_aws`` are blocked in
-``sys.modules`` and asserting the import still succeeds. The mirror case is also pinned:
-``orchestration.storage`` must import Prefect-free too (its Prefect imports are lazy),
-so hoisting one back to module scope, which the Prefect-present CI would not catch,
-fails here instead.
+``sys.modules`` and asserting the import still succeeds. The ``orchestration/`` layer is
+free to import Prefect at module scope: it is imported only behind the
+``slipstream-orchestrate`` entry, which guards the extra first
+(:mod:`slipstream_bench.orchestration.__main__`).
 """
 
 import subprocess
@@ -47,18 +47,4 @@ def test_sweep_and_load_sweep_import_without_prefect() -> None:
     assert result.returncode == 0, (
         "the bench-client import path must load with no prefect present, but "
         f"importing slipstream_bench.sweep failed:\n{result.stderr}"
-    )
-
-
-def test_orchestration_storage_imports_without_prefect() -> None:
-    result = _run_prefect_free(
-        """
-        import slipstream_bench.orchestration.storage as storage
-        assert hasattr(storage, "result_storage")
-        """
-    )
-
-    assert result.returncode == 0, (
-        "orchestration.storage must import with no prefect present (its prefect "
-        f"imports are lazy), but importing it failed:\n{result.stderr}"
     )
