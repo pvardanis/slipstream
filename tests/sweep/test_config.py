@@ -152,15 +152,19 @@ def test_load_binds_the_cli_injected_context(tmp_path: Path) -> None:
         model="Qwen/Qwen3-8B-AWQ",
         out_dir="/out",
         commercial=False,
+        revision="4da05a8edb55c6046cce958586c33b61da07bb79",
     )
 
     assert config.base_url == "http://127.0.0.1:9"
     assert config.model == "Qwen/Qwen3-8B-AWQ"
+    assert config.revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
     assert config.out_dir == "/out"
     assert config.prefix_shares == [10, 50, 90]
 
 
-@pytest.mark.parametrize("key", ["base_url", "model", "out_dir", "commercial"])
+@pytest.mark.parametrize(
+    "key", ["base_url", "model", "revision", "out_dir", "commercial"]
+)
 def test_load_rejects_a_config_that_sets_a_reserved_key(
     tmp_path: Path, key: str
 ) -> None:
@@ -410,16 +414,20 @@ def test_load_cell_binds_the_cli_injected_context(tmp_path: Path) -> None:
         model="Qwen/Qwen3-8B-AWQ",
         out_dir="/out",
         commercial=False,
+        revision="4da05a8edb55c6046cce958586c33b61da07bb79",
     )
 
     assert cell.base_url == "http://127.0.0.1:9"
     assert cell.model == "Qwen/Qwen3-8B-AWQ"
+    assert cell.revision == "4da05a8edb55c6046cce958586c33b61da07bb79"
     assert cell.out_dir == "/out"
     assert cell.prefix_share == 90
     assert cell.burstiness == 0.2
 
 
-@pytest.mark.parametrize("key", ["base_url", "model", "out_dir", "commercial"])
+@pytest.mark.parametrize(
+    "key", ["base_url", "model", "revision", "out_dir", "commercial"]
+)
 def test_load_cell_rejects_a_reserved_key(tmp_path: Path, key: str) -> None:
     """A cell config may not set a CLI-injected key; model.yaml is the model SoT."""
     path = _write_cell(tmp_path, **{key: "x"})

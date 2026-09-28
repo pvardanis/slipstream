@@ -120,6 +120,25 @@ def test_cell_command_omits_the_tokenizer_when_unset() -> None:
     assert "--tokenizer" not in joined
 
 
+def test_cell_command_carries_the_tokenizer_revision_when_set() -> None:
+    """A pinned revision reaches the command so vLLM resolves the baked tokenizer.
+
+    The image bakes the tokenizer under the model's commit sha with no ``refs/main``
+    pointer, so an offline ``vllm bench serve`` that asks for the default ``main`` ref
+    cannot resolve it. Passing ``--tokenizer-revision`` pins the client to the same
+    commit, resolving the baked snapshot without a network call.
+    """
+    cell = _cell(revision="4da05a8edb55c6046cce958586c33b61da07bb79")
+    joined = " ".join(cell_command(cell))
+    assert "--tokenizer-revision 4da05a8edb55c6046cce958586c33b61da07bb79" in joined
+
+
+def test_cell_command_omits_the_tokenizer_revision_when_unset() -> None:
+    """A model that floats ``main`` pins no revision; the flag is left off."""
+    joined = " ".join(cell_command(_cell()))
+    assert "--tokenizer-revision" not in joined
+
+
 # --- cell_command: the flag assembly the retired bash test pinned ------------
 
 

@@ -131,6 +131,13 @@ def load_sweep(
         str,
         typer.Option(help="Served model id (model.yaml is its source of truth)."),
     ] = "Qwen/Qwen2.5-0.5B-Instruct",
+    revision: Annotated[
+        str | None,
+        typer.Option(
+            help="Model's pinned Hugging Face commit, pinning the tokenizer so an "
+            "offline run resolves the baked snapshot. Omit to float main."
+        ),
+    ] = None,
     out_dir: Annotated[
         str, typer.Option(help="Directory for the per-cell result JSON.")
     ] = "bench/results",
@@ -155,6 +162,7 @@ def load_sweep(
             model=model,
             out_dir=out_dir,
             commercial=api_key_env is not None,
+            revision=revision,
         )
         code = run_sweep(
             cfg,
@@ -188,6 +196,13 @@ def load_cell(
         str,
         typer.Option(help="Served model id (model.yaml is its source of truth)."),
     ] = "Qwen/Qwen2.5-0.5B-Instruct",
+    revision: Annotated[
+        str | None,
+        typer.Option(
+            help="Model's pinned Hugging Face commit, pinning the tokenizer so an "
+            "offline run resolves the baked snapshot. Omit to float main."
+        ),
+    ] = None,
     out_dir: Annotated[
         str, typer.Option(help="Directory for this cell's result JSON.")
     ] = "bench/results",
@@ -220,6 +235,7 @@ def load_cell(
             model=model,
             out_dir=out_dir,
             commercial=api_key_env is not None,
+            revision=revision,
         )
         if dry_run:
             typer.echo(" ".join(cell_command(cell)))

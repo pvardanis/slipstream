@@ -132,6 +132,7 @@ def _context() -> SweepContext:
         image_ref="repo:tag",
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
+        revision="4da05a8edb55c6046cce958586c33b61da07bb79",
     )
 
 
@@ -165,6 +166,19 @@ def test_first_run_executes_every_cell(tmp_path: Path) -> None:
     assert all(p.startswith("s3://bench-bucket/sweeps/run1/") for p in pointers)
     assert ssm.proxy_ups() == 1
     assert ssm.cell_runs() == 4
+
+
+def test_each_cell_command_carries_the_pinned_revision(tmp_path: Path) -> None:
+    ssm = _FakeSsm()
+
+    _drive(tmp_path, ssm, _isolated_task(tmp_path))
+
+    cell_commands = [c for c in ssm.commands if _CELL in c]
+    assert cell_commands
+    assert all(
+        "REVISION='4da05a8edb55c6046cce958586c33b61da07bb79'" in command
+        for command in cell_commands
+    )
 
 
 def test_second_run_resumes_and_re_executes_no_cell(tmp_path: Path) -> None:

@@ -62,7 +62,7 @@ def test_render_cell_config_round_trips_through_load_cell_config(
 def test_render_cell_config_omits_the_cli_injected_keys() -> None:
     rendered = render_cell_config(_first_cell())
 
-    for key in ("base_url", "model", "out_dir", "commercial"):
+    for key in ("base_url", "model", "revision", "out_dir", "commercial"):
         assert f"{key}:" not in rendered
 
 
@@ -95,6 +95,7 @@ def test_build_cell_command_prefixes_the_host_environment() -> None:
     assert "RUN_ID='run1/mns64'" in command
     assert "CELL_CONFIG_B64='Y2ZnCg=='" in command
     assert "SWEEP_ARGS_B64" not in command
+    assert "REVISION" not in command
 
 
 def test_build_cell_command_appends_optional_args() -> None:
@@ -108,6 +109,19 @@ def test_build_cell_command_appends_optional_args() -> None:
     )
 
     assert "SWEEP_ARGS_B64='LS1kcnktcnVu'" in command
+
+
+def test_build_cell_command_prefixes_the_pinned_revision() -> None:
+    command = build_cell_command(
+        image_ref="repo:tag",
+        bucket="b",
+        model="m",
+        run_id="r",
+        cell_config_b64="Y2ZnCg==",
+        revision="4da05a8edb55c6046cce958586c33b61da07bb79",
+    )
+
+    assert "REVISION='4da05a8edb55c6046cce958586c33b61da07bb79'" in command
 
 
 class _FakeSsm:
