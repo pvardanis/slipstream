@@ -96,10 +96,10 @@ def read_image_ref(manifest: Path, *, container: str = _VLLM_CONTAINER) -> str:
         message = f"vLLM manifest could not be read: {manifest}: {error}"
         raise DigestError(message) from error
     try:
-        data = yaml.safe_load(text)
+        documents = list(yaml.safe_load_all(text))
     except yaml.YAMLError as error:
         raise DigestError(f"{manifest} is not valid YAML: {error}") from error
-    for entry in _get_containers(data, manifest):
+    for entry in _get_containers(documents, manifest):
         if isinstance(entry, dict) and entry.get("name") == container:
             return _require_image(entry, container, manifest)
     raise DigestError(
@@ -107,23 +107,38 @@ def read_image_ref(manifest: Path, *, container: str = _VLLM_CONTAINER) -> str:
     )
 
 
-def _get_containers(data: object, manifest: Path) -> list[object]:
-    """Walk a Deployment manifest to its pod template's container list.
+def _get_containers(documents: list[object], manifest: Path) -> list[object]:
+    """Find the pod template's container list across a manifest's documents.
 
-    :param data: the parsed manifest.
+    ``k8s/vllm-gpu.yaml`` bundles the Deployment and its Service, ``---``-separated,
+    so the Deployment document is picked out of the stream by its
+    ``spec.template.spec.containers`` shape and the others are passed over.
+
+    :param documents: the parsed manifest documents.
     :param manifest: the manifest path, for the error message.
-    :return: the container entries.
-    :raise DigestError: when the manifest is not the expected Deployment shape.
+    :return: the Deployment's container entries.
+    :raise DigestError: when no document is a Deployment with that shape, or that
+        document's containers are not a list.
     """
-    node: object = data
+    for document in documents:
+        containers = _template_containers(document)
+        if containers is None:
+            continue
+        if not isinstance(containers, list):
+            raise DigestError(f"{manifest} containers is not a list")
+        return containers
+    raise DigestError(
+        f"{manifest} is not a Deployment with spec.template.spec.containers"
+    )
+
+
+def _template_containers(document: object) -> object | None:
+    """Return a document's ``spec.template.spec.containers`` node, or None if absent."""
+    node: object = document
     for key in ("spec", "template", "spec", "containers"):
         if not isinstance(node, dict) or key not in node:
-            raise DigestError(
-                f"{manifest} is not a Deployment with spec.template.spec.containers"
-            )
+            return None
         node = node[key]
-    if not isinstance(node, list):
-        raise DigestError(f"{manifest} containers is not a list")
     return node
 
 

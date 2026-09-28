@@ -87,6 +87,30 @@ def test_read_image_ref_reads_the_vllm_container_image(tmp_path: Path) -> None:
     assert read_image_ref(manifest) == "vllm/vllm-openai:v0.29.0"
 
 
+def test_read_image_ref_reads_from_a_multi_document_manifest(tmp_path: Path) -> None:
+    # k8s/vllm-gpu.yaml bundles the Deployment and its Service, `---`-separated; the
+    # image ref is read from the Deployment document past the others.
+    manifest = tmp_path / "vllm-gpu.yaml"
+    manifest.write_text(
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "        - name: vllm\n"
+        "          image: vllm/vllm-openai:v0.29.0\n"
+        "---\n"
+        "apiVersion: v1\n"
+        "kind: Service\n"
+        "spec:\n"
+        "  selector:\n"
+        "    app: vllm-gpu\n"
+    )
+
+    assert read_image_ref(manifest) == "vllm/vllm-openai:v0.29.0"
+
+
 def test_read_image_ref_rejects_a_manifest_without_the_container(
     tmp_path: Path,
 ) -> None:
