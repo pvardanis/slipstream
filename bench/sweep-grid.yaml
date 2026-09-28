@@ -22,6 +22,10 @@ tier1:
 
 tier2:
   max_concurrency: [8, 16, 32, 64, 128, 256]
+  # Arrival-process shape for the open-loop path; inert here because the ceiling
+  # method is closed-loop (request_rate: inf, below), where vLLM ignores burstiness.
+  # Parked at 1.0 (neutral) for the future open-loop autoscaler sweep, whose bursty
+  # arrivals (burstiness < 1) it will drive.
   burstiness: 1.0
 
 # Fixed client-load knobs every cell runs with. The grid is the single source of a
@@ -40,8 +44,12 @@ load:
   output_len: 128
   # Floor the prefix to a multiple of N tokens; 0 disables alignment.
   align_blocks: 0
-  # Requests/sec, or 'inf' for an unthrottled sweep.
-  request_rate: 8
+  # Unthrottled arrivals so the --max-concurrency ladder is the sole limiter: the
+  # closed-loop ceiling method (ADR-0009) measures a count of simultaneous requests,
+  # not an arrival rate. A finite rate would let the in-flight count float and queue
+  # depth, not replica capacity, would set the SLO cliff. The open-loop autoscaler
+  # sweep will set a finite requests/sec here instead.
+  request_rate: .inf
   # RNG seed, fixed so runs replay identical prefixes.
   seed: 0
   # Goodput SLO passed to vllm bench serve.
