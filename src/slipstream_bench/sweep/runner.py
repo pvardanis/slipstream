@@ -77,14 +77,20 @@ def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int
     return prefix_len, total_len - prefix_len
 
 
-def _result_file(cell: CellConfig) -> str:
-    """Name a distinct result JSON for one cell.
+def cell_basename(cell: CellConfig) -> str:
+    """Name the result JSON one cell writes, without its directory.
 
     A closed-loop cell carries its cap in the name so ladder rungs never collide;
-    an open-loop cell (no cap) is left un-suffixed.
+    an open-loop cell (no cap) is left un-suffixed. The orchestration layer reads the
+    same name to address the cell's S3 object and cache key, so the two never drift.
     """
     cap = f"_mc{cell.max_concurrency}" if cell.max_concurrency is not None else ""
-    return f"{cell.out_dir}/pshare{cell.prefix_share}_burst{cell.burstiness}{cap}.json"
+    return f"pshare{cell.prefix_share}_burst{cell.burstiness}{cap}.json"
+
+
+def _result_file(cell: CellConfig) -> str:
+    """Name a distinct result JSON for one cell, under its output dir."""
+    return f"{cell.out_dir}/{cell_basename(cell)}"
 
 
 def cell_command(cell: CellConfig) -> list[str]:

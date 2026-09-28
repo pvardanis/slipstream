@@ -17,12 +17,17 @@ dependencies = [
 # driver and CI install `.[orchestration]`. See ADR-0012 §Amendment.
 [project.optional-dependencies]
 orchestration = [
+    "boto3>=1.34",
     "prefect>=3",
     "prefect-aws>=0.7.12",
 ]
 
 [project.scripts]
 slipstream-bench = "slipstream_bench.cli:app"
+# The orchestration driver runs at the control point with the orchestration extra; the
+# script is installed by `.` too but only runs under `.[orchestration]` (it imports
+# Prefect and boto3 when invoked). ADR-0012 §Amendment.
+slipstream-orchestrate = "slipstream_bench.orchestration.cli:app"
 
 [dependency-groups]
 dev = [
