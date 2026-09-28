@@ -18,8 +18,9 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-# Invocation states SSM settles into; anything else (Pending, InProgress, Delayed)
-# is still running and keeps the poll loop going.
+# Invocation states SSM settles into; any other, non-terminal state — Pending,
+# InProgress, Delayed, Cancelling, and so on — is still running and keeps the poll
+# loop going.
 _SUCCESS = "Success"
 _TERMINAL = frozenset({"Success", "Cancelled", "TimedOut", "Failed"})
 
@@ -96,13 +97,38 @@ def _poll(client: Any, *, command_id: str, instance_id: str) -> tuple[str, str]:
         invocation = client.get_command_invocation(
             CommandId=command_id, InstanceId=instance_id
         )
-    except Exception as error:  # narrowed below to the not-ready case
-        if type(error).__name__ == _NOT_READY or _NOT_READY in str(error):
+    except Exception as error:  # not-ready is benign; any other get failure is fatal
+        if _is_not_ready(error):
             return "Pending", ""
         raise SsmError(
             f"could not read SSM invocation {command_id} on {instance_id}: {error}"
         ) from error
-    return invocation.get("Status", ""), invocation.get("StandardErrorContent", "")
+    status = invocation.get("Status")
+    if not status:
+        raise SsmError(
+            f"SSM invocation {command_id} on {instance_id} returned no status "
+            f"(response {invocation!r}): the invocation shape is unexpected"
+        )
+    return status, invocation.get("StandardErrorContent", "")
+
+
+def _is_not_ready(error: Exception) -> bool:
+    """Report whether a get failure is SSM's not-created-yet eventual-consistency case.
+
+    Matched precisely — by boto3's modeled exception class name, or the structured
+    error code botocore carries on the response — never by a substring of the message,
+    so an unrelated failure that merely mentions the code is not misread as
+    still-pending and polled all the way to the timeout.
+
+    :param error: the exception ``get_command_invocation`` raised.
+    :return: True only for the ``InvocationDoesNotExist`` not-ready case.
+    """
+    if type(error).__name__ == _NOT_READY:
+        return True
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        return response.get("Error", {}).get("Code") == _NOT_READY
+    return False
 
 
 def build_ssm_client(region: str) -> Any:

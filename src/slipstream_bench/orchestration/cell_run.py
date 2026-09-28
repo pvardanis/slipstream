@@ -29,12 +29,18 @@ from slipstream_bench.sweep.runner import cell_basename
 _BENCH_CELL_SCRIPT = "/usr/local/bin/bench-sweep.sh"
 
 
+class CellResultError(Exception):
+    """A cell that ran over SSM but whose result object could not be downloaded."""
+
+
 def render_cell_config(cell: CellConfig) -> str:
     """Render one cell to the ``load-cell`` config YAML, minus the CLI-injected keys.
 
-    ``base_url``, ``model``, ``out_dir``, and ``commercial`` are supplied by
-    ``bench-sweep.sh`` as flags and rejected by ``load_cell_config`` if present in the
-    file (model.yaml is the served-model source of truth), so they are excluded here.
+    ``base_url``, ``model``, and ``out_dir`` are supplied by ``bench-sweep.sh`` as
+    flags; ``commercial`` is a CLI-derived context key (from ``--api-key-env``), not a
+    config field. All four are RESERVED context keys ``load_cell_config`` rejects if
+    present in the file (model.yaml is the served-model source of truth), so they are
+    excluded here.
 
     :param cell: the cell to render.
     :return: the YAML text to base64 and ship as ``bench-sweep.sh``'s ``CELL_CONFIG_B64``.
@@ -159,7 +165,13 @@ def build_cell_execution(
             run_kwargs["sleep"] = sleep
         run_command(ssm_client, **run_kwargs)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        s3_client.download_file(bucket, key, str(dest))
+        try:
+            s3_client.download_file(bucket, key, str(dest))
+        except Exception as error:
+            raise CellResultError(
+                f"the cell ran on {instance_id} but its result object "
+                f"s3://{bucket}/{key} could not be downloaded to {dest}: {error}"
+            ) from error
 
     return execute
 
@@ -170,7 +182,7 @@ def build_s3_client(region: str) -> Any:
     :param region: the AWS region the results bucket lives in.
     :return: a boto3 S3 client.
     :raise ImportError: when ``boto3`` (the ``orchestration`` extra) is not installed,
-        re-raised naming the extra to install, matching the SSM client builder.
+        re-raised with a message naming the extra to install.
     """
     try:
         import boto3

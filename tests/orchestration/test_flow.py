@@ -19,6 +19,7 @@ from prefect.testing.utilities import prefect_test_harness
 
 from slipstream_bench.orchestration.cell_task import build_cell_task
 from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
+from slipstream_bench.orchestration.validity import InvalidCellError
 
 _PROXY = "/usr/local/bin/bench-proxy-up.sh"
 _CELL = "/usr/local/bin/bench-sweep.sh"
@@ -32,6 +33,10 @@ _VALID_RESULT = {
     "request_throughput": 95.0,
     "errors": [""] * 99 + ["Timeout"],
 }
+
+# 50 of 100 requests failed -> error rate 0.5, past the gate's 0.05 ceiling: parses,
+# but an unhealthy-server result the validity gate rejects.
+_UNHEALTHY_RESULT = {**_VALID_RESULT, "completed": 50}
 
 # A closed-loop point config: the gate reuses the aggregate-sweep parser, which
 # requires each cell's max_concurrency cap — the knob sweep's Tier-2 ladder shape.
@@ -81,6 +86,21 @@ class _FakeS3:
         Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
 
 
+class _UnhealthyOnceS3:
+    """Serve one cell an unhealthy result the first time it is fetched, valid after."""
+
+    def __init__(self, unhealthy_basename: str) -> None:
+        self._unhealthy = unhealthy_basename
+        self._served: set[str] = set()
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        if self._unhealthy in key and key not in self._served:
+            self._served.add(key)
+            Path(dest).write_text(json.dumps(_UNHEALTHY_RESULT), encoding="utf-8")
+        else:
+            Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
+
+
 def _isolated_task(tmp_path: Path):
     results = LocalFileSystem(basepath=str(tmp_path / "results"))
     results.save(f"results-{uuid4().hex}", overwrite=True)
@@ -107,13 +127,13 @@ def _config(tmp_path: Path) -> Path:
     return path
 
 
-def _drive(tmp_path: Path, ssm: _FakeSsm, task) -> list[str]:
+def _drive(tmp_path: Path, ssm: _FakeSsm, task, s3=None) -> list[str]:
     return run_point_sweep(
         config_path=_config(tmp_path),
         results_dir=tmp_path / "results-local",
         context=_context(),
         ssm_client=ssm,
-        s3_client=_FakeS3(),
+        s3_client=s3 or _FakeS3(),
         task=task,
         poll_interval_s=0.0,
         sleep=lambda _s: None,
@@ -145,3 +165,20 @@ def test_second_run_resumes_and_re_executes_no_cell(tmp_path: Path) -> None:
     assert first == second
     assert second_ssm.proxy_ups() == 1  # the proxy still comes up once per flow
     assert second_ssm.cell_runs() == 0  # every cell hit the cache
+
+
+def test_a_failed_cell_re_runs_while_valid_cells_stay_cached(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+    # The ladder is innermost, shares outermost, so this is the last enumerated cell:
+    # the three before it cache before it fails the gate and raises out of the flow.
+    unhealthy = "pshare50_burst1.0_mc128.json"
+
+    first_ssm = _FakeSsm()
+    with pytest.raises(InvalidCellError):
+        _drive(tmp_path, first_ssm, task, s3=_UnhealthyOnceS3(unhealthy))
+
+    second_ssm = _FakeSsm()
+    _drive(tmp_path, second_ssm, task, s3=_FakeS3())
+
+    assert second_ssm.cell_runs() == 1  # only the once-failed cell re-runs
+    assert second_ssm.proxy_ups() == 1

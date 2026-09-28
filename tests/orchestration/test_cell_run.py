@@ -12,7 +12,10 @@ without AWS.
 import base64
 from pathlib import Path
 
+import pytest
+
 from slipstream_bench.orchestration.cell_run import (
+    CellResultError,
     build_cell_command,
     build_cell_execution,
     cell_result_uri,
@@ -87,6 +90,7 @@ def test_build_cell_command_prefixes_the_host_environment() -> None:
     assert command.endswith("/usr/local/bin/bench-sweep.sh")
     assert "IMAGE_REF='repo:tag'" in command
     assert "RESULTS_BUCKET='bench-bucket'" in command
+    assert "MODEL='Qwen/Qwen2.5-0.5B-Instruct'" in command
     assert "RUN_ID='run1/mns64'" in command
     assert "CELL_CONFIG_B64='Y2ZnCg=='" in command
     assert "SWEEP_ARGS_B64" not in command
@@ -158,3 +162,27 @@ def test_build_cell_execution_runs_then_downloads(tmp_path: Path) -> None:
     assert f"prefix_share: {cell.prefix_share}" in decoded
     assert s3.downloads == [("bench-bucket", cell_s3_key("run1/mns64", cell))]
     assert dest.read_text(encoding="utf-8") == '{"completed": 1}'
+
+
+class _DownloadFails:
+    def download_file(self, _bucket: str, _key: str, _dest: str) -> None:
+        raise RuntimeError("404 Not Found")
+
+
+def test_build_cell_execution_wraps_a_missing_result(tmp_path: Path) -> None:
+    execute = build_cell_execution(
+        cell=_first_cell(),
+        ssm_client=_FakeSsm(),
+        s3_client=_DownloadFails(),
+        instance_id="i-1",
+        image_ref="repo:tag",
+        bucket="bench-bucket",
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        run_id="run1/mns64",
+        dest=tmp_path / "cell.json",
+        poll_interval_s=0.0,
+        sleep=lambda _s: None,
+    )
+
+    with pytest.raises(CellResultError, match="could not be downloaded"):
+        execute()

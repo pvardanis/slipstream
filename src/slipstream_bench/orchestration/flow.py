@@ -68,6 +68,34 @@ class SweepContext:
     proxy_timeout_s: float = 240.0
     cell_timeout_s: float = 3600.0
 
+    def __post_init__(self) -> None:
+        """Reject a context that cannot address a run or would stall the transport.
+
+        Frozen, so validating on construction makes the instance valid for its whole
+        life: the identifiers that key the cache and address S3 must be non-empty,
+        ``run_id`` must nest ``point_slug`` (the cells land under it), and both
+        timeouts must be positive so the SSM poll loop has a deadline to trip.
+        """
+        for name in (
+            "run_id",
+            "point_slug",
+            "digest",
+            "instance_id",
+            "image_ref",
+            "bucket",
+            "model",
+        ):
+            if not getattr(self, name).strip():
+                raise ValueError(f"SweepContext.{name} must be a non-empty string")
+        if self.point_slug not in self.run_id:
+            raise ValueError(
+                f"SweepContext.run_id {self.run_id!r} must nest point_slug "
+                f"{self.point_slug!r}: the run's cell objects land under it"
+            )
+        for name in ("proxy_timeout_s", "cell_timeout_s"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"SweepContext.{name} must be positive")
+
 
 def run_point_sweep(
     *,
