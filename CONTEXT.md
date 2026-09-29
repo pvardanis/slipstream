@@ -66,8 +66,12 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
   tokenizer at build time so its token counts match the Engine's.
 - **Tokenizer slug** — the served-model identifier carried in the bench-client image's tag, so a
   tag names the tokenizer the image contains rather than an opaque `latest`.
-- **Knob sweep** — the L1 measurement that varies engine knobs across a grid to find the
-  concurrency ceiling at the goodput SLO.
+- **Knob sweep** — the whole L1 campaign: the measurement that varies engine knobs across a
+  grid to find the concurrency ceiling at the goodput SLO. One knob sweep is many point
+  sweeps — one per engine point — each preceded by its own GPU redeploy.
+- **Point sweep** — one engine point's measurement: the client-load ladder run against a
+  single running replica (one GPU deployment), producing that point's concurrency ceiling.
+  The knob sweep is the parent over every point sweep.
 
 ## Observability
 
