@@ -1,0 +1,270 @@
+# Plan-level tests for the Prefect worker layer on the eks stack (#178): the worker's
+# IAM role + least-privilege policy (S3 results bucket read, SSM SendCommand to the
+# bench host), its Pod Identity association, the ServiceAccount RBAC scoped to
+# managing deploy/vllm-gpu, and the prefect-worker Helm release. They run offline —
+# the aws, helm, and kubernetes providers are mocked — so the assertions check the
+# install's shape without standing a cluster up (ADR-0002 tier-1). A worker actually
+# registering against the pool and running a sweep is the cloud tier (#92 / manual).
+#
+# The permission policy and trust policy are jsonencode()'d inline (not
+# aws_iam_policy_document data sources), so their statements are known at plan and
+# assertable here — the mock provider blanks aws_iam_policy_document to empty JSON
+# (see the note in prefect.tftest.hcl), which would hide their contents.
+
+mock_provider "aws" {
+  mock_data "aws_iam_policy_document" {
+    defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  mock_data "aws_partition" {
+    defaults = {
+      partition  = "aws"
+      dns_suffix = "amazonaws.com"
+    }
+  }
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["eu-west-1a", "eu-west-1b", "eu-west-1c"] }
+  }
+  mock_data "aws_caller_identity" {
+    defaults = {
+      account_id = "111122223333"
+      arn        = "arn:aws:iam::111122223333:user/test"
+    }
+  }
+  mock_data "aws_iam_session_context" {
+    defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
+  }
+}
+
+mock_provider "aws" {
+  alias = "virginia"
+}
+mock_provider "helm" {}
+mock_provider "kubernetes" {}
+
+run "worker_layer_shape" {
+  command = plan
+
+  variables {
+    prefect_worker_image = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-orchestrator:orchestrator-abc123"
+  }
+
+  # --- IAM trust: Pod Identity, no static keys ---
+
+  # The worker assumes its role through a Pod Identity association; the trust is the
+  # pods.eks.amazonaws.com service principal with sts:TagSession alongside AssumeRole
+  # (the Pod Identity agent tags the session). No static AWS keys anywhere.
+  assert {
+    condition     = jsondecode(aws_iam_role.prefect_worker[0].assume_role_policy).Statement[0].Principal.Service == "pods.eks.amazonaws.com"
+    error_message = "The worker role must trust the EKS Pod Identity service principal."
+  }
+  assert {
+    condition     = contains(jsondecode(aws_iam_role.prefect_worker[0].assume_role_policy).Statement[0].Action, "sts:AssumeRole")
+    error_message = "The worker trust policy must allow sts:AssumeRole."
+  }
+  assert {
+    condition     = contains(jsondecode(aws_iam_role.prefect_worker[0].assume_role_policy).Statement[0].Action, "sts:TagSession")
+    error_message = "The worker trust policy must allow sts:TagSession (the Pod Identity agent tags the session)."
+  }
+
+  # The association binds the worker's ServiceAccount (in the prefect namespace) to
+  # the role. Unlike the EBS CSI association (a module.eks input, unassertable), this
+  # is a standalone resource, so the plan can guard its namespace/SA wiring.
+  assert {
+    condition     = aws_eks_pod_identity_association.prefect_worker[0].namespace == "prefect"
+    error_message = "The Pod Identity association must target the prefect namespace where the worker runs."
+  }
+  assert {
+    condition     = aws_eks_pod_identity_association.prefect_worker[0].service_account == "prefect-worker"
+    error_message = "The Pod Identity association must bind the prefect-worker ServiceAccount."
+  }
+
+  # --- IAM permissions: least-privilege S3 + SSM ---
+
+  # S3: read-only on the bench-endpoint results bucket. The bucket's name carries a
+  # random suffix and lives in a stack this one cannot reference without a dependency
+  # cycle, so it is scoped by ARN prefix, not an exact ARN. The host writes objects;
+  # the worker only reads them, so no s3:PutObject.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "ResultsBucketObjects" && contains(s.Action, "s3:GetObject") && s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*"]) == 1
+    error_message = "The policy must allow s3:GetObject on the results bucket objects, scoped by ARN prefix."
+  }
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "ResultsBucketList" && contains(s.Action, "s3:ListBucket") && s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*"]) == 1
+    error_message = "The policy must allow s3:ListBucket on the results bucket, scoped by ARN prefix."
+  }
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:PutObject")]) == 0
+    error_message = "The worker must not write to S3 — the bench host owns PutObject."
+  }
+
+  # SSM SendCommand is split in two: the AWS-managed document is authorized
+  # unconditionally, and the instance target is narrowed to Project=slipstream tagged
+  # instances by condition (the tag on the document is absent, so a single combined
+  # statement would deny the send). This scopes the send to the bench host without
+  # naming its ephemeral instance id.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "SsmSendCommandDocument" && contains(s.Action, "ssm:SendCommand") && s.Resource == "arn:aws:ssm:eu-west-1::document/AWS-RunShellScript"]) == 1
+    error_message = "The policy must allow ssm:SendCommand on the AWS-RunShellScript document."
+  }
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "SsmSendCommandInstances" && s.Condition.StringEquals["ssm:resourceTag/Project"] == "slipstream"]) == 1
+    error_message = "The SSM instance target must be scoped to Project=slipstream tagged instances."
+  }
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "SsmCommandStatus" && contains(s.Action, "ssm:GetCommandInvocation")]) == 1
+    error_message = "The policy must allow ssm:GetCommandInvocation so the worker can poll command completion."
+  }
+
+  # --- RBAC: scoped to deploy/vllm-gpu, no cluster-admin ---
+
+  # The Role lives in the slipstream namespace (where vllm-gpu runs), so the grant is
+  # namespaced, never cluster-wide.
+  assert {
+    condition     = kubernetes_role_v1.vllm_gpu_manage[0].metadata[0].namespace == "slipstream"
+    error_message = "The worker Role must live in the slipstream namespace where vllm-gpu runs."
+  }
+
+  # get/patch are narrowed to the vllm-gpu Deployment by resourceNames — the worker
+  # can read and reconfigure that one Deployment and no other.
+  assert {
+    condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage[0].rule : r if contains(r.resources, "deployments") && contains(r.verbs, "patch") && contains(r.resource_names, "vllm-gpu")]) == 1
+    error_message = "The Role must scope get/patch on deployments to the vllm-gpu resource name."
+  }
+  # Reading the rollout needs list/watch on deployments, which resourceNames cannot
+  # restrict; the namespace holds only vllm-gpu, so this stays scoped in practice.
+  assert {
+    condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage[0].rule : r if contains(r.resources, "deployments") && contains(r.verbs, "watch") && !contains(r.verbs, "patch")]) == 1
+    error_message = "The Role must allow list/watch on deployments so the worker can read the rollout."
+  }
+  # Reading logs (kubectl logs deploy/vllm-gpu) needs pods/log get and pods get/list.
+  assert {
+    condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage[0].rule : r if contains(r.resources, "pods/log") && contains(r.verbs, "get")]) == 1
+    error_message = "The Role must allow get on pods/log so the worker can read vllm-gpu logs."
+  }
+  # No wildcard verbs or cluster-admin.
+  assert {
+    condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage[0].rule : r if contains(r.verbs, "*") || contains(r.resources, "*")]) == 0
+    error_message = "The worker Role must not use wildcard verbs or resources."
+  }
+
+  # The RoleBinding binds that Role to the worker's ServiceAccount, which lives in the
+  # prefect namespace (cross-namespace subject).
+  assert {
+    condition     = kubernetes_role_binding_v1.vllm_gpu_manage[0].subject[0].name == "prefect-worker"
+    error_message = "The RoleBinding must bind the prefect-worker ServiceAccount."
+  }
+  assert {
+    condition     = kubernetes_role_binding_v1.vllm_gpu_manage[0].subject[0].namespace == "prefect"
+    error_message = "The RoleBinding subject must reference the worker SA in the prefect namespace."
+  }
+  assert {
+    condition     = kubernetes_role_binding_v1.vllm_gpu_manage[0].role_ref[0].name == kubernetes_role_v1.vllm_gpu_manage[0].metadata[0].name
+    error_message = "The RoleBinding must reference the vllm-gpu-manage Role."
+  }
+
+  # --- Helm release: the worker itself ---
+
+  assert {
+    condition     = helm_release.prefect_worker[0].repository == "https://prefecthq.github.io/prefect-helm"
+    error_message = "The worker must install from the upstream prefect-helm repository."
+  }
+  assert {
+    condition     = helm_release.prefect_worker[0].chart == "prefect-worker"
+    error_message = "Helm release must deploy the prefect-worker chart."
+  }
+  assert {
+    condition     = helm_release.prefect_worker[0].version == var.prefect_worker_chart_version
+    error_message = "Chart version must be pinned to var.prefect_worker_chart_version."
+  }
+  assert {
+    condition     = helm_release.prefect_worker[0].wait == true
+    error_message = "The worker release must wait for the Deployment so a broken install fails the apply."
+  }
+  assert {
+    condition     = helm_release.prefect_worker[0].atomic == true
+    error_message = "The worker release must be atomic so a failed install rolls back instead of leaving a half-up worker."
+  }
+
+  # A process worker (not kubernetes): the sweep runs as a subprocess in the worker
+  # pod, matching the serial single-GPU sweep (ADR-0015 amendment).
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.config.type == "process"
+    error_message = "The worker must be a process worker, not kubernetes."
+  }
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.config.workPool == var.prefect_work_pool
+    error_message = "The worker must poll the sweep work pool (var.prefect_work_pool)."
+  }
+  # Connects to the in-cluster self-hosted server over cluster DNS, no public endpoint.
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.apiConfig == "selfHostedServer"
+    error_message = "The worker must target the self-hosted in-cluster server."
+  }
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.selfHostedServerApiConfig.apiUrl == "http://prefect-server.prefect.svc.cluster.local:4200/api"
+    error_message = "The worker must reach the server over cluster DNS."
+  }
+  # Runs the orchestration image (repository + tag split from var.prefect_worker_image).
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.repository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-orchestrator"
+    error_message = "The worker image repository must come from var.prefect_worker_image."
+  }
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.prefectTag == "orchestrator-abc123"
+    error_message = "The worker image tag must come from var.prefect_worker_image."
+  }
+  # The chart creates the SA (which Pod Identity binds); RBAC is owned by this stack,
+  # so the chart's own Role/RoleBinding are off — the chart's default role grants
+  # kubernetes-worker permissions a process worker does not need.
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).serviceAccount.create == true
+    error_message = "The chart must create the worker ServiceAccount (which Pod Identity binds)."
+  }
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).serviceAccount.name == "prefect-worker"
+    error_message = "The chart must name the ServiceAccount prefect-worker to match the Pod Identity association."
+  }
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).role.create == false
+    error_message = "The chart's own Role must be off — this stack owns the scoped RBAC."
+  }
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).rolebinding.create == false
+    error_message = "The chart's own RoleBinding must be off — this stack owns the scoped RBAC."
+  }
+
+  # The slipstream namespace is created here (not just by `just gpu-deploy`) so the
+  # Role/RoleBinding have somewhere to land at cluster-up.
+  assert {
+    condition     = kubernetes_namespace_v1.slipstream[0].metadata[0].name == "slipstream"
+    error_message = "The worker layer must create the slipstream namespace for the vllm-gpu RBAC."
+  }
+}
+
+# With no image supplied the worker layer is absent entirely, so `just cluster-up`
+# stands the cluster up before the orchestration image exists (the image ships in its
+# own build stack). Supplying the image is what brings the worker up.
+run "worker_absent_without_image" {
+  command = plan
+
+  variables {
+    prefect_worker_image = ""
+  }
+
+  assert {
+    condition     = length(helm_release.prefect_worker) == 0
+    error_message = "An empty prefect_worker_image must leave the worker release uncreated."
+  }
+  assert {
+    condition     = length(aws_iam_role.prefect_worker) == 0
+    error_message = "An empty prefect_worker_image must leave the worker IAM role uncreated."
+  }
+  assert {
+    condition     = length(aws_eks_pod_identity_association.prefect_worker) == 0
+    error_message = "An empty prefect_worker_image must leave the Pod Identity association uncreated."
+  }
+  assert {
+    condition     = length(kubernetes_role_v1.vllm_gpu_manage) == 0
+    error_message = "An empty prefect_worker_image must leave the worker RBAC uncreated."
+  }
+}

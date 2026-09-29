@@ -46,3 +46,21 @@ variable "prefect_sqlite_volume_size" {
   type        = string
   default     = "1Gi"
 }
+
+variable "prefect_worker_chart_version" {
+  description = "Pinned prefect-worker Helm chart version from the https://prefecthq.github.io/prefect-helm repo (matches the prefect-server chart, appVersion 3.8.7, Prefect 3)."
+  type        = string
+  default     = "2026.9.26234203"
+}
+
+variable "prefect_worker_image" {
+  description = "Full ECR image reference (repo:tag) for the Prefect worker — a lean image carrying the orchestration extra (Prefect + the sweep flow code), built by its own image stack. Empty leaves the worker layer uncreated so the cluster stands up before that image exists; supplying it brings the worker up."
+  type        = string
+  default     = ""
+}
+
+variable "prefect_work_pool" {
+  description = "Name of the process work pool the worker polls; matches the pool `just prefect-up` creates (justfile prefect_work_pool)."
+  type        = string
+  default     = "sweep-pool"
+}
