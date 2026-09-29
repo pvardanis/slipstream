@@ -57,6 +57,15 @@ variable "prefect_worker_image" {
   description = "Full ECR image reference (repo:tag) for the Prefect worker — a lean image carrying the orchestration extra (Prefect + the sweep flow code), built by its own image stack. Empty leaves the worker layer uncreated so the cluster stands up before that image exists; supplying it brings the worker up."
   type        = string
   default     = ""
+
+  # Enforce the repo:tag shape the tag split (worker.tf) relies on: exactly one colon,
+  # no @ (a digest ref's colon would mis-split repo from tag). Empty is the off switch.
+  # Rejecting a malformed ref here fails the plan loudly instead of deploying the worker
+  # with a blank or wrong tag Helm then resolves to something unintended.
+  validation {
+    condition     = var.prefect_worker_image == "" || length(regexall("^[^:@]+:[^:@]+$", var.prefect_worker_image)) == 1
+    error_message = "prefect_worker_image must be empty or a single repo:tag reference (one colon, no digest, no registry port)."
+  }
 }
 
 variable "prefect_work_pool" {
