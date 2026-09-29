@@ -71,6 +71,15 @@ module "eks" {
     eks-pod-identity-agent = { before_compute = true }
     kube-proxy             = {}
     vpc-cni                = { before_compute = true }
+    # Dynamic PVC provisioning for the Prefect server's SQLite volume (#185). The
+    # module does not create the controller's IAM role, so its Pod Identity
+    # association points at the role built in storage.tf.
+    aws-ebs-csi-driver = {
+      pod_identity_association = [{
+        role_arn        = aws_iam_role.ebs_csi.arn
+        service_account = "ebs-csi-controller-sa"
+      }]
+    }
   }
 
   vpc_id                   = module.vpc.vpc_id

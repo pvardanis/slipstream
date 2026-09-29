@@ -1,11 +1,14 @@
 # Whole-stack orchestration: bring the benchmark stack up or down, the one-shot cloud verification, and the zero-leak money sweep.
 
-# Bring the whole benchmark stack up and leave it running: cluster, GPU node pool,
-# GPU replica, and the ephemeral mTLS bench endpoint. Everything `just bench`
-# and `just prefix-cache` need — run them against it as often as you like, then
-# `just stack-down` at the end of the day to return spend to zero.
+# Bring the whole benchmark stack up and leave it running: cluster, the self-hosted
+# Prefect server's work pool, GPU node pool, GPU replica, and the ephemeral mTLS bench
+# endpoint. Everything `just bench` and `just prefix-cache` need — run them against it
+# as often as you like, then `just stack-down` at the end of the day to return spend to
+# zero. Ordered cluster-up -> prefect-up -> gpu-pool-up: the server (a helm_release in
+# the eks stack) comes up with the cluster, then its work pool is created, then the GPU
+# pool a worker's runs target (ADR-0015 amendment).
 [group('orchestrate')]
-stack-up: cluster-up gpu-pool-up gpu-deploy bench-endpoint-up
+stack-up: cluster-up prefect-up gpu-pool-up gpu-deploy bench-endpoint-up
 
 # Tear the whole benchmark stack down, returning GPU and cluster spend to zero,
 # then sweep AWS to confirm nothing tagged Project=slipstream is still billing.
@@ -34,6 +37,10 @@ stack-down:
     fi
     just gpu-down || true
     just gpu-pool-down || true
+    # Remove the Prefect work pool before the VPC destroy. Best-effort: the server and
+    # its pool ride cluster-down (helm_release in the eks stack), so a failure here
+    # never blocks the money-safety-critical teardown.
+    just prefect-down || true
     # cluster-down only when the endpoint is gone. A failed cluster-down is escalated —
     # it means resources may remain billing for the sweep to catch.
     if [[ "${overall}" -eq 0 ]] && ! just cluster-down; then overall=1; fi

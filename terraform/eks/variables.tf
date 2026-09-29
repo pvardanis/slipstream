@@ -34,3 +34,15 @@ variable "karpenter_chart_version" {
   type        = string
   default     = "1.8.8"
 }
+
+variable "prefect_server_chart_version" {
+  description = "Pinned prefect-server Helm chart version from the https://prefecthq.github.io/prefect-helm repo (appVersion 3.8.7, Prefect 3)."
+  type        = string
+  default     = "2026.9.26234203"
+}
+
+variable "prefect_sqlite_volume_size" {
+  description = "Size of the EBS-backed PVC holding the Prefect server's SQLite state. Run history is disposable — S3 is the source of truth (ADR-0012) — so a small volume suffices."
+  type        = string
+  default     = "1Gi"
+}
