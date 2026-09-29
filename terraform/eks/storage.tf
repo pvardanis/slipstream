@@ -17,7 +17,7 @@ provider "kubernetes" {
 }
 
 # The EBS CSI controller assumes this role through the Pod Identity association wired
-# in main.tf; Pod Identity's trust is the eks-pod-identity-agent service principal,
+# in main.tf; Pod Identity's trust is the pods.eks.amazonaws.com service principal,
 # with sts:TagSession alongside AssumeRole (the agent tags the session).
 data "aws_iam_policy_document" "ebs_csi_assume" {
   statement {
@@ -46,10 +46,11 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
 # binds here. WaitForFirstConsumer defers provisioning until the consuming pod is
 # scheduled, so the volume lands in that pod's AZ (immediate binding can strand a
 # zonal EBS volume in another AZ and leave the pod Pending). Reclaim Delete makes the
-# volume die with its PVC, so cluster-down's Helm uninstall reaps the EBS volume and
-# nothing outlives the cluster. Provisioned volumes carry the Project tag the
-# zero-leak sweep filters on, so an orphan is caught rather than silently billed
-# (ADR-0002 money-safety).
+# volume die with its PVC: cluster-down's Helm uninstall deletes the chart's PVC
+# (which carries no keep annotation), and the CSI driver then deletes the backing EBS
+# volume — reconciled asynchronously, so the deletion trails the uninstall. Provisioned
+# volumes carry the Project tag the zero-leak sweep filters on, so an orphan is caught
+# rather than silently billed (ADR-0002 money-safety).
 resource "kubernetes_storage_class_v1" "gp3" {
   metadata {
     name = "gp3"
