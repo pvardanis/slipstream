@@ -6,6 +6,12 @@
 # class's provisioner/binding/reclaim, the release's SQLite-not-Postgres values and
 # single-attach Recreate strategy) without standing a cluster up. A PVC actually
 # binding and surviving a pod bounce is the cloud tier (#92 / manual verify).
+#
+# Two joins are outside this tier's reach: the aws-ebs-csi-driver addon's
+# pod_identity_association (main.tf) binds this role to the driver, but it is a
+# module.eks *input*, which terraform test cannot assert; and the Pod Identity trust
+# policy is mock-defaulted to empty JSON below. Both are covered only at the cloud
+# tier (#92) — the role's existence and managed policy are all the plan can guard.
 
 # The eks module builds IAM roles whose assume_role_policy is validated as JSON at
 # plan; the mock provider's random string is not valid JSON, so every policy
@@ -120,23 +126,24 @@ run "prefect_server_layer_shape" {
     error_message = "Helm release must be atomic so a failed install rolls back instead of leaving a half-up server."
   }
 
-  # The rendered values are unknown until apply, so these read the source map the
-  # release yamlencodes: flipping the database backend, dropping the PVC binding, or
-  # restoring a rolling update then fails the test.
+  # Decode the release's own values attribute — what the resource actually ships, not
+  # just the source local — so repointing values, dropping the yamlencode, or deleting
+  # the line is caught too. It is [yamlencode(local)], known at plan. Flipping the
+  # database backend, dropping the PVC binding, or restoring a rolling update fails here.
   assert {
-    condition     = local.prefect_server_helm_values.postgresql.enabled == false
+    condition     = yamldecode(helm_release.prefect_server.values[0]).postgresql.enabled == false
     error_message = "Postgres must be disabled — the server runs on SQLite (ADR-0015 amendment)."
   }
   assert {
-    condition     = local.prefect_server_helm_values.sqlite.enabled == true
+    condition     = yamldecode(helm_release.prefect_server.values[0]).sqlite.enabled == true
     error_message = "SQLite must be the enabled database backend."
   }
   assert {
-    condition     = local.prefect_server_helm_values.sqlite.persistence.enabled == true
+    condition     = yamldecode(helm_release.prefect_server.values[0]).sqlite.persistence.enabled == true
     error_message = "SQLite must persist to a PVC so a server-pod bounce keeps the run in the UI."
   }
   assert {
-    condition     = local.prefect_server_helm_values.sqlite.persistence.storageClassName == kubernetes_storage_class_v1.gp3.metadata[0].name
+    condition     = yamldecode(helm_release.prefect_server.values[0]).sqlite.persistence.storageClassName == kubernetes_storage_class_v1.gp3.metadata[0].name
     error_message = "The SQLite PVC must bind the gp3 StorageClass this stack creates."
   }
 
@@ -144,11 +151,11 @@ run "prefect_server_layer_shape" {
   # before the new one starts, so a rollout never schedules two pods contending for
   # the same volume (the chart default RollingUpdate would deadlock).
   assert {
-    condition     = local.prefect_server_helm_values.server.updateStrategy.type == "Recreate"
+    condition     = yamldecode(helm_release.prefect_server.values[0]).server.updateStrategy.type == "Recreate"
     error_message = "The server must use the Recreate strategy so a rollout does not contend for the single-attach EBS volume."
   }
   assert {
-    condition     = local.prefect_server_helm_values.server.replicaCount == 1
+    condition     = yamldecode(helm_release.prefect_server.values[0]).server.replicaCount == 1
     error_message = "The server must run a single replica — one SQLite writer on one volume."
   }
 }
@@ -163,7 +170,7 @@ run "sqlite_volume_size_is_configurable" {
   }
 
   assert {
-    condition     = local.prefect_server_helm_values.sqlite.persistence.size == "5Gi"
+    condition     = yamldecode(helm_release.prefect_server.values[0]).sqlite.persistence.size == "5Gi"
     error_message = "The SQLite PVC size must come from var.prefect_sqlite_volume_size."
   }
 }

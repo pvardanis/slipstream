@@ -37,9 +37,10 @@ stack-down:
     fi
     just gpu-down || true
     just gpu-pool-down || true
-    # Remove the Prefect work pool before the VPC destroy. Best-effort: the server and
-    # its pool ride cluster-down (helm_release in the eks stack), so a failure here
-    # never blocks the money-safety-critical teardown.
+    # Remove the Prefect work pool before the VPC destroy. Best-effort: the server is a
+    # helm_release in the eks stack and the pool lives in its SQLite, so cluster-down
+    # reaps both regardless — a failure here never blocks the money-safety-critical
+    # teardown.
     just prefect-down || true
     # cluster-down only when the endpoint is gone. A failed cluster-down is escalated —
     # it means resources may remain billing for the sweep to catch.

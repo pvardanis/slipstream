@@ -51,8 +51,10 @@ resource "helm_release" "prefect_server" {
   values = [yamlencode(local.prefect_server_helm_values)]
 
   # The chart's PVC binds the gp3 class (implicit dependency via the values above);
-  # the explicit dependency on the eks module orders teardown so the release is
-  # uninstalled — and its PVC deleted — before the EBS CSI addon is removed, or the
-  # volume would orphan with no driver left to reap it.
+  # the explicit dependency on the eks module orders teardown so the release's
+  # uninstall — and its PVC delete — starts before the EBS CSI addon is removed. The
+  # driver reaps the backing volume asynchronously, so the ordering gives the driver
+  # the chance to delete it while still installed, not a hard guarantee it finishes
+  # first; reclaim=Delete + the Project tag + the zero-leak sweep are the backstop.
   depends_on = [module.eks]
 }
