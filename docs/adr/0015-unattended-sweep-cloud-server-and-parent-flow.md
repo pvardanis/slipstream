@@ -1,4 +1,4 @@
-<!-- ADR recording how the knob sweep runs unattended off the laptop: the whole outer loop (Tier-1 GPU redeploys + Tier-2 cells) is promoted into one parent Prefect flow calling per-point subflows; the Prefect server moves from local SQLite to Prefect Cloud (Hobby); the flow runs on a Prefect worker on EKS as a run-to-completion Job; a resume skips a point's GPU redeploy when all its cells already hold a valid measurement; and ArgoCD is ruled out as the sweep runner (kept, if at all, for L2a production serving deploy). Supersedes ADR-0012's "server runs locally" and "flows run from the workstation" sections, firing that ADR's own reopen trigger #3. -->
+<!-- ADR recording how the knob sweep runs unattended off the laptop: the whole outer loop (Tier-1 GPU redeploys + Tier-2 cells) is promoted into one parent Prefect flow calling per-point subflows; the Prefect server moves from local SQLite to Prefect Cloud (Hobby); the flow runs on a Prefect worker on EKS as a run-to-completion Job; a resume skips a point's GPU redeploy when all its cells already hold a valid measurement; and ArgoCD is ruled out as the sweep runner (kept, if at all, for L2a production serving deploy). Supersedes ADR-0012's "server runs locally" and "flows run from the workstation" sections, firing that ADR's own reopen trigger #3. NOTE: the Cloud-server half is reversed by the 2026-09-29 amendment below — the server is a self-hosted OSS Prefect on EKS that rides the cluster's own duty-cycle; read that amendment for the server location, work pool type, and state backend actually built. -->
 
 # ADR-0015: The knob sweep runs unattended — Cloud server, EKS worker, one parent flow
 
@@ -151,3 +151,63 @@ feature. Whether L2a needs Argo is a separate, later call and out of scope here.
   cap only if using managed execution, not the own-compute worker) would reopen the flat-vs-
   subflow shape and the tier choice; **mid-campaign cell-logic edits** still reopen the
   digest's code-version scope (unchanged from ADR-0012).
+
+## Amendment (2026-09-29): the server is self-hosted on EKS, not Prefect Cloud
+
+Implementing the Cloud wiring (#176), `terraform apply` on the work pool returned
+`403 {"detail":"Your plan does not support hybrid or push work pools."}` — first for a
+**kubernetes** pool, then again after switching to a **process** pool. A CLI probe of the
+tier settled the cause: the free Hobby tier permits **only `prefect:managed` work pools**
+(Prefect's own serverless compute, capped at 1 concurrent run / 500 min/month). Every pool
+an own-compute worker polls — process, kubernetes, and push alike — is gated behind a paid
+plan. The Decision above rests on an **own-compute EKS worker** (that is how it sidesteps the
+managed-execution caps and brings its own GPU). Hobby cannot host that worker under any pool
+type, so the "Prefect Cloud (Hobby)" server choice is unworkable as specified, not merely the
+kubernetes-pool detail the previous amendment tried to patch.
+
+**Decision — self-host OSS Prefect on the existing EKS cluster, duty-cycled with it.** The
+server does not go to Cloud and does not become a new always-on stack. It rides the cluster's
+own duty-cycle: a Prefect server (Deployment) and a worker (Deployment) come up when the
+cluster comes up and are torn down with `cluster-down`. The cluster already exists only while
+a sweep campaign runs (days, then destroyed — ADR-0006), and the server has **no reason to
+outlive the GPU it observes**, so it inherits that cadence at ~$0 marginal cost. This is what
+flips ADR-0012/ADR-0015's cost logic: those rejected self-hosting because they pictured an
+**always-on** control plane (recurring idle cost fighting the duty-cycle). Pinning the server
+to the cluster's lifecycle removes the always-on floor entirely — the objection was the floor,
+not self-hosting itself. Self-hosted OSS has no tier gate, so every pool type is free.
+
+Settled shape (grilled 2026-09-29):
+
+| Decision | Choice |
+|----------|--------|
+| Server location | Self-hosted OSS Prefect 3, in-cluster Deployment, up with the cluster, torn down with `cluster-down`. Not Cloud. |
+| Work pool | **process**, concurrency 1 — matches the serial single-GPU sweep. |
+| State backend | SQLite on a small EBS PVC (adds the EBS CSI addon + a default gp3 StorageClass, which the cluster lacks). Survives a server-pod bounce so the run stays in the UI; dies with the cluster. Run history is disposable — S3 is the source of truth (ADR-0012). |
+| UI access | `kubectl port-forward`. No public endpoint. |
+| Worker image / auth | Worker runs our ECR bench-client image (carries the flow code) with S3 + SSM via Pod Identity and in-namespace RBAC to manage `deploy/vllm-gpu`. |
+| Trigger | Manual `prefect deployment run` over port-forward; the run executes in-cluster to completion, laptop-independent. |
+
+The process pool stands for the same reason the previous amendment gave — the per-run-Job
+wins (isolation, per-run resource requests, per-run images, parallel autoscale) do not apply
+to a **serial** sweep on a single static GPU node — but now it is a free choice on a
+self-hosted server, not a tier concession. A further correction for the record: the
+"always-on Postgres+Redis" premise ADR-0012 cited overstated it twice over — Prefect 3
+self-host needs no Redis at all, and a single-instance ephemeral server needs no Postgres
+either (SQLite suffices). The real objection was always the always-on floor, and the
+duty-cycle pinning removes it.
+
+**Alternatives rejected.** *Cloud Starter* (~$100/mo) unlocks own-compute pools with zero ops,
+but a duty-cycled toy sweep does not earn a monthly subscription when the server can ride the
+cluster for ~$0. *A dedicated always-on self-hosted stack* (~$95/mo EKS) re-incurs the exact
+idle floor ADR-0012/0006 rejected — declined for the same reason, which the ephemeral in-
+cluster server avoids by construction.
+
+**What is deferred to implementation, not settled here:** during a sweep the flow reconfigures
+`deploy/vllm-gpu` per grid point; today `just gpu-deploy` applies it statically. The two must
+not both own that Deployment — reconciling static-vs-per-run vllm ownership belongs to the
+implementation ticket.
+
+**Reopen trigger (unchanged in substance):** a **GPU fleet** making points genuinely parallel
+revalues per-run Jobs (parallel points want per-run isolation and scheduling a process pool
+cannot give) and reopens the pool type — now a switch to a **kubernetes** pool on the same
+self-hosted server, no tier change needed.
