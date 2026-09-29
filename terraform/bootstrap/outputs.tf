@@ -23,3 +23,18 @@ output "bench_image_push_role_arn" {
   description = "ARN of the IAM role the bench-image GitHub Actions workflow assumes via OIDC to push to ECR; set as the role-to-assume in that workflow."
   value       = aws_iam_role.bench_image_push.arn
 }
+
+output "orchestration_image_repo_url" {
+  description = "Registry URL of the orchestration ECR repository; the base for `docker push` and the worker's prefect_worker_image reference."
+  value       = aws_ecr_repository.orchestration.repository_url
+}
+
+output "orchestration_image_repo_arn" {
+  description = "ARN of the orchestration ECR repository."
+  value       = aws_ecr_repository.orchestration.arn
+}
+
+output "orchestration_image_push_role_arn" {
+  description = "ARN of the IAM role the orchestration-image GitHub Actions workflow assumes via OIDC to push to ECR; set as the role-to-assume in that workflow."
+  value       = aws_iam_role.orchestration_image_push.arn
+}

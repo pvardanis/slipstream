@@ -30,6 +30,30 @@ resource "aws_ecr_lifecycle_policy" "bench_client" {
   policy = jsonencode({ rules = local.bench_client_lifecycle_rules })
 }
 
+# The orchestration image (the baked Prefect-worker image, `.[orchestration]` + the
+# sweep flow code) that the EKS worker runs. Like the bench-client repo it lives in the
+# bootstrap stack, not eks, because it must exist before the worker can pull it and must
+# outlive `just cluster-down`. Separate from bench-client (ADR-0012): different image,
+# different build, different tag lineage.
+resource "aws_ecr_repository" "orchestration" {
+  name = var.orchestration_image_repo_name
+
+  # Rebuilt in place during the dev loop, so the tag is reused rather than pinned;
+  # production serving would pin by digest.
+  image_tag_mutability = "MUTABLE"
+
+  # Surface CVEs in the baked layers on every push.
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "orchestration" {
+  repository = aws_ecr_repository.orchestration.name
+
+  policy = jsonencode({ rules = local.orchestration_lifecycle_rules })
+}
+
 locals {
   bench_client_lifecycle_rules = [
     {
@@ -55,6 +79,44 @@ locals {
         tagPatternList = ["*"]
         countType      = "imageCountMoreThan"
         countNumber    = var.bench_image_keep_count
+      }
+      action = { type = "expire" }
+    },
+    {
+      rulePriority = 3
+      description  = "Expire untagged images after 7 days."
+      selection = {
+        tagStatus   = "untagged"
+        countType   = "sinceImagePushed"
+        countUnit   = "days"
+        countNumber = 7
+      }
+      action = { type = "expire" }
+    },
+  ]
+
+  # Same priority-ordered scheme as the bench-client rules above: rule 1 shields the
+  # floating -main tag from rule 2's -sha count sweep, rule 3 reaps untagged leftovers.
+  orchestration_lifecycle_rules = [
+    {
+      rulePriority = 1
+      description  = "Keep the floating -main tag; claimed before the -sha count rule so it is never expired."
+      selection = {
+        tagStatus      = "tagged"
+        tagPatternList = ["*-main"]
+        countType      = "imageCountMoreThan"
+        countNumber    = 1
+      }
+      action = { type = "expire" }
+    },
+    {
+      rulePriority = 2
+      description  = "Keep the last ${var.orchestration_image_keep_count} content-tagged (-sha) images; expire older ones."
+      selection = {
+        tagStatus      = "tagged"
+        tagPatternList = ["*"]
+        countType      = "imageCountMoreThan"
+        countNumber    = var.orchestration_image_keep_count
       }
       action = { type = "expire" }
     },

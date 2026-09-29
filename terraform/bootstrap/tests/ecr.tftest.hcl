@@ -67,3 +67,48 @@ run "retention_count_is_configurable" {
     error_message = "The -sha retention count must come from var.bench_image_keep_count."
   }
 }
+
+# The orchestration image (the baked Prefect-worker image) gets its own repo and the
+# same priority-ordered lifecycle: -main protected by a higher-priority rule, last N
+# -sha builds kept, untagged swept after 7 days.
+run "orchestration_lifecycle_rules" {
+  command = plan
+
+  assert {
+    condition     = local.orchestration_lifecycle_rules[0].selection.tagPatternList[0] == "*-main"
+    error_message = "The highest-priority rule must match the floating -main tag."
+  }
+  assert {
+    condition     = local.orchestration_lifecycle_rules[0].rulePriority < local.orchestration_lifecycle_rules[1].rulePriority
+    error_message = "The -main protection rule must be applied before the -sha count rule."
+  }
+  assert {
+    condition     = local.orchestration_lifecycle_rules[0].selection.countType == "imageCountMoreThan" && local.orchestration_lifecycle_rules[0].selection.countNumber == 1
+    error_message = "The -main rule must keep the single newest -main image (imageCountMoreThan 1)."
+  }
+  assert {
+    condition     = local.orchestration_lifecycle_rules[1].selection.tagPatternList[0] == "*"
+    error_message = "The -sha retention rule must span all tagged images."
+  }
+  assert {
+    condition     = local.orchestration_lifecycle_rules[1].selection.countNumber == 10
+    error_message = "The -sha retention rule must keep the last 10 images by default."
+  }
+  assert {
+    condition     = one([for r in local.orchestration_lifecycle_rules : r if r.selection.tagStatus == "untagged"]).selection.countNumber == 7
+    error_message = "Untagged images must still expire after 7 days."
+  }
+}
+
+run "orchestration_retention_count_is_configurable" {
+  command = plan
+
+  variables {
+    orchestration_image_keep_count = 3
+  }
+
+  assert {
+    condition     = local.orchestration_lifecycle_rules[1].selection.countNumber == 3
+    error_message = "The -sha retention count must come from var.orchestration_image_keep_count."
+  }
+}

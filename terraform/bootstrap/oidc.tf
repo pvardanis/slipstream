@@ -16,7 +16,10 @@ locals {
   # subject would not match that token.
   github_push_subject = "${var.github_oidc_sub_prefix}:ref:refs/heads/main"
 
-  bench_push_trust_policy = {
+  # Shared by both image-push roles (bench-client and orchestration): the trust is
+  # scoped to this repo's main branch, not to any one image, so the same policy backs
+  # every push role. Each role's *permissions* are what narrow it to a single repo.
+  github_push_trust_policy = {
     Version = "2012-10-17"
     Statement = [{
       Effect    = "Allow"
@@ -65,6 +68,38 @@ locals {
       },
     ]
   }
+
+  # Same shape as the bench push policy, scoped to the orchestration repo ARN so this
+  # role touches that repository and no other.
+  orchestration_push_permissions_policy = {
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "GetAuthorizationToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "PushOrchestrationImage"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+        ]
+        Resource = aws_ecr_repository.orchestration.arn
+      },
+      {
+        Sid      = "CheckOrchestrationImageExists"
+        Effect   = "Allow"
+        Action   = "ecr:DescribeImages"
+        Resource = aws_ecr_repository.orchestration.arn
+      },
+    ]
+  }
 }
 
 # AWS uses its own library of trusted root CAs to validate GitHub's issuer, so no
@@ -77,11 +112,22 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 resource "aws_iam_role" "bench_image_push" {
   name               = var.bench_image_push_role_name
-  assume_role_policy = jsonencode(local.bench_push_trust_policy)
+  assume_role_policy = jsonencode(local.github_push_trust_policy)
 }
 
 resource "aws_iam_role_policy" "bench_image_push" {
   name   = "bench-client-push"
   role   = aws_iam_role.bench_image_push.id
   policy = jsonencode(local.bench_push_permissions_policy)
+}
+
+resource "aws_iam_role" "orchestration_image_push" {
+  name               = var.orchestration_image_push_role_name
+  assume_role_policy = jsonencode(local.github_push_trust_policy)
+}
+
+resource "aws_iam_role_policy" "orchestration_image_push" {
+  name   = "orchestration-push"
+  role   = aws_iam_role.orchestration_image_push.id
+  policy = jsonencode(local.orchestration_push_permissions_policy)
 }

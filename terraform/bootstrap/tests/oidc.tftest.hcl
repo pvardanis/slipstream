@@ -26,15 +26,15 @@ run "github_oidc_trust_and_permissions" {
   # which the repo emits when immutable subject claims are enabled, so a mutable
   # "repo:owner/name" subject would no longer match the token and must fail here.
   assert {
-    condition     = local.bench_push_trust_policy.Statement[0].Action == "sts:AssumeRoleWithWebIdentity"
+    condition     = local.github_push_trust_policy.Statement[0].Action == "sts:AssumeRoleWithWebIdentity"
     error_message = "Trust policy must allow only web-identity assumption."
   }
   assert {
-    condition     = local.bench_push_trust_policy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    condition     = local.github_push_trust_policy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
     error_message = "Trust policy must require the sts.amazonaws.com audience claim."
   }
   assert {
-    condition     = local.bench_push_trust_policy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:pvardanis@37624791/slipstream@1357264197:ref:refs/heads/main"
+    condition     = local.github_push_trust_policy.Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:pvardanis@37624791/slipstream@1357264197:ref:refs/heads/main"
     error_message = "Trust policy must scope the subject to this repo's main branch using GitHub's immutable owner/repo IDs."
   }
 
@@ -69,6 +69,39 @@ run "github_oidc_trust_and_permissions" {
   }
   assert {
     condition     = local.bench_push_permissions_policy.Statement[2].Action == "ecr:DescribeImages"
+    error_message = "A separate statement must grant DescribeImages for the content-hash existence check."
+  }
+}
+
+# The orchestration-image push role shares the repo-main trust (one identity, both
+# workflows) but carries its own permissions scoped to the orchestration repo ARN, so
+# a compromised orchestration workflow cannot push the bench-client image, and vice
+# versa.
+run "orchestration_push_permissions" {
+  command = plan
+
+  assert {
+    condition     = local.orchestration_push_permissions_policy.Statement[0].Action == "ecr:GetAuthorizationToken"
+    error_message = "Role must be able to obtain an ECR auth token."
+  }
+  assert {
+    condition     = local.orchestration_push_permissions_policy.Statement[0].Resource == "*"
+    error_message = "GetAuthorizationToken has no resource scope and must be granted on *."
+  }
+  assert {
+    condition = alltrue([
+      for action in [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+      ] : contains(local.orchestration_push_permissions_policy.Statement[1].Action, action)
+    ])
+    error_message = "Push statement must grant the full docker-push action set."
+  }
+  assert {
+    condition     = local.orchestration_push_permissions_policy.Statement[2].Action == "ecr:DescribeImages"
     error_message = "A separate statement must grant DescribeImages for the content-hash existence check."
   }
 }

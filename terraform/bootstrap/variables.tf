@@ -23,6 +23,18 @@ variable "bench_image_keep_count" {
   default     = 10
 }
 
+variable "orchestration_image_repo_name" {
+  description = "Name of the ECR repository holding the orchestration image (the baked Prefect-worker image that drives the knob sweep)."
+  type        = string
+  default     = "slipstream/orchestration"
+}
+
+variable "orchestration_image_keep_count" {
+  description = "Number of most-recent content-tagged (-sha) orchestration images the ECR lifecycle policy retains before expiring older ones."
+  type        = number
+  default     = 10
+}
+
 variable "github_oidc_sub_prefix" {
   description = "Immutable OIDC subject prefix for the GitHub repository whose Actions workflows may assume the bench-client push role, in the form repo:<owner>@<owner_id>/<repo>@<repo_id>. Read once from the repo's OIDC sub-claim customization (gh api repos/OWNER/REPO/actions/oidc/customization/sub); the numeric IDs are immutable, so the trust survives owner or repo renames."
   type        = string
@@ -33,4 +45,10 @@ variable "bench_image_push_role_name" {
   description = "Name of the IAM role GitHub Actions assumes via OIDC to push the bench-client image."
   type        = string
   default     = "slipstream-bench-image-push"
+}
+
+variable "orchestration_image_push_role_name" {
+  description = "Name of the IAM role GitHub Actions assumes via OIDC to push the orchestration image."
+  type        = string
+  default     = "slipstream-orchestration-image-push"
 }
