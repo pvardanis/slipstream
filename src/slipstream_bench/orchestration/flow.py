@@ -67,7 +67,6 @@ class SweepContext:
     image_ref: str
     bucket: str
     model: str
-    revision: str | None = None
     commercial: bool = False
     sweep_args_b64: str = ""
     proxy_timeout_s: float = 240.0
@@ -197,7 +196,6 @@ def _drive_point_sweep(
         model=context.model,
         out_dir=str(results_dir),
         commercial=context.commercial,
-        revision=context.revision,
     )
 
     execution_context = CellExecutionContext(
@@ -208,7 +206,6 @@ def _drive_point_sweep(
         bucket=context.bucket,
         model=context.model,
         run_id=context.run_id,
-        revision=context.revision,
         sweep_args_b64=context.sweep_args_b64,
         timeout_s=context.cell_timeout_s,
         poll_interval_s=poll_interval_s,

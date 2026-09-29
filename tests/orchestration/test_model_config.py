@@ -12,7 +12,6 @@ import pytest
 from slipstream_bench.orchestration.model_config import (
     ModelConfigError,
     read_model_id,
-    read_model_revision,
 )
 
 _MODEL_YAML = "model:\n  hfId: Qwen/Qwen3-8B-AWQ\n  revision: abc123\n"
@@ -51,32 +50,3 @@ def test_read_model_id_rejects_a_missing_hf_id(tmp_path: Path) -> None:
 
     with pytest.raises(ModelConfigError, match="hfId"):
         read_model_id(model_yaml)
-
-
-def test_read_model_revision_returns_the_pinned_commit(tmp_path: Path) -> None:
-    model_yaml = tmp_path / "model.yaml"
-    model_yaml.write_text(_MODEL_YAML, encoding="utf-8")
-
-    assert read_model_revision(model_yaml) == "abc123"
-
-
-def test_read_model_revision_strips_surrounding_whitespace(tmp_path: Path) -> None:
-    model_yaml = tmp_path / "model.yaml"
-    model_yaml.write_text(
-        "model:\n  hfId: Qwen/Qwen3-8B-AWQ\n  revision: '  abc123  '\n",
-        encoding="utf-8",
-    )
-
-    assert read_model_revision(model_yaml) == "abc123"
-
-
-def test_read_model_revision_is_none_when_the_model_floats_main(tmp_path: Path) -> None:
-    model_yaml = tmp_path / "model.yaml"
-    model_yaml.write_text("model:\n  hfId: Qwen/Qwen3-8B-AWQ\n", encoding="utf-8")
-
-    assert read_model_revision(model_yaml) is None
-
-
-def test_read_model_revision_rejects_a_missing_file(tmp_path: Path) -> None:
-    with pytest.raises(ModelConfigError, match="not found"):
-        read_model_revision(tmp_path / "absent.yaml")

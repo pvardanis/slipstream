@@ -20,10 +20,7 @@ from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cell_task import cell_task
 from slipstream_bench.orchestration.digest import DigestInputs
 from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
-from slipstream_bench.orchestration.model_config import (
-    read_model_id,
-    read_model_revision,
-)
+from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
 
 app = typer.Typer(
@@ -54,7 +51,6 @@ def build_sweep_context(
     bucket: str,
     model: str,
     digest_inputs: DigestInputs,
-    revision: str | None = None,
     commercial: bool = False,
     sweep_args_b64: str = "",
 ) -> SweepContext:
@@ -71,8 +67,6 @@ def build_sweep_context(
     :param bucket: the results bucket.
     :param model: the served model id.
     :param digest_inputs: the three files the deep config digest is folded from.
-    :param revision: the model's pinned Hugging Face commit (from model.yaml), pinning
-        the tokenizer so an offline cell resolves the baked snapshot; None floats main.
     :param commercial: whether this is the commercial arm.
     :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
     :return: the fully-populated :class:`SweepContext`.
@@ -85,7 +79,6 @@ def build_sweep_context(
         image_ref=image_ref,
         bucket=bucket,
         model=model,
-        revision=revision,
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )
@@ -150,7 +143,6 @@ def point_sweep(
         image_ref=image_ref,
         bucket=bucket,
         model=read_model_id(model_yaml),
-        revision=read_model_revision(model_yaml),
         digest_inputs=DigestInputs(
             model_yaml=model_yaml,
             sweep_grid=sweep_grid,

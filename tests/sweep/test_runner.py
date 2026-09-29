@@ -115,27 +115,22 @@ def test_cell_command_carries_the_tokenizer_when_set() -> None:
 
 
 def test_cell_command_omits_the_tokenizer_when_unset() -> None:
-    """The self-hosted arm leaves --tokenizer off; vLLM defaults it to --model."""
+    """A cell with no tokenizer leaves --tokenizer off; vLLM defaults it to --model."""
     joined = " ".join(cell_command(_cell()))
     assert "--tokenizer" not in joined
 
 
-def test_cell_command_carries_the_tokenizer_revision_when_set() -> None:
-    """A pinned revision reaches the command so vLLM resolves the baked tokenizer.
+def test_cell_command_points_the_tokenizer_at_the_baked_snapshot() -> None:
+    """The self-hosted arm points --tokenizer at the baked local snapshot path.
 
-    The image bakes the tokenizer under the model's commit sha with no ``refs/main``
-    pointer, so an offline ``vllm bench serve`` that asks for the default ``main`` ref
-    cannot resolve it. Passing ``--tokenizer-revision`` pins the client to the same
-    commit, resolving the baked snapshot without a network call.
+    The image bakes the tokenizer to a fixed path and runs offline
+    (``HF_HUB_OFFLINE=1``). ``vllm bench serve`` has no revision flag, so the cell
+    resolves the pinned tokenizer by handing ``--tokenizer`` that local path, which
+    ``AutoTokenizer.from_pretrained`` loads without a Hub call.
     """
-    cell = _cell(revision="4da05a8edb55c6046cce958586c33b61da07bb79")
+    cell = _cell(tokenizer="/opt/hf/tokenizer")
     joined = " ".join(cell_command(cell))
-    assert "--tokenizer-revision 4da05a8edb55c6046cce958586c33b61da07bb79" in joined
-
-
-def test_cell_command_omits_the_tokenizer_revision_when_unset() -> None:
-    """A model that floats ``main`` pins no revision; the flag is left off."""
-    joined = " ".join(cell_command(_cell()))
+    assert "--tokenizer /opt/hf/tokenizer" in joined
     assert "--tokenizer-revision" not in joined
 
 

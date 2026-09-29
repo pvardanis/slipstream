@@ -32,11 +32,9 @@ source /etc/bench-proxy/proxy.env
 # so they cross the SSM command line without any quoting that the host shell (not
 # necessarily bash) would misparse.
 sweep_args_b64="${SWEEP_ARGS_B64:-}"
-# REVISION is optional: the model's pinned Hugging Face commit. When set it pins the
-# tokenizer (via load-cell --revision) so the offline cell resolves the baked snapshot
-# under that commit rather than the default main ref the image never wrote. A model that
-# floats main sets none.
-revision="${REVISION:-}"
+# The offline cell synthesises prompts against the tokenizer the image baked to a fixed
+# path; load-cell reads that path from the image's own env (SLIPSTREAM_BENCH_TOKENIZER_DIR),
+# so this runner passes no tokenizer of its own.
 
 echo "bench-cell: fetching the vLLM api-key" >&2
 # vLLM enforces an api-key on /v1; load-cell's openai backend sends it as the bearer
@@ -85,13 +83,6 @@ if [[ -n "${sweep_args_b64}" ]]; then
   read -ra sweep_args <<<"${decoded_args}"
 fi
 
-# Pin the tokenizer revision as its own flag only when the caller set one; an empty
-# array expands to nothing, leaving load-cell to float main for an unpinned model.
-revision_args=()
-if [[ -n "${revision}" ]]; then
-  revision_args=(--revision "${revision}")
-fi
-
 echo "bench-cell: running the cell against the loopback proxy" >&2
 # --network host so the container reaches the proxy on 127.0.0.1; --rm for a one-shot.
 # --entrypoint slipstream-bench overrides the base image's `vllm serve` entrypoint so
@@ -109,7 +100,6 @@ docker run --rm --network host --user "$(id -u):$(id -g)" \
   --config /config/cell-config.yaml \
   --base-url "http://127.0.0.1:${PROXY_PORT}" \
   --model "${MODEL}" \
-  "${revision_args[@]}" \
   --out-dir /out "${sweep_args[@]}" || cell_rc=$?
 
 # No JSON landed: either a clean dry run (cell exited 0) or a real failure — a failed

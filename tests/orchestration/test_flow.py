@@ -132,7 +132,6 @@ def _context() -> SweepContext:
         image_ref="repo:tag",
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
-        revision="4da05a8edb55c6046cce958586c33b61da07bb79",
     )
 
 
@@ -168,17 +167,20 @@ def test_first_run_executes_every_cell(tmp_path: Path) -> None:
     assert ssm.cell_runs() == 4
 
 
-def test_each_cell_command_carries_the_pinned_revision(tmp_path: Path) -> None:
+def test_no_cell_command_carries_a_tokenizer_env(tmp_path: Path) -> None:
+    """The cell's tokenizer is the image's baked snapshot, not an SSM-passed env.
+
+    The image names where its tokenizer lives (the baked path, read by the cell's
+    ``--tokenizer`` env var), so the orchestrator passes no tokenizer or revision env.
+    """
     ssm = _FakeSsm()
 
     _drive(tmp_path, ssm, _isolated_task(tmp_path))
 
     cell_commands = [c for c in ssm.commands if _CELL in c]
     assert cell_commands
-    assert all(
-        "REVISION='4da05a8edb55c6046cce958586c33b61da07bb79'" in command
-        for command in cell_commands
-    )
+    assert all("REVISION" not in command for command in cell_commands)
+    assert all("TOKENIZER" not in command for command in cell_commands)
 
 
 def test_second_run_resumes_and_re_executes_no_cell(tmp_path: Path) -> None:

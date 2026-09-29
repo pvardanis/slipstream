@@ -260,28 +260,49 @@ def test_load_cell_omits_the_cap_when_open_loop(tmp_path: Path) -> None:
     assert "--max-concurrency" not in result.stdout
 
 
-def test_load_cell_pins_the_tokenizer_revision_from_the_cli(tmp_path: Path) -> None:
-    """The injected revision reaches the command so vLLM resolves the baked tokenizer."""
+def test_load_cell_points_the_tokenizer_at_the_cli_value(tmp_path: Path) -> None:
+    """An injected tokenizer path reaches the command so the offline cell resolves it."""
     result = _cell_dry_run(
         _write_cell(tmp_path, prefix_share=90, burstiness=1.0),
-        "--revision",
-        "4da05a8edb55c6046cce958586c33b61da07bb79",
+        "--tokenizer",
+        "/opt/hf/tokenizer",
     )
 
     assert result.exit_code == 0, plain(result)
-    assert (
-        "--tokenizer-revision 4da05a8edb55c6046cce958586c33b61da07bb79" in result.stdout
+    assert "--tokenizer /opt/hf/tokenizer" in result.stdout
+    assert "--tokenizer-revision" not in result.stdout
+
+
+def test_load_cell_reads_the_tokenizer_path_from_the_image_env(tmp_path: Path) -> None:
+    """The bench image exposes the baked path via the env var the option reads.
+
+    The image bakes the tokenizer to a fixed path and sets
+    ``SLIPSTREAM_BENCH_TOKENIZER_DIR``; the option's ``envvar`` picks it up so the host
+    runner passes no path and the image alone owns where its tokenizer lives.
+    """
+    result = runner.invoke(
+        app,
+        [
+            "load-cell",
+            "--config",
+            str(_write_cell(tmp_path, prefix_share=90, burstiness=1.0)),
+            "--dry-run",
+        ],
+        env={"SLIPSTREAM_BENCH_TOKENIZER_DIR": "/opt/hf/tokenizer"},
     )
 
+    assert result.exit_code == 0, plain(result)
+    assert "--tokenizer /opt/hf/tokenizer" in result.stdout
 
-def test_load_cell_omits_the_revision_when_the_model_floats_main(
+
+def test_load_cell_omits_the_tokenizer_when_neither_flag_nor_env_set(
     tmp_path: Path,
 ) -> None:
-    """With no --revision the cell command pins none, letting vLLM float ``main``."""
+    """With no tokenizer flag or env, the command omits it, letting vLLM use --model."""
     result = _cell_dry_run(_write_cell(tmp_path, prefix_share=90, burstiness=1.0))
 
     assert result.exit_code == 0, plain(result)
-    assert "--tokenizer-revision" not in result.stdout
+    assert "--tokenizer" not in result.stdout
 
 
 def test_load_cell_injects_context_from_the_cli(tmp_path: Path) -> None:
