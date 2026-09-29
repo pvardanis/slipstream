@@ -76,9 +76,19 @@ gpu-pool-down:
     fi
     kubectl delete -f {{ gpu_pool_manifests }} --ignore-not-found
 
-# Destroy the cluster (the bootstrap state bucket is left intact).
+# Destroy the cluster (the bootstrap state bucket is left intact). Initialises the eks
+# backend first, exactly as `just cluster-up` does: destroy needs the s3 backend
+# configured, and a fresh checkout (or a reconfigured backend) has no `.terraform/`, so
+# a bare destroy aborts with "Backend initialization required" and leaves the cluster
+# billing.
 [group('cluster')]
-cluster-down:
+cluster-down: _bootstrap-init
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignment so a failed `terraform output` aborts instead of collapsing to an
+    # empty backend the destroy would then reject.
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ eks_dir }} destroy -auto-approve
 
 # Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
