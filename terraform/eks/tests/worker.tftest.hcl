@@ -117,7 +117,7 @@ run "worker_layer_shape" {
     error_message = "The policy must allow ssm:SendCommand on the AWS-RunShellScript document."
   }
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "SsmSendCommandInstances" && contains(s.Action, "ssm:SendCommand") && s.Resource == "arn:aws:ec2:eu-west-1:111122223333:instance/*" && s.Condition.StringEquals["ssm:resourceTag/Project"] == "slipstream"]) == 1
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "SsmSendCommandInstances" && contains(s.Action, "ssm:SendCommand") && s.Resource == "arn:aws:ec2:eu-west-1:111122223333:instance/*" && try(s.Condition.StringEquals["ssm:resourceTag/Project"], null) == "slipstream"]) == 1
     error_message = "The SSM instance target must allow ssm:SendCommand on account instances scoped to Project=slipstream."
   }
   assert {
@@ -138,7 +138,7 @@ run "worker_layer_shape" {
   # can read and reconfigure that one Deployment and no other. Both verbs are asserted:
   # get reads the Deployment before patching, patch reconfigures it per sweep point.
   assert {
-    condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage[0].rule : r if contains(r.resources, "deployments") && contains(r.verbs, "get") && contains(r.verbs, "patch") && contains(r.resource_names, "vllm-gpu")]) == 1
+    condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage[0].rule : r if contains(r.resources, "deployments") && contains(r.verbs, "get") && contains(r.verbs, "patch") && try(contains(r.resource_names, "vllm-gpu"), false)]) == 1
     error_message = "The Role must scope get/patch on deployments to the vllm-gpu resource name."
   }
   # Reading the rollout needs list/watch on deployments, which resourceNames cannot
