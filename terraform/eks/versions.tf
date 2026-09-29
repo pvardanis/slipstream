@@ -14,5 +14,11 @@ terraform {
       source  = "hashicorp/helm"
       version = "~> 3.0"
     }
+    # Creates the default gp3 StorageClass the EBS CSI driver provisions against
+    # (the cluster ships no default class), so the Prefect PVC binds (#185).
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.0"
+    }
   }
 }

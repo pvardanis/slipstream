@@ -22,12 +22,17 @@ bench_image_tag := ""
 cpu_model := "Qwen/Qwen2.5-0.5B-Instruct"
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
+# The process work pool the sweep worker polls, and the local port the Prefect UI/API
+# port-forward binds (the in-cluster server listens on 4200; ADR-0015 amendment).
+prefect_work_pool := "sweep-pool"
+prefect_port := "4200"
 
 # List available recipes.
 default:
     @just --list
 
 import "just/cluster.just"
+import "just/prefect.just"
 import "just/serve.just"
 import "just/bench.just"
 import "just/obs.just"

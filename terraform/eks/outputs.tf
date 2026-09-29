@@ -36,6 +36,11 @@ output "karpenter_node_iam_role_name" {
   value       = module.karpenter.node_iam_role_name
 }
 
+output "prefect_namespace" {
+  description = "Namespace the self-hosted Prefect server runs in; the justfile port-forwards svc/prefect-server here to reach the UI/API."
+  value       = local.prefect_namespace
+}
+
 output "node_autoscaling_groups" {
   description = "Autoscaling group names backing the managed node groups; a load balancer target group attaches to these to register node instances."
   value       = flatten([for ng in module.eks.eks_managed_node_groups : ng.node_group_autoscaling_group_names])
