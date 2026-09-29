@@ -46,7 +46,10 @@ bench point_slug *args:
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    image="$(just _bench-image-ref)"
+    # Forward bench_image_tag into the nested call: a command-line override does not
+    # cross into a child `just` invocation, so an unforwarded pin would silently fall
+    # back to the floating main tag and run the cell on the wrong image.
+    image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir, so
     # concurrent or repeated runs never overwrite each other. knob-sweep injects
     # BENCH_RUN_ID to nest one point's ladder under a shared knob-sweep run; when it is
@@ -240,7 +243,10 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    image="$(just _bench-image-ref)"
+    # Forward bench_image_tag into the nested call: a command-line override does not
+    # cross into a child `just` invocation, so an unforwarded pin would silently fall
+    # back to the floating main tag and run the cell on the wrong image.
+    image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir,
     # so concurrent or repeated runs never overwrite each other.
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
