@@ -131,11 +131,14 @@ def load_sweep(
         str,
         typer.Option(help="Served model id (model.yaml is its source of truth)."),
     ] = "Qwen/Qwen2.5-0.5B-Instruct",
-    revision: Annotated[
+    tokenizer: Annotated[
         str | None,
         typer.Option(
-            help="Model's pinned Hugging Face commit, pinning the tokenizer so an "
-            "offline run resolves the baked snapshot. Omit to float main."
+            envvar="SLIPSTREAM_BENCH_TOKENIZER_DIR",
+            help="Local tokenizer for prompt synthesis, overriding any the config "
+            "authors. The bench image sets this to its baked snapshot path so an "
+            "offline run resolves the pinned tokenizer without a Hub call. Omit to "
+            "let vLLM default it to --model.",
         ),
     ] = None,
     out_dir: Annotated[
@@ -162,7 +165,7 @@ def load_sweep(
             model=model,
             out_dir=out_dir,
             commercial=api_key_env is not None,
-            revision=revision,
+            tokenizer=tokenizer,
         )
         code = run_sweep(
             cfg,
@@ -196,11 +199,14 @@ def load_cell(
         str,
         typer.Option(help="Served model id (model.yaml is its source of truth)."),
     ] = "Qwen/Qwen2.5-0.5B-Instruct",
-    revision: Annotated[
+    tokenizer: Annotated[
         str | None,
         typer.Option(
-            help="Model's pinned Hugging Face commit, pinning the tokenizer so an "
-            "offline run resolves the baked snapshot. Omit to float main."
+            envvar="SLIPSTREAM_BENCH_TOKENIZER_DIR",
+            help="Local tokenizer for prompt synthesis, overriding any the config "
+            "authors. The bench image sets this to its baked snapshot path so an "
+            "offline run resolves the pinned tokenizer without a Hub call. Omit to "
+            "let vLLM default it to --model.",
         ),
     ] = None,
     out_dir: Annotated[
@@ -235,7 +241,7 @@ def load_cell(
             model=model,
             out_dir=out_dir,
             commercial=api_key_env is not None,
-            revision=revision,
+            tokenizer=tokenizer,
         )
         if dry_run:
             typer.echo(" ".join(cell_command(cell)))

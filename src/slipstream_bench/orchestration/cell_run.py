@@ -84,15 +84,14 @@ def build_cell_command(
     run_id: str,
     cell_config_b64: str,
     sweep_args_b64: str = "",
-    revision: str | None = None,
 ) -> str:
     """Compose the SSM command line: the cell env prefixed to ``bench-sweep.sh``.
 
     The values carry no shell-special characters (an image ref, a bucket, a model id,
-    a run prefix, base64, a commit sha), so single-quoting each is enough to cross the
-    SSM command line intact. ``SWEEP_ARGS_B64`` and ``REVISION`` are appended only when
-    set, matching the host script's optional reads; ``REVISION`` pins the tokenizer so
-    an offline cell resolves the baked snapshot rather than the absent ``main`` ref.
+    a run prefix, base64), so single-quoting each is enough to cross the SSM command
+    line intact. ``SWEEP_ARGS_B64`` is appended only when set, matching the host
+    script's optional read. The tokenizer the offline cell synthesises against is the
+    image's baked snapshot: the image names its path, so no env carries it here.
 
     :return: the shell command line the SSM transport sends to the bench host.
     """
@@ -103,8 +102,6 @@ def build_cell_command(
         f"RUN_ID='{run_id}'",
         f"CELL_CONFIG_B64='{cell_config_b64}'",
     ]
-    if revision:
-        env.append(f"REVISION='{revision}'")
     if sweep_args_b64:
         env.append(f"SWEEP_ARGS_B64='{sweep_args_b64}'")
     return " ".join([*env, _BENCH_CELL_SCRIPT])
@@ -126,8 +123,6 @@ class CellExecutionContext:
     :param bucket: the results bucket the cells write to and are downloaded from.
     :param model: the served model id the cells measure.
     :param run_id: the run's bucket prefix, point-nested by the caller.
-    :param revision: the model's pinned Hugging Face commit, pinning the tokenizer so an
-        offline cell resolves the baked snapshot; None floats ``main``.
     :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
     :param timeout_s: the ceiling on each cell's SSM command.
     :param poll_interval_s: the wait between SSM invocation polls.
@@ -141,7 +136,6 @@ class CellExecutionContext:
     bucket: str
     model: str
     run_id: str
-    revision: str | None = None
     sweep_args_b64: str = ""
     timeout_s: float = 3600.0
     poll_interval_s: float = 5.0
@@ -168,7 +162,6 @@ def build_cell_execution(
         run_id=context.run_id,
         cell_config_b64=config_b64,
         sweep_args_b64=context.sweep_args_b64,
-        revision=context.revision,
     )
     return functools.partial(
         _run_and_download,

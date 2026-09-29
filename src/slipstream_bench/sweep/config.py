@@ -86,16 +86,11 @@ class Knobs(LoadKnobs):
     """The load knobs plus the execution context injected from the CLI.
 
     ``LoadKnobs`` defines the experiment; this adds where it runs: the endpoint, the
-    served model and its pinned revision (model.yaml is their single source of truth),
-    the output dir, and the commercial-arm flag. A whole-grid ``SweepConfig`` and a
+    served model (model.yaml is its single source of truth), the output dir, and the
+    commercial-arm flag. A whole-grid ``SweepConfig`` and a
     single ``CellConfig`` extend this full model, so both range-check load knobs and
     context the same way; a config YAML never authors the injected fields (see
     ``RESERVED_KEYS``).
-
-    ``revision`` pins the tokenizer's Hugging Face commit for ``vllm bench serve``: the
-    image bakes the tokenizer under that commit sha with no ``refs/main``, so an offline
-    client that asks for the default ``main`` ref cannot resolve it. ``None`` floats
-    ``main`` for a model that pins no revision.
     """
 
     # ``model`` is a served-model id, not a pydantic ``model_``-namespaced field, so
@@ -104,7 +99,6 @@ class Knobs(LoadKnobs):
 
     base_url: NonEmptyStr
     model: NonEmptyStr
-    revision: str | None = None
     out_dir: NonEmptyStr
     commercial: bool = False
 
@@ -238,7 +232,7 @@ def _load_config(
     model: str,
     out_dir: str,
     commercial: bool,
-    revision: str | None = None,
+    tokenizer: str | None = None,
 ) -> _KnobsT:
     """Read a config YAML at ``path``, bind the execution context, and validate it.
 
@@ -255,19 +249,21 @@ def _load_config(
     :param model: the served model id (from model.yaml via image-tag.sh hf-id).
     :param out_dir: the directory for the per-cell result JSON.
     :param commercial: whether this is the commercial arm (drives the tokenizer guard).
-    :param revision: the model's pinned Hugging Face commit, injected so the cell
-        command can pin the tokenizer to the baked snapshot; None floats ``main``.
+    :param tokenizer: a prompt-synthesis tokenizer to bind, overriding any the YAML
+        authors; the self-hosted arm injects the image's baked snapshot path here so an
+        offline ``vllm bench serve`` resolves it. ``None`` leaves the YAML value intact.
     :return: the validated config.
     :raise SweepError: on any read/parse/validate failure, or a reserved key set.
     """
     data = _read_config_mapping(path, label=label)
+    injected_tokenizer = {"tokenizer": tokenizer} if tokenizer is not None else {}
     try:
         return model_cls.model_validate(
             {
                 **data,
+                **injected_tokenizer,
                 "base_url": base_url,
                 "model": model,
-                "revision": revision,
                 "out_dir": out_dir,
                 "commercial": commercial,
             }
@@ -283,7 +279,7 @@ def load_sweep_config(
     model: str,
     out_dir: str,
     commercial: bool,
-    revision: str | None = None,
+    tokenizer: str | None = None,
 ) -> SweepConfig:
     """Read the sweep definition at ``path`` (grid axes + shared knobs) and validate it.
 
@@ -295,7 +291,8 @@ def load_sweep_config(
     :param model: the served model id (from model.yaml via image-tag.sh hf-id).
     :param out_dir: the directory for the per-cell result JSON.
     :param commercial: whether this is the commercial arm (drives the tokenizer guard).
-    :param revision: the model's pinned Hugging Face commit; None floats ``main``.
+    :param tokenizer: a prompt-synthesis tokenizer to bind (the baked snapshot path on
+        the self-hosted arm); None leaves the YAML value intact.
     :return: the validated config.
     :raise SweepError: on any read/parse/validate failure, or a reserved key set.
     """
@@ -307,7 +304,7 @@ def load_sweep_config(
         model=model,
         out_dir=out_dir,
         commercial=commercial,
-        revision=revision,
+        tokenizer=tokenizer,
     )
 
 
@@ -318,7 +315,7 @@ def load_cell_config(
     model: str,
     out_dir: str,
     commercial: bool,
-    revision: str | None = None,
+    tokenizer: str | None = None,
 ) -> CellConfig:
     """Read the single-cell definition at ``path`` (coordinate + shared knobs).
 
@@ -332,7 +329,8 @@ def load_cell_config(
     :param model: the served model id (from model.yaml via image-tag.sh hf-id).
     :param out_dir: the directory for this cell's result JSON.
     :param commercial: whether this is the commercial arm (drives the tokenizer guard).
-    :param revision: the model's pinned Hugging Face commit; None floats ``main``.
+    :param tokenizer: a prompt-synthesis tokenizer to bind (the baked snapshot path on
+        the self-hosted arm); None leaves the YAML value intact.
     :return: the validated cell config.
     :raise SweepError: on any read/parse/validate failure, or a reserved key set.
     """
@@ -344,5 +342,5 @@ def load_cell_config(
         model=model,
         out_dir=out_dir,
         commercial=commercial,
-        revision=revision,
+        tokenizer=tokenizer,
     )

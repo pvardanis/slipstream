@@ -34,13 +34,20 @@ RUN python3 -m pip install --no-cache-dir .
 # edits. A bare `load-cell`/`load-sweep` with no --config exits 2 on the missing
 # default, which no deployed path hits — every invocation passes --config.
 
-# Bake the tokenizer into HF_HOME at build time, pinned to the model's revision so
-# the baked tokenizer matches the weights the server loads. This fetch is the last
-# step that needs the Hub.
-RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${MODEL}', revision='${REVISION}')"
+# Bake the tokenizer at build time, pinned to the model's revision so the baked
+# tokenizer matches the weights the server loads, and save it to a fixed path. The
+# client, `vllm bench serve`, has no revision flag: it resolves a tokenizer only by
+# name or local path. Saving to a stable directory lets the cell point --tokenizer at
+# that path and load the pinned snapshot offline, with no ref to resolve. This fetch
+# is the last step that needs the Hub.
+RUN python3 -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('${MODEL}', revision='${REVISION}').save_pretrained('/opt/hf/tokenizer')"
+
+# Name where the baked tokenizer lives so the image alone owns the path: `load-cell`
+# reads this into its --tokenizer, and the host runner passes no path of its own.
+ENV SLIPSTREAM_BENCH_TOKENIZER_DIR=/opt/hf/tokenizer
 
 # Forbid any run-time Hub call, so the client tokenizes purely from the baked
-# cache — no revision check, no soft failure on an egress-restricted pull. Set
+# snapshot — no ref lookup, no soft failure on an egress-restricted pull. Set
 # after the bake, which needs the Hub.
 ENV HF_HUB_OFFLINE=1
 

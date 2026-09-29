@@ -110,24 +110,17 @@ def cell_command(cell: CellConfig) -> list[str]:
     prefix_len, suffix_len = split_lengths(
         cell.total_len, cell.prefix_share, align_blocks=cell.align_blocks
     )
-    # A local tokenizer for prompt synthesis; vLLM defaults it to --model when
-    # omitted, which only works for the self-hosted arm's HF model id. The
-    # commercial arm's billed token counts come from the provider's usage block
-    # when the provider returns one, which vLLM v0.29.0 always requests
-    # (stream_options include_usage), so no flag forces it here; on a missing
-    # usage block vLLM silently retokenizes locally (see cost.commercial).
+    # A local tokenizer for prompt synthesis. The self-hosted arm points this at the
+    # baked snapshot path: the image bakes the tokenizer offline (HF_HUB_OFFLINE=1),
+    # and vLLM's bench-serve client has no revision flag, so the pinned tokenizer is
+    # resolved by handing --tokenizer its local path. The commercial arm names its own
+    # ruler; its billed token counts come from the provider's usage block when the
+    # provider returns one, which vLLM v0.29.0 always requests (stream_options
+    # include_usage), so no flag forces it here; on a missing usage block vLLM silently
+    # retokenizes locally (see cost.commercial). Omitted, vLLM defaults it to --model.
     tokenizer_args = (
         ["--tokenizer", cell.tokenizer]
         if cell.tokenizer and cell.tokenizer.strip()
-        else []
-    )
-    # The image bakes the tokenizer under the model's commit sha with no refs/main, so
-    # an offline run asking for the default main ref cannot resolve it. Pinning the
-    # revision resolves the baked snapshot without a network call; a model that floats
-    # main pins none and the flag is left off.
-    revision_args = (
-        ["--tokenizer-revision", cell.revision]
-        if cell.revision and cell.revision.strip()
         else []
     )
     # A closed-loop cell caps in-flight requests with the client-side semaphore;
@@ -148,7 +141,6 @@ def cell_command(cell: CellConfig) -> list[str]:
         "--model",
         cell.model,
         *tokenizer_args,
-        *revision_args,
         "--endpoint",
         "/v1/completions",
         "--dataset-name",
