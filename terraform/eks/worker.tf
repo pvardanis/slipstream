@@ -26,10 +26,13 @@ locals {
   vllm_namespace  = "slipstream"
   vllm_deployment = "vllm-gpu"
 
-  # ECR refs carry no port, so the single colon splits repo from tag.
+  # The single colon splits repo from tag — var.prefect_worker_image is validated to
+  # the repo:tag shape (one colon, no digest), so parts has exactly two elements when
+  # the worker is enabled. Guarded on worker_enabled so the empty off-switch value
+  # doesn't index past the end.
   worker_image_parts      = split(":", var.prefect_worker_image)
-  worker_image_repository = try(local.worker_image_parts[0], "")
-  worker_image_tag        = try(local.worker_image_parts[1], "")
+  worker_image_repository = local.worker_enabled ? local.worker_image_parts[0] : ""
+  worker_image_tag        = local.worker_enabled ? local.worker_image_parts[1] : ""
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. A process worker (subprocess, not a per-run Job) matches the serial
