@@ -8,8 +8,10 @@
 # chart, which supplies the container command; the CMD here only makes a bare `docker run`
 # do something sane.
 #
-# Two stages: a uv builder resolves the locked dependency set into a venv, and a slim
-# runtime carries only that venv — no uv, no compiler, no lockfile. Both base images are
+# Two stages: a uv builder resolves the locked dependency set into a venv, and a Prefect
+# runtime (prefecthq/prefect) carries that venv on top of the worker runtime contract the
+# prefect-worker Helm chart assumes — tini as PID-1 (/usr/bin/tini), /opt/prefect/entrypoint.sh,
+# and an arbitrary-uid writable HOME the chart's securityContext pins. Both base images are
 # pinned by digest (a tag is a mutable pointer; a digest is the content) and Dependabot
 # advances them.
 
@@ -43,33 +45,27 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra orchestration
 
-FROM python:3.11-slim@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
+# prefecthq/prefect 3.8.7-python3.11 — the base carries the worker runtime contract the
+# prefect-worker Helm chart's command and securityContext assume (tini as PID-1,
+# /opt/prefect/entrypoint.sh, an arbitrary-uid writable HOME). A bare python:slim base
+# lacks all three, so the chart's `tini -g -- /opt/prefect/entrypoint.sh` never starts.
+FROM prefecthq/prefect@sha256:b3cdfebebff039d1c171947a61a0c37688c6336a1aa659841c3642265d0b2484
 
-# Run as a non-root user: the worker holds AWS access through its Pod Identity
-# association (S3 + SSM), so a container escape must not land as root. The venv and the
-# Prefect home the worker writes to are owned by this user.
-RUN groupadd --system --gid 1000 app \
-    && useradd --system --uid 1000 --gid app --create-home --home-dir /home/app app
+# The pinned digest freezes the base's apt package set, which drifts behind Debian security
+# updates (openssl, kernel headers). Pull the fixed OS packages so the image clears the Trivy
+# HIGH/CRITICAL scan-gate, cleaning the apt lists in the same layer so nothing lands in the image.
+RUN apt-get update \
+    && apt-get upgrade --yes \
+    && rm -rf /var/lib/apt/lists/*
 
-# The venv built in the previous stage is the whole runtime: no uv, no compiler, no
-# lockfile, no source tree. Put its bin on PATH so `prefect` and the package's console
-# scripts resolve without activation.
-COPY --from=builder --chown=app:app /app/.venv /app/.venv
+# The venv built in the builder stage carries the .[orchestration] deps and the sweep flow code.
+# Prepend its bin so the locked `prefect` and the package's console scripts resolve ahead of the
+# base image's own Prefect. The chart runs the container as an arbitrary uid; the venv is copied
+# world-readable (0755 dirs, 0644 files), so that uid can read and execute it without a chown.
+COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:${PATH}"
 
-# Pin Prefect's home to the app user's writable home so profile/state writes land
-# somewhere owned, not a root-owned default the non-root worker cannot create.
-ENV PREFECT_HOME=/home/app/.prefect
-
-# The app runs entirely from the copied venv; the base image's bundled pip/setuptools/wheel
-# are never invoked at runtime, and setuptools vendors CVE-bearing copies of jaraco.context
-# and wheel. Remove the unused tooling so the runtime carries no packages it does not run.
-RUN /usr/local/bin/python -m pip uninstall --yes pip setuptools wheel
-
-USER app
-WORKDIR /home/app
-
-# The prefect-worker Helm chart supplies the real command (prefect worker start …). This
-# default only serves a bare `docker run` — a version print that fails loudly if the
-# install is broken.
+# The prefect-worker Helm chart supplies the real command (tini -> entrypoint.sh -> prefect
+# worker start …). This default only serves a bare `docker run` — a version print that fails
+# loudly if the install is broken.
 CMD ["prefect", "version"]
