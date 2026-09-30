@@ -12,15 +12,17 @@ _bootstrap-init:
 cluster-up: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
-    # Bare assignments so a failed `terraform output` aborts the recipe instead of
-    # collapsing to an empty backend/name the next command would use blindly.
+    # Bare assignment so a failed `terraform output` aborts the recipe; the non-empty check
+    # then catches the exit-0-empty-stdout case (see gpu-pool-up) an empty backend/name the
+    # next command would otherwise use blindly.
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     # enable_prefect_worker (default false) gates the worker layer: false stands the
     # cluster up before the orchestration image exists; true deploys the worker and
     # requires the image published — the eks stack reads the bootstrap orchestration ECR
-    # output (state_bucket) and resolves the image's content-sha tag, failing loudly if
-    # :main is not there yet.
+    # repo URL (via the remote state in state_bucket) and resolves the image's content-sha
+    # tag, failing loudly if :main is absent or its manifest carries no single content tag.
     terraform -chdir={{ eks_dir }} apply -auto-approve \
       -var="enable_prefect_worker={{ enable_prefect_worker }}" \
       -var="state_bucket=${bucket}"
@@ -34,9 +36,10 @@ cluster-up: _bootstrap-init
 cluster-plan: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
-    # Bare assignment so a failed `terraform output` aborts instead of passing an
-    # empty bucket into the eks backend (see `cluster-up`).
+    # Bare assignment + non-empty check so a failed or empty `terraform output` aborts
+    # instead of passing an empty bucket into the eks backend (see `cluster-up`).
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     # Mirror cluster-up's worker gate so the plan reflects what an apply would do.
     terraform -chdir={{ eks_dir }} plan \
@@ -95,9 +98,10 @@ gpu-pool-down:
 cluster-down: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
-    # Bare assignment so a failed `terraform output` aborts instead of collapsing to an
-    # empty backend the destroy would then reject.
+    # Bare assignment + non-empty check so a failed or empty `terraform output` aborts
+    # instead of collapsing to an empty backend the destroy would then reject.
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ eks_dir }} destroy -auto-approve
 
