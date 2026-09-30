@@ -53,19 +53,16 @@ variable "prefect_worker_chart_version" {
   default     = "2026.9.26234203"
 }
 
-variable "prefect_worker_image" {
-  description = "Full ECR image reference (repo:tag) for the Prefect worker — a lean image carrying the orchestration extra (Prefect + the sweep flow code), built by its own image stack. Empty leaves the worker layer uncreated so the cluster stands up before that image exists; supplying it brings the worker up."
+variable "enable_prefect_worker" {
+  description = "Whether to create the Prefect worker layer — a lean image (Prefect + the sweep flow code, the orchestration extra) whose repository comes from the bootstrap ECR output and whose tag is the content-sha resolved from that image's :main pointer. False leaves the worker uncreated so the cluster stands up before the orchestration image exists; true brings the worker up and requires the image published (`just bootstrap` + the orchestration-image workflow)."
+  type        = bool
+  default     = false
+}
+
+variable "state_bucket" {
+  description = "Name of the S3 bucket holding the bootstrap stack's remote state, read for the orchestration image repository URL. Supplied by `just cluster-up` from the bootstrap state_bucket_name output; the backend itself is configured separately at init (backend.tf)."
   type        = string
   default     = ""
-
-  # Enforce the repo:tag shape the tag split (worker.tf) relies on: exactly one colon,
-  # no @ (a digest ref's colon would mis-split repo from tag). Empty is the off switch.
-  # Rejecting a malformed ref here fails the plan loudly instead of deploying the worker
-  # with a blank or wrong tag Helm then resolves to something unintended.
-  validation {
-    condition     = var.prefect_worker_image == "" || length(regexall("^[^:@]+:[^:@]+$", var.prefect_worker_image)) == 1
-    error_message = "prefect_worker_image must be empty or a single repo:tag reference (one colon, no digest, no registry port)."
-  }
 }
 
 variable "prefect_work_pool" {

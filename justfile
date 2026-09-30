@@ -26,6 +26,10 @@ otel_config := "k8s/otel-collector-config.yaml"
 # port-forward binds (the in-cluster server listens on 4200; ADR-0015 amendment).
 prefect_work_pool := "sweep-pool"
 prefect_port := "4200"
+# Whether `just cluster-up` brings the Prefect worker up. Default false stands the cluster
+# up before the orchestration image exists; set true once it is published (`just bootstrap`
+# + the orchestration-image workflow) to deploy the worker: `just enable_prefect_worker=true cluster-up`.
+enable_prefect_worker := "false"
 
 # List available recipes.
 default:

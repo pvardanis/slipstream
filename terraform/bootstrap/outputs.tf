@@ -25,7 +25,7 @@ output "bench_image_push_role_arn" {
 }
 
 output "orchestration_image_repo_url" {
-  description = "Registry URL of the orchestration ECR repository; the base for `docker push` and the worker's prefect_worker_image reference."
+  description = "Registry URL of the orchestration ECR repository; the base for `docker push` and the repository the eks worker layer reads to resolve its image."
   value       = aws_ecr_repository.orchestration.repository_url
 }
 
