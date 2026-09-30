@@ -12,6 +12,7 @@ counts as pending, so a point is never skipped on a cell it has not actually mea
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ from slipstream_bench.sweep.runner import get_cell_basename
 # enumerating them needs only non-empty placeholders for the two the addressing ignores.
 _PLACEHOLDER_BASE_URL = "http://127.0.0.1:0"
 _PLACEHOLDER_OUT_DIR = "/tmp"
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def point_is_complete(
@@ -103,10 +106,22 @@ def _object_is_valid_cell(
     """
     try:
         s3_client.download_file(bucket, key, str(dest))
-    # Any failure to obtain the object — a missing key, a transport or auth error — is a
-    # pending cell, not a raise: an unattended sweep degrades to re-running the point
-    # rather than aborting, and never false-completes a cell it could not read. Mirrors
-    # is_cell_valid's own conservative contract (False on any validation failure).
-    except Exception:  # noqa: BLE001
+    # Any failure to obtain the object — a missing key, a transport or auth error, or a
+    # mis-wired client — is a pending cell, not a raise: an unattended sweep degrades to
+    # re-running the point rather than aborting, and never false-completes a cell it could
+    # not read. Mirrors is_cell_valid's own conservative contract (False on any validation
+    # failure). The catch is broad, so it also absorbs programming errors (a bad client);
+    # logging every read failure with its type and the object it hit keeps a systematic
+    # cause — an auth denial, an endpoint typo, a null client — visible in the sweep's log
+    # rather than silently re-running every point's GPU redeploy against nothing.
+    except Exception as error:  # noqa: BLE001
+        _LOGGER.warning(
+            "cell object s3://%s/%s could not be read (%s: %s): counting the cell "
+            "pending, so the point re-runs",
+            bucket,
+            key,
+            type(error).__name__,
+            error,
+        )
         return False
     return is_cell_valid(dest, max_error_rate=max_error_rate)

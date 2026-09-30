@@ -7,9 +7,11 @@ and that the probe checks every cell object under the point's run prefix.
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from slipstream_bench.orchestration.completion import point_is_complete
@@ -98,6 +100,21 @@ class _UnhealthyOneS3(_AllValidS3):
         super().download_file(_bucket, key, dest)
 
 
+class _CorruptOneS3(_AllValidS3):
+    """Download succeeds but writes unparseable bytes for the key holding ``corrupt``."""
+
+    def __init__(self, corrupt: str) -> None:
+        super().__init__()
+        self._corrupt = corrupt
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        if self._corrupt in key:
+            self.keys.append(key)
+            Path(dest).write_text("not json {{{", encoding="utf-8")
+            return
+        super().download_file(_bucket, key, dest)
+
+
 def _grid() -> SweepGrid:
     return SweepGrid.model_validate(yaml.safe_load(_GRID))
 
@@ -134,9 +151,34 @@ def test_a_degenerate_cell_makes_the_point_incomplete() -> None:
     assert _probe(s3) is False
 
 
+def test_a_corrupt_downloaded_cell_makes_the_point_incomplete() -> None:
+    # The object exists and downloads, but its bytes do not parse: falseness comes from
+    # the validity gate, not the download except — a separately documented pending cause.
+    s3 = _CorruptOneS3("pshare10_burst1.0_mc64.json")
+
+    assert _probe(s3) is False
+
+
 def test_the_probe_stops_at_the_first_pending_cell() -> None:
     # The first enumerated cell is missing, so the probe returns before reading the rest.
     s3 = _MissingOneS3("pshare10_burst1.0_mc64.json")
 
     assert _probe(s3) is False
     assert len(s3.keys) == 1
+
+
+def test_an_unreadable_cell_is_logged_with_its_key_and_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A download failure must not be swallowed silently: a systematic cause (auth denial,
+    # endpoint typo, null client) has to surface in the sweep's log, not just re-run.
+    s3 = _MissingOneS3("pshare10_burst1.0_mc64.json")
+
+    with caplog.at_level(
+        logging.WARNING, logger="slipstream_bench.orchestration.completion"
+    ):
+        assert _probe(s3) is False
+
+    assert "could not be read" in caplog.text
+    assert "pshare10_burst1.0_mc64.json" in caplog.text
+    assert "FileNotFoundError" in caplog.text

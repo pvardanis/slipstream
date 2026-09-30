@@ -238,3 +238,17 @@ def test_build_kubectl_raises_on_a_non_zero_exit() -> None:
 
     with pytest.raises(KubectlError, match="exited"):
         run([], None)
+
+
+def test_build_kubectl_error_carries_the_argv_and_stderr() -> None:
+    # An unattended sweep diagnoses a failed apply from the log alone, so the raised error
+    # must carry both what ran and what the command wrote to stderr.
+    run = build_kubectl(binary="sh")
+
+    with pytest.raises(KubectlError) as excinfo:
+        run(["-c", "echo boom >&2; exit 3"], None)
+
+    message = str(excinfo.value)
+    assert "boom" in message
+    assert "exited 3" in message
+    assert "-c" in message
