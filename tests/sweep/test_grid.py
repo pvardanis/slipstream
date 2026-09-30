@@ -18,6 +18,7 @@ from slipstream_bench.sweep.grid import (
     SweepGrid,
     SweepGridError,
     build_point_sweep_config,
+    get_engine_deploy_knobs,
     list_engine_points,
     load_grid,
     render_burstiness,
@@ -259,6 +260,38 @@ def test_list_engine_points_shares_render_points_enumeration(tmp_path: Path) -> 
     slugs_from_points = {point.slug() for point in list_engine_points(grid)}
     slugs_from_tsv = {row.split("\t")[0] for row in render_points(grid).splitlines()}
     assert slugs_from_points == slugs_from_tsv
+
+
+def test_deploy_knobs_resolve_a_points_manifest_args(tmp_path: Path) -> None:
+    """A caching-on fp8 point renders max-num-seqs, the fp8 token, and the on flag."""
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    point = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
+
+    knobs = get_engine_deploy_knobs(grid, point)
+
+    assert knobs.max_num_seqs == 64
+    assert knobs.kv_engine_token == "fp8"
+    assert knobs.prefix_caching_flag == "--enable-prefix-caching"
+
+
+def test_deploy_knobs_map_fp16_and_the_caching_off_flag(tmp_path: Path) -> None:
+    """fp16 renders vLLM's float16 token; the off arm renders the disable flag."""
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    point = EnginePoint(max_num_seqs=32, kv_cache_dtype="fp16", prefix_caching=False)
+
+    knobs = get_engine_deploy_knobs(grid, point)
+
+    assert knobs.kv_engine_token == "float16"
+    assert knobs.prefix_caching_flag == "--no-enable-prefix-caching"
+
+
+def test_deploy_knobs_reject_a_point_absent_from_the_grid(tmp_path: Path) -> None:
+    """A point the grid does not sweep never renders a manifest — it raises."""
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    absent = EnginePoint(max_num_seqs=999, kv_cache_dtype="fp8", prefix_caching=True)
+
+    with pytest.raises(SweepGridError):
+        get_engine_deploy_knobs(grid, absent)
 
 
 def test_ladder_emits_the_max_concurrency_rungs(tmp_path: Path) -> None:

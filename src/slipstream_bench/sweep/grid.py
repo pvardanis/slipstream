@@ -16,6 +16,7 @@ orchestration driver enumerates — the grid alone, not a second load-sweep file
 the single source of a point's cells (ADR-0012).
 """
 
+from dataclasses import dataclass
 from enum import StrEnum
 from itertools import product
 from pathlib import Path
@@ -244,6 +245,52 @@ def list_engine_points(grid: SweepGrid) -> list[EnginePoint]:
             grid.tier1.prefix_caching,
         )
     ]
+
+
+@dataclass(frozen=True)
+class EngineDeployKnobs:
+    """The three swept engine args one Tier-1 redeploy renders into the GPU manifest.
+
+    The manifest placeholders (``k8s/vllm-gpu.yaml``) the knob sweep substitutes per
+    point: ``max-num-seqs``, the ``--kv-cache-dtype`` engine token (the chart label
+    mapped to what vLLM accepts, fp16 -> float16), and the prefix-caching flag
+    (``--enable-prefix-caching`` / ``--no-enable-prefix-caching``). Binding them into
+    one value keeps the deploy from threading three loose strings a caller could
+    transpose, and reuses the one label->token mapping the recipe already renders.
+    """
+
+    max_num_seqs: int
+    kv_engine_token: str
+    prefix_caching_flag: str
+
+
+def get_engine_deploy_knobs(grid: SweepGrid, point: EnginePoint) -> EngineDeployKnobs:
+    """Resolve one engine point's manifest knobs from the grid, its single source.
+
+    The parent knob sweep redeploys the GPU per point (ADR-0015); this reads the three
+    values the manifest is rendered with — max-num-seqs from the point, the engine
+    token from the grid's label->token mapping, and the caching flag from the point's
+    arm — so the in-cluster deploy renders the same knobs ``render_points`` emits for
+    the recipe, from one mapping.
+
+    :param grid: the validated knob-sweep grid.
+    :param point: the engine-knob point being redeployed.
+    :return: the point's manifest knobs (max-num-seqs, kv engine token, caching flag).
+    :raise SweepGridError: when the point's knobs are not all swept by this grid — the
+        same fail-fast guard ``build_point_sweep_config`` applies, so a point the grid
+        does not sweep never renders a manifest.
+    """
+    arm = _require_grid_arm(grid, point, point.slug())
+    # _require_grid_arm has confirmed the point's dtype is one the grid sweeps, so this
+    # finds the KvLabel-typed key the token mapping is keyed by (no unchecked cast).
+    kv_label = next(
+        label for label in grid.tier1.kv_cache_dtype if label == point.kv_cache_dtype
+    )
+    return EngineDeployKnobs(
+        max_num_seqs=point.max_num_seqs,
+        kv_engine_token=_KV_ENGINE_TOKEN[kv_label],
+        prefix_caching_flag=arm.flag,
+    )
 
 
 def render_points(grid: SweepGrid) -> str:
