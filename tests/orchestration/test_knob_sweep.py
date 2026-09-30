@@ -57,7 +57,7 @@ def _collaborators(
 
 
 def test_drives_each_pending_point_deploy_then_scrape_then_sweep() -> None:
-    from slipstream_bench.orchestration.knob_sweep import run_knob_sweep
+    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
 
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(events)
@@ -82,7 +82,7 @@ def test_drives_each_pending_point_deploy_then_scrape_then_sweep() -> None:
 
 
 def test_a_fully_valid_point_skips_its_redeploy_and_scrape_but_still_reports() -> None:
-    from slipstream_bench.orchestration.knob_sweep import run_knob_sweep
+    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
 
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(
@@ -113,7 +113,7 @@ def test_a_fully_valid_point_skips_its_redeploy_and_scrape_but_still_reports() -
 
 
 def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None:
-    from slipstream_bench.orchestration.knob_sweep import run_knob_sweep
+    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
 
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(
@@ -138,7 +138,7 @@ def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None
 
 
 def test_no_points_drives_no_collaborators_and_returns_no_pointers() -> None:
-    from slipstream_bench.orchestration.knob_sweep import run_knob_sweep
+    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
 
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(events)
@@ -157,7 +157,7 @@ def test_no_points_drives_no_collaborators_and_returns_no_pointers() -> None:
 
 
 def test_every_point_sweep_runs_nested_under_the_parent_flow() -> None:
-    from slipstream_bench.orchestration.knob_sweep import run_knob_sweep
+    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
 
     flow_names: list[str | None] = []
 

@@ -22,8 +22,8 @@ from typing import Any
 import boto3
 import yaml
 
-from slipstream_bench.orchestration.cell_task import CellExecution
 from slipstream_bench.orchestration.ssm import run_command
+from slipstream_bench.orchestration.tasks.cell import CellExecution
 from slipstream_bench.sweep.config import RESERVED_KEYS, CellConfig
 from slipstream_bench.sweep.runner import get_cell_basename
 

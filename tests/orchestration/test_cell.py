@@ -16,7 +16,7 @@ import pytest
 from prefect import flow
 from prefect.testing.utilities import prefect_test_harness
 
-from slipstream_bench.orchestration.cell_task import build_cell_task, run_cell
+from slipstream_bench.orchestration.tasks.cell import build_cell_task, run_cell
 from slipstream_bench.orchestration.validity import InvalidCellError
 
 _VALID = {
@@ -151,7 +151,7 @@ def test_a_degenerate_cell_is_re_attempted(tmp_path: Path) -> None:
 def test_cell_task_for_a_bucket_wires_s3_result_storage() -> None:
     from prefect_aws import S3Bucket
 
-    from slipstream_bench.orchestration.cell_task import cell_task
+    from slipstream_bench.orchestration.tasks.cell import cell_task
 
     task = cell_task("slipstream-bench-results")
 
