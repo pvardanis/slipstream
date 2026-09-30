@@ -61,6 +61,11 @@ ENV PATH="/app/.venv/bin:${PATH}"
 # somewhere owned, not a root-owned default the non-root worker cannot create.
 ENV PREFECT_HOME=/home/app/.prefect
 
+# The app runs entirely from the copied venv; the base image's bundled pip/setuptools/wheel
+# are never invoked at runtime, and setuptools vendors CVE-bearing copies of jaraco.context
+# and wheel. Remove the unused tooling so the runtime carries no packages it does not run.
+RUN /usr/local/bin/python -m pip uninstall --yes pip setuptools wheel
+
 USER app
 WORKDIR /home/app
 
