@@ -1,27 +1,20 @@
-"""The parent knob-sweep flow: drive one point sweep per engine point (ADR-0015).
+"""The knob-sweep sequencing driver: one point sweep per engine point (ADR-0015).
 
-The outer loop over the grid's engine points as one Prefect flow. Per point it redeploys
-the GPU, scrapes the concurrency ceiling (fail-loud), then runs the existing per-point
-sweep as a nested subflow — with a resume gate that skips a point whose cells already
-hold valid measurements. Collaborators are injected, so the whole path is exercised here
-against fakes under ``prefect_test_harness()``: no Cloud, cluster, or GPU needed.
+Exercises drive_knob_sweep — the transport-free driver the parent flow wraps. The four
+collaborators (GPU redeploy, ceiling scrape, per-point sweep, redeploy-skip gate) are
+injected as fakes, so the whole path is asserted with no cluster, GPU, or Prefect server:
+each pending point is redeployed then scraped then swept in that order, a fully-valid
+point skips its redeploy and scrape but still reports its cached pointers, and an empty
+ceiling scrape raises loud before the point's ladder runs.
 """
 
-from collections.abc import Iterator
-
 import pytest
-from prefect.testing.utilities import prefect_test_harness
 
+from slipstream_bench.orchestration.flows.knob_sweep import drive_knob_sweep
 from slipstream_bench.sweep.aggregation import CeilingScrapeError, EnginePoint
 
 _P1 = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _P2 = EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False)
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _harness() -> Iterator[None]:
-    with prefect_test_harness():
-        yield
 
 
 def _collaborators(
@@ -57,12 +50,10 @@ def _collaborators(
 
 
 def test_drives_each_pending_point_deploy_then_scrape_then_sweep() -> None:
-    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
-
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(events)
 
-    pointers = run_knob_sweep(
+    pointers = drive_knob_sweep(
         points=[_P1, _P2],
         deploy_fn=deploy_fn,
         scrape_fn=scrape_fn,
@@ -82,14 +73,12 @@ def test_drives_each_pending_point_deploy_then_scrape_then_sweep() -> None:
 
 
 def test_a_fully_valid_point_skips_its_redeploy_and_scrape_but_still_reports() -> None:
-    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
-
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(
         events, pending={_P2.slug()}
     )
 
-    pointers = run_knob_sweep(
+    pointers = drive_knob_sweep(
         points=[_P1, _P2],
         deploy_fn=deploy_fn,
         scrape_fn=scrape_fn,
@@ -113,8 +102,6 @@ def test_a_fully_valid_point_skips_its_redeploy_and_scrape_but_still_reports() -
 
 
 def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None:
-    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
-
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(
         events, empty_ceiling={_P1.slug()}
@@ -123,7 +110,7 @@ def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None
     with pytest.raises(
         CeilingScrapeError, match=f"no ceiling scraped for {_P1.slug()}"
     ):
-        run_knob_sweep(
+        drive_knob_sweep(
             points=[_P1, _P2],
             deploy_fn=deploy_fn,
             scrape_fn=scrape_fn,
@@ -138,12 +125,10 @@ def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None
 
 
 def test_no_points_drives_no_collaborators_and_returns_no_pointers() -> None:
-    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
-
     events: list[str] = []
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(events)
 
-    pointers = run_knob_sweep(
+    pointers = drive_knob_sweep(
         points=[],
         deploy_fn=deploy_fn,
         scrape_fn=scrape_fn,
@@ -154,27 +139,3 @@ def test_no_points_drives_no_collaborators_and_returns_no_pointers() -> None:
     # An empty grid drives nothing and reports nothing — no collaborator fires.
     assert pointers == []
     assert events == []
-
-
-def test_every_point_sweep_runs_nested_under_the_parent_flow() -> None:
-    from slipstream_bench.orchestration.flows.knob_sweep import run_knob_sweep
-
-    flow_names: list[str | None] = []
-
-    def recording_point_sweep(point: EnginePoint) -> list[str]:
-        from prefect.runtime import flow_run
-
-        flow_names.append(flow_run.flow_name)
-        return [f"ptr:{point.slug()}"]
-
-    run_knob_sweep(
-        points=[_P1, _P2],
-        deploy_fn=lambda _p: None,
-        scrape_fn=lambda _p: None,
-        point_sweep_fn=recording_point_sweep,
-        has_pending_cells=lambda _p: True,
-    )
-
-    # Each point sweep observes the one parent knob-sweep flow run: real parent->child
-    # lineage — every point sweep nests under the same parent run.
-    assert flow_names == ["knob-sweep", "knob-sweep"]
