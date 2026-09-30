@@ -569,6 +569,8 @@ def test_register_knob_sweep_rejects_an_empty_cluster_input(
 
     result = CliRunner().invoke(app, argv)
 
-    assert result.exit_code != 0
+    # Exit 2 is typer's usage-error code (BadParameter), and deploy never fires — so the
+    # empty input is rejected at registration, before any deployment is created. The
+    # rendered message is not asserted: rich truncates it at the terminal width.
+    assert result.exit_code == 2
     assert not deployed
-    assert option in result.output
