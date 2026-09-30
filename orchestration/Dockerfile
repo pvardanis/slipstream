@@ -13,7 +13,8 @@
 # pinned by digest (a tag is a mutable pointer; a digest is the content) and Dependabot
 # advances them.
 
-FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS builder  # uv 0.9.30-python3.11-bookworm-slim
+# uv 0.9.30-python3.11-bookworm-slim
+FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS builder
 
 # Byte-compile on install so the worker doesn't pay first-import compilation, and copy
 # packages into the venv rather than symlinking the uv cache, so the venv is self-contained
