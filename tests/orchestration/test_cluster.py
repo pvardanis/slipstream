@@ -23,7 +23,7 @@ from slipstream_bench.orchestration.cluster import (
 from slipstream_bench.sweep.aggregation import CeilingScrapeError, EnginePoint
 from slipstream_bench.sweep.grid import (
     SweepGrid,
-    get_engine_deploy_knobs,
+    get_engine_args,
 )
 
 _GRID = """
@@ -108,9 +108,9 @@ def load_grid_from_text(text: str) -> SweepGrid:
 
 
 def test_render_substitutes_the_three_swept_knobs() -> None:
-    knobs = get_engine_deploy_knobs(_grid(), _POINT)
+    engine_args = get_engine_args(_grid(), _POINT)
 
-    rendered = render_gpu_manifest(_MANIFEST, knobs=knobs)
+    rendered = render_gpu_manifest(_MANIFEST, engine_args=engine_args)
 
     assert "${" not in rendered
     assert '"64"' in rendered
@@ -119,9 +119,9 @@ def test_render_substitutes_the_three_swept_knobs() -> None:
 
 
 def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
-    knobs = get_engine_deploy_knobs(_grid(), _FP16_OFF)
+    engine_args = get_engine_args(_grid(), _FP16_OFF)
 
-    rendered = render_gpu_manifest(_MANIFEST, knobs=knobs)
+    rendered = render_gpu_manifest(_MANIFEST, engine_args=engine_args)
 
     # fp16 -> the engine token float16; the off arm's flag renders as the bare list item.
     assert '"float16"' in rendered
@@ -129,12 +129,12 @@ def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
     assert '"128"' in rendered
 
 
-def test_get_engine_deploy_knobs_rejects_a_point_absent_from_the_grid() -> None:
+def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:
     from slipstream_bench.sweep.grid import SweepGridError
 
     absent = EnginePoint(max_num_seqs=999, kv_cache_dtype="fp8", prefix_caching=True)
     with pytest.raises(SweepGridError):
-        get_engine_deploy_knobs(_grid(), absent)
+        get_engine_args(_grid(), absent)
 
 
 def test_extract_deployment_doc_returns_only_the_named_deployment() -> None:

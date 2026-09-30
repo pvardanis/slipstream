@@ -26,9 +26,9 @@ import yaml
 
 from slipstream_bench.sweep.aggregation import CeilingScrapeError, EnginePoint
 from slipstream_bench.sweep.grid import (
-    EngineDeployKnobs,
+    EngineArgs,
     SweepGrid,
-    get_engine_deploy_knobs,
+    get_engine_args,
 )
 
 # vLLM logs its VRAM/KV-budget concurrency estimate once at startup, e.g.
@@ -94,8 +94,8 @@ def build_kubectl(*, binary: str = "kubectl") -> Kubectl:
     return run
 
 
-def render_gpu_manifest(manifest_text: str, *, knobs: EngineDeployKnobs) -> str:
-    """Substitute a point's three swept engine knobs into the GPU manifest text.
+def render_gpu_manifest(manifest_text: str, *, engine_args: EngineArgs) -> str:
+    """Substitute a point's three swept engine args into the GPU manifest text.
 
     The Python counterpart to the recipe's ``envsubst`` (``just _render-gpu-manifest``):
     only ``${MAX_NUM_SEQS}``, ``${KV_CACHE_DTYPE}``, and ``${PREFIX_CACHING_FLAG}`` are
@@ -103,13 +103,13 @@ def render_gpu_manifest(manifest_text: str, *, knobs: EngineDeployKnobs) -> str:
     worker image free of a gettext dependency.
 
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
-    :param knobs: the point's max-num-seqs, kv engine token, and caching flag.
+    :param engine_args: the point's max-num-seqs, kv-cache token, and caching flag.
     :return: the manifest with the three placeholders rendered.
     """
     return (
-        manifest_text.replace(_MAX_NUM_SEQS_PLACEHOLDER, str(knobs.max_num_seqs))
-        .replace(_KV_CACHE_DTYPE_PLACEHOLDER, knobs.kv_engine_token)
-        .replace(_PREFIX_CACHING_PLACEHOLDER, knobs.prefix_caching_flag)
+        manifest_text.replace(_MAX_NUM_SEQS_PLACEHOLDER, str(engine_args.max_num_seqs))
+        .replace(_KV_CACHE_DTYPE_PLACEHOLDER, engine_args.kv_engine_token)
+        .replace(_PREFIX_CACHING_PLACEHOLDER, engine_args.prefix_caching_flag)
     )
 
 
@@ -164,8 +164,8 @@ def deploy_gpu_point(
     :param deployment: the Deployment's name.
     :param rollout_timeout_s: the ceiling the rollout wait trips at.
     """
-    knobs = get_engine_deploy_knobs(grid, point)
-    rendered = render_gpu_manifest(manifest_text, knobs=knobs)
+    engine_args = get_engine_args(grid, point)
+    rendered = render_gpu_manifest(manifest_text, engine_args=engine_args)
     deployment_doc = extract_deployment_doc(rendered, deployment=deployment)
     kubectl(["apply", "-n", namespace, "-f", "-"], deployment_doc)
     kubectl(
