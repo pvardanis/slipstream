@@ -22,6 +22,9 @@ from typer.testing import CliRunner
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import (
     KnobSweepInputs,
+    _point_has_pending_cells,
+    _scrape_and_log_ceiling,
+    _sweep_one_point,
     app,
     build_knob_sweep_collaborators,
 )
@@ -94,10 +97,12 @@ def _grid() -> SweepGrid:
 
 
 def _inputs(results_dir: Path) -> KnobSweepInputs:
+    manifest_path = results_dir / "vllm-gpu.yaml"
+    manifest_path.write_text(_MANIFEST, encoding="utf-8")
     return KnobSweepInputs(
         grid=_grid(),
         grid_path=Path("sweep-grid.yaml"),
-        manifest_text=_MANIFEST,
+        manifest_path=manifest_path,
         results_dir=results_dir,
         run="run1",
         digest="deadbeef",
@@ -132,28 +137,26 @@ def test_deploy_fn_applies_the_points_deployment_then_waits_the_rollout(
     assert kubectl.calls[1][0][:2] == ["rollout", "status"]
 
 
-def test_scrape_fn_logs_the_predicted_ceiling(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_scrape_logs_the_predicted_ceiling(
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     kubectl = _FakeKubectl(logs=_CEILING_LOG)
-    _deploy, scrape_fn, _sweep, _pending = _collaborators(tmp_path, kubectl=kubectl)
 
     with caplog.at_level(logging.INFO, logger="slipstream_bench.orchestration.cli"):
-        scrape_fn(_POINT)
+        _scrape_and_log_ceiling(_POINT, kubectl=kubectl)
 
     assert _POINT.slug() in caplog.text
     assert "12.50x" in caplog.text
 
 
-def test_scrape_fn_raises_loud_when_the_log_carries_no_ceiling(tmp_path: Path) -> None:
+def test_scrape_raises_loud_when_the_log_carries_no_ceiling() -> None:
     kubectl = _FakeKubectl(logs="INFO startup, no ceiling line")
-    _deploy, scrape_fn, _sweep, _pending = _collaborators(tmp_path, kubectl=kubectl)
 
     with pytest.raises(CeilingScrapeError, match=_POINT.slug()):
-        scrape_fn(_POINT)
+        _scrape_and_log_ceiling(_POINT, kubectl=kubectl)
 
 
-def test_point_sweep_fn_runs_under_the_points_run_id_and_results_subdir(
+def test_sweep_one_point_runs_under_the_points_run_id_and_results_subdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -163,14 +166,21 @@ def test_point_sweep_fn_runs_under_the_points_run_id_and_results_subdir(
         return [f"ptr:{kwargs['context'].point_slug}"]
 
     monkeypatch.setattr(cli_module, "run_point_sweep", _fake_run)
-    _deploy, _scrape, point_sweep_fn, _pending = _collaborators(
-        tmp_path, kubectl=_FakeKubectl()
-    )
+    inputs = _inputs(tmp_path)
+
+    def _sweep(point: EnginePoint) -> list[str]:
+        return _sweep_one_point(
+            point,
+            inputs=inputs,
+            ssm_client=object(),
+            s3_client=object(),
+            task=cast(Task[..., str], object()),
+        )
 
     # Two distinct points: each nests under the sweep's shared run and lands in its own
     # per-point subdir, so their identically-named tier-2 cells never collide on disk.
-    assert point_sweep_fn(_POINT) == [f"ptr:{_POINT.slug()}"]
-    assert point_sweep_fn(_OTHER_POINT) == [f"ptr:{_OTHER_POINT.slug()}"]
+    assert _sweep(_POINT) == [f"ptr:{_POINT.slug()}"]
+    assert _sweep(_OTHER_POINT) == [f"ptr:{_OTHER_POINT.slug()}"]
 
     assert calls[0]["context"].run_id == f"run1/{_POINT.slug()}"
     assert calls[0]["results_dir"] == tmp_path / _POINT.slug()
@@ -182,13 +192,13 @@ def test_point_sweep_fn_runs_under_the_points_run_id_and_results_subdir(
 def test_has_pending_cells_is_the_negation_of_point_is_complete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _deploy, _scrape, _sweep, gate = _collaborators(tmp_path, kubectl=_FakeKubectl())
+    inputs = _inputs(tmp_path)
 
     # A complete point has no pending cells; an incomplete one does.
     monkeypatch.setattr(cli_module, "point_is_complete", lambda *a, **k: True)
-    assert gate(_POINT) is False
+    assert _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object()) is False
     monkeypatch.setattr(cli_module, "point_is_complete", lambda *a, **k: False)
-    assert gate(_POINT) is True
+    assert _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object()) is True
 
 
 def test_has_pending_cells_propagates_an_unfixable_probe_error(
@@ -201,10 +211,10 @@ def test_has_pending_cells_propagates_an_unfixable_probe_error(
         raise ClientError({"Error": {"Code": "403"}}, "HeadObject")
 
     monkeypatch.setattr(cli_module, "point_is_complete", _raising)
-    _deploy, _scrape, _sweep, gate = _collaborators(tmp_path, kubectl=_FakeKubectl())
+    inputs = _inputs(tmp_path)
 
     with pytest.raises(ClientError):
-        gate(_POINT)
+        _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object())
 
 
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -219,17 +229,17 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return model_yaml, grid_yaml, manifest
 
 
-@pytest.mark.parametrize("field", ["manifest_text", "run", "digest", "bucket", "model"])
+@pytest.mark.parametrize("field", ["run", "digest", "bucket", "model"])
 def test_empty_keying_input_is_rejected_before_the_redeploy(
     tmp_path: Path, field: str
 ) -> None:
-    # An empty keying field (or manifest) would address cells under a broken key or
-    # redeploy nothing; rejecting it on construction fails the sweep before its first
-    # ~20-minute GPU redeploy, not at the S3 probe or silently.
+    # An empty keying field would address cells under a broken key; rejecting it on
+    # construction fails the sweep before its first ~20-minute GPU redeploy, not at the
+    # S3 probe or silently.
     kwargs: dict[str, Any] = {
         "grid": _grid(),
         "grid_path": Path("sweep-grid.yaml"),
-        "manifest_text": _MANIFEST,
+        "manifest_path": Path("vllm-gpu.yaml"),
         "results_dir": tmp_path,
         "run": "run1",
         "digest": "deadbeef",

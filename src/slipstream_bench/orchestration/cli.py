@@ -202,7 +202,7 @@ class KnobSweepInputs:
 
     grid: SweepGrid
     grid_path: Path
-    manifest_text: str
+    manifest_path: Path
     results_dir: Path
     run: str
     digest: str
@@ -214,23 +214,16 @@ class KnobSweepInputs:
     sweep_args_b64: str = ""
 
     def __post_init__(self) -> None:
-        """Reject inputs that would address a run with an empty key or redeploy nothing.
+        """Reject inputs that would address a run with an empty key.
 
         Frozen, so validating on construction makes the value valid for its whole life.
-        The keying and addressing fields — and the manifest the redeploy renders — must
-        be non-empty, so a misconfigured sweep fails here, before its first ~20-minute
-        GPU redeploy, rather than at the S3 probe or silently (an empty ``run`` would
-        pass ``SweepContext``'s own check yet key cells under ``sweeps//<slug>/``).
+        The keying and addressing fields must be non-empty, so a misconfigured sweep
+        fails here, before its first ~20-minute GPU redeploy, rather than at the S3 probe
+        or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
+        cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
+        command that reads them.
         """
-        for name in (
-            "manifest_text",
-            "run",
-            "digest",
-            "instance_id",
-            "image_ref",
-            "bucket",
-            "model",
-        ):
+        for name in ("run", "digest", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
 
@@ -265,38 +258,65 @@ def build_knob_sweep_collaborators(
     deploy_fn: DeployFn = partial(
         deploy_gpu_point,
         grid=inputs.grid,
-        manifest_text=inputs.manifest_text,
+        manifest_text=inputs.manifest_path.read_text(encoding="utf-8"),
         kubectl=kubectl,
     )
-
-    def scrape_fn(point: EnginePoint) -> None:
-        ceiling = scrape_ceiling(point, kubectl=kubectl)
-        _LOGGER.info(
-            "point %s predicted concurrency ceiling: %s", point.slug(), ceiling
-        )
-
-    def point_sweep_fn(point: EnginePoint) -> list[str]:
-        return run_point_sweep(
-            grid_path=inputs.grid_path,
-            results_dir=inputs.results_dir / point.slug(),
-            context=_build_point_context(inputs, point),
-            ssm_client=ssm_client,
-            s3_client=s3_client,
-            task=task,
-        )
-
-    def has_pending_cells(point: EnginePoint) -> bool:
-        return not point_is_complete(
-            point,
-            grid=inputs.grid,
-            run_prefix=inputs.run,
-            bucket=inputs.bucket,
-            s3_client=s3_client,
-            model=inputs.model,
-            commercial=inputs.commercial,
-        )
-
+    scrape_fn: ScrapeFn = partial(_scrape_and_log_ceiling, kubectl=kubectl)
+    point_sweep_fn: PointSweepFn = partial(
+        _sweep_one_point,
+        inputs=inputs,
+        ssm_client=ssm_client,
+        s3_client=s3_client,
+        task=task,
+    )
+    has_pending_cells: PendingCellsFn = partial(
+        _point_has_pending_cells, inputs=inputs, s3_client=s3_client
+    )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
+
+
+def _scrape_and_log_ceiling(point: EnginePoint, *, kubectl: Kubectl) -> None:
+    """Scrape the point's predicted concurrency ceiling and record it in the log.
+
+    The grid fixes the Tier-2 ladder, so the ceiling is recorded, not threaded into it
+    (ADR-0009); the scrape raises loud on an empty ceiling (ADR-0015).
+    """
+    ceiling = scrape_ceiling(point, kubectl=kubectl)
+    _LOGGER.info("point %s predicted concurrency ceiling: %s", point.slug(), ceiling)
+
+
+def _sweep_one_point(
+    point: EnginePoint,
+    *,
+    inputs: KnobSweepInputs,
+    ssm_client: Any,
+    s3_client: Any,
+    task: Task[..., str],
+) -> list[str]:
+    """Run one point's Tier-2 ladder under its own results subdir and nested run id."""
+    return run_point_sweep(
+        grid_path=inputs.grid_path,
+        results_dir=inputs.results_dir / point.slug(),
+        context=_build_point_context(inputs, point),
+        ssm_client=ssm_client,
+        s3_client=s3_client,
+        task=task,
+    )
+
+
+def _point_has_pending_cells(
+    point: EnginePoint, *, inputs: KnobSweepInputs, s3_client: Any
+) -> bool:
+    """Report whether a point still has cells to run — the redeploy-skip probe negated."""
+    return not point_is_complete(
+        point,
+        grid=inputs.grid,
+        run_prefix=inputs.run,
+        bucket=inputs.bucket,
+        s3_client=s3_client,
+        model=inputs.model,
+        commercial=inputs.commercial,
+    )
 
 
 def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepContext:
@@ -374,7 +394,7 @@ def knob_sweep(
     inputs = KnobSweepInputs(
         grid=grid,
         grid_path=sweep_grid,
-        manifest_text=vllm_manifest.read_text(encoding="utf-8"),
+        manifest_path=vllm_manifest,
         results_dir=results_dir,
         run=run_id,
         digest=DigestInputs(
