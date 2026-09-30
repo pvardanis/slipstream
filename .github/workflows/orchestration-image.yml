@@ -8,22 +8,25 @@
 name: orchestration-image
 
 on:
+  # Build and scan on any PR that touches an image input, so a CVE or broken build is
+  # caught before merge rather than on the post-merge publish run. This trigger runs the
+  # no-cloud `scan` job only.
+  pull_request:
+    paths:
+      - src/**
+      - pyproject.toml
+      - uv.lock
+      - orchestration/Dockerfile
+      - .dockerignore
+      - .github/workflows/orchestration-image.yml
   push:
     branches: [main]
   workflow_dispatch:
 
-# OIDC needs a token to exchange for the role; checkout needs read. The push role's trust
-# is scoped to refs/heads/main, so a push publishes and a dispatch from a non-main branch
-# fails at the OIDC exchange rather than publishing.
+# Least privilege at the top: only read. The publish job raises id-token for the OIDC
+# exchange itself, so pull_request runs — which never publish — are never granted a token.
 permissions:
   contents: read
-  id-token: write
-
-# Never cancel an in-flight publish: a cancelled push mid-layer leaves a partial upload.
-# Serialize instead so two main builds cannot race the floating pointer.
-concurrency:
-  group: orchestration-image
-  cancel-in-progress: false
 
 env:
   # Region and repository name come from repo variables set from the bootstrap stack's
@@ -34,10 +37,58 @@ env:
   ECR_REPOSITORY: ${{ vars.ORCHESTRATION_ECR_REPOSITORY }}
 
 jobs:
-  publish:
-    name: build, scan & push (content-hash idempotent)
+  scan:
+    name: build & scan (pull request)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+    # Supersede an in-flight PR scan when the branch is pushed again: unlike the publish
+    # job there is no floating pointer to corrupt, so cancelling the stale run is safe.
+    concurrency:
+      group: orchestration-image-scan-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the content image
+        run: |
+          set -euo pipefail
+          # Build for the amd64 worker nodes, tagged locally only — the PR gate never
+          # pushes. The scan below reads this image from the local docker store.
+          docker build --platform linux/amd64 \
+            -f orchestration/Dockerfile \
+            -t orchestration-image:pr-scan \
+            .
+
+      # Same gate as the publish job's scan, run pre-merge: fail on fixable high/critical
+      # CVEs so a vulnerable image is caught on the PR, not on the post-merge publish.
+      - name: Scan the content image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: orchestration-image:pr-scan
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+  publish:
+    name: build, scan & push (content-hash idempotent)
+    # Publish only on push/dispatch; the pull_request event runs the scan job alone.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    # Never cancel an in-flight publish: a cancelled push mid-layer leaves a partial upload.
+    # Serialize instead so two main builds cannot race the floating pointer.
+    concurrency:
+      group: orchestration-image
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
