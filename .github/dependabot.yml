@@ -1,5 +1,6 @@
-# Dependabot: weekly update PRs for GitHub Actions, uv (Python), and Terraform
-# providers, grouped per ecosystem with a 7-day cooldown before a release is bumped.
+# Dependabot: weekly update PRs for GitHub Actions, uv (Python), Docker base
+# images, and Terraform providers, grouped per ecosystem with a 7-day cooldown
+# before a release is bumped.
 version: 2
 
 updates:
@@ -21,6 +22,18 @@ updates:
       default-days: 7
     groups:
       python:
+        patterns: ["*"]
+
+  # Advances the digest-pinned FROM lines in orchestration/Dockerfile (the uv builder
+  # and the slim runtime); the pin is the content, Dependabot is what keeps it current.
+  - package-ecosystem: docker
+    directory: /orchestration
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      docker:
         patterns: ["*"]
 
   - package-ecosystem: terraform
