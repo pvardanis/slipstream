@@ -67,7 +67,7 @@ jobs:
       # Same gate as the publish job's scan, run pre-merge: fail on fixable high/critical
       # CVEs so a vulnerable image is caught on the PR, not on the post-merge publish.
       - name: Scan the content image
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: orchestration-image:pr-scan
           format: table
@@ -193,7 +193,7 @@ jobs:
       # CVEs (no upstream patch yet) do not block — they cannot be actioned by a rebuild.
       - name: Scan the content image
         if: steps.probe.outputs.present == 'false'
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tags.outputs.sha_tag }}
           format: table
