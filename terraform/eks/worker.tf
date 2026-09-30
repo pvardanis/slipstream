@@ -33,10 +33,12 @@ locals {
   # registry host, which is what the ECR data source looks the image up by.
   orchestration_repo_url  = local.worker_enabled ? data.terraform_remote_state.bootstrap[0].outputs.orchestration_image_repo_url : ""
   orchestration_repo_name = local.worker_enabled ? trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/") : ""
-  # try() guards only the disabled case, where the ECR data source is not read; when the
-  # worker is enabled the data source's postcondition guarantees exactly one non-main tag.
+  # The worker_enabled guard mirrors the repository above: disabled, the ECR data source is
+  # uncreated and the tag is "". Enabled, the data source's postcondition guarantees exactly
+  # one non-main tag, so the list comprehension's [0] resolves it — and an empty list (a
+  # loosened postcondition or drifted filter) fails the plan loudly instead of pinning "".
   worker_image_repository = local.worker_enabled ? local.orchestration_repo_url : ""
-  worker_image_tag        = try([for t in data.aws_ecr_image.orchestration[0].image_tags : t if t != "main"][0], "")
+  worker_image_tag        = local.worker_enabled ? [for t in data.aws_ecr_image.orchestration[0].image_tags : t if t != "main"][0] : ""
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. A process worker (subprocess, not a per-run Job) matches the serial

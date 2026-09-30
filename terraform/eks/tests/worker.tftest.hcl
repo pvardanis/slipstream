@@ -259,6 +259,13 @@ run "worker_layer_shape" {
     condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.repository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
     error_message = "The worker image repository must come from the bootstrap orchestration_image_repo_url output."
   }
+  # The ECR lookup keys off the repository path, not the full registry URL — trimprefix
+  # must strip the host. A bug there (wrong split, leftover slash) would only surface as a
+  # real-ECR lookup miss, so pin the transform here where the input is known at plan.
+  assert {
+    condition     = data.aws_ecr_image.orchestration[0].repository_name == "slipstream/orchestration"
+    error_message = "The ECR lookup must strip the registry host to the repository path (slipstream/orchestration)."
+  }
   assert {
     condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.prefectTag == "orchestrator-abc123"
     error_message = "The worker image tag must be the content-sha tag resolved from the orchestration :main image."
@@ -318,6 +325,10 @@ run "worker_absent_when_disabled" {
     error_message = "A disabled worker must leave the worker IAM role uncreated."
   }
   assert {
+    condition     = length(aws_iam_role_policy.prefect_worker) == 0
+    error_message = "A disabled worker must leave the worker IAM policy uncreated."
+  }
+  assert {
     condition     = length(aws_eks_pod_identity_association.prefect_worker) == 0
     error_message = "A disabled worker must leave the Pod Identity association uncreated."
   }
@@ -325,7 +336,19 @@ run "worker_absent_when_disabled" {
     condition     = length(kubernetes_role_v1.vllm_gpu_manage) == 0
     error_message = "A disabled worker must leave the worker RBAC uncreated."
   }
+  assert {
+    condition     = length(kubernetes_role_binding_v1.vllm_gpu_manage) == 0
+    error_message = "A disabled worker must leave the worker RoleBinding uncreated."
+  }
+  assert {
+    condition     = length(kubernetes_namespace_v1.slipstream) == 0
+    error_message = "A disabled worker must leave the slipstream namespace uncreated."
+  }
   # A disabled worker reads neither the bootstrap remote state nor the ECR image.
+  assert {
+    condition     = length(data.terraform_remote_state.bootstrap) == 0
+    error_message = "A disabled worker must not read the bootstrap remote state."
+  }
   assert {
     condition     = length(data.aws_ecr_image.orchestration) == 0
     error_message = "A disabled worker must not resolve the orchestration image from ECR."
@@ -356,6 +379,36 @@ run "worker_requires_a_content_tag" {
     target = data.aws_ecr_image.orchestration[0]
     values = {
       image_tags = ["main"]
+    }
+  }
+
+  expect_failures = [data.aws_ecr_image.orchestration]
+}
+
+# The other side of the ==1 postcondition: a :main manifest carrying two content-sha tags
+# is as ambiguous as none — [0] would pin an arbitrary one — so the enabled worker fails
+# the plan loudly rather than guessing which tag to deploy.
+run "worker_rejects_multiple_content_tags" {
+  command = plan
+
+  variables {
+    enable_prefect_worker = true
+    state_bucket          = "slipstream-tfstate-abc123"
+  }
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap[0]
+    values = {
+      outputs = {
+        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      }
+    }
+  }
+
+  override_data {
+    target = data.aws_ecr_image.orchestration[0]
+    values = {
+      image_tags = ["main", "orchestrator-abc123", "orchestrator-def456"]
     }
   }
 
