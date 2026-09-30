@@ -42,6 +42,17 @@ class SweepAggregationError(Exception):
     """A sweep artifact that cannot be aggregated into a ceiling row."""
 
 
+class CeilingScrapeError(Exception):
+    """No concurrency ceiling could be scraped for an engine point.
+
+    The parent knob sweep scrapes each redeployed engine's reported ceiling before
+    running the point's Tier-2 ladder (ADR-0015). A scrape that finds none raises this
+    rather than returning empty, so the point fails loudly instead of measuring its
+    ladder against a garbage ceiling — the one failure an unattended sweep cannot
+    tolerate.
+    """
+
+
 class FailureCohorts(TypedDict):
     """The failed-request cohorts summed across a ceiling row's rungs.
 

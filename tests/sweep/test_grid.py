@@ -12,11 +12,13 @@ from pathlib import Path
 import pytest
 import yaml
 
+from slipstream_bench.sweep.aggregation import EnginePoint
 from slipstream_bench.sweep.config import CellConfig, SweepConfig
 from slipstream_bench.sweep.grid import (
     SweepGrid,
     SweepGridError,
     build_point_sweep_config,
+    list_engine_points,
     load_grid,
     render_burstiness,
     render_ladder,
@@ -225,6 +227,38 @@ def test_points_pins_caching_off_to_a_single_zero_share(tmp_path: Path) -> None:
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
     rows = render_points(grid).splitlines()
     assert "mns32_kvfp8_pcoff\t32\tfp8\t--no-enable-prefix-caching\t0" in rows
+
+
+def test_list_engine_points_enumerates_every_tier1_point(tmp_path: Path) -> None:
+    """5 max-num-seqs x 2 kv-dtype x 2 prefix-caching = 20 engine points, as objects."""
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    points = list_engine_points(grid)
+    assert len(points) == 20
+    assert all(isinstance(point, EnginePoint) for point in points)
+
+
+def test_list_engine_points_yields_the_cartesian_product_of_the_knobs(
+    tmp_path: Path,
+) -> None:
+    """A caching-on fp8 point binds its three engine knobs into one value object."""
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    points = list_engine_points(grid)
+    assert (
+        EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
+        in points
+    )
+
+
+def test_list_engine_points_shares_render_points_enumeration(tmp_path: Path) -> None:
+    """The point objects a flow iterates name the same slugs render_points emits.
+
+    Both enumerate the Tier-1 grid, so the parent flow's points and the recipe's TSV
+    rows must be the one set of engine points — never two enumerations that can drift.
+    """
+    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
+    slugs_from_points = {point.slug() for point in list_engine_points(grid)}
+    slugs_from_tsv = {row.split("\t")[0] for row in render_points(grid).splitlines()}
+    assert slugs_from_points == slugs_from_tsv
 
 
 def test_ladder_emits_the_max_concurrency_rungs(tmp_path: Path) -> None:

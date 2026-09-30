@@ -223,6 +223,29 @@ def build_point_sweep_config(
         ) from error
 
 
+def list_engine_points(grid: SweepGrid) -> list[EnginePoint]:
+    """Enumerate the grid's Tier-1 engine points, one per GPU redeploy.
+
+    The cartesian product of the three engine knobs — max-num-seqs x kv-cache-dtype x
+    prefix-caching arm — as :class:`EnginePoint` objects, the point-object form of the
+    same enumeration :func:`render_points` emits as TSV. The parent knob-sweep flow
+    iterates these to drive one point sweep per point (ADR-0015), reading the grid as
+    the single source of the points so the flow and the recipe never enumerate apart.
+    """
+    return [
+        EnginePoint(
+            max_num_seqs=max_num_seqs,
+            kv_cache_dtype=kv_label,
+            prefix_caching=pc_label == "on",
+        )
+        for max_num_seqs, kv_label, pc_label in product(
+            grid.tier1.max_num_seqs,
+            grid.tier1.kv_cache_dtype,
+            grid.tier1.prefix_caching,
+        )
+    ]
+
+
 def render_points(grid: SweepGrid) -> str:
     """Emit the Tier-1 points as TSV, one row per engine-knob redeploy.
 
