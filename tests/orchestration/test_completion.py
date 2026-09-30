@@ -1,9 +1,10 @@
 """The redeploy-skip gate: is an engine point's every cell already valid in S3?
 
-Exercises point_is_complete against a fake S3 that serves valid, unhealthy, or missing
-cell objects. Asserts a fully-valid point reads complete (so the parent skips its deploy
-and scrape), while one missing or degenerate cell reads incomplete (so the point re-runs),
-and that the probe checks every cell object under the point's run prefix.
+Exercises point_is_complete against a fake S3 that serves valid, unhealthy, absent,
+transiently-unreachable, or access-denied cell objects. Asserts a fully-valid point reads
+complete (so the parent skips its deploy and scrape); an absent, transient, or degenerate
+cell reads incomplete (so the point re-runs); and a failure re-running cannot fix — an
+access denial — aborts the probe rather than degrading to a re-run.
 """
 
 import json
@@ -13,10 +14,16 @@ from typing import Any
 
 import pytest
 import yaml
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from slipstream_bench.orchestration.completion import point_is_complete
 from slipstream_bench.sweep.aggregation import EnginePoint
 from slipstream_bench.sweep.grid import SweepGrid
+
+
+def _client_error(code: str) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": code}}, "HeadObject")
+
 
 _GRID = """
 tier1:
@@ -72,7 +79,10 @@ class _AllValidS3:
 
 
 class _MissingOneS3(_AllValidS3):
-    """Serve every key a valid result except the one whose key holds ``missing``."""
+    """Serve every key a valid result except the one whose key holds ``missing``.
+
+    An absent object surfaces as a 404 ClientError — download_file heads it first.
+    """
 
     def __init__(self, missing: str) -> None:
         super().__init__()
@@ -81,7 +91,35 @@ class _MissingOneS3(_AllValidS3):
     def download_file(self, _bucket: str, key: str, dest: str) -> None:
         if self._missing in key:
             self.keys.append(key)
-            raise FileNotFoundError(key)
+            raise _client_error("404")
+        super().download_file(_bucket, key, dest)
+
+
+class _ForbiddenOneS3(_AllValidS3):
+    """Deny the key holding ``forbidden`` with a 403 — a failure re-running cannot fix."""
+
+    def __init__(self, forbidden: str) -> None:
+        super().__init__()
+        self._forbidden = forbidden
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        if self._forbidden in key:
+            self.keys.append(key)
+            raise _client_error("403")
+        super().download_file(_bucket, key, dest)
+
+
+class _UnreachableOneS3(_AllValidS3):
+    """Fail the key holding ``unreachable`` with a transient endpoint error."""
+
+    def __init__(self, unreachable: str) -> None:
+        super().__init__()
+        self._unreachable = unreachable
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        if self._unreachable in key:
+            self.keys.append(key)
+            raise EndpointConnectionError(endpoint_url="https://s3.amazonaws.com")
         super().download_file(_bucket, key, dest)
 
 
@@ -139,8 +177,24 @@ def test_a_point_whose_cells_are_all_valid_is_complete() -> None:
     assert all(key.startswith("sweeps/run1/mns64_kvfp8_pcon/") for key in s3.keys)
 
 
-def test_a_missing_cell_makes_the_point_incomplete() -> None:
+def test_an_absent_cell_makes_the_point_incomplete() -> None:
     s3 = _MissingOneS3("pshare50_burst1.0_mc128.json")
+
+    assert _probe(s3) is False
+
+
+def test_an_access_denied_cell_aborts_the_probe() -> None:
+    # A 403 is a failure re-running cannot fix, so the probe must not degrade it to a
+    # re-run — it propagates and aborts the sweep at the first cell it denies.
+    s3 = _ForbiddenOneS3("pshare10_burst1.0_mc64.json")
+
+    with pytest.raises(ClientError):
+        _probe(s3)
+
+
+def test_a_transiently_unreachable_cell_makes_the_point_incomplete() -> None:
+    # A network blip may clear, so the point re-runs rather than aborting the sweep.
+    s3 = _UnreachableOneS3("pshare10_burst1.0_mc64.json")
 
     assert _probe(s3) is False
 
@@ -167,12 +221,11 @@ def test_the_probe_stops_at_the_first_pending_cell() -> None:
     assert len(s3.keys) == 1
 
 
-def test_an_unreadable_cell_is_logged_with_its_key_and_error(
+def test_a_transient_read_failure_is_logged_with_its_key_and_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # A download failure must not be swallowed silently: a systematic cause (auth denial,
-    # endpoint typo, null client) has to surface in the sweep's log, not just re-run.
-    s3 = _MissingOneS3("pshare10_burst1.0_mc64.json")
+    # A transient failure is re-run, not swallowed: it logs so a persistent one is visible.
+    s3 = _UnreachableOneS3("pshare10_burst1.0_mc64.json")
 
     with caplog.at_level(
         logging.WARNING, logger="slipstream_bench.orchestration.completion"
@@ -181,4 +234,4 @@ def test_an_unreadable_cell_is_logged_with_its_key_and_error(
 
     assert "could not be read" in caplog.text
     assert "pshare10_burst1.0_mc64.json" in caplog.text
-    assert "FileNotFoundError" in caplog.text
+    assert "EndpointConnectionError" in caplog.text
