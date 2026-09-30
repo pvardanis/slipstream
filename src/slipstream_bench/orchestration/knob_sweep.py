@@ -1,0 +1,106 @@
+"""The parent knob-sweep flow: one point sweep per engine point (ADR-0015).
+
+The whole outer loop as one Prefect flow. It iterates the grid's engine points and, per
+point, redeploys the GPU, scrapes the concurrency ceiling, then runs the existing
+per-point :func:`slipstream_bench.orchestration.flow.run_point_sweep` as a nested
+subflow — the per-point flow is wrapped, not rewritten. A resume skips a point whose
+cells already hold valid measurements (the ~20-minute GPU redeploy is not re-paid to run
+zero cells), and a ceiling scrape that finds nothing raises loudly rather than running
+the point's ladder against a garbage ceiling.
+
+The collaborators — the GPU redeploy, the ceiling scrape, the per-point sweep, and the
+redeploy-skip predicate — are injected as callables. The flow only sequences them, so
+the whole path is testable against fakes under ``prefect_test_harness()``; production
+wires the real Prefect tasks at the composition root (the ``slipstream-orchestrate``
+CLI). Parent->child lineage replaces the ``run={run_group}`` tag ``run_point_sweep``
+stamped when the loop lived in bash.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+
+from prefect import flow
+
+from slipstream_bench.sweep.aggregation import EnginePoint
+
+# The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
+# sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
+DeployFn = Callable[[EnginePoint], None]
+
+# The concurrency-ceiling scrape run after a redeploy. Returns the scraped ceiling and
+# raises CeilingScrapeError when the engine reported none (ADR-0015 fail-loud).
+ScrapeFn = Callable[[EnginePoint], str]
+
+# One engine point's Tier-2 sweep (``run_point_sweep`` in production), returning the S3
+# pointer for each of its cells.
+PointSweepFn = Callable[[EnginePoint], list[str]]
+
+# The redeploy-skip gate: whether the point still has cells to run (ADR-0015). False
+# when every cell already holds a valid measurement, so the point is skipped entirely.
+PendingCellsFn = Callable[[EnginePoint], bool]
+
+
+def run_knob_sweep(
+    *,
+    points: Sequence[EnginePoint],
+    deploy_fn: DeployFn,
+    scrape_fn: ScrapeFn,
+    point_sweep_fn: PointSweepFn,
+    has_pending_cells: PendingCellsFn,
+) -> list[str]:
+    """Drive one point sweep per engine point, returning every driven cell's pointer.
+
+    :param points: the grid's engine points, in enumeration order.
+    :param deploy_fn: redeploy the GPU for a point's knobs (Tier-1).
+    :param scrape_fn: scrape the concurrency ceiling after a redeploy; raises when the
+        engine reported none, so the point's ladder never runs against a garbage ceiling.
+    :param point_sweep_fn: run one point's Tier-2 cells as a nested subflow.
+    :param has_pending_cells: whether a point still has cells to run; a point with none
+        skips its redeploy and scrape — the two expensive tasks — but still runs its
+        resumable sweep, which returns its cached pointers (resume).
+    :return: the S3 pointer for each cell of every point, in order.
+    """
+
+    # The @flow wraps a zero-argument closure, not run_knob_sweep itself, so the injected
+    # collaborators stay out of the flow's parameter set: Prefect runs every flow
+    # parameter through serialize_parameters to persist the flow-run record, and a live
+    # callable (a bound boto3/kubectl task) does not survive that. Mirrors run_point_sweep.
+    @flow(name="knob-sweep")
+    def _flow() -> list[str]:
+        return _drive_knob_sweep(
+            points=points,
+            deploy_fn=deploy_fn,
+            scrape_fn=scrape_fn,
+            point_sweep_fn=point_sweep_fn,
+            has_pending_cells=has_pending_cells,
+        )
+
+    return _flow()
+
+
+def _drive_knob_sweep(
+    *,
+    points: Sequence[EnginePoint],
+    deploy_fn: DeployFn,
+    scrape_fn: ScrapeFn,
+    point_sweep_fn: PointSweepFn,
+    has_pending_cells: PendingCellsFn,
+) -> list[str]:
+    """Iterate the points, redeploying and scraping each pending one, then sweeping all.
+
+    The redeploy and scrape — the ~20-minute GPU rollout and its ceiling read — are gated
+    on the point having pending cells, so a resume never re-pays them to run zero cells
+    (ADR-0015). The sweep runs for every point regardless: for a fully-cached point it
+    hits the cache and re-executes nothing, returning the point's cached pointers.
+    """
+    pointers: list[str] = []
+    for point in points:
+        if has_pending_cells(point):
+            deploy_fn(point)
+            # Scrape for its raise-on-empty side effect: a point whose engine reported no
+            # ceiling must fail before its ladder runs (ADR-0015). The grid fixes the
+            # ladder shape, so the scraped value is recorded by the task, not threaded here.
+            scrape_fn(point)
+        pointers.extend(point_sweep_fn(point))
+    return pointers
