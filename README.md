@@ -220,6 +220,19 @@ gh variable set AWS_REGION \
   --body "$(terraform -chdir=terraform/bootstrap output -raw region)"
 ```
 
+The [`orchestration-image`](.github/workflows/orchestration-image.yml) workflow —
+the same OIDC, idempotent, sole-`main`-publisher scheme for the Prefect-worker
+image — reads its own push role and ECR repository from a second pair of
+variables (`AWS_REGION` is shared), fed from the bootstrap stack's orchestration
+outputs:
+
+```sh
+gh variable set AWS_ORCHESTRATION_IMAGE_PUSH_ROLE_ARN \
+  --body "$(terraform -chdir=terraform/bootstrap output -raw orchestration_image_push_role_arn)"
+gh variable set ORCHESTRATION_ECR_REPOSITORY \
+  --body "$(terraform -chdir=terraform/bootstrap output -raw orchestration_image_repo_url | cut -d/ -f2-)"
+```
+
 Bootstrapping under a different repo (a fork, a rename, or a new owner) also
 needs the OIDC trust to match that repo. The trust subject uses GitHub's
 immutable owner/repo IDs, so set `github_oidc_sub_prefix` in

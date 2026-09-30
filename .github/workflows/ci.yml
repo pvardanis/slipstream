@@ -138,6 +138,39 @@ jobs:
         if: steps.filter.outputs.bench == 'true'
         run: bench/build-image.sh
 
+  orchestration-image-build:
+    name: orchestration image build (no push)
+    # PR-only, same rationale as bench-image-build: prove the Dockerfile still
+    # builds before merge with no credentials; a push to main publishes via
+    # orchestration-image.yml, which rebuilds anyway.
+    if: github.event_name == 'pull_request'
+    needs: [lint, python, terraform, shell-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Only the orchestration image's inputs make this build worth running. The
+      # path list mirrors the content-tag pathspec in orchestration-image.yml
+      # (Derive image tags) — keep the two in sync.
+      - name: Detect orchestration image input changes
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            orchestration:
+              - 'orchestration/Dockerfile'
+              - 'src/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.dockerignore'
+      # Build succeeding is the check: a broken Dockerfile or an unresolvable
+      # locked dependency fails the PR. No tag, no push.
+      - name: Build the orchestration image (no push)
+        if: steps.filter.outputs.orchestration == 'true'
+        run: docker build --platform linux/amd64 -f orchestration/Dockerfile .
+
   shell-tests:
     name: shell unit tests
     runs-on: ubuntu-latest

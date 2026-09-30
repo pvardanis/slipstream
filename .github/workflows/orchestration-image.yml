@@ -1,0 +1,168 @@
+# Cloud CI for the orchestration image (ADR-0015 unattended-sweep): the lean Prefect-worker image the eks
+# worker layer runs (terraform/eks/worker.tf). Like bench-image.yml it is the sole holder
+# of AWS access — GitHub OIDC to a dedicated bootstrap push role, scoped to the
+# orchestration ECR repo alone (terraform/bootstrap), so a compromised orchestration build
+# cannot push the bench-client image — and the sole publisher of the floating `main`
+# pointer. Kept apart from ci.yml so that gate stays no-cloud (ADR-0002 No-cloud tier). The build
+# is content-hash idempotent: it publishes only when the content tag is absent from ECR.
+name: orchestration-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# OIDC needs a token to exchange for the role; checkout needs read. The push role's trust
+# is scoped to refs/heads/main, so a push publishes and a dispatch from a non-main branch
+# fails at the OIDC exchange rather than publishing.
+permissions:
+  contents: read
+  id-token: write
+
+# Never cancel an in-flight publish: a cancelled push mid-layer leaves a partial upload.
+# Serialize instead so two main builds cannot race the floating pointer.
+concurrency:
+  group: orchestration-image
+  cancel-in-progress: false
+
+env:
+  # Region and repository name come from repo variables set from the bootstrap stack's
+  # `region` and `orchestration_image_repo_url` outputs (see README), so they track the
+  # infrastructure terraform created rather than restating its values. The registry host
+  # is derived from the ECR login, so no account id is hardcoded here.
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ORCHESTRATION_ECR_REPOSITORY }}
+
+jobs:
+  publish:
+    name: build, scan & push (content-hash idempotent)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The content tag is the short sha of the last commit touching the image's
+          # inputs, so the tag derivation needs full history rather than a shallow clone.
+          fetch-depth: 0
+
+      - name: Derive image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          # Fail loud early if the region repo variable is unset, before it reaches
+          # configure-aws-credentials as a vague error (mirrors the ECR_REPOSITORY guard
+          # in the probe step below).
+          : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
+          # The immutable content tag is the short hash of the last commit that touched
+          # any image input — the package source, its locked dependency set, and the build
+          # definition. A change to any of these is what a new content tag must capture;
+          # a change elsewhere (docs, terraform) leaves the image identical, so the probe
+          # below finds the tag present and skips the rebuild. Assign before writing: a
+          # failing substitution inside an echo argument does not trip `set -e`, so a bare
+          # assignment is what makes an error here fail the job rather than write an empty
+          # tag to GITHUB_OUTPUT. The width is pinned with --abbrev so the immutable tag for a
+          # commit stays constant: git's default short hash grows with history, which would
+          # otherwise re-tag the same content and defeat the presence probe below.
+          sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
+            src pyproject.toml uv.lock orchestration/Dockerfile .dockerignore)"
+          if [[ -z "${sha_tag}" ]]; then
+            echo "::error::could not derive a content tag — no commit touches the image inputs"
+            exit 1
+          fi
+          {
+            echo "sha_tag=${sha_tag}"
+            echo "main_tag=main"
+          } >>"${GITHUB_OUTPUT}"
+
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ORCHESTRATION_IMAGE_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Skip when the content tag is already published
+        id: probe
+        env:
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+          # Fail loud with a fix hint if the repo variable is unset/empty rather than
+          # letting an empty name reach describe-images as a vague API error.
+          : "${ECR_REPOSITORY:?repo variable ORCHESTRATION_ECR_REPOSITORY is empty — set it from the bootstrap output (see README)}"
+
+          # Distinguish "tag absent" (build) from a real API error (fail). A bare
+          # describe-images failure would otherwise read as absent and trigger a rebuild
+          # against, e.g., a missing repo or expired auth.
+          set +e
+          probe="$(aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${SHA_TAG}" 2>&1)"
+          status=$?
+          set -e
+          if [[ "${status}" -eq 0 ]]; then
+            echo "content tag ${SHA_TAG} already in ECR; nothing to build"
+            echo "present=true" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # Match the parenthesized error code the CLI prints, not a bare substring, so an
+          # unrelated error whose text happens to contain the token is not misread as absent.
+          if ! grep -q '(ImageNotFoundException)' <<<"${probe}"; then
+            echo "::error::ECR describe-images failed for ${SHA_TAG}"
+            echo "${probe}" >&2
+            exit "${status}"
+          fi
+          echo "content tag ${SHA_TAG} absent; building"
+          echo "present=false" >>"${GITHUB_OUTPUT}"
+
+      - name: Build the content image
+        if: steps.probe.outputs.present == 'false'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+          MAIN_TAG: ${{ steps.tags.outputs.main_tag }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${ECR_REPOSITORY}"
+          # Build once, tagged with both the content tag and the floating pointer; the two
+          # pushes below share this one build. The worker nodes are amd64, so pin the build
+          # platform rather than inheriting the runner's.
+          docker build --platform linux/amd64 \
+            -f orchestration/Dockerfile \
+            -t "${image}:${SHA_TAG}" \
+            -t "${image}:${MAIN_TAG}" \
+            .
+
+      # Gate the publish on the image being clean of fixable high/critical CVEs: a
+      # vulnerable image must never reach ECR where the worker would pull it. Unfixed
+      # CVEs (no upstream patch yet) do not block — they cannot be actioned by a rebuild.
+      - name: Scan the content image
+        if: steps.probe.outputs.present == 'false'
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tags.outputs.sha_tag }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Publish the scanned image
+        if: steps.probe.outputs.present == 'false'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+          MAIN_TAG: ${{ steps.tags.outputs.main_tag }}
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${ECR_REPOSITORY}"
+          # Publish the floating pointer first, then the immutable content tag. The content
+          # tag is pushed last because the existence probe keys on it: a run that dies
+          # before the content-tag push leaves it absent, so the next run rebuilds and
+          # republishes both, rather than short-circuiting on a present content tag while
+          # `main` never got repointed.
+          docker push "${image}:${MAIN_TAG}"
+          docker push "${image}:${SHA_TAG}"
