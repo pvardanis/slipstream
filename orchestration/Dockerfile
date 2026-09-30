@@ -16,7 +16,7 @@
 # advances them.
 
 # uv 0.9.30-python3.11-bookworm-slim
-FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS builder
+FROM ghcr.io/astral-sh/uv@sha256:a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711 AS builder
 
 # Byte-compile on install so the worker doesn't pay first-import compilation, and copy
 # packages into the venv rather than symlinking the uv cache, so the venv is self-contained
