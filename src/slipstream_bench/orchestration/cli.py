@@ -213,6 +213,27 @@ class KnobSweepInputs:
     commercial: bool = False
     sweep_args_b64: str = ""
 
+    def __post_init__(self) -> None:
+        """Reject inputs that would address a run with an empty key or redeploy nothing.
+
+        Frozen, so validating on construction makes the value valid for its whole life.
+        The keying and addressing fields — and the manifest the redeploy renders — must
+        be non-empty, so a misconfigured sweep fails here, before its first ~20-minute
+        GPU redeploy, rather than at the S3 probe or silently (an empty ``run`` would
+        pass ``SweepContext``'s own check yet key cells under ``sweeps//<slug>/``).
+        """
+        for name in (
+            "manifest_text",
+            "run",
+            "digest",
+            "instance_id",
+            "image_ref",
+            "bucket",
+            "model",
+        ):
+            if not getattr(self, name).strip():
+                raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
+
 
 def build_knob_sweep_collaborators(
     inputs: KnobSweepInputs,

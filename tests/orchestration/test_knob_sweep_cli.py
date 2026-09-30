@@ -72,6 +72,9 @@ spec:
 
 _CEILING_LOG = "Maximum concurrency for 4,096 tokens per request: 12.50x"
 _POINT = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
+_OTHER_POINT = EnginePoint(
+    max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False
+)
 
 
 class _FakeKubectl:
@@ -153,10 +156,10 @@ def test_scrape_fn_raises_loud_when_the_log_carries_no_ceiling(tmp_path: Path) -
 def test_point_sweep_fn_runs_under_the_points_run_id_and_results_subdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    captured: dict[str, Any] = {}
+    calls: list[dict[str, Any]] = []
 
     def _fake_run(**kwargs: Any) -> list[str]:
-        captured.update(kwargs)
+        calls.append(kwargs)
         return [f"ptr:{kwargs['context'].point_slug}"]
 
     monkeypatch.setattr(cli_module, "run_point_sweep", _fake_run)
@@ -164,14 +167,16 @@ def test_point_sweep_fn_runs_under_the_points_run_id_and_results_subdir(
         tmp_path, kubectl=_FakeKubectl()
     )
 
-    pointers = point_sweep_fn(_POINT)
+    # Two distinct points: each nests under the sweep's shared run and lands in its own
+    # per-point subdir, so their identically-named tier-2 cells never collide on disk.
+    assert point_sweep_fn(_POINT) == [f"ptr:{_POINT.slug()}"]
+    assert point_sweep_fn(_OTHER_POINT) == [f"ptr:{_OTHER_POINT.slug()}"]
 
-    assert pointers == [f"ptr:{_POINT.slug()}"]
-    context = captured["context"]
-    # The point nests under the sweep's shared run, and its cells land in a per-point
-    # subdir so two points' identically-named tier-2 cells never collide on disk.
-    assert context.run_id == f"run1/{_POINT.slug()}"
-    assert captured["results_dir"] == tmp_path / _POINT.slug()
+    assert calls[0]["context"].run_id == f"run1/{_POINT.slug()}"
+    assert calls[0]["results_dir"] == tmp_path / _POINT.slug()
+    assert calls[1]["context"].run_id == f"run1/{_OTHER_POINT.slug()}"
+    assert calls[1]["results_dir"] == tmp_path / _OTHER_POINT.slug()
+    assert calls[0]["results_dir"] != calls[1]["results_dir"]
 
 
 def test_has_pending_cells_is_the_negation_of_point_is_complete(
@@ -214,6 +219,31 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return model_yaml, grid_yaml, manifest
 
 
+@pytest.mark.parametrize("field", ["manifest_text", "run", "digest", "bucket", "model"])
+def test_empty_keying_input_is_rejected_before_the_redeploy(
+    tmp_path: Path, field: str
+) -> None:
+    # An empty keying field (or manifest) would address cells under a broken key or
+    # redeploy nothing; rejecting it on construction fails the sweep before its first
+    # ~20-minute GPU redeploy, not at the S3 probe or silently.
+    kwargs: dict[str, Any] = {
+        "grid": _grid(),
+        "grid_path": Path("sweep-grid.yaml"),
+        "manifest_text": _MANIFEST,
+        "results_dir": tmp_path,
+        "run": "run1",
+        "digest": "deadbeef",
+        "instance_id": "i-1",
+        "image_ref": "repo:tag",
+        "bucket": "bench-bucket",
+        "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    }
+    kwargs[field] = ""
+
+    with pytest.raises(ValueError, match=field):
+        KnobSweepInputs(**kwargs)
+
+
 def test_knob_sweep_command_is_registered() -> None:
     names = [command.name for command in app.registered_commands]
 
@@ -227,7 +257,13 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     monkeypatch.setattr(cli_module, "build_kubectl", lambda: _FakeKubectl())
     monkeypatch.setattr(cli_module, "build_ssm_client", lambda _region: object())
     monkeypatch.setattr(cli_module, "build_s3_client", lambda _region: object())
-    monkeypatch.setattr(cli_module, "cell_task", lambda _bucket, *, retries=0: object())
+    task_args: dict[str, Any] = {}
+
+    def _fake_cell_task(bucket: str, *, retries: int = 0) -> object:
+        task_args.update(bucket=bucket, retries=retries)
+        return object()
+
+    monkeypatch.setattr(cli_module, "cell_task", _fake_cell_task)
     captured: dict[str, Any] = {}
 
     def _fake_run(**kwargs: Any) -> list[str]:
@@ -260,6 +296,8 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
             str(manifest),
             "--results-dir",
             str(tmp_path / "results"),
+            "--retries",
+            "2",
         ],
     )
 
@@ -267,3 +305,9 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     assert "pshare10_burst1.0_mc64.json" in result.output
     # The grid holds one engine point, so the sweep is driven over exactly it.
     assert [point.slug() for point in captured["points"]] == [_POINT.slug()]
+    # All four collaborators reach the flow under their expected keywords, callable — so
+    # a keyword-name mismatch or a dropped collaborator at the command->flow seam fails.
+    for name in ("deploy_fn", "scrape_fn", "point_sweep_fn", "has_pending_cells"):
+        assert callable(captured[name]), name
+    # The cell task is built on the run's bucket with the command's retries threaded.
+    assert task_args == {"bucket": "bench-bucket", "retries": 2}
