@@ -18,7 +18,7 @@ from slipstream_bench.sweep.grid import (
     SweepGrid,
     SweepGridError,
     build_point_sweep_config,
-    get_engine_deploy_knobs,
+    get_engine_args,
     list_engine_points,
     load_grid,
     render_burstiness,
@@ -262,36 +262,36 @@ def test_list_engine_points_shares_render_points_enumeration(tmp_path: Path) -> 
     assert slugs_from_points == slugs_from_tsv
 
 
-def test_deploy_knobs_resolve_a_points_manifest_args(tmp_path: Path) -> None:
-    """A caching-on fp8 point renders max-num-seqs, the fp8 token, and the on flag."""
+def test_engine_args_resolve_a_points_vllm_args(tmp_path: Path) -> None:
+    """A caching-on fp8 point resolves max-num-seqs, the fp8 token, and the on flag."""
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
     point = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 
-    knobs = get_engine_deploy_knobs(grid, point)
+    engine_args = get_engine_args(grid, point)
 
-    assert knobs.max_num_seqs == 64
-    assert knobs.kv_engine_token == "fp8"
-    assert knobs.prefix_caching_flag == "--enable-prefix-caching"
+    assert engine_args.max_num_seqs == 64
+    assert engine_args.kv_engine_token == "fp8"
+    assert engine_args.prefix_caching_flag == "--enable-prefix-caching"
 
 
-def test_deploy_knobs_map_fp16_and_the_caching_off_flag(tmp_path: Path) -> None:
-    """fp16 renders vLLM's float16 token; the off arm renders the disable flag."""
+def test_engine_args_map_fp16_and_the_caching_off_flag(tmp_path: Path) -> None:
+    """fp16 resolves vLLM's float16 token; the off arm resolves the disable flag."""
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
     point = EnginePoint(max_num_seqs=32, kv_cache_dtype="fp16", prefix_caching=False)
 
-    knobs = get_engine_deploy_knobs(grid, point)
+    engine_args = get_engine_args(grid, point)
 
-    assert knobs.kv_engine_token == "float16"
-    assert knobs.prefix_caching_flag == "--no-enable-prefix-caching"
+    assert engine_args.kv_engine_token == "float16"
+    assert engine_args.prefix_caching_flag == "--no-enable-prefix-caching"
 
 
-def test_deploy_knobs_reject_a_point_absent_from_the_grid(tmp_path: Path) -> None:
-    """A point the grid does not sweep never renders a manifest — it raises."""
+def test_engine_args_reject_a_point_absent_from_the_grid(tmp_path: Path) -> None:
+    """A point the grid does not sweep never resolves args — it raises."""
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
     absent = EnginePoint(max_num_seqs=999, kv_cache_dtype="fp8", prefix_caching=True)
 
     with pytest.raises(SweepGridError):
-        get_engine_deploy_knobs(grid, absent)
+        get_engine_args(grid, absent)
 
 
 def test_ladder_emits_the_max_concurrency_rungs(tmp_path: Path) -> None:
