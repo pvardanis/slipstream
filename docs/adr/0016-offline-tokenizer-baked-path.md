@@ -1,6 +1,6 @@
 <!-- ADR recording why the bench client resolves its prompt-synthesis tokenizer from a snapshot baked into the image at a fixed path rather than pinning a Hugging Face revision at run time: `vllm bench serve` (the client) has no revision flag — it resolves a tokenizer only by name or local path — so the revision is pinned at build time by baking the model.yaml-pinned snapshot with save_pretrained to a stable directory, the image names that directory through an env var the CLI reads, and HF_HUB_OFFLINE forbids any run-time Hub call so a miss raises instead of silently fetching a different revision. Sharpens ADR-0012 §Amendment (the container runs one cell) and complements ADR-0006 (server-side --revision). Issue #142, PR #172. -->
 
-# ADR-0015: The bench client's offline tokenizer is baked to a fixed path, not pinned by a runtime revision
+# ADR-0016: The bench client's offline tokenizer is baked to a fixed path, not pinned by a runtime revision
 
 - Status: Accepted
 - Date: 2026-09-29
