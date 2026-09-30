@@ -105,6 +105,36 @@ prefect-storage-down:
       fi
     done
 
+# Register the knob-sweep deployment on the process work pool, so a sweep is triggered
+# with `prefect deployment run knob-sweep/knob-sweep --param run_id=... --param
+# instance_id=...` and picked up by the in-cluster worker (ADR-0015). The worker runs the
+# baked orchestration image, so the deployment stores a module-path entrypoint resolved by
+# import — no source is fetched and no image is built for the process pool. Registration
+# hits the in-cluster Prefect API over a transient port-forward (reaped on exit), the same
+# way `prefect-up` creates the pool; run it after `prefect-up`. The cluster-stable inputs
+# (region, results bucket, bench-client image) are read from terraform and become the
+# deployment's default parameters; run_id and instance_id are supplied per run at trigger.
+[group('prefect')]
+prefect-register:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignments so a failed output lookup aborts rather than registering a
+    # deployment against an empty region, bucket, or image ref (see `bench`).
+    region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    # Forward bench_image_tag into the nested call: a command-line override does not cross
+    # into a child `just`, so an unforwarded pin would fall back to the floating main tag.
+    image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
+    # Reach the API over a transient port-forward (reaped on exit), so registration needs
+    # no public endpoint.
+    source bench/prefect-portforward.sh
+    prefect_api_portforward {{ eks_dir }} {{ prefect_port }}
+    uv run --extra orchestration slipstream-orchestrate register-knob-sweep \
+      --region "${region}" \
+      --bucket "${bucket}" \
+      --image-ref "${image}" \
+      --work-pool {{ prefect_work_pool }}
+
 # Port-forward the Prefect UI/API to localhost and hold it open (Ctrl-C to stop).
 # No public endpoint — this is the only way in (ADR-0015 amendment). Visit
 # http://localhost:{{ prefect_port }} for the UI.

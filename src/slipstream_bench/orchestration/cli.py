@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from prefect import Task
+from prefect import Task, flow
+from prefect.deployments.runner import EntrypointType
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
@@ -36,7 +37,7 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     PendingCellsFn,
     PointSweepFn,
     ScrapeFn,
-    run_knob_sweep,
+    drive_knob_sweep,
 )
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
@@ -253,7 +254,7 @@ def build_knob_sweep_collaborators(
     :param s3_client: the boto3 S3 client the cell downloads and the pending probe read.
     :param task: the cell task each point sweep caches and gates its cells with.
     :return: the (deploy, scrape, point-sweep, has-pending-cells) callables, in the order
-        :func:`run_knob_sweep` takes them.
+        :func:`drive_knob_sweep` takes them.
     """
     deploy_fn: DeployFn = partial(
         deploy_gpu_point,
@@ -334,6 +335,86 @@ def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepCo
     )
 
 
+@flow(name="knob-sweep")
+def knob_sweep_flow(
+    *,
+    run_id: str,
+    instance_id: str,
+    region: str,
+    bucket: str,
+    image_ref: str,
+    model_yaml: Path,
+    sweep_grid: Path,
+    vllm_manifest: Path,
+    results_dir: Path,
+    retries: int = 0,
+    commercial: bool = False,
+    sweep_args_b64: str = "",
+) -> list[str]:
+    """Drive the whole two-tier knob sweep as one Prefect flow (ADR-0015).
+
+    The composition root and the flow the deployment registers: it enumerates the grid's
+    engine points, wires the real in-cluster and per-point collaborators from the live
+    transports, and sequences them so one flow run redeploys the GPU, scrapes the ceiling,
+    and runs each point's Tier-2 ladder — each point sweep nested under this parent run. A
+    resume re-invoked with the same inputs skips a point whose cells already hold valid
+    measurements, so its ~20-minute redeploy and scrape are not re-paid.
+
+    The parameters are all serializable (Prefect persists them through
+    ``serialize_parameters``); the live handles are built inside the flow, never passed in.
+    The three config paths are read on the worker at run time, so they name in-image files.
+
+    :param run_id: shared run the points nest under (``<run-id>/<point-slug>``).
+    :param instance_id: bench host the cells run on.
+    :param region: AWS region of the host and bucket.
+    :param bucket: results bucket (RESULTS_BUCKET).
+    :param image_ref: bench-client image reference the cells run.
+    :param model_yaml: model.yaml — the served model id and a digest input.
+    :param sweep_grid: sweep-grid.yaml — the engine points, their cells, a digest input.
+    :param vllm_manifest: k8s/vllm-gpu.yaml — the redeploy template and serving image ref.
+    :param results_dir: directory each point's cells download under.
+    :param retries: opt-in cell retries for a transient transport fault.
+    :param commercial: run the commercial arm (needs a tokenizer).
+    :param sweep_args_b64: extra load-cell flags, base64-encoded.
+    :return: the S3 pointer for each cell of every point, in order.
+    """
+    grid = load_grid(sweep_grid)
+    inputs = KnobSweepInputs(
+        grid=grid,
+        grid_path=sweep_grid,
+        manifest_path=vllm_manifest,
+        results_dir=results_dir,
+        run=run_id,
+        digest=DigestInputs(
+            model_yaml=model_yaml,
+            sweep_grid=sweep_grid,
+            vllm_manifest=vllm_manifest,
+        ).digest(),
+        instance_id=instance_id,
+        image_ref=image_ref,
+        bucket=bucket,
+        model=read_model_id(model_yaml),
+        commercial=commercial,
+        sweep_args_b64=sweep_args_b64,
+    )
+    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
+        build_knob_sweep_collaborators(
+            inputs,
+            kubectl=build_kubectl(),
+            ssm_client=build_ssm_client(region),
+            s3_client=build_s3_client(region),
+            task=cell_task(bucket, retries=retries),
+        )
+    )
+    return drive_knob_sweep(
+        points=list_engine_points(grid),
+        deploy_fn=deploy_fn,
+        scrape_fn=scrape_fn,
+        point_sweep_fn=point_sweep_fn,
+        has_pending_cells=has_pending_cells,
+    )
+
+
 @app.command("knob-sweep")
 def knob_sweep(
     *,
@@ -382,51 +463,106 @@ def knob_sweep(
         str, typer.Option(help="Extra load-cell flags, base64-encoded.")
     ] = "",
 ) -> None:
-    """Drive the whole two-tier knob sweep unattended, printing every cell's S3 pointer.
+    """Drive the knob sweep by hand, printing every cell's S3 pointer.
 
-    The composition root of the parent flow (ADR-0015): enumerates the grid's engine
-    points, wires the real in-cluster and per-point collaborators, and runs the sweep so
-    one flow run redeploys the GPU, scrapes the ceiling, and runs each point's Tier-2
-    ladder. A resume re-invoked with the same inputs skips a point whose cells already
-    hold valid measurements — its ~20-minute redeploy and scrape are not re-paid.
+    Runs :func:`knob_sweep_flow` directly against local files — the same flow the EKS
+    worker runs from its registered deployment, driven from the workstation for a
+    one-off. A resume re-invoked with the same inputs skips a point whose cells already
+    hold valid measurements.
     """
-    grid = load_grid(sweep_grid)
-    inputs = KnobSweepInputs(
-        grid=grid,
-        grid_path=sweep_grid,
-        manifest_path=vllm_manifest,
-        results_dir=results_dir,
-        run=run_id,
-        digest=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=sweep_grid,
-            vllm_manifest=vllm_manifest,
-        ).digest(),
+    for uri in knob_sweep_flow(
+        run_id=run_id,
         instance_id=instance_id,
-        image_ref=image_ref,
+        region=region,
         bucket=bucket,
-        model=read_model_id(model_yaml),
+        image_ref=image_ref,
+        model_yaml=model_yaml,
+        sweep_grid=sweep_grid,
+        vllm_manifest=vllm_manifest,
+        results_dir=results_dir,
+        retries=retries,
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
-    )
-    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
-        build_knob_sweep_collaborators(
-            inputs,
-            kubectl=build_kubectl(),
-            ssm_client=build_ssm_client(region),
-            s3_client=build_s3_client(region),
-            task=cell_task(bucket, retries=retries),
-        )
-    )
-    cell_result_uris = run_knob_sweep(
-        points=list_engine_points(grid),
-        deploy_fn=deploy_fn,
-        scrape_fn=scrape_fn,
-        point_sweep_fn=point_sweep_fn,
-        has_pending_cells=has_pending_cells,
-    )
-    for uri in cell_result_uris:
+    ):
         typer.echo(uri)
+
+
+@app.command("register-knob-sweep")
+def register_knob_sweep(
+    *,
+    region: Annotated[str, typer.Option(help="AWS region of the host and bucket.")],
+    bucket: Annotated[str, typer.Option(help="Results bucket (RESULTS_BUCKET).")],
+    image_ref: Annotated[str, typer.Option(help="Bench-client image reference.")],
+    work_pool: Annotated[
+        str, typer.Option(help="Process work pool the sweep worker polls.")
+    ] = "sweep-pool",
+    model_yaml: Annotated[
+        Path, typer.Option(help="In-image path to model.yaml, read on the worker.")
+    ] = Path("/app/model.yaml"),
+    sweep_grid: Annotated[
+        Path, typer.Option(help="In-image path to sweep-grid.yaml, read on the worker.")
+    ] = Path("/app/bench/sweep-grid.yaml"),
+    vllm_manifest: Annotated[
+        Path,
+        typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
+    ] = Path("/app/k8s/vllm-gpu.yaml"),
+    results_dir: Annotated[
+        Path, typer.Option(help="In-image directory each point's cells download under.")
+    ] = Path("/app/results"),
+    retries: Annotated[
+        int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
+    ] = 0,
+    commercial: Annotated[
+        bool, typer.Option(help="Run the commercial arm (needs a tokenizer).")
+    ] = False,
+    sweep_args_b64: Annotated[
+        str, typer.Option(help="Extra load-cell flags, base64-encoded.")
+    ] = "",
+) -> None:
+    """Register the knob-sweep deployment on the process work pool (ADR-0015).
+
+    Creates the deployment the operator triggers with ``prefect deployment run
+    knob-sweep/knob-sweep --param run_id=... --param instance_id=...``. The worker runs
+    the baked orchestration image, so the entrypoint is stored as a module path resolved
+    by import (``EntrypointType.MODULE_PATH``) — no source tree is fetched and no laptop
+    path leaks into the deployment — and no image is built (the process worker runs its
+    own container). The cluster-stable inputs become the deployment's default parameters;
+    ``run_id`` and ``instance_id`` are supplied per run at trigger time.
+
+    Run over a port-forward to the in-cluster Prefect API (see ``just prefect-register``).
+
+    :param region: AWS region of the host and bucket.
+    :param bucket: results bucket (RESULTS_BUCKET).
+    :param image_ref: bench-client image reference the cells run.
+    :param work_pool: process work pool the sweep worker polls.
+    :param model_yaml: in-image path to model.yaml, read on the worker at run time.
+    :param sweep_grid: in-image path to sweep-grid.yaml, read on the worker at run time.
+    :param vllm_manifest: in-image path to k8s/vllm-gpu.yaml, read on the worker.
+    :param results_dir: in-image directory each point's cells download under.
+    :param retries: opt-in cell retries for a transient transport fault.
+    :param commercial: run the commercial arm (needs a tokenizer).
+    :param sweep_args_b64: extra load-cell flags, base64-encoded.
+    """
+    deployment_id = knob_sweep_flow.deploy(
+        name="knob-sweep",
+        work_pool_name=work_pool,
+        entrypoint_type=EntrypointType.MODULE_PATH,
+        build=False,
+        push=False,
+        parameters={
+            "region": region,
+            "bucket": bucket,
+            "image_ref": image_ref,
+            "model_yaml": str(model_yaml),
+            "sweep_grid": str(sweep_grid),
+            "vllm_manifest": str(vllm_manifest),
+            "results_dir": str(results_dir),
+            "retries": retries,
+            "commercial": commercial,
+            "sweep_args_b64": sweep_args_b64,
+        },
+    )
+    typer.echo(f"registered knob-sweep deployment {deployment_id}")
 
 
 if __name__ == "__main__":
