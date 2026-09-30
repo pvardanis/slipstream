@@ -12,8 +12,8 @@ The collaborators — the GPU redeploy, the ceiling scrape, the per-point sweep,
 redeploy-skip predicate — are injected as callables. The flow only sequences them, so
 the whole path is testable against fakes under ``prefect_test_harness()``; production
 wires the real Prefect tasks at the composition root (the ``slipstream-orchestrate``
-CLI). Parent->child lineage replaces the ``run={run_group}`` tag ``run_point_sweep``
-stamped when the loop lived in bash.
+CLI). Each point sweep runs nested under this one parent flow run, so the point sweeps
+of a knob sweep share a parent->child lineage in the Prefect UI.
 """
 
 from __future__ import annotations
@@ -28,9 +28,11 @@ from slipstream_bench.sweep.aggregation import EnginePoint
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
 DeployFn = Callable[[EnginePoint], None]
 
-# The concurrency-ceiling scrape run after a redeploy. Returns the scraped ceiling and
-# raises CeilingScrapeError when the engine reported none (ADR-0015 fail-loud).
-ScrapeFn = Callable[[EnginePoint], str]
+# The concurrency-ceiling scrape run after a redeploy. Returns nothing: the flow sequences
+# it for its raise-on-empty side effect and raises CeilingScrapeError when the engine
+# reported none (ADR-0015 fail-loud). The grid fixes the ladder shape, so the scraped
+# value is recorded by the task, not threaded through the flow.
+ScrapeFn = Callable[[EnginePoint], None]
 
 # One engine point's Tier-2 sweep (``run_point_sweep`` in production), returning the S3
 # pointer for each of its cells.

@@ -41,11 +41,10 @@ def _collaborators(
     def deploy_fn(point: EnginePoint) -> None:
         events.append(f"deploy:{point.slug()}")
 
-    def scrape_fn(point: EnginePoint) -> str:
+    def scrape_fn(point: EnginePoint) -> None:
         events.append(f"scrape:{point.slug()}")
         if empty_ceiling is not None and point.slug() in empty_ceiling:
             raise CeilingScrapeError(f"no ceiling scraped for {point.slug()}")
-        return "ceiling"
 
     def point_sweep_fn(point: EnginePoint) -> list[str]:
         events.append(f"sweep:{point.slug()}")
@@ -121,7 +120,9 @@ def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None
         events, empty_ceiling={_P1.slug()}
     )
 
-    with pytest.raises(CeilingScrapeError):
+    with pytest.raises(
+        CeilingScrapeError, match=f"no ceiling scraped for {_P1.slug()}"
+    ):
         run_knob_sweep(
             points=[_P1, _P2],
             deploy_fn=deploy_fn,
@@ -131,8 +132,28 @@ def test_an_empty_ceiling_scrape_raises_and_the_points_cells_never_run() -> None
         )
 
     # The scrape found no ceiling, so the point's Tier-2 ladder never runs against a
-    # garbage ceiling: no sweep for P1, and the loud failure aborts before P2.
-    assert f"sweep:{_P1.slug()}" not in events
+    # garbage ceiling: P1 is deployed and scraped, then the loud failure aborts the whole
+    # sweep — no sweep call for P1, and nothing at all for P2.
+    assert events == [f"deploy:{_P1.slug()}", f"scrape:{_P1.slug()}"]
+
+
+def test_no_points_drives_no_collaborators_and_returns_no_pointers() -> None:
+    from slipstream_bench.orchestration.knob_sweep import run_knob_sweep
+
+    events: list[str] = []
+    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = _collaborators(events)
+
+    pointers = run_knob_sweep(
+        points=[],
+        deploy_fn=deploy_fn,
+        scrape_fn=scrape_fn,
+        point_sweep_fn=point_sweep_fn,
+        has_pending_cells=has_pending_cells,
+    )
+
+    # An empty grid drives nothing and reports nothing — no collaborator fires.
+    assert pointers == []
+    assert events == []
 
 
 def test_every_point_sweep_runs_nested_under_the_parent_flow() -> None:
@@ -149,11 +170,11 @@ def test_every_point_sweep_runs_nested_under_the_parent_flow() -> None:
     run_knob_sweep(
         points=[_P1, _P2],
         deploy_fn=lambda _p: None,
-        scrape_fn=lambda _p: "ceiling",
+        scrape_fn=lambda _p: None,
         point_sweep_fn=recording_point_sweep,
         has_pending_cells=lambda _p: True,
     )
 
     # Each point sweep observes the one parent knob-sweep flow run: real parent->child
-    # lineage, the grouping that replaces the run={run_group} tag the bash loop needed.
+    # lineage — every point sweep nests under the same parent run.
     assert flow_names == ["knob-sweep", "knob-sweep"]
