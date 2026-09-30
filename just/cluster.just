@@ -16,7 +16,14 @@ cluster-up: _bootstrap-init
     # collapsing to an empty backend/name the next command would use blindly.
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ eks_dir }} apply -auto-approve
+    # enable_prefect_worker (default false) gates the worker layer: false stands the
+    # cluster up before the orchestration image exists; true deploys the worker and
+    # requires the image published — the eks stack reads the bootstrap orchestration ECR
+    # output (state_bucket) and resolves the image's content-sha tag, failing loudly if
+    # :main is not there yet.
+    terraform -chdir={{ eks_dir }} apply -auto-approve \
+      -var="enable_prefect_worker={{ enable_prefect_worker }}" \
+      -var="state_bucket=${bucket}"
     name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     aws eks update-kubeconfig --name "${name}" --region "${region}"
@@ -31,7 +38,10 @@ cluster-plan: _bootstrap-init
     # empty bucket into the eks backend (see `cluster-up`).
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ eks_dir }} plan
+    # Mirror cluster-up's worker gate so the plan reflects what an apply would do.
+    terraform -chdir={{ eks_dir }} plan \
+      -var="enable_prefect_worker={{ enable_prefect_worker }}" \
+      -var="state_bucket=${bucket}"
 
 # Apply the GPU node pool (NodePool + EC2NodeClass) and the NVIDIA device plugin.
 # Karpenter provisions no node until a pod tolerates the GPU taint and requests

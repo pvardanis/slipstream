@@ -12,11 +12,10 @@
 # to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys).
 
 locals {
-  # The image ref (repo:tag) doubles as the worker's on/off switch: it is empty until
-  # the orchestration image ships in its own build stack, and an empty value leaves the
-  # whole layer uncreated so `just cluster-up` stands the cluster up before that image
-  # exists. Supplying the image is what brings the worker up.
-  worker_enabled = var.prefect_worker_image != ""
+  # The worker layer's on/off switch: false until the orchestration image ships in its
+  # own build stack, leaving the whole layer uncreated so `just cluster-up` stands the
+  # cluster up before that image exists. Enabling it is what brings the worker up.
+  worker_enabled = var.enable_prefect_worker
 
   worker_service_account = "prefect-worker"
 
@@ -26,13 +25,18 @@ locals {
   vllm_namespace  = "slipstream"
   vllm_deployment = "vllm-gpu"
 
-  # The single colon splits repo from tag — var.prefect_worker_image is validated to
-  # the repo:tag shape (one colon, no digest), so parts has exactly two elements when
-  # the worker is enabled. Guarded on worker_enabled so the empty off-switch value
-  # doesn't index past the end.
-  worker_image_parts      = split(":", var.prefect_worker_image)
-  worker_image_repository = local.worker_enabled ? local.worker_image_parts[0] : ""
-  worker_image_tag        = local.worker_enabled ? local.worker_image_parts[1] : ""
+  # The worker image: repository from the bootstrap ECR output, pinned to the immutable
+  # content-sha tag the publish workflow puts on the :main manifest alongside :main (the
+  # non-main tag on that manifest, resolved in data.tf). The Deployment pins the sha, so a
+  # re-apply re-resolves to a new immutable ref (a real rollout) and a cached image on a
+  # node is always the right one under IfNotPresent. repository_name is the path after the
+  # registry host, which is what the ECR data source looks the image up by.
+  orchestration_repo_url  = local.worker_enabled ? data.terraform_remote_state.bootstrap[0].outputs.orchestration_image_repo_url : ""
+  orchestration_repo_name = local.worker_enabled ? trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/") : ""
+  # try() guards only the disabled case, where the ECR data source is not read; when the
+  # worker is enabled the data source's postcondition guarantees exactly one non-main tag.
+  worker_image_repository = local.worker_enabled ? local.orchestration_repo_url : ""
+  worker_image_tag        = try([for t in data.aws_ecr_image.orchestration[0].image_tags : t if t != "main"][0], "")
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. A process worker (subprocess, not a per-run Job) matches the serial
@@ -44,6 +48,9 @@ locals {
       image = {
         repository = local.worker_image_repository
         prefectTag = local.worker_image_tag
+        # The tag is an immutable content-sha, so IfNotPresent is safe: the ref uniquely
+        # identifies content, so a cached image on a node is always the right one.
+        pullPolicy = "IfNotPresent"
       }
       config = {
         workPool = var.prefect_work_pool

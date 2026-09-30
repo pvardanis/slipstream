@@ -2,9 +2,11 @@
 # IAM role + least-privilege policy (S3 results bucket read, SSM SendCommand to the
 # bench host), its Pod Identity association, the ServiceAccount RBAC scoped to
 # managing deploy/vllm-gpu, and the prefect-worker Helm release. They run offline —
-# the aws, helm, and kubernetes providers are mocked — so the assertions check the
-# install's shape without standing a cluster up (ADR-0002 tier-1). A worker actually
-# registering against the pool and running a sweep is the cloud tier (#92 / manual).
+# the aws, helm, and kubernetes providers are mocked, and the bootstrap remote state
+# and the orchestration ECR image are stubbed with override_data — so the assertions
+# check the install's shape without standing a cluster up (ADR-0002 tier-1). A worker
+# actually registering against the pool and running a sweep is the cloud tier (#92 /
+# manual).
 #
 # The permission policy and trust policy are jsonencode()'d inline (not
 # aws_iam_policy_document data sources), so their statements are known at plan and
@@ -33,6 +35,12 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
+  # The orchestration image the worker runs: the :main pointer resolves to one manifest
+  # carrying exactly its own content-sha tag, so image_tags is [main, <sha>]. The stack
+  # picks the non-main tag to pin the Deployment to an immutable ref.
+  mock_data "aws_ecr_image" {
+    defaults = { image_tags = ["main", "orchestrator-abc123"] }
+  }
 }
 
 mock_provider "aws" {
@@ -45,7 +53,20 @@ run "worker_layer_shape" {
   command = plan
 
   variables {
-    prefect_worker_image = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-orchestrator:orchestrator-abc123"
+    enable_prefect_worker = true
+    state_bucket          = "slipstream-tfstate-abc123"
+  }
+
+  # Plan against mocked bootstrap remote state instead of reaching for real S3. The
+  # orchestration ECR repository URL is the worker image's repository; the content-sha
+  # tag is resolved from ECR (mock_data aws_ecr_image above).
+  override_data {
+    target = data.terraform_remote_state.bootstrap[0]
+    values = {
+      outputs = {
+        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      }
+    }
   }
 
   # --- IAM trust: Pod Identity, no static keys ---
@@ -232,14 +253,22 @@ run "worker_layer_shape" {
     condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.selfHostedServerApiConfig.apiUrl == "http://prefect-server.prefect.svc.cluster.local:4200/api"
     error_message = "The worker must reach the server over cluster DNS."
   }
-  # Runs the orchestration image (repository + tag split from var.prefect_worker_image).
+  # Runs the orchestration image: repository from the bootstrap ECR output, tag the
+  # content-sha resolved from the :main image (the non-main tag on that manifest).
   assert {
-    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.repository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-orchestrator"
-    error_message = "The worker image repository must come from var.prefect_worker_image."
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.repository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+    error_message = "The worker image repository must come from the bootstrap orchestration_image_repo_url output."
   }
   assert {
     condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.prefectTag == "orchestrator-abc123"
-    error_message = "The worker image tag must come from var.prefect_worker_image."
+    error_message = "The worker image tag must be the content-sha tag resolved from the orchestration :main image."
+  }
+  # The ref is an immutable content-sha tag, so IfNotPresent is safe and correct: the
+  # tag uniquely identifies content, so a cached image on a node is always the right one
+  # (a floating :main + IfNotPresent would silently run a stale cached image).
+  assert {
+    condition     = yamldecode(helm_release.prefect_worker[0].values[0]).worker.image.pullPolicy == "IfNotPresent"
+    error_message = "The worker image pullPolicy must be IfNotPresent — the content-sha tag is immutable."
   }
   # The chart creates the SA (which Pod Identity binds); RBAC is owned by this stack,
   # so the chart's own Role/RoleBinding are off — the chart's default role grants
@@ -269,42 +298,66 @@ run "worker_layer_shape" {
   }
 }
 
-# With no image supplied the worker layer is absent entirely, so `just cluster-up`
-# stands the cluster up before the orchestration image exists (the image ships in its
-# own build stack). Supplying the image is what brings the worker up.
-run "worker_absent_without_image" {
+# With the worker disabled the layer is absent entirely, so `just cluster-up` stands the
+# cluster up before the orchestration image exists (the image ships in its own build
+# stack). Enabling the worker is what brings it up.
+run "worker_absent_when_disabled" {
   command = plan
 
   variables {
-    prefect_worker_image = ""
+    enable_prefect_worker = false
+    state_bucket          = "slipstream-tfstate-abc123"
   }
 
   assert {
     condition     = length(helm_release.prefect_worker) == 0
-    error_message = "An empty prefect_worker_image must leave the worker release uncreated."
+    error_message = "A disabled worker must leave the worker release uncreated."
   }
   assert {
     condition     = length(aws_iam_role.prefect_worker) == 0
-    error_message = "An empty prefect_worker_image must leave the worker IAM role uncreated."
+    error_message = "A disabled worker must leave the worker IAM role uncreated."
   }
   assert {
     condition     = length(aws_eks_pod_identity_association.prefect_worker) == 0
-    error_message = "An empty prefect_worker_image must leave the Pod Identity association uncreated."
+    error_message = "A disabled worker must leave the Pod Identity association uncreated."
   }
   assert {
     condition     = length(kubernetes_role_v1.vllm_gpu_manage) == 0
-    error_message = "An empty prefect_worker_image must leave the worker RBAC uncreated."
+    error_message = "A disabled worker must leave the worker RBAC uncreated."
+  }
+  # A disabled worker reads neither the bootstrap remote state nor the ECR image.
+  assert {
+    condition     = length(data.aws_ecr_image.orchestration) == 0
+    error_message = "A disabled worker must not resolve the orchestration image from ECR."
   }
 }
 
-# A malformed image ref must fail the plan at the input boundary, not deploy the worker
-# with a blank or mis-split tag. A bare repo (no tag) has no colon for the split to find.
-run "worker_image_must_be_repo_tag" {
+# The :main image must carry exactly one content-sha tag for the pin to be unambiguous.
+# If the resolve finds none (only :main present), the enabled worker fails the plan loudly
+# rather than deploying with a blank tag Helm would resolve to something unintended.
+run "worker_requires_a_content_tag" {
   command = plan
 
   variables {
-    prefect_worker_image = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-orchestrator"
+    enable_prefect_worker = true
+    state_bucket          = "slipstream-tfstate-abc123"
   }
 
-  expect_failures = [var.prefect_worker_image]
+  override_data {
+    target = data.terraform_remote_state.bootstrap[0]
+    values = {
+      outputs = {
+        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      }
+    }
+  }
+
+  override_data {
+    target = data.aws_ecr_image.orchestration[0]
+    values = {
+      image_tags = ["main"]
+    }
+  }
+
+  expect_failures = [data.aws_ecr_image.orchestration]
 }
