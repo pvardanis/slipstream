@@ -1,16 +1,18 @@
 """The orchestration entrypoint: drive the knob sweep, or one point's Tier-2 sweep.
 
-Two commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
+Three commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
 sweep as one parent flow: it enumerates the grid's engine points and, per point,
 redeploys the GPU (Tier-1), scrapes the concurrency ceiling, and runs the point's Tier-2
 ladder, skipping a point whose cells already hold valid measurements. ``point-sweep``
 (ADR-0012 §Amendment) drives a single engine point's resumable Tier-2 ladder — the unit
 ``knob-sweep`` runs per point, kept its own command for driving one point by hand.
+``register-knob-sweep`` registers ``knob-sweep`` as a Prefect deployment on the process
+work pool, the entrypoint the EKS worker runs unattended.
 
-Both read the point context, fold the deep config digest, and wire the S3-backed cell
-task so an interrupted run resumes at cell granularity. Kept its own console script (not
-on the Prefect-free ``slipstream-bench`` app) because its whole job needs Prefect and
-boto3, present only in the orchestration extra.
+The two sweep commands read the point context, fold the deep config digest, and wire the
+S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
+console script (not on the Prefect-free ``slipstream-bench`` app) because its whole job
+needs Prefect and boto3, present only in the orchestration extra.
 """
 
 import logging
@@ -531,6 +533,11 @@ def register_knob_sweep(
 
     Run over a port-forward to the in-cluster Prefect API (see ``just prefect-register``).
 
+    The cluster-stable inputs are rejected here if empty: ``run_id`` and ``instance_id``
+    are the only parameters ``prefect deployment run`` supplies per run, so an empty
+    ``region``, ``bucket``, or ``image_ref`` default would otherwise surface as an obscure
+    boto3 failure on the worker at run time, long after registration reported success.
+
     :param region: AWS region of the host and bucket.
     :param bucket: results bucket (RESULTS_BUCKET).
     :param image_ref: bench-client image reference the cells run.
@@ -543,6 +550,15 @@ def register_knob_sweep(
     :param commercial: run the commercial arm (needs a tokenizer).
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
     """
+    for name, value in (
+        ("region", region),
+        ("bucket", bucket),
+        ("image-ref", image_ref),
+    ):
+        if not value.strip():
+            raise typer.BadParameter(
+                "must be a non-empty string", param_hint=f"--{name}"
+            )
     deployment_id = knob_sweep_flow.deploy(
         name="knob-sweep",
         work_pool_name=work_pool,

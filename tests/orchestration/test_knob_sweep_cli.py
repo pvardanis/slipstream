@@ -67,6 +67,28 @@ load:
   goodput: ["ttft:1000", "tpot:50"]
 """
 
+_MULTI_GRID = """
+tier1:
+  max_num_seqs: [64, 128]
+  kv_cache_dtype: [fp8]
+  prefix_caching:
+    "on":
+      flag: --enable-prefix-caching
+      prefix_share: [10]
+tier2:
+  max_concurrency: [64]
+  burstiness: 1.0
+load:
+  total_len: 1000
+  num_prompts: 500
+  num_prefixes: 5
+  output_len: 128
+  align_blocks: 0
+  request_rate: 8
+  seed: 0
+  goodput: ["ttft:1000", "tpot:50"]
+"""
+
 _MANIFEST = """\
 apiVersion: apps/v1
 kind: Deployment
@@ -282,25 +304,38 @@ def test_knob_sweep_flow_is_named_for_the_deployment() -> None:
 
 
 def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Fake the live transports the flow builds, recording the cell task's build args."""
-    task_args: dict[str, Any] = {}
+    """Fake the live transports the flow builds, recording the args it threads into them.
+
+    Captures the cell task's build args and the region the boto3 clients are built on, so a
+    test asserts the flow threads ``bucket``/``retries``/``region`` from its parameters into
+    the transports rather than dropping or hardcoding them.
+    """
+    captures: dict[str, Any] = {"task_args": {}}
 
     def _fake_cell_task(bucket: str, *, retries: int = 0) -> object:
-        task_args.update(bucket=bucket, retries=retries)
+        captures["task_args"] = {"bucket": bucket, "retries": retries}
+        return object()
+
+    def _fake_ssm(region: str) -> object:
+        captures["ssm_region"] = region
+        return object()
+
+    def _fake_s3(region: str) -> object:
+        captures["s3_region"] = region
         return object()
 
     monkeypatch.setattr(cli_module, "build_kubectl", lambda: _FakeKubectl())
-    monkeypatch.setattr(cli_module, "build_ssm_client", lambda _region: object())
-    monkeypatch.setattr(cli_module, "build_s3_client", lambda _region: object())
+    monkeypatch.setattr(cli_module, "build_ssm_client", _fake_ssm)
+    monkeypatch.setattr(cli_module, "build_s3_client", _fake_s3)
     monkeypatch.setattr(cli_module, "cell_task", _fake_cell_task)
-    return task_args
+    return captures
 
 
 def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
-    task_args = _stub_transports(monkeypatch)
+    captures = _stub_transports(monkeypatch)
     captured: dict[str, Any] = {}
 
     def _fake_drive(**kwargs: Any) -> list[str]:
@@ -310,6 +345,17 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         ]
 
     monkeypatch.setattr(cli_module, "drive_knob_sweep", _fake_drive)
+
+    # Capture the inputs the flow constructs, so the arms the grid does not carry — the
+    # commercial tokenizer arm and the extra load-cell flags — are asserted to reach it.
+    real_build = cli_module.build_knob_sweep_collaborators
+    built_inputs: dict[str, Any] = {}
+
+    def _capturing_build(inputs: KnobSweepInputs, **kwargs: Any) -> Any:
+        built_inputs["inputs"] = inputs
+        return real_build(inputs, **kwargs)
+
+    monkeypatch.setattr(cli_module, "build_knob_sweep_collaborators", _capturing_build)
 
     result = CliRunner().invoke(
         app,
@@ -335,6 +381,9 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
             str(tmp_path / "results"),
             "--retries",
             "2",
+            "--commercial",
+            "--sweep-args-b64",
+            "Zm9v",
         ],
     )
 
@@ -346,24 +395,35 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     # a keyword-name mismatch or a dropped collaborator at the flow->driver seam fails.
     for name in ("deploy_fn", "scrape_fn", "point_sweep_fn", "has_pending_cells"):
         assert callable(captured[name]), name
-    # The cell task is built on the run's bucket with the command's retries threaded.
-    assert task_args == {"bucket": "bench-bucket", "retries": 2}
+    # The cell task is built on the run's bucket with the command's retries threaded, and
+    # both boto3 clients on the run's region — so a dropped or hardcoded region is caught.
+    assert captures["task_args"] == {"bucket": "bench-bucket", "retries": 2}
+    assert captures["ssm_region"] == "us-east-1"
+    assert captures["s3_region"] == "us-east-1"
+    # The commercial arm and the extra load-cell flags reach the inputs the cells run under.
+    assert built_inputs["inputs"].commercial is True
+    assert built_inputs["inputs"].sweep_args_b64 == "Zm9v"
 
 
 def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
-    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    # A two-point grid, so the assertion is that *both* point sweeps observe the *same* one
+    # parent run: a regression that spawned a fresh parent per point would still nest a
+    # single point, but here it would report two distinct parent flow-run names.
+    model_yaml, _grid_yaml, manifest = _write_inputs(tmp_path)
+    grid_yaml = tmp_path / "sweep-grid.yaml"
+    grid_yaml.write_text(_MULTI_GRID, encoding="utf-8")
     _stub_transports(monkeypatch)
     # A complete point skips its redeploy and scrape, so the real driver runs only the
-    # point sweep — isolating the lineage assertion from the fake kubectl's empty scrape.
+    # point sweeps — isolating the lineage assertion from the fake kubectl's empty scrape.
     monkeypatch.setattr(cli_module, "point_is_complete", lambda *_a, **_k: True)
-    flow_names: list[str | None] = []
+    seen: list[tuple[str | None, Any]] = []
 
     def _recording_point_sweep(**kwargs: Any) -> list[str]:
         from prefect.runtime import flow_run
 
-        flow_names.append(flow_run.flow_name)
+        seen.append((flow_run.flow_name, flow_run.id))
         return [f"ptr:{kwargs['context'].point_slug}"]
 
     monkeypatch.setattr(cli_module, "run_point_sweep", _recording_point_sweep)
@@ -380,10 +440,11 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
         results_dir=tmp_path / "results",
     )
 
-    # The point sweep observes the one parent knob-sweep flow run: real parent->child
-    # lineage, so a knob sweep's point sweeps share a parent in the Prefect UI (ADR-0015).
-    assert flow_names == ["knob-sweep"]
-    assert pointers == [f"ptr:{_POINT.slug()}"]
+    # Both point sweeps observe the one parent knob-sweep flow run — same name and same
+    # run id — so a knob sweep's point sweeps share a parent in the Prefect UI (ADR-0015).
+    assert [name for name, _id in seen] == ["knob-sweep", "knob-sweep"]
+    assert len({run_id for _name, run_id in seen}) == 1
+    assert len(pointers) == 2
 
 
 def test_register_knob_sweep_registers_a_module_path_deployment(
@@ -421,10 +482,93 @@ def test_register_knob_sweep_registers_a_module_path_deployment(
     assert captured["entrypoint_type"] is EntrypointType.MODULE_PATH
     assert captured["build"] is False
     assert captured["push"] is False
-    # The cluster-stable inputs default onto the deployment; run_id and instance_id are
-    # left for `prefect deployment run` to supply per run.
-    params = captured["parameters"]
-    assert params["bucket"] == "bench-bucket"
-    assert params["model_yaml"] == "/app/model.yaml"
-    assert "run_id" not in params
-    assert "instance_id" not in params
+    # Every cluster-stable input defaults onto the deployment, keyed exactly as the flow's
+    # parameters — a dropped or mis-named default is a run-time failure on the worker, since
+    # `prefect deployment run` supplies only run_id and instance_id per run.
+    assert captured["parameters"] == {
+        "region": "us-east-1",
+        "bucket": "bench-bucket",
+        "image_ref": "repo:tag",
+        "model_yaml": "/app/model.yaml",
+        "sweep_grid": "/app/bench/sweep-grid.yaml",
+        "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
+        "results_dir": "/app/results",
+        "retries": 0,
+        "commercial": False,
+        "sweep_args_b64": "",
+    }
+    # The paths are serialized to str: Prefect runs parameters through serialize_parameters,
+    # so a raw Path default would fail at real registration.
+    for key in ("model_yaml", "sweep_grid", "vllm_manifest", "results_dir"):
+        assert isinstance(captured["parameters"][key], str)
+
+
+def test_register_knob_sweep_threads_overrides_onto_the_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_deploy(**kwargs: Any) -> str:
+        captured.update(kwargs)
+        return "dep-456"
+
+    monkeypatch.setattr(cli_module.knob_sweep_flow, "deploy", _fake_deploy)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "register-knob-sweep",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+            "--work-pool",
+            "other-pool",
+            "--model-yaml",
+            "/opt/model.yaml",
+            "--retries",
+            "3",
+            "--commercial",
+            "--sweep-args-b64",
+            "Zm9v",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # An overridden option reaches deploy, not just the default — so an option defined but
+    # not wired into flow.deploy is caught.
+    assert captured["work_pool_name"] == "other-pool"
+    assert captured["parameters"]["model_yaml"] == "/opt/model.yaml"
+    assert captured["parameters"]["retries"] == 3
+    assert captured["parameters"]["commercial"] is True
+    assert captured["parameters"]["sweep_args_b64"] == "Zm9v"
+
+
+@pytest.mark.parametrize("option", ["region", "bucket", "image-ref"])
+def test_register_knob_sweep_rejects_an_empty_cluster_input(
+    monkeypatch: pytest.MonkeyPatch, option: str
+) -> None:
+    # An empty region/bucket/image-ref would register a deployment whose default surfaces as
+    # an obscure boto3 failure on the worker at run time; reject it at registration instead.
+    deployed = False
+
+    def _fake_deploy(**_kwargs: Any) -> str:
+        nonlocal deployed
+        deployed = True
+        return "dep-nope"
+
+    monkeypatch.setattr(cli_module.knob_sweep_flow, "deploy", _fake_deploy)
+
+    values = {"region": "us-east-1", "bucket": "bench-bucket", "image-ref": "repo:tag"}
+    values[option] = ""
+    argv = ["register-knob-sweep"]
+    for name, value in values.items():
+        argv += [f"--{name}", value]
+
+    result = CliRunner().invoke(app, argv)
+
+    assert result.exit_code != 0
+    assert not deployed
+    assert option in result.output

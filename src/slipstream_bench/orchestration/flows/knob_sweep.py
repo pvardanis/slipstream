@@ -1,21 +1,20 @@
-"""The parent knob-sweep flow: one point sweep per engine point (ADR-0015).
+"""The knob-sweep sequencing driver: one point sweep per engine point (ADR-0015).
 
-The whole outer loop as one Prefect flow. It iterates the grid's engine points and, per
-point, redeploys the GPU, scrapes the concurrency ceiling, then runs the existing
-per-point :func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep` as a nested
-subflow — the per-point flow is wrapped, not rewritten. A resume skips a point whose
-cells already hold valid measurements (the ~20-minute GPU redeploy is not re-paid to run
-zero cells), and a ceiling scrape that finds nothing raises loudly rather than running
-the point's ladder against a garbage ceiling.
+The transport-free outer loop of the two-tier sweep. :func:`drive_knob_sweep` iterates the
+grid's engine points and, per point, redeploys the GPU, scrapes the concurrency ceiling,
+then runs the per-point
+:func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep` as a nested subflow.
+A resume skips a point whose cells already hold valid measurements (the ~20-minute GPU
+redeploy is not re-paid to run zero cells), and a ceiling scrape that finds nothing raises
+loudly rather than running the point's ladder against a garbage ceiling.
 
 The collaborators — the GPU redeploy, the ceiling scrape, the per-point sweep, and the
-redeploy-skip predicate — are injected as callables into :func:`drive_knob_sweep`, which
-only sequences them, so the whole path is testable against fakes with no cluster, GPU, or
-Prefect server. Production wraps it in the ``@flow``-decorated ``knob_sweep_flow`` at the
-composition root (the ``slipstream-orchestrate`` CLI), which builds the real collaborators
-and is the entrypoint the Prefect deployment registers. Each point sweep runs nested under
-that one parent flow run, so the point sweeps of a knob sweep share a parent->child lineage
-in the Prefect UI.
+redeploy-skip predicate — are injected as callables, so the whole path is testable against
+fakes with no cluster, GPU, or Prefect server. Production wraps the driver in the
+``@flow``-decorated ``knob_sweep_flow`` at the composition root (the
+``slipstream-orchestrate`` CLI), which builds the real collaborators and is the entrypoint
+the Prefect deployment registers. Each point sweep runs nested under that one parent flow
+run, so the point sweeps of a knob sweep share a parent->child lineage in the Prefect UI.
 """
 
 from __future__ import annotations

@@ -118,13 +118,17 @@ prefect-storage-down:
 prefect-register:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Bare assignments so a failed output lookup aborts rather than registering a
-    # deployment against an empty region, bucket, or image ref (see `bench`).
+    # Bare assignments so a failed output lookup aborts; the non-empty checks then catch
+    # the exit-0-empty-stdout case (a present-but-empty output), so neither path registers
+    # a deployment against an empty region, bucket, or image ref (see `cluster`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    [[ -n "${region}" ]] || { echo "eks output region is empty" >&2; exit 1; }
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    [[ -n "${bucket}" ]] || { echo "bench-endpoint output results_bucket_name is empty" >&2; exit 1; }
     # Forward bench_image_tag into the nested call: a command-line override does not cross
     # into a child `just`, so an unforwarded pin would fall back to the floating main tag.
     image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
+    [[ -n "${image}" ]] || { echo "_bench-image-ref resolved empty" >&2; exit 1; }
     # Reach the API over a transient port-forward (reaped on exit), so registration needs
     # no public endpoint.
     source bench/prefect-portforward.sh
