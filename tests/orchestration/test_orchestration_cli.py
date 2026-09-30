@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import app, build_sweep_context
 from slipstream_bench.orchestration.digest import DigestInputs, config_digest
-from slipstream_bench.orchestration.flow import SweepContext
+from slipstream_bench.orchestration.flows.point_sweep import SweepContext
 
 _MODEL_YAML = b"model:\n  hfId: Qwen/Qwen2.5-0.5B-Instruct\n"
 _GRID_YAML = b"engine_points: []\n"

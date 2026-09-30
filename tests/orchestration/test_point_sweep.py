@@ -18,8 +18,11 @@ from prefect import Task
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
-from slipstream_bench.orchestration.cell_task import build_cell_task
-from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
+from slipstream_bench.orchestration.flows.point_sweep import (
+    SweepContext,
+    run_point_sweep,
+)
+from slipstream_bench.orchestration.tasks.cell import build_cell_task
 from slipstream_bench.orchestration.validity import InvalidCellError
 
 _PROXY = "/usr/local/bin/bench-proxy-up.sh"

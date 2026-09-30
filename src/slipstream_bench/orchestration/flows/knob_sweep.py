@@ -2,7 +2,7 @@
 
 The whole outer loop as one Prefect flow. It iterates the grid's engine points and, per
 point, redeploys the GPU, scrapes the concurrency ceiling, then runs the existing
-per-point :func:`slipstream_bench.orchestration.flow.run_point_sweep` as a nested
+per-point :func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep` as a nested
 subflow — the per-point flow is wrapped, not rewritten. A resume skips a point whose
 cells already hold valid measurements (the ~20-minute GPU redeploy is not re-paid to run
 zero cells), and a ceiling scrape that finds nothing raises loudly rather than running

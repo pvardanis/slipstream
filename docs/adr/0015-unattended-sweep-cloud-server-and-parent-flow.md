@@ -12,7 +12,7 @@ per-point sweep resumable and adopted Prefect as a cache/retry/observability lay
 but pinned two things to the operator's laptop: the Prefect server runs locally
 (`prefect server start`, SQLite `~/.prefect/prefect.db`) and the flow is triggered
 "from the workstation driving `kubectl` + SSM". Its §Amendment kept the **Tier-1 GPU
-redeploy in the justfile** — the flow (`orchestration/flow.py` `run_point_sweep`) drives
+redeploy in the justfile** — the flow (`orchestration/flows/point_sweep.py` `run_point_sweep`) drives
 **one engine point**; the outer loop over the ~20 points stays an imperative bash loop
 in `just knob-sweep`.
 
@@ -79,7 +79,7 @@ The `knob-sweep` loop becomes a **parent `@flow`** calling the existing per-poin
 as parent tasks run before each subflow. The per-point flow is kept intact and wrapped,
 not rewritten.
 
-This replaces the `run={run_group}` **tag** (`orchestration/flow.py`) with real parent→child
+This replaces the `run={run_group}` **tag** (`orchestration/flows/point_sweep.py`) with real parent→child
 lineage. That tag existed only because the loop lived in bash: 20 separate
 `slipstream-orchestrate point-sweep` processes had no process-level parent, so a shared tag
 stitched them in the UI. Once the loop is a Prefect flow, the parent run *is* the grouping;

@@ -17,11 +17,14 @@ from typing import Annotated
 import typer
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
-from slipstream_bench.orchestration.cell_task import cell_task
 from slipstream_bench.orchestration.digest import DigestInputs
-from slipstream_bench.orchestration.flow import SweepContext, run_point_sweep
+from slipstream_bench.orchestration.flows.point_sweep import (
+    SweepContext,
+    run_point_sweep,
+)
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
+from slipstream_bench.orchestration.tasks.cell import cell_task
 
 app = typer.Typer(
     name="slipstream-orchestrate",
