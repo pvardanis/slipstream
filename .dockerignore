@@ -1,8 +1,14 @@
 # The two image builds need only the package's own inputs: bench/Dockerfile copies
 # pyproject.toml + src/, and orchestration/Dockerfile also reads uv.lock for its frozen
-# install. Everything else — terraform state, the cluster manifests, docs, git, caches,
-# results — stays out of the build context so it can't bloat or leak into a layer.
+# install and bakes the three deep-config files the registered knob-sweep reads on the worker
+# (model.yaml, the sweep grid, the vLLM redeploy manifest). Everything else — terraform state,
+# the rest of the cluster manifests, docs, git, caches, results — stays out of the build context
+# so it can't bloat or leak into a layer. The three config files are named individually, not by
+# their directories, so bench/ and k8s/ otherwise stay excluded.
 *
 !pyproject.toml
 !uv.lock
 !src
+!model.yaml
+!bench/sweep-grid.yaml
+!k8s/vllm-gpu.yaml
