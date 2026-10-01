@@ -25,12 +25,13 @@ from prefect.testing.utilities import prefect_test_harness
 from typer.testing import CliRunner
 
 from slipstream_bench.orchestration import cli as cli_module
-from slipstream_bench.orchestration.cli import (
+from slipstream_bench.orchestration.cli import app
+from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
+from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
     _point_has_pending_cells,
     _scrape_and_log_ceiling,
     _sweep_one_point,
-    app,
     build_knob_sweep_collaborators,
     knob_sweep_flow,
 )
@@ -178,7 +179,9 @@ def test_scrape_logs_the_predicted_ceiling(
 ) -> None:
     kubectl = _FakeKubectl(logs=_CEILING_LOG)
 
-    with caplog.at_level(logging.INFO, logger="slipstream_bench.orchestration.cli"):
+    with caplog.at_level(
+        logging.INFO, logger="slipstream_bench.orchestration.flows.knob_sweep"
+    ):
         _scrape_and_log_ceiling(_POINT, kubectl=kubectl)
 
     assert _POINT.slug() in caplog.text
@@ -201,7 +204,7 @@ def test_sweep_one_point_runs_under_the_points_run_id_and_results_subdir(
         calls.append(kwargs)
         return [f"ptr:{kwargs['context'].point_slug}"]
 
-    monkeypatch.setattr(cli_module, "run_point_sweep", _fake_run)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _fake_run)
     inputs = _inputs(tmp_path)
 
     def _sweep(point: EnginePoint) -> list[str]:
@@ -231,9 +234,9 @@ def test_has_pending_cells_is_the_negation_of_point_is_complete(
     inputs = _inputs(tmp_path)
 
     # A complete point has no pending cells; an incomplete one does.
-    monkeypatch.setattr(cli_module, "point_is_complete", lambda *a, **k: True)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *a, **k: True)
     assert _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object()) is False
-    monkeypatch.setattr(cli_module, "point_is_complete", lambda *a, **k: False)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *a, **k: False)
     assert _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object()) is True
 
 
@@ -246,7 +249,7 @@ def test_has_pending_cells_propagates_an_unfixable_probe_error(
     def _raising(*_a: Any, **_k: Any) -> bool:
         raise ClientError({"Error": {"Code": "403"}}, "HeadObject")
 
-    monkeypatch.setattr(cli_module, "point_is_complete", _raising)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", _raising)
     inputs = _inputs(tmp_path)
 
     with pytest.raises(ClientError):
@@ -324,10 +327,10 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captures["s3_region"] = region
         return object()
 
-    monkeypatch.setattr(cli_module, "build_kubectl", lambda: _FakeKubectl())
-    monkeypatch.setattr(cli_module, "build_ssm_client", _fake_ssm)
-    monkeypatch.setattr(cli_module, "build_s3_client", _fake_s3)
-    monkeypatch.setattr(cli_module, "cell_task", _fake_cell_task)
+    monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
+    monkeypatch.setattr(knob_sweep_module, "build_ssm_client", _fake_ssm)
+    monkeypatch.setattr(knob_sweep_module, "build_s3_client", _fake_s3)
+    monkeypatch.setattr(knob_sweep_module, "cell_task", _fake_cell_task)
     return captures
 
 
@@ -344,18 +347,20 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
             "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
         ]
 
-    monkeypatch.setattr(cli_module, "drive_knob_sweep", _fake_drive)
+    monkeypatch.setattr(knob_sweep_module, "drive_knob_sweep", _fake_drive)
 
     # Capture the inputs the flow constructs, so the arms the grid does not carry — the
     # commercial tokenizer arm and the extra load-cell flags — are asserted to reach it.
-    real_build = cli_module.build_knob_sweep_collaborators
+    real_build = knob_sweep_module.build_knob_sweep_collaborators
     built_inputs: dict[str, Any] = {}
 
     def _capturing_build(inputs: KnobSweepInputs, **kwargs: Any) -> Any:
         built_inputs["inputs"] = inputs
         return real_build(inputs, **kwargs)
 
-    monkeypatch.setattr(cli_module, "build_knob_sweep_collaborators", _capturing_build)
+    monkeypatch.setattr(
+        knob_sweep_module, "build_knob_sweep_collaborators", _capturing_build
+    )
 
     result = CliRunner().invoke(
         app,
@@ -417,7 +422,7 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     _stub_transports(monkeypatch)
     # A complete point skips its redeploy and scrape, so the real driver runs only the
     # point sweeps — isolating the lineage assertion from the fake kubectl's empty scrape.
-    monkeypatch.setattr(cli_module, "point_is_complete", lambda *_a, **_k: True)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
     seen: list[tuple[str | None, Any]] = []
 
     def _recording_point_sweep(**kwargs: Any) -> list[str]:
@@ -426,7 +431,7 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
         seen.append((flow_run.flow_name, flow_run.id))
         return [f"ptr:{kwargs['context'].point_slug}"]
 
-    monkeypatch.setattr(cli_module, "run_point_sweep", _recording_point_sweep)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _recording_point_sweep)
 
     pointers = knob_sweep_flow(
         run_id="run1",
@@ -662,7 +667,7 @@ def test_register_knob_sweep_creates_a_real_deployment(_harness: None) -> None:
     # The entrypoint is the dotted module path resolved by import, not a file path — so the
     # worker runs the baked image without fetching a source tree.
     assert deployment.entrypoint == (
-        "slipstream_bench.orchestration.cli.knob_sweep_flow"
+        "slipstream_bench.orchestration.flows.knob_sweep.knob_sweep_flow"
     )
     assert deployment.work_pool_name == "sweep-pool"
     # The cluster-stable defaults round-trip through the server, paths serialized to str.

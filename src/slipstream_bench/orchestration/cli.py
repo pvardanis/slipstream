@@ -15,34 +15,17 @@ console script (not on the Prefect-free ``slipstream-bench`` app) because its wh
 needs Prefect and boto3, present only in the orchestration extra.
 """
 
-import logging
-from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
-from prefect import Task, flow
 from prefect.client.orchestration import get_client
 from prefect.deployments.runner import EntrypointType
 from prefect.exceptions import ObjectNotFound
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
-from slipstream_bench.orchestration.cluster import (
-    Kubectl,
-    build_kubectl,
-    deploy_gpu_point,
-    scrape_ceiling,
-)
-from slipstream_bench.orchestration.completion import point_is_complete
 from slipstream_bench.orchestration.digest import DigestInputs
-from slipstream_bench.orchestration.flows.knob_sweep import (
-    DeployFn,
-    PendingCellsFn,
-    PointSweepFn,
-    ScrapeFn,
-    drive_knob_sweep,
-)
+from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -50,10 +33,6 @@ from slipstream_bench.orchestration.flows.point_sweep import (
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
-from slipstream_bench.sweep.aggregation import EnginePoint
-from slipstream_bench.sweep.grid import SweepGrid, list_engine_points, load_grid
-
-_LOGGER = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="slipstream-orchestrate",
@@ -193,230 +172,6 @@ def point_sweep(
     )
     for uri in cell_result_uris:
         typer.echo(uri)
-
-
-@dataclass(frozen=True)
-class KnobSweepInputs:
-    """The per-run inputs every engine point of one knob sweep shares (ADR-0015).
-
-    The grid and manifest the points are enumerated and redeployed from, the shared run
-    the points nest under, and the deep config digest and addressing every point sweep
-    keys its cells by. A point's own values — its slug, its results subdir, its nested
-    run id — are derived per point from these; nothing here varies point to point.
-    """
-
-    grid: SweepGrid
-    grid_path: Path
-    manifest_path: Path
-    results_dir: Path
-    run: str
-    digest: str
-    instance_id: str
-    image_ref: str
-    bucket: str
-    model: str
-    commercial: bool = False
-    sweep_args_b64: str = ""
-
-    def __post_init__(self) -> None:
-        """Reject inputs that would address a run with an empty key.
-
-        Frozen, so validating on construction makes the value valid for its whole life.
-        The keying and addressing fields must be non-empty, so a misconfigured sweep
-        fails here, before its first ~20-minute GPU redeploy, rather than at the S3 probe
-        or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
-        cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
-        command that reads them.
-        """
-        for name in ("run", "digest", "instance_id", "image_ref", "bucket", "model"):
-            if not getattr(self, name).strip():
-                raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
-
-
-def build_knob_sweep_collaborators(
-    inputs: KnobSweepInputs,
-    *,
-    kubectl: Kubectl,
-    ssm_client: Any,
-    s3_client: Any,
-    task: Task[..., str],
-) -> tuple[DeployFn, ScrapeFn, PointSweepFn, PendingCellsFn]:
-    """Bind the four callables the parent knob-sweep flow sequences per engine point.
-
-    The composition root: the real in-cluster and per-point collaborators, with the
-    injected transports (kubectl, the boto3 clients, the cell task) closed over so the
-    flow itself stays free of live handles. The deploy renders and applies the point's
-    Deployment; the scrape reads its predicted ceiling and raises loud on an empty one
-    (ADR-0015), logging the value it read (the grid fixes the ladder, so the ceiling is
-    recorded, not threaded — ADR-0009); the point sweep runs the point's Tier-2 cells
-    under a per-point results subdir and the sweep's nested run id; the pending gate is
-    the negation of the redeploy-skip probe, so a fully-valid point skips its redeploy.
-
-    :param inputs: the per-run inputs every point of the sweep shares.
-    :param kubectl: the transport the redeploy and ceiling scrape are issued through.
-    :param ssm_client: the boto3 SSM client each point sweep sends cells through.
-    :param s3_client: the boto3 S3 client the cell downloads and the pending probe read.
-    :param task: the cell task each point sweep caches and gates its cells with.
-    :return: the (deploy, scrape, point-sweep, has-pending-cells) callables, in the order
-        :func:`drive_knob_sweep` takes them.
-    """
-    deploy_fn: DeployFn = partial(
-        deploy_gpu_point,
-        grid=inputs.grid,
-        manifest_text=inputs.manifest_path.read_text(encoding="utf-8"),
-        kubectl=kubectl,
-    )
-    scrape_fn: ScrapeFn = partial(_scrape_and_log_ceiling, kubectl=kubectl)
-    point_sweep_fn: PointSweepFn = partial(
-        _sweep_one_point,
-        inputs=inputs,
-        ssm_client=ssm_client,
-        s3_client=s3_client,
-        task=task,
-    )
-    has_pending_cells: PendingCellsFn = partial(
-        _point_has_pending_cells, inputs=inputs, s3_client=s3_client
-    )
-    return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
-
-
-def _scrape_and_log_ceiling(point: EnginePoint, *, kubectl: Kubectl) -> None:
-    """Scrape the point's predicted concurrency ceiling and record it in the log.
-
-    The grid fixes the Tier-2 ladder, so the ceiling is recorded, not threaded into it
-    (ADR-0009); the scrape raises loud on an empty ceiling (ADR-0015).
-    """
-    ceiling = scrape_ceiling(point, kubectl=kubectl)
-    _LOGGER.info("point %s predicted concurrency ceiling: %s", point.slug(), ceiling)
-
-
-def _sweep_one_point(
-    point: EnginePoint,
-    *,
-    inputs: KnobSweepInputs,
-    ssm_client: Any,
-    s3_client: Any,
-    task: Task[..., str],
-) -> list[str]:
-    """Run one point's Tier-2 ladder under its own results subdir and nested run id."""
-    return run_point_sweep(
-        grid_path=inputs.grid_path,
-        results_dir=inputs.results_dir / point.slug(),
-        context=_build_point_context(inputs, point),
-        ssm_client=ssm_client,
-        s3_client=s3_client,
-        task=task,
-    )
-
-
-def _point_has_pending_cells(
-    point: EnginePoint, *, inputs: KnobSweepInputs, s3_client: Any
-) -> bool:
-    """Report whether a point still has cells to run — the redeploy-skip probe negated."""
-    return not point_is_complete(
-        point,
-        grid=inputs.grid,
-        run_prefix=inputs.run,
-        bucket=inputs.bucket,
-        s3_client=s3_client,
-        model=inputs.model,
-        commercial=inputs.commercial,
-    )
-
-
-def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepContext:
-    """Derive one engine point's sweep context, nesting it under the shared run."""
-    return SweepContext(
-        run_id=f"{inputs.run}/{point.slug()}",
-        point_slug=point.slug(),
-        digest=inputs.digest,
-        instance_id=inputs.instance_id,
-        image_ref=inputs.image_ref,
-        bucket=inputs.bucket,
-        model=inputs.model,
-        commercial=inputs.commercial,
-        sweep_args_b64=inputs.sweep_args_b64,
-    )
-
-
-@flow(name="knob-sweep")
-def knob_sweep_flow(
-    *,
-    run_id: str,
-    instance_id: str,
-    region: str,
-    bucket: str,
-    image_ref: str,
-    model_yaml: Path,
-    sweep_grid: Path,
-    vllm_manifest: Path,
-    results_dir: Path,
-    retries: int = 0,
-    commercial: bool = False,
-    sweep_args_b64: str = "",
-) -> list[str]:
-    """Drive the whole two-tier knob sweep as one Prefect flow (ADR-0015).
-
-    The composition root and the flow the deployment registers: it enumerates the grid's
-    engine points, wires the real in-cluster and per-point collaborators from the live
-    transports, and sequences them so one flow run redeploys the GPU, scrapes the ceiling,
-    and runs each point's Tier-2 ladder — each point sweep nested under this parent run. A
-    resume re-invoked with the same inputs skips a point whose cells already hold valid
-    measurements, so its ~20-minute redeploy and scrape are not re-paid.
-
-    The parameters are all serializable (Prefect persists them through
-    ``serialize_parameters``); the live handles are built inside the flow, never passed in.
-    The three config paths are read on the worker at run time, so they name in-image files.
-
-    :param run_id: shared run the points nest under (``<run-id>/<point-slug>``).
-    :param instance_id: bench host the cells run on.
-    :param region: AWS region of the host and bucket.
-    :param bucket: results bucket (RESULTS_BUCKET).
-    :param image_ref: bench-client image reference the cells run.
-    :param model_yaml: model.yaml — the served model id and a digest input.
-    :param sweep_grid: sweep-grid.yaml — the engine points, their cells, a digest input.
-    :param vllm_manifest: k8s/vllm-gpu.yaml — the redeploy template and serving image ref.
-    :param results_dir: directory each point's cells download under.
-    :param retries: opt-in cell retries for a transient transport fault.
-    :param commercial: run the commercial arm (needs a tokenizer).
-    :param sweep_args_b64: extra load-cell flags, base64-encoded.
-    :return: the S3 pointer for each cell of every point, in order.
-    """
-    grid = load_grid(sweep_grid)
-    inputs = KnobSweepInputs(
-        grid=grid,
-        grid_path=sweep_grid,
-        manifest_path=vllm_manifest,
-        results_dir=results_dir,
-        run=run_id,
-        digest=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=sweep_grid,
-            vllm_manifest=vllm_manifest,
-        ).digest(),
-        instance_id=instance_id,
-        image_ref=image_ref,
-        bucket=bucket,
-        model=read_model_id(model_yaml),
-        commercial=commercial,
-        sweep_args_b64=sweep_args_b64,
-    )
-    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
-        build_knob_sweep_collaborators(
-            inputs,
-            kubectl=build_kubectl(),
-            ssm_client=build_ssm_client(region),
-            s3_client=build_s3_client(region),
-            task=cell_task(bucket, retries=retries),
-        )
-    )
-    return drive_knob_sweep(
-        points=list_engine_points(grid),
-        deploy_fn=deploy_fn,
-        scrape_fn=scrape_fn,
-        point_sweep_fn=point_sweep_fn,
-        has_pending_cells=has_pending_cells,
-    )
 
 
 @app.command("knob-sweep")
