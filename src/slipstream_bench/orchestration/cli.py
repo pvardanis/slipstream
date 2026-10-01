@@ -42,59 +42,6 @@ app = typer.Typer(
 )
 
 
-@app.callback()
-def _group() -> None:
-    """Keep the app a command group so its commands stay named subcommands.
-
-    Typer collapses a single-command app into a nameless root command, which would
-    make ``slipstream-orchestrate --run-id ...`` the invocation and reject the
-    documented ``slipstream-orchestrate point-sweep ...``. A callback holds the group
-    open so ``knob-sweep`` and ``point-sweep`` stay subcommands.
-    """
-
-
-def build_sweep_context(
-    *,
-    run_id: str,
-    point_slug: str,
-    instance_id: str,
-    image_ref: str,
-    bucket: str,
-    model: str,
-    digest_inputs: DigestInputs,
-    commercial: bool = False,
-    sweep_args_b64: str = "",
-) -> SweepContext:
-    """Assemble the point's context, folding the deep config digest from its inputs.
-
-    The digest is ``sha256(model.yaml + sweep-grid.yaml + vLLM image ref)`` (ADR-0012):
-    the raw bytes of the two files and the serving image ref read from the vLLM
-    manifest, so a model, grid, or image change invalidates the point's cached cells.
-
-    :param run_id: the point-nested bucket prefix (``<run>/<point-slug>``).
-    :param point_slug: the engine point's cache-key part.
-    :param instance_id: the bench host the cells run on.
-    :param image_ref: the bench-client image the cells run.
-    :param bucket: the results bucket.
-    :param model: the served model id.
-    :param digest_inputs: the three files the deep config digest is folded from.
-    :param commercial: whether this is the commercial arm.
-    :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
-    :return: the fully-populated :class:`SweepContext`.
-    """
-    return SweepContext(
-        run_id=run_id,
-        point_slug=point_slug,
-        digest=digest_inputs.digest(),
-        instance_id=instance_id,
-        image_ref=image_ref,
-        bucket=bucket,
-        model=model,
-        commercial=commercial,
-        sweep_args_b64=sweep_args_b64,
-    )
-
-
 @app.command("point-sweep")
 def point_sweep(
     *,
@@ -246,25 +193,6 @@ def knob_sweep(
         typer.echo(uri)
 
 
-def _require_work_pool(work_pool: str) -> None:
-    """Fail fast if the target work pool is absent, before registering against it.
-
-    ``flow.deploy`` only warns on a missing pool and still returns a deployment id, so a
-    typo'd or un-created pool would register a deployment no worker ever polls — every
-    triggered run would sit Scheduled forever, the obscure run-time failure the rest of
-    this command guards against. Reading the pool over the port-forward raises here with
-    an actionable message instead.
-    """
-    with get_client(sync_client=True) as client:
-        try:
-            client.read_work_pool(work_pool)
-        except ObjectNotFound:
-            raise typer.BadParameter(
-                f"work pool {work_pool!r} not found; run `just prefect-up` first",
-                param_hint="--work-pool",
-            ) from None
-
-
 @app.command("register-knob-sweep")
 def register_knob_sweep(
     *,
@@ -359,6 +287,67 @@ def register_knob_sweep(
         },
     )
     typer.echo(f"registered knob-sweep deployment {deployment_id}")
+
+
+def build_sweep_context(
+    *,
+    run_id: str,
+    point_slug: str,
+    instance_id: str,
+    image_ref: str,
+    bucket: str,
+    model: str,
+    digest_inputs: DigestInputs,
+    commercial: bool = False,
+    sweep_args_b64: str = "",
+) -> SweepContext:
+    """Assemble the point's context, folding the deep config digest from its inputs.
+
+    The digest is ``sha256(model.yaml + sweep-grid.yaml + vLLM image ref)`` (ADR-0012):
+    the raw bytes of the two files and the serving image ref read from the vLLM
+    manifest, so a model, grid, or image change invalidates the point's cached cells.
+
+    :param run_id: the point-nested bucket prefix (``<run>/<point-slug>``).
+    :param point_slug: the engine point's cache-key part.
+    :param instance_id: the bench host the cells run on.
+    :param image_ref: the bench-client image the cells run.
+    :param bucket: the results bucket.
+    :param model: the served model id.
+    :param digest_inputs: the three files the deep config digest is folded from.
+    :param commercial: whether this is the commercial arm.
+    :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
+    :return: the fully-populated :class:`SweepContext`.
+    """
+    return SweepContext(
+        run_id=run_id,
+        point_slug=point_slug,
+        digest=digest_inputs.digest(),
+        instance_id=instance_id,
+        image_ref=image_ref,
+        bucket=bucket,
+        model=model,
+        commercial=commercial,
+        sweep_args_b64=sweep_args_b64,
+    )
+
+
+def _require_work_pool(work_pool: str) -> None:
+    """Fail fast if the target work pool is absent, before registering against it.
+
+    ``flow.deploy`` only warns on a missing pool and still returns a deployment id, so a
+    typo'd or un-created pool would register a deployment no worker ever polls — every
+    triggered run would sit Scheduled forever, the obscure run-time failure the rest of
+    this command guards against. Reading the pool over the port-forward raises here with
+    an actionable message instead.
+    """
+    with get_client(sync_client=True) as client:
+        try:
+            client.read_work_pool(work_pool)
+        except ObjectNotFound:
+            raise typer.BadParameter(
+                f"work pool {work_pool!r} not found; run `just prefect-up` first",
+                param_hint="--work-pool",
+            ) from None
 
 
 if __name__ == "__main__":
