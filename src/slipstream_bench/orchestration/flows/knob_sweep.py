@@ -68,43 +68,6 @@ PointSweepFn = Callable[[EnginePoint], list[str]]
 PendingCellsFn = Callable[[EnginePoint], bool]
 
 
-def drive_knob_sweep(
-    *,
-    points: Sequence[EnginePoint],
-    deploy_fn: DeployFn,
-    scrape_fn: ScrapeFn,
-    point_sweep_fn: PointSweepFn,
-    has_pending_cells: PendingCellsFn,
-) -> list[str]:
-    """Iterate the points, redeploying and scraping each pending one, then sweeping all.
-
-    The redeploy and scrape — the ~20-minute GPU rollout and its ceiling read — are gated
-    on the point having pending cells, so a resume never re-pays them to run zero cells
-    (ADR-0015). The sweep runs for every point regardless: for a fully-cached point it
-    hits the cache and re-executes nothing, returning the point's cached pointers.
-
-    :param points: the grid's engine points, in enumeration order.
-    :param deploy_fn: redeploy the GPU for a point's knobs (Tier-1).
-    :param scrape_fn: scrape the concurrency ceiling after a redeploy; raises when the
-        engine reported none, so the point's ladder never runs against a garbage ceiling.
-    :param point_sweep_fn: run one point's Tier-2 cells as a nested subflow.
-    :param has_pending_cells: whether a point still has cells to run; a point with none
-        skips its redeploy and scrape — the two expensive tasks — but still runs its
-        resumable sweep, which returns its cached pointers (resume).
-    :return: the S3 pointer for each cell of every point, in order.
-    """
-    pointers: list[str] = []
-    for point in points:
-        if has_pending_cells(point):
-            deploy_fn(point)
-            # Scrape for its raise-on-empty side effect: a point whose engine reported no
-            # ceiling must fail before its ladder runs (ADR-0015). The grid fixes the
-            # ladder shape, so the scraped value is recorded by the task, not threaded here.
-            scrape_fn(point)
-        pointers.extend(point_sweep_fn(point))
-    return pointers
-
-
 @dataclass(frozen=True)
 class KnobSweepInputs:
     """The per-run inputs every engine point of one knob sweep shares (ADR-0015).
@@ -141,6 +104,123 @@ class KnobSweepInputs:
         for name in ("run", "digest", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
+
+
+@flow(name="knob-sweep")
+def knob_sweep_flow(
+    *,
+    run_id: str,
+    instance_id: str,
+    region: str,
+    bucket: str,
+    image_ref: str,
+    model_yaml: Path,
+    sweep_grid: Path,
+    vllm_manifest: Path,
+    results_dir: Path,
+    retries: int = 0,
+    commercial: bool = False,
+    sweep_args_b64: str = "",
+) -> list[str]:
+    """Drive the whole two-tier knob sweep as one Prefect flow (ADR-0015).
+
+    The composition root and the flow the deployment registers: it enumerates the grid's
+    engine points, wires the real in-cluster and per-point collaborators from the live
+    transports, and sequences them so one flow run redeploys the GPU, scrapes the ceiling,
+    and runs each point's Tier-2 ladder — each point sweep nested under this parent run. A
+    resume re-invoked with the same inputs skips a point whose cells already hold valid
+    measurements, so its ~20-minute redeploy and scrape are not re-paid.
+
+    The parameters are all serializable (Prefect persists them through
+    ``serialize_parameters``); the live handles are built inside the flow, never passed in.
+    The three config paths are read on the worker at run time, so they name in-image files.
+
+    :param run_id: shared run the points nest under (``<run-id>/<point-slug>``).
+    :param instance_id: bench host the cells run on.
+    :param region: AWS region of the host and bucket.
+    :param bucket: results bucket (RESULTS_BUCKET).
+    :param image_ref: bench-client image reference the cells run.
+    :param model_yaml: model.yaml — the served model id and a digest input.
+    :param sweep_grid: sweep-grid.yaml — the engine points, their cells, a digest input.
+    :param vllm_manifest: k8s/vllm-gpu.yaml — the redeploy template and serving image ref.
+    :param results_dir: directory each point's cells download under.
+    :param retries: opt-in cell retries for a transient transport fault.
+    :param commercial: run the commercial arm (needs a tokenizer).
+    :param sweep_args_b64: extra load-cell flags, base64-encoded.
+    :return: the S3 pointer for each cell of every point, in order.
+    """
+    grid = load_grid(sweep_grid)
+    inputs = KnobSweepInputs(
+        grid=grid,
+        grid_path=sweep_grid,
+        manifest_path=vllm_manifest,
+        results_dir=results_dir,
+        run=run_id,
+        digest=DigestInputs(
+            model_yaml=model_yaml,
+            sweep_grid=sweep_grid,
+            vllm_manifest=vllm_manifest,
+        ).digest(),
+        instance_id=instance_id,
+        image_ref=image_ref,
+        bucket=bucket,
+        model=read_model_id(model_yaml),
+        commercial=commercial,
+        sweep_args_b64=sweep_args_b64,
+    )
+    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
+        build_knob_sweep_collaborators(
+            inputs,
+            kubectl=build_kubectl(),
+            ssm_client=build_ssm_client(region),
+            s3_client=build_s3_client(region),
+            task=cell_task(bucket, retries=retries),
+        )
+    )
+    return drive_knob_sweep(
+        points=list_engine_points(grid),
+        deploy_fn=deploy_fn,
+        scrape_fn=scrape_fn,
+        point_sweep_fn=point_sweep_fn,
+        has_pending_cells=has_pending_cells,
+    )
+
+
+def drive_knob_sweep(
+    *,
+    points: Sequence[EnginePoint],
+    deploy_fn: DeployFn,
+    scrape_fn: ScrapeFn,
+    point_sweep_fn: PointSweepFn,
+    has_pending_cells: PendingCellsFn,
+) -> list[str]:
+    """Iterate the points, redeploying and scraping each pending one, then sweeping all.
+
+    The redeploy and scrape — the ~20-minute GPU rollout and its ceiling read — are gated
+    on the point having pending cells, so a resume never re-pays them to run zero cells
+    (ADR-0015). The sweep runs for every point regardless: for a fully-cached point it
+    hits the cache and re-executes nothing, returning the point's cached pointers.
+
+    :param points: the grid's engine points, in enumeration order.
+    :param deploy_fn: redeploy the GPU for a point's knobs (Tier-1).
+    :param scrape_fn: scrape the concurrency ceiling after a redeploy; raises when the
+        engine reported none, so the point's ladder never runs against a garbage ceiling.
+    :param point_sweep_fn: run one point's Tier-2 cells as a nested subflow.
+    :param has_pending_cells: whether a point still has cells to run; a point with none
+        skips its redeploy and scrape — the two expensive tasks — but still runs its
+        resumable sweep, which returns its cached pointers (resume).
+    :return: the S3 pointer for each cell of every point, in order.
+    """
+    pointers: list[str] = []
+    for point in points:
+        if has_pending_cells(point):
+            deploy_fn(point)
+            # Scrape for its raise-on-empty side effect: a point whose engine reported no
+            # ceiling must fail before its ladder runs (ADR-0015). The grid fixes the
+            # ladder shape, so the scraped value is recorded by the task, not threaded here.
+            scrape_fn(point)
+        pointers.extend(point_sweep_fn(point))
+    return pointers
 
 
 def build_knob_sweep_collaborators(
@@ -246,84 +326,4 @@ def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepCo
         model=inputs.model,
         commercial=inputs.commercial,
         sweep_args_b64=inputs.sweep_args_b64,
-    )
-
-
-@flow(name="knob-sweep")
-def knob_sweep_flow(
-    *,
-    run_id: str,
-    instance_id: str,
-    region: str,
-    bucket: str,
-    image_ref: str,
-    model_yaml: Path,
-    sweep_grid: Path,
-    vllm_manifest: Path,
-    results_dir: Path,
-    retries: int = 0,
-    commercial: bool = False,
-    sweep_args_b64: str = "",
-) -> list[str]:
-    """Drive the whole two-tier knob sweep as one Prefect flow (ADR-0015).
-
-    The composition root and the flow the deployment registers: it enumerates the grid's
-    engine points, wires the real in-cluster and per-point collaborators from the live
-    transports, and sequences them so one flow run redeploys the GPU, scrapes the ceiling,
-    and runs each point's Tier-2 ladder — each point sweep nested under this parent run. A
-    resume re-invoked with the same inputs skips a point whose cells already hold valid
-    measurements, so its ~20-minute redeploy and scrape are not re-paid.
-
-    The parameters are all serializable (Prefect persists them through
-    ``serialize_parameters``); the live handles are built inside the flow, never passed in.
-    The three config paths are read on the worker at run time, so they name in-image files.
-
-    :param run_id: shared run the points nest under (``<run-id>/<point-slug>``).
-    :param instance_id: bench host the cells run on.
-    :param region: AWS region of the host and bucket.
-    :param bucket: results bucket (RESULTS_BUCKET).
-    :param image_ref: bench-client image reference the cells run.
-    :param model_yaml: model.yaml — the served model id and a digest input.
-    :param sweep_grid: sweep-grid.yaml — the engine points, their cells, a digest input.
-    :param vllm_manifest: k8s/vllm-gpu.yaml — the redeploy template and serving image ref.
-    :param results_dir: directory each point's cells download under.
-    :param retries: opt-in cell retries for a transient transport fault.
-    :param commercial: run the commercial arm (needs a tokenizer).
-    :param sweep_args_b64: extra load-cell flags, base64-encoded.
-    :return: the S3 pointer for each cell of every point, in order.
-    """
-    grid = load_grid(sweep_grid)
-    inputs = KnobSweepInputs(
-        grid=grid,
-        grid_path=sweep_grid,
-        manifest_path=vllm_manifest,
-        results_dir=results_dir,
-        run=run_id,
-        digest=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=sweep_grid,
-            vllm_manifest=vllm_manifest,
-        ).digest(),
-        instance_id=instance_id,
-        image_ref=image_ref,
-        bucket=bucket,
-        model=read_model_id(model_yaml),
-        commercial=commercial,
-        sweep_args_b64=sweep_args_b64,
-    )
-    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
-        build_knob_sweep_collaborators(
-            inputs,
-            kubectl=build_kubectl(),
-            ssm_client=build_ssm_client(region),
-            s3_client=build_s3_client(region),
-            task=cell_task(bucket, retries=retries),
-        )
-    )
-    return drive_knob_sweep(
-        points=list_engine_points(grid),
-        deploy_fn=deploy_fn,
-        scrape_fn=scrape_fn,
-        point_sweep_fn=point_sweep_fn,
-        has_pending_cells=has_pending_cells,
     )
