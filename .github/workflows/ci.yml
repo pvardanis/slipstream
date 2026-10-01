@@ -166,10 +166,18 @@ jobs:
               - 'uv.lock'
               - '.dockerignore'
       # Build succeeding is the check: a broken Dockerfile or an unresolvable
-      # locked dependency fails the PR. No tag, no push.
+      # locked dependency fails the PR. No push.
       - name: Build the orchestration image (no push)
         if: steps.filter.outputs.orchestration == 'true'
-        run: docker build --platform linux/amd64 -f orchestration/Dockerfile .
+        run: docker build --platform linux/amd64 -f orchestration/Dockerfile -t orchestration-image:pr-build .
+
+      # The worker drives the GPU redeploy and ceiling scrape by shelling out to kubectl
+      # (slipstream_bench.orchestration.cluster), so the image must carry it. Assert it
+      # resolves on the image PATH here, rather than discovering its absence at run time
+      # on the worker, where it fails the sweep at the first point's apply.
+      - name: Assert kubectl is on the image PATH
+        if: steps.filter.outputs.orchestration == 'true'
+        run: docker run --rm --platform linux/amd64 orchestration-image:pr-build kubectl version --client
 
   shell-tests:
     name: shell unit tests

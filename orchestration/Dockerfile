@@ -58,6 +58,18 @@ RUN apt-get update \
     && apt-get upgrade --yes \
     && rm -rf /var/lib/apt/lists/*
 
+# The worker drives the per-point GPU redeploy and ceiling scrape by shelling out to
+# kubectl (slipstream_bench.orchestration.cluster), so the image must carry the binary.
+# Pinned to the EKS control-plane minor (terraform/eks kubernetes_version 1.36) to hold
+# the client within kubectl's +/-1 version-skew support. BuildKit's ADD --checksum
+# verifies the download against the release sha256 (the pin-by-content rule the base
+# image digests follow), failing the build on any mismatch; --chmod makes it executable
+# for the arbitrary uid the prefect-worker chart runs as. amd64 to match the worker nodes.
+ADD --chmod=0755 \
+    --checksum=sha256:33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e \
+    https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl \
+    /usr/local/bin/kubectl
+
 # The venv built in the builder stage carries the .[orchestration] deps and the sweep flow code.
 # Prepend its bin so the locked `prefect` and the package's console scripts resolve ahead of the
 # base image's own Prefect. The chart runs the container as an arbitrary uid; the venv is copied
