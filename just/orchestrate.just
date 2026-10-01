@@ -43,8 +43,15 @@ stack-down:
     # teardown.
     just prefect-down || true
     # cluster-down only when the endpoint is gone. A failed cluster-down is escalated —
-    # it means resources may remain billing for the sweep to catch.
-    if [[ "${overall}" -eq 0 ]] && ! just cluster-down; then overall=1; fi
+    # it means resources may remain billing for the sweep to catch. Drain the Prefect PVC
+    # first, while the EBS CSI driver is still installed, so its backing volume is reaped
+    # before the control plane goes rather than orphaned; best-effort, the sweep is the
+    # backstop. Tied to the cluster-down branch: skipped when the endpoint teardown wedged
+    # and the cluster stays up, so the drain never deletes storage under a live server.
+    if [[ "${overall}" -eq 0 ]]; then
+      just prefect-storage-down || true
+      if ! just cluster-down; then overall=1; fi
+    fi
     if ! just _zero-leak-sweep "${region}"; then overall=1; fi
     exit "${overall}"
 
@@ -101,6 +108,10 @@ cloud-verify:
     # is escalated — it means resources may remain for the sweep to catch.
     just gpu-down || true
     just gpu-pool-down || true
+    # cluster-up stood the Prefect server + its SQLite PVC up as part of the eks stack, so
+    # drain the PVC here too, while the EBS CSI driver is still installed, before cluster-down
+    # rips the control plane out and orphans the backing volume; best-effort, sweep backstop.
+    just prefect-storage-down || true
     if ! just cluster-down; then overall=1; fi
 
     # Money-safety backstop: assert no tagged resource outlived the teardown.
