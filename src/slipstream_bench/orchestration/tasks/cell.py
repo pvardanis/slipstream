@@ -34,32 +34,41 @@ from slipstream_bench.orchestration.validity import (
 # Protocol; the orchestration layer names the port and the caller adapts to it.
 CellExecution = Callable[[], None]
 
+# The task-run name template Prefect fills from the task's ``point_slug`` and
+# ``cell_name`` call parameters, so a run reads its grid coordinate — tier1 point slug,
+# then tier2 cell name — in the run list instead of the bare function name.
+_CELL_RUN_NAME = "{point_slug}:{cell_name}"
 
-def run_cell(
-    execute_func: CellExecution,
-    *,
-    result_path: Path,
-    result_uri: str,
-    max_error_rate: float = DEFAULT_MAX_ERROR_RATE,
-) -> str:
-    """Run one cell, gate its result, and return the cell's pointer.
+# The block names the two S3 storage blocks register under. Prefect resolves a
+# task's storage from a saved block document, so each is persisted server-side under a
+# stable name before the task binds it.
+_RESULT_BLOCK = "sweep-cell-results"
+_CACHE_KEY_BLOCK = "sweep-cell-cache-keys"
 
-    The Prefect-free core of the bench task: any raise here (an execution failure or
-    an invalid result) leaves the task with no value to cache, so the cell re-attempts
-    on the next run.
 
-    :param execute_func: runs the single cell, raising on process failure.
-    :param result_path: where the executed cell wrote its result JSON, gated before
-        the pointer is returned.
-    :param result_uri: the cell's S3 pointer, the task's return value and the single
-        source of truth Prefect points at (never a competing copy of the numbers).
-    :param max_error_rate: the health threshold passed to :func:`validate_cell`.
-    :return: ``result_uri`` once the result passes the validity gate.
-    :raise InvalidCellError: when the produced result is not a measurement.
+def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
+    """Build the bench-cell task with its result and cache storage on S3.
+
+    The production wiring of :func:`build_cell_task`: both storage blocks are rooted
+    in the sweep results bucket, on the two distinct prefixes
+    (:mod:`slipstream_bench.orchestration.storage`) so the cell pointer and the cache
+    index never collide. Prefect binds a task's storage from a persisted block
+    document, so each block is registered (idempotently, overwriting a prior
+    definition) before the task binds it — this must run where the Prefect API is
+    reachable, i.e. within the flow the sweep drives.
+
+    :param bucket: the sweep results bucket (``RESULTS_BUCKET``).
+    :param retries: opt-in retries for a flaky cell.
+    :return: the configured task, its state on S3.
+    :raise StorageError: when ``bucket`` is blank.
     """
-    execute_func()
-    validate_cell(result_path, max_error_rate=max_error_rate)
-    return result_uri
+    result = storage.result_storage(bucket)
+    cache_keys = storage.cache_key_storage(bucket)
+    result.save(_RESULT_BLOCK, overwrite=True)
+    cache_keys.save(_CACHE_KEY_BLOCK, overwrite=True)
+    return build_cell_task(
+        result_storage=result, key_storage=cache_keys, retries=retries
+    )
 
 
 def build_cell_task(
@@ -97,42 +106,31 @@ def build_cell_task(
     return as_task(_bench_cell)
 
 
-# The task-run name template Prefect fills from the task's ``point_slug`` and
-# ``cell_name`` call parameters, so a run reads its grid coordinate — tier1 point slug,
-# then tier2 cell name — in the run list instead of the bare function name.
-_CELL_RUN_NAME = "{point_slug}:{cell_name}"
+def run_cell(
+    execute_func: CellExecution,
+    *,
+    result_path: Path,
+    result_uri: str,
+    max_error_rate: float = DEFAULT_MAX_ERROR_RATE,
+) -> str:
+    """Run one cell, gate its result, and return the cell's pointer.
 
+    The Prefect-free core of the bench task: any raise here (an execution failure or
+    an invalid result) leaves the task with no value to cache, so the cell re-attempts
+    on the next run.
 
-# The block names the two S3 storage blocks register under. Prefect resolves a
-# task's storage from a saved block document, so each is persisted server-side under a
-# stable name before the task binds it.
-_RESULT_BLOCK = "sweep-cell-results"
-_CACHE_KEY_BLOCK = "sweep-cell-cache-keys"
-
-
-def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
-    """Build the bench-cell task with its result and cache storage on S3.
-
-    The production wiring of :func:`build_cell_task`: both storage blocks are rooted
-    in the sweep results bucket, on the two distinct prefixes
-    (:mod:`slipstream_bench.orchestration.storage`) so the cell pointer and the cache
-    index never collide. Prefect binds a task's storage from a persisted block
-    document, so each block is registered (idempotently, overwriting a prior
-    definition) before the task binds it — this must run where the Prefect API is
-    reachable, i.e. within the flow the sweep drives.
-
-    :param bucket: the sweep results bucket (``RESULTS_BUCKET``).
-    :param retries: opt-in retries for a flaky cell.
-    :return: the configured task, its state on S3.
-    :raise StorageError: when ``bucket`` is blank.
+    :param execute_func: runs the single cell, raising on process failure.
+    :param result_path: where the executed cell wrote its result JSON, gated before
+        the pointer is returned.
+    :param result_uri: the cell's S3 pointer, the task's return value and the single
+        source of truth Prefect points at (never a competing copy of the numbers).
+    :param max_error_rate: the health threshold passed to :func:`validate_cell`.
+    :return: ``result_uri`` once the result passes the validity gate.
+    :raise InvalidCellError: when the produced result is not a measurement.
     """
-    result = storage.result_storage(bucket)
-    cache_keys = storage.cache_key_storage(bucket)
-    result.save(_RESULT_BLOCK, overwrite=True)
-    cache_keys.save(_CACHE_KEY_BLOCK, overwrite=True)
-    return build_cell_task(
-        result_storage=result, key_storage=cache_keys, retries=retries
-    )
+    execute_func()
+    validate_cell(result_path, max_error_rate=max_error_rate)
+    return result_uri
 
 
 def _bench_cell(
