@@ -18,6 +18,9 @@ on:
       - uv.lock
       - orchestration/Dockerfile
       - .dockerignore
+      - model.yaml
+      - bench/sweep-grid.yaml
+      - k8s/vllm-gpu.yaml
       - .github/workflows/orchestration-image.yml
   push:
     branches: [main]
@@ -106,17 +109,20 @@ jobs:
           # in the probe step below).
           : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
           # The immutable content tag is the short hash of the last commit that touched
-          # any image input — the package source, its locked dependency set, and the build
-          # definition. A change to any of these is what a new content tag must capture;
-          # a change elsewhere (docs, terraform) leaves the image identical, so the probe
-          # below finds the tag present and skips the rebuild. Assign before writing: a
-          # failing substitution inside an echo argument does not trip `set -e`, so a bare
-          # assignment is what makes an error here fail the job rather than write an empty
-          # tag to GITHUB_OUTPUT. The width is pinned with --abbrev so the immutable tag for a
-          # commit stays constant: git's default short hash grows with history, which would
-          # otherwise re-tag the same content and defeat the presence probe below.
+          # any image input — the package source, its locked dependency set, the build
+          # definition, and the three deep-config files the image bakes for the worker
+          # (model.yaml, the sweep grid, the vLLM redeploy manifest). A change to any of
+          # these is what a new content tag must capture; a change elsewhere (docs,
+          # terraform) leaves the image identical, so the probe below finds the tag present
+          # and skips the rebuild. Assign before writing: a failing substitution inside an
+          # echo argument does not trip `set -e`, so a bare assignment is what makes an error
+          # here fail the job rather than write an empty tag to GITHUB_OUTPUT. The width is
+          # pinned with --abbrev so the immutable tag for a commit stays constant: git's
+          # default short hash grows with history, which would otherwise re-tag the same
+          # content and defeat the presence probe below.
           sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
-            src pyproject.toml uv.lock orchestration/Dockerfile .dockerignore)"
+            src pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
+            model.yaml bench/sweep-grid.yaml k8s/vllm-gpu.yaml)"
           if [[ -z "${sha_tag}" ]]; then
             echo "::error::could not derive a content tag — no commit touches the image inputs"
             exit 1

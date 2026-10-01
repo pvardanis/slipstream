@@ -65,6 +65,25 @@ RUN apt-get update \
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:${PATH}"
 
+# The three deep-config inputs the registered knob-sweep deployment reads on the worker at run
+# time (register-knob-sweep's in-image default paths, slipstream_bench.orchestration.cli): model.yaml
+# and sweep-grid.yaml are the served model and the sweep's grid, vllm-gpu.yaml is the redeploy template
+# whose serving image ref folds into the deep digest (ADR-0012). The worker has no source tree, so
+# they are baked rather than fetched. Copied low and narrowly so a config edit rebuilds only this
+# layer, never the dependency install above it. These files are image inputs: the content tag in
+# orchestration-image.yml hashes them and the build triggers watch them, so an edit republishes a
+# new image.
+COPY model.yaml /app/model.yaml
+COPY bench/sweep-grid.yaml /app/bench/sweep-grid.yaml
+COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
+
+# The directory each point's cells download their results under (register-knob-sweep's --results-dir
+# default). The prefect-worker chart runs the container as an arbitrary uid and pins no fsGroup
+# (terraform/eks/worker.tf sets no securityContext), so the running gid is not fixed to 0 — a
+# group-write grant under gid 0 would not reach it. World-write is the grant that holds for whatever
+# uid/gid the chart assigns, so the uid can write results without a chown.
+RUN mkdir -p /app/results && chmod 0777 /app/results
+
 # The prefect-worker Helm chart supplies the real command (tini -> entrypoint.sh -> prefect
 # worker start …). This default only serves a bare `docker run` — a version print that fails
 # loudly if the install is broken.
