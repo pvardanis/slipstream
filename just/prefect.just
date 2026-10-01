@@ -112,15 +112,17 @@ prefect-storage-down:
 # import — no source is fetched and no image is built for the process pool. Registration
 # hits the in-cluster Prefect API over a transient port-forward (reaped on exit), the same
 # way `prefect-up` creates the pool; run it after `prefect-up`. The cluster-stable inputs
-# (region, results bucket, bench-client image) are read from terraform and become the
-# deployment's default parameters; run_id and instance_id are supplied per run at trigger.
+# become the deployment's default parameters: region and results bucket are read from
+# terraform, the bench-client image from `_bench-image-ref`; run_id and instance_id are
+# supplied per run at trigger.
 [group('prefect')]
 prefect-register:
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed output lookup aborts; the non-empty checks then catch
     # the exit-0-empty-stdout case (a present-but-empty output), so neither path registers
-    # a deployment against an empty region, bucket, or image ref (see `cluster`).
+    # a deployment against an empty region, bucket, or image ref (same bare-assignment +
+    # non-empty-check idiom as `cluster-up` in cluster.just).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     [[ -n "${region}" ]] || { echo "eks output region is empty" >&2; exit 1; }
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"

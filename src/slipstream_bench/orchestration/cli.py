@@ -23,7 +23,9 @@ from typing import Annotated, Any
 
 import typer
 from prefect import Task, flow
+from prefect.client.orchestration import get_client
 from prefect.deployments.runner import EntrypointType
+from prefect.exceptions import ObjectNotFound
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
@@ -489,6 +491,25 @@ def knob_sweep(
         typer.echo(uri)
 
 
+def _require_work_pool(work_pool: str) -> None:
+    """Fail fast if the target work pool is absent, before registering against it.
+
+    ``flow.deploy`` only warns on a missing pool and still returns a deployment id, so a
+    typo'd or un-created pool would register a deployment no worker ever polls — every
+    triggered run would sit Scheduled forever, the obscure run-time failure the rest of
+    this command guards against. Reading the pool over the port-forward raises here with
+    an actionable message instead.
+    """
+    with get_client(sync_client=True) as client:
+        try:
+            client.read_work_pool(work_pool)
+        except ObjectNotFound:
+            raise typer.BadParameter(
+                f"work pool {work_pool!r} not found; run `just prefect-up` first",
+                param_hint="--work-pool",
+            ) from None
+
+
 @app.command("register-knob-sweep")
 def register_knob_sweep(
     *,
@@ -527,16 +548,18 @@ def register_knob_sweep(
     knob-sweep/knob-sweep --param run_id=... --param instance_id=...``. The worker runs
     the baked orchestration image, so the entrypoint is stored as a module path resolved
     by import (``EntrypointType.MODULE_PATH``) — no source tree is fetched and no laptop
-    path leaks into the deployment — and no image is built (the process worker runs its
-    own container). The cluster-stable inputs become the deployment's default parameters;
-    ``run_id`` and ``instance_id`` are supplied per run at trigger time.
+    path leaks into the deployment — and no image is built (a process worker runs the flow
+    in-process from its baked image). The cluster-stable inputs become the deployment's
+    default parameters; ``run_id`` and ``instance_id`` are supplied per run at trigger time.
 
     Run over a port-forward to the in-cluster Prefect API (see ``just prefect-register``).
 
     The cluster-stable inputs are rejected here if empty: ``run_id`` and ``instance_id``
     are the only parameters ``prefect deployment run`` supplies per run, so an empty
     ``region``, ``bucket``, or ``image_ref`` default would otherwise surface as an obscure
-    boto3 failure on the worker at run time, long after registration reported success.
+    boto3 failure on the worker at run time, long after registration reported success. The
+    target work pool is checked present for the same reason: ``flow.deploy`` only warns on a
+    missing pool, so an absent one would register a deployment whose runs never start.
 
     :param region: AWS region of the host and bucket.
     :param bucket: results bucket (RESULTS_BUCKET).
@@ -554,11 +577,13 @@ def register_knob_sweep(
         ("region", region),
         ("bucket", bucket),
         ("image-ref", image_ref),
+        ("work-pool", work_pool),
     ):
         if not value.strip():
             raise typer.BadParameter(
                 "must be a non-empty string", param_hint=f"--{name}"
             )
+    _require_work_pool(work_pool)
     deployment_id = knob_sweep_flow.deploy(
         name="knob-sweep",
         work_pool_name=work_pool,

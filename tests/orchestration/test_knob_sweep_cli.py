@@ -459,6 +459,7 @@ def test_register_knob_sweep_registers_a_module_path_deployment(
         return "dep-123"
 
     monkeypatch.setattr(cli_module.knob_sweep_flow, "deploy", _fake_deploy)
+    monkeypatch.setattr(cli_module, "_require_work_pool", lambda _wp: None)
 
     result = CliRunner().invoke(
         app,
@@ -513,6 +514,7 @@ def test_register_knob_sweep_threads_overrides_onto_the_deployment(
         return "dep-456"
 
     monkeypatch.setattr(cli_module.knob_sweep_flow, "deploy", _fake_deploy)
+    monkeypatch.setattr(cli_module, "_require_work_pool", lambda _wp: None)
 
     result = CliRunner().invoke(
         app,
@@ -546,12 +548,15 @@ def test_register_knob_sweep_threads_overrides_onto_the_deployment(
     assert captured["parameters"]["sweep_args_b64"] == "Zm9v"
 
 
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "whitespace"])
 @pytest.mark.parametrize("option", ["region", "bucket", "image-ref"])
 def test_register_knob_sweep_rejects_an_empty_cluster_input(
-    monkeypatch: pytest.MonkeyPatch, option: str
+    monkeypatch: pytest.MonkeyPatch, option: str, blank: str
 ) -> None:
-    # An empty region/bucket/image-ref would register a deployment whose default surfaces as
-    # an obscure boto3 failure on the worker at run time; reject it at registration instead.
+    # An empty or whitespace-only region/bucket/image-ref would register a deployment whose
+    # default surfaces as an obscure boto3 failure on the worker at run time; reject it at
+    # registration instead. The whitespace case pins the `.strip()` guard: a bare falsiness
+    # check would let "   " register a deployment defaulted to blanks.
     deployed = False
 
     def _fake_deploy(**_kwargs: Any) -> str:
@@ -560,9 +565,10 @@ def test_register_knob_sweep_rejects_an_empty_cluster_input(
         return "dep-nope"
 
     monkeypatch.setattr(cli_module.knob_sweep_flow, "deploy", _fake_deploy)
+    monkeypatch.setattr(cli_module, "_require_work_pool", lambda _wp: None)
 
     values = {"region": "us-east-1", "bucket": "bench-bucket", "image-ref": "repo:tag"}
-    values[option] = ""
+    values[option] = blank
     argv = ["register-knob-sweep"]
     for name, value in values.items():
         argv += [f"--{name}", value]
@@ -574,3 +580,101 @@ def test_register_knob_sweep_rejects_an_empty_cluster_input(
     # rendered message is not asserted: rich truncates it at the terminal width.
     assert result.exit_code == 2
     assert not deployed
+
+
+def test_register_knob_sweep_surfaces_a_deploy_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A registration that reaches deploy and fails (API unreachable over the port-forward, a
+    # Prefect-side rejection) must surface as a non-zero exit, not a swallowed success.
+    def _failing_deploy(**_kwargs: Any) -> str:
+        raise RuntimeError("prefect API unreachable")
+
+    monkeypatch.setattr(cli_module.knob_sweep_flow, "deploy", _failing_deploy)
+    monkeypatch.setattr(cli_module, "_require_work_pool", lambda _wp: None)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "register-knob-sweep",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, RuntimeError)
+
+
+def test_register_knob_sweep_rejects_an_absent_work_pool(_harness: None) -> None:
+    # `flow.deploy` only warns on a missing pool and still returns a deployment id, so a
+    # deployment would register that no worker ever polls — every run sitting Scheduled
+    # forever. The ephemeral server starts with no pools, so registration must fail fast
+    # here rather than report success. deploy is left real: the pool pre-check runs first.
+    result = CliRunner().invoke(
+        app,
+        [
+            "register-knob-sweep",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+            "--work-pool",
+            "ghost-pool",
+        ],
+    )
+
+    assert result.exit_code == 2
+
+
+def test_register_knob_sweep_creates_a_real_deployment(_harness: None) -> None:
+    # Register against a real ephemeral server with the real deploy: catches a Prefect
+    # API-contract break a faked deploy hides — a renamed kwarg, a dropped MODULE_PATH
+    # entrypoint, or a parameter that fails serialize_parameters (a raw Path default).
+    from prefect.client.orchestration import get_client
+    from prefect.client.schemas.actions import WorkPoolCreate
+
+    with get_client(sync_client=True) as client:
+        client.create_work_pool(WorkPoolCreate(name="sweep-pool", type="process"))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "register-knob-sweep",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    with get_client(sync_client=True) as client:
+        deployment = client.read_deployment_by_name("knob-sweep/knob-sweep")
+    # The entrypoint is the dotted module path resolved by import, not a file path — so the
+    # worker runs the baked image without fetching a source tree.
+    assert deployment.entrypoint == (
+        "slipstream_bench.orchestration.cli.knob_sweep_flow"
+    )
+    assert deployment.work_pool_name == "sweep-pool"
+    # The cluster-stable defaults round-trip through the server, paths serialized to str.
+    assert deployment.parameters == {
+        "region": "us-east-1",
+        "bucket": "bench-bucket",
+        "image_ref": "repo:tag",
+        "model_yaml": "/app/model.yaml",
+        "sweep_grid": "/app/bench/sweep-grid.yaml",
+        "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
+        "results_dir": "/app/results",
+        "retries": 0,
+        "commercial": False,
+        "sweep_args_b64": "",
+    }
