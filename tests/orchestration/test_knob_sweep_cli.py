@@ -452,6 +452,43 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     assert len(pointers) == 2
 
 
+def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    # The parent knob-sweep flow run carries run=<run_id>, the same tag its point sweeps
+    # group under, so the UI filters the whole sweep — parent and points — as one run.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
+    captured: dict[str, Any] = {}
+
+    def _recording_point_sweep(**_kwargs: Any) -> list[str]:
+        from prefect.runtime import flow_run
+
+        captured["parent_id"] = flow_run.id
+        return ["ptr"]
+
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _recording_point_sweep)
+
+    knob_sweep_flow(
+        run_id="run1",
+        instance_id="i-1",
+        region="us-east-1",
+        bucket="bench-bucket",
+        image_ref="repo:tag",
+        model_yaml=model_yaml,
+        sweep_grid=grid_yaml,
+        vllm_manifest=manifest,
+        results_dir=tmp_path / "results",
+    )
+
+    from prefect.client.orchestration import get_client
+
+    with get_client(sync_client=True) as client:
+        run = client.read_flow_run(captured["parent_id"])
+    assert "run=run1" in run.tags
+
+
 def test_register_knob_sweep_registers_a_module_path_deployment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
