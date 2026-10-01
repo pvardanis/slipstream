@@ -16,7 +16,8 @@ and :func:`knob_sweep_flow` is the ``@flow``-decorated composition root the Pref
 deployment registers: it builds the real collaborators inside the flow and drives the loop,
 so only serializable parameters cross the flow boundary. Each point sweep runs nested under
 that one parent flow run, so the point sweeps of a knob sweep share a parent->child lineage
-in the Prefect UI.
+in the Prefect UI, and the parent run is tagged ``run=<run-id>`` to join the same ``run=``
+filter its point sweeps group under.
 """
 
 import logging
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from prefect import Task, flow
+from prefect.client.orchestration import get_client
+from prefect.runtime import flow_run
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
@@ -134,6 +137,8 @@ def knob_sweep_flow(
     The parameters are all serializable (Prefect persists them through
     ``serialize_parameters``); the live handles are built inside the flow, never passed in.
     The three config paths are read on the worker at run time, so they name in-image files.
+    This parent run is tagged ``run=<run-id>``, the same tag its point sweeps group under, so
+    the UI filters the whole sweep — parent and points — as one run.
 
     :param run_id: shared run the points nest under (``<run-id>/<point-slug>``).
     :param instance_id: bench host the cells run on.
@@ -149,6 +154,7 @@ def knob_sweep_flow(
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
     :return: the S3 pointer for each cell of every point, in order.
     """
+    _tag_run_with_group(run_id)
     grid = load_grid(sweep_grid)
     inputs = KnobSweepInputs(
         grid=grid,
@@ -327,3 +333,20 @@ def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepCo
         commercial=inputs.commercial,
         sweep_args_b64=inputs.sweep_args_b64,
     )
+
+
+def _tag_run_with_group(run_id: str) -> None:
+    """Tag the running knob-sweep flow run ``run=<run-id>``, matching its point sweeps.
+
+    The point sweeps tag their own runs through the ``tags`` context manager
+    (:func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep`); the parent
+    run is already created when this flow body runs, so that context manager cannot reach it
+    — its run is updated through the API instead. The update overwrites tags rather than
+    merging, so the current set is read and the run tag added to it. A direct call outside a
+    flow run (no runtime id) is a no-op.
+    """
+    flow_run_id = flow_run.id
+    if flow_run_id is None:
+        return
+    with get_client(sync_client=True) as client:
+        client.update_flow_run(flow_run_id, tags=set(flow_run.tags) | {f"run={run_id}"})
