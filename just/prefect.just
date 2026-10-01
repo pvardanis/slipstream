@@ -2,9 +2,10 @@
 # helm_release in the eks stack (terraform/eks/prefect.tf): it comes up with
 # `just cluster-up` and is torn down by `just cluster-down` (ADR-0015 amendment).
 # These recipes wrap what lives outside terraform — the process work pool a worker
-# polls, the port-forward that reaches the UI/API with no public endpoint, and the
-# synchronous drain of the server's SQLite PVC ahead of `cluster-down`, so the EBS
-# CSI driver reaps the backing volume while it is still installed.
+# polls and the port-forward that reaches the UI/API with no public endpoint — plus one
+# operational step over a terraform-managed resource: the synchronous drain of the
+# server's SQLite PVC ahead of `cluster-down`, so the EBS CSI driver reaps the backing
+# volume while it is still installed.
 
 # Create the process work pool (concurrency 1) the sweep worker polls. The server
 # Deployment is already applied by `just cluster-up` (helm_release, wait=true), so it
@@ -74,6 +75,11 @@ prefect-storage-down:
       echo "prefect-storage-down: no PVCs in ${namespace}; nothing to drain" >&2
       exit 0
     fi
+    # Any failure from here leaves the PVC partly drained, so cluster-down can orphan its
+    # volume. Announce that the zero-leak sweep is now the load-bearing backstop, then let
+    # set -e exit non-zero (the call sites guard with `|| true` so this never blocks
+    # cluster-down). The explicit exits below add the specific reason on top of this line.
+    trap 'echo "prefect-storage-down: drain incomplete; relying on the zero-leak sweep to flag any orphaned volume" >&2' ERR
     # Release the single-attach volume before deleting its claim: scale the server to zero
     # and wait for the pod to go, so the pvc-protection finalizer clears and the PVC is free
     # to delete rather than hanging in Terminating under a live mount.
@@ -81,15 +87,21 @@ prefect-storage-down:
     kubectl -n "${namespace}" rollout status deploy/prefect-server --timeout=120s
     kubectl -n "${namespace}" delete pvc --all --wait --timeout=120s
     # Wait for each bound PV to vanish: its deletion is what drives the CSI DeleteVolume that
-    # reaps the EBS volume. A PV outliving the timeout means the driver has not reaped it, so
-    # fail loudly — the zero-leak sweep then flags the orphan instead of a false-green drain.
+    # reaps the EBS volume. A PV that outlives the wait, or that we cannot confirm is gone,
+    # fails loudly so the zero-leak sweep flags the orphan instead of a false-green drain.
     read -ra pv_list <<<"${pvs}"
     for pv in "${pv_list[@]}"; do
-      if ! kubectl wait --for=delete "pv/${pv}" --timeout=120s 2>/dev/null; then
-        if kubectl get "pv/${pv}" >/dev/null 2>&1; then
-          echo "prefect-storage-down: ${pv} still present after delete; its backing volume may orbit" >&2
-          exit 1
-        fi
+      kubectl wait --for=delete "pv/${pv}" --timeout=120s && continue
+      # The wait exited non-zero: the PV is either already gone (reaped) or still present /
+      # unqueryable. Ask for it directly and treat only a NotFound as reaped — any other
+      # error means the reap is unconfirmed, so fail rather than assume it succeeded.
+      status="$(kubectl get "pv/${pv}" -o name 2>&1)" && {
+        echo "prefect-storage-down: ${pv} still present after delete; its backing volume may orbit" >&2
+        exit 1
+      }
+      if ! grep -qi 'notfound\|not found' <<<"${status}"; then
+        echo "prefect-storage-down: cannot confirm ${pv} was reaped: ${status}" >&2
+        exit 1
       fi
     done
 
