@@ -109,8 +109,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # The host writes results; the worker only reads them back (aws s3 sync
-      # sweeps/…), so GetObject/ListBucket, never PutObject.
+      # The host writes the sweep result objects; the worker reads them back (aws s3 sync
+      # sweeps/…), so GetObject/ListBucket on the bucket at large.
       {
         Sid      = "ResultsBucketObjects"
         Effect   = "Allow"
@@ -122,6 +122,18 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
         Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*"
+      },
+      # The worker persists its own resume state with persist_result=True: the task result
+      # under prefect/results and the cache-key records under prefect/cache-keys. PutObject
+      # is scoped to those two prefixes, never the host-owned sweep objects at the root.
+      {
+        Sid    = "PrefectStateObjects"
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/prefect/results/*",
+          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/prefect/cache-keys/*",
+        ]
       },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;
