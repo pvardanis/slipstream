@@ -211,3 +211,48 @@ implementation ticket.
 revalues per-run Jobs (parallel points want per-run isolation and scheduling a process pool
 cannot give) and reopens the pool type — now a switch to a **kubernetes** pool on the same
 self-hosted server, no tier change needed.
+
+## Amendment (2026-10-02): the run's configuration is published as one parent-level artifact
+
+A knob-sweep run page showed no record of the configuration the run executed. The served
+model, the swept grid, and the engine args a redeploy ran with lived only in the image's
+files; an operator verifying what a particular run ran with had to leave the UI and read the
+image. The run is already versioned — the bench-client image's content-sha tag, the deep
+digest (ADR-0012) — but neither is human-inspectable.
+
+**Decision — publish the configuration as one keyed markdown artifact on the parent run
+page.** The flow renders a markdown body and publishes it through
+`create_markdown_artifact`, keyed so Prefect keeps a cross-run history of it. The body folds
+the version anchors (the bench-client image ref, the orchestration image ref, the deep
+config digest) with `model.yaml` and `sweep-grid.yaml` verbatim, the vLLM serving image ref,
+and the vLLM container args verbatim — the swept placeholders (`${MAX_NUM_SEQS}`,
+`${KV_CACHE_DTYPE}`, `${PREFIX_CACHING_FLAG}`) left intact. The render is a pure function of
+its inputs; the Prefect call stays in the flow.
+
+**One artifact at the parent, not one per point or a three-level tree.** The run hierarchy is
+one parent flow run, one `point-sweep` subflow run per engine point, and a cell task per
+Tier-2 rung. An earlier shape published the configuration lower down — the vLLM args
+resolved per engine point into one block each, or a three-level layout with a subflow
+artifact per point and a cell artifact per rung. Both were rejected. The swept deltas are
+already read off the Prefect graph: the engine point's slug (`mns{N}_kv{dtype}_pc{on|off}`)
+and the cell name (`pshare{share}_burst{burstiness}[_mc{cap}]`) name exactly the knobs that
+vary. Everything else is fixed for the whole run and belongs recorded once. Resolving the
+args per point produced ~20 near-identical blocks that drowned that signal, and re-rendering
+the manifest from the same inputs would only prove the substitution is deterministic, not
+that the pod actually served those args. The slug on the graph names the point a redeploy
+ran; the grid in the artifact decodes what each slug's placeholders resolve to.
+
+**The orchestration image ref is baked at build time.** The flow runs in-process under a
+**process** work pool, which gives it no runtime handle to its own worker image, and
+neither the Prefect runtime nor the Kubernetes downward API exposes a pod's own image field
+for that pool. So the orchestration image's own ref is baked into the image as
+`ORCH_IMAGE_REF` at build time (its content-tag ref, deterministic per image) and read from
+the environment. A local or test build bakes none, so it reads as `"unknown"`. This is kept
+separate from the bench-client image ref because the two images do not always share a tag.
+
+**Consequences.** Ships as a stack, one kind of change each (per this ADR's own precedent):
+the build change that bakes `ORCH_IMAGE_REF` (build/CI), and the flow + render code (code).
+The deep digest's input set is unchanged — the artifact reads `model.yaml`,
+`sweep-grid.yaml`, and the vLLM manifest for display only, and does not fold the
+orchestration image ref into the digest. A **three-level artifact layout** reopens only if a
+point or a cell gains configuration that is not already encoded in its slug or cell name.
