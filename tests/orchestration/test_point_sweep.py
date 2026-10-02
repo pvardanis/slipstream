@@ -118,6 +118,17 @@ class _UnhealthyOnceS3:
             Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
 
 
+class _DestRecordingS3:
+    """Record each download destination, serving every cell a valid result."""
+
+    def __init__(self) -> None:
+        self.dests: list[str] = []
+
+    def download_file(self, _bucket: str, _key: str, dest: str) -> None:
+        self.dests.append(dest)
+        Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
+
+
 def _isolated_task(tmp_path: Path):
     results = LocalFileSystem(basepath=str(tmp_path / "results"))
     results.save(f"results-{uuid4().hex}", overwrite=True)
@@ -147,7 +158,6 @@ def _grid(tmp_path: Path) -> Path:
 def _drive(tmp_path: Path, ssm: _FakeSsm, task, s3=None) -> list[str]:
     return run_point_sweep(
         grid_path=_grid(tmp_path),
-        results_dir=tmp_path / "results-local",
         context=_context(),
         ssm_client=ssm,
         s3_client=s3 or _FakeS3(),
@@ -168,6 +178,34 @@ def test_first_run_executes_every_cell(tmp_path: Path) -> None:
     assert all(p.startswith("s3://bench-bucket/sweeps/run1/") for p in pointers)
     assert ssm.proxy_ups() == 1
     assert ssm.cell_runs() == 4
+
+
+def test_cell_results_download_into_an_ephemeral_dir_cleaned_after(
+    tmp_path: Path,
+) -> None:
+    """Each cell's result JSON downloads into a scratch dir the flow owns and removes.
+
+    The worker runs under a read-only root filesystem, so the download target cannot be
+    a fixed in-image path; it is an ephemeral directory created and torn down inside the
+    flow. The validity gate reads each result while the flow runs, then nothing it
+    downloaded survives the flow — no fixed results path is written to.
+    """
+    recorder = _DestRecordingS3()
+
+    pointers = run_point_sweep(
+        grid_path=_grid(tmp_path),
+        context=_context(),
+        ssm_client=_FakeSsm(),
+        s3_client=recorder,
+        task=_isolated_task(tmp_path),
+        poll_interval_s=0.0,
+        sleep=lambda _s: None,
+    )
+
+    assert len(pointers) == 4
+    assert recorder.dests  # every cell was downloaded somewhere
+    assert not any(Path(dest).exists() for dest in recorder.dests)
+    assert not any(Path(dest).parent.exists() for dest in recorder.dests)
 
 
 def test_no_cell_command_carries_a_tokenizer_env(tmp_path: Path) -> None:
@@ -251,7 +289,6 @@ def test_every_point_flow_run_is_named_and_grouped(tmp_path: Path) -> None:
 
     run_point_sweep(
         grid_path=_grid(tmp_path),
-        results_dir=tmp_path / "results-local",
         context=_context(),
         ssm_client=_FakeSsm(),
         s3_client=_FakeS3(),
@@ -283,7 +320,6 @@ def test_each_cell_run_is_tagged_with_its_tier_knobs(tmp_path: Path) -> None:
 
     run_point_sweep(
         grid_path=_grid(tmp_path),
-        results_dir=tmp_path / "results-local",
         context=_context(),
         ssm_client=_FakeSsm(),
         s3_client=_FakeS3(),

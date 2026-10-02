@@ -115,8 +115,6 @@ def test_point_sweep_echoes_each_cell_pointer(
             str(grid_yaml),
             "--vllm-manifest",
             str(manifest),
-            "--results-dir",
-            str(tmp_path / "results"),
         ],
     )
 
@@ -130,3 +128,39 @@ def test_point_sweep_echoes_each_cell_pointer(
         sweep_grid_yaml=_GRID_YAML,
         image_ref="vllm/vllm-openai:v0.6.0",
     )
+
+
+def test_point_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
+    # The worker's per-point download dir is an internal TemporaryDirectory, not an
+    # operator-supplied path: the command must carry no --results-dir option to re-open.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "point-sweep",
+            "--run-id",
+            "run1/mns64",
+            "--point-slug",
+            "mns64",
+            "--instance-id",
+            "i-1",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+            "--model-yaml",
+            str(model_yaml),
+            "--sweep-grid",
+            str(grid_yaml),
+            "--vllm-manifest",
+            str(manifest),
+            "--results-dir",
+            str(tmp_path / "results"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option: --results-dir" in result.output
