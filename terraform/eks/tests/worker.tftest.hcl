@@ -121,8 +121,10 @@ run "worker_layer_shape" {
   # The worker persists its resume state with persist_result=True: the task result under
   # prefect/results and the cache-key records under prefect/cache-keys. PutObject is scoped
   # to exactly those two prefixes, never the host-owned sweep objects at the bucket root.
+  # Resource is normalised to a list so the membership checks never run against a bare
+  # string Resource on the other statements (which errors where && does not short-circuit).
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && length(s.Resource) == 2 && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 2 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
     error_message = "The policy must allow s3:PutObject scoped to exactly the prefect/results and prefect/cache-keys prefixes."
   }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
