@@ -21,6 +21,7 @@ filter its point sweeps group under.
 """
 
 import logging
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from prefect import Task, flow
+from prefect.artifacts import create_markdown_artifact
 from prefect.client.orchestration import get_client
 from prefect.runtime import flow_run
 
@@ -39,6 +41,10 @@ from slipstream_bench.orchestration.cluster import (
     scrape_ceiling,
 )
 from slipstream_bench.orchestration.completion import point_is_complete
+from slipstream_bench.orchestration.config_artifact import (
+    ImageRefs,
+    publish_config_artifact,
+)
 from slipstream_bench.orchestration.digest import DigestInputs
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
@@ -153,22 +159,38 @@ def knob_sweep_flow(
     """
     _tag_run_with_group(run_id)
     grid = load_grid(sweep_grid)
+    digest_inputs = DigestInputs(
+        model_yaml=model_yaml,
+        sweep_grid=sweep_grid,
+        vllm_manifest=vllm_manifest,
+    )
     inputs = KnobSweepInputs(
         grid=grid,
         grid_path=sweep_grid,
-        manifest_path=vllm_manifest,
+        manifest_path=digest_inputs.vllm_manifest,
         run=run_id,
-        digest=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=sweep_grid,
-            vllm_manifest=vllm_manifest,
-        ).digest(),
+        digest=digest_inputs.digest(),
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
         model=read_model_id(model_yaml),
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
+    )
+    # Surface the run's configuration on its Prefect run page: the version anchors (the
+    # bench-client and orchestration image content-sha tags, the deep digest), the two
+    # verbatim config bodies (model.yaml, sweep-grid.yaml), the manifest's serving image ref,
+    # and the vLLM container args verbatim, so an operator inspects exactly what the run
+    # executed without the files leaving the image. The orchestration image bakes its own ref
+    # as ORCH_IMAGE_REF; a local or test build bakes none, so it reads as "unknown".
+    publish_config_artifact(
+        run_id=run_id,
+        images=ImageRefs(
+            bench=image_ref,
+            orch=os.environ.get("ORCH_IMAGE_REF") or "unknown",
+        ),
+        digest_inputs=digest_inputs,
+        publish=create_markdown_artifact,
     )
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
         build_knob_sweep_collaborators(

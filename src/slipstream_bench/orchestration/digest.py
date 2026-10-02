@@ -88,6 +88,38 @@ def read_image_ref(manifest: Path, *, container: str = _VLLM_CONTAINER) -> str:
     :raise DigestError: when the manifest is missing, unreadable, not valid YAML,
         holds no such container, or that container declares no image.
     """
+    return _require_image(_find_container(manifest, container), container, manifest)
+
+
+def read_vllm_args(manifest: Path, *, container: str = _VLLM_CONTAINER) -> list[str]:
+    """Read the serving-engine container's args out of the vLLM Deployment manifest.
+
+    The args are the engine flags the ``vllm`` container runs with — ``--model``, the
+    swept knobs rendered per point (``--max-num-seqs ${MAX_NUM_SEQS}``), and the rest. They
+    are the manifest's redeploy shape, read here so a run's configuration can be shown
+    without embedding the whole manifest body.
+
+    :param manifest: the ``k8s/vllm-gpu.yaml`` Deployment manifest.
+    :param container: the container name whose args are the serving engine's.
+    :return: the container's args, each as a string.
+    :raise DigestError: when the manifest is missing, unreadable, not valid YAML, holds no
+        such container, or that container declares no args.
+    """
+    entry = _find_container(manifest, container)
+    args = entry.get("args")
+    if not isinstance(args, list) or not args:
+        raise DigestError(
+            f"{manifest} '{container}' container declares no args to read"
+        )
+    return [str(arg) for arg in args]
+
+
+def _find_container(manifest: Path, container: str) -> dict[str, object]:
+    """Find a named container entry in the vLLM Deployment manifest.
+
+    :raise DigestError: when the manifest is missing, unreadable, not valid YAML, or holds
+        no container of that name.
+    """
     try:
         text = manifest.read_text(encoding="utf-8")
     except FileNotFoundError as error:
@@ -101,10 +133,8 @@ def read_image_ref(manifest: Path, *, container: str = _VLLM_CONTAINER) -> str:
         raise DigestError(f"{manifest} is not valid YAML: {error}") from error
     for entry in _get_containers(documents, manifest):
         if isinstance(entry, dict) and entry.get("name") == container:
-            return _require_image(entry, container, manifest)
-    raise DigestError(
-        f"{manifest} has no '{container}' container to read the serving image ref from"
-    )
+            return entry
+    raise DigestError(f"{manifest} has no '{container}' container")
 
 
 def _get_containers(documents: list[object], manifest: Path) -> list[object]:
