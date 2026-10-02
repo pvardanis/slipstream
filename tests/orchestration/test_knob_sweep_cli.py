@@ -13,6 +13,7 @@ is registered as a module-path entrypoint on the process pool with no image buil
 """
 
 import logging
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -37,6 +38,15 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
 )
 from slipstream_bench.sweep.aggregation import CeilingScrapeError, EnginePoint
 from slipstream_bench.sweep.grid import SweepGrid
+
+# Typer colours an option name when a terminal forces colour (CI does), rendering
+# ``--results-dir`` with a reset between the dashes so the literal hides from a
+# substring check. Strip the escapes before asserting on text.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(output: str) -> str:
+    return _ANSI.sub("", output)
 
 
 @pytest.fixture
@@ -432,7 +442,7 @@ def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "No such option: --results-dir" in result.output
+    assert "No such option: --results-dir" in _plain(result.output)
 
 
 def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
