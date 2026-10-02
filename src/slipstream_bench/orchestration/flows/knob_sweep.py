@@ -77,14 +77,13 @@ class KnobSweepInputs:
 
     The grid and manifest the points are enumerated and redeployed from, the shared run
     the points nest under, and the deep config digest and addressing every point sweep
-    keys its cells by. A point's own values — its slug, its results subdir, its nested
-    run id — are derived per point from these; nothing here varies point to point.
+    keys its cells by. A point's own values — its slug, its nested run id — are derived
+    per point from these; nothing here varies point to point.
     """
 
     grid: SweepGrid
     grid_path: Path
     manifest_path: Path
-    results_dir: Path
     run: str
     digest: str
     instance_id: str
@@ -120,7 +119,6 @@ def knob_sweep_flow(
     model_yaml: Path,
     sweep_grid: Path,
     vllm_manifest: Path,
-    results_dir: Path,
     retries: int = 0,
     commercial: bool = False,
     sweep_args_b64: str = "",
@@ -148,7 +146,6 @@ def knob_sweep_flow(
     :param model_yaml: model.yaml — the served model id and a digest input.
     :param sweep_grid: sweep-grid.yaml — the engine points, their cells, a digest input.
     :param vllm_manifest: k8s/vllm-gpu.yaml — the redeploy template and serving image ref.
-    :param results_dir: directory each point's cells download under.
     :param retries: opt-in cell retries for a transient transport fault.
     :param commercial: run the commercial arm (needs a tokenizer).
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
@@ -160,7 +157,6 @@ def knob_sweep_flow(
         grid=grid,
         grid_path=sweep_grid,
         manifest_path=vllm_manifest,
-        results_dir=results_dir,
         run=run_id,
         digest=DigestInputs(
             model_yaml=model_yaml,
@@ -294,10 +290,9 @@ def _sweep_one_point(
     s3_client: Any,
     task: Task[..., str],
 ) -> list[str]:
-    """Run one point's Tier-2 ladder under its own results subdir and nested run id."""
+    """Run one point's Tier-2 ladder under its own nested run id."""
     return run_point_sweep(
         grid_path=inputs.grid_path,
-        results_dir=inputs.results_dir / point.slug(),
         context=_build_point_context(inputs, point),
         ssm_client=ssm_client,
         s3_client=s3_client,

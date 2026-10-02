@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from prefect import Task, flow, tags
@@ -48,6 +49,13 @@ _PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
 # proxy) as a flag, and render_cell_config strips it, so the value enumerated here is
 # never sent — it only satisfies the non-empty CellConfig field.
 _PLACEHOLDER_BASE_URL = "http://127.0.0.1:0"
+
+# Placeholder out_dir: bench-sweep.sh runs the cell with its own --out-dir /out (the
+# container path it bind-mounts from the host result dir), and render_cell_config strips
+# out_dir, so the value enumerated here is never sent — it only satisfies the non-empty
+# CellConfig field. The worker's own per-point download dir is the ephemeral
+# TemporaryDirectory below, not this.
+_PLACEHOLDER_OUT_DIR = "/out"
 
 
 @dataclass(frozen=True)
@@ -114,7 +122,6 @@ class SweepContext:
 def run_point_sweep(
     *,
     grid_path: Path,
-    results_dir: Path,
     context: SweepContext,
     ssm_client: Any,
     s3_client: Any,
@@ -127,8 +134,6 @@ def run_point_sweep(
 
     :param grid_path: the ``sweep-grid.yaml`` the point's cells are derived from — the
         single source of the grid axes and load knobs, and the file the digest is over.
-    :param results_dir: the local directory each cell's result JSON downloads into
-        (the validity gate's input).
     :param context: the per-run context (run id, point slug, digest, host, bucket).
     :param ssm_client: the boto3 SSM client (or stand-in) commands are sent through.
     :param s3_client: the boto3 S3 client (or stand-in) results are downloaded with.
@@ -150,7 +155,6 @@ def run_point_sweep(
     def _flow() -> list[str]:
         return _drive_point_sweep(
             grid_path=grid_path,
-            results_dir=results_dir,
             context=context,
             ssm_client=ssm_client,
             s3_client=s3_client,
@@ -169,7 +173,6 @@ def run_point_sweep(
 def _drive_point_sweep(
     *,
     grid_path: Path,
-    results_dir: Path,
     context: SweepContext,
     ssm_client: Any,
     s3_client: Any,
@@ -194,7 +197,7 @@ def _drive_point_sweep(
         context.point_slug,
         base_url=_PLACEHOLDER_BASE_URL,
         model=context.model,
-        out_dir=str(results_dir),
+        out_dir=_PLACEHOLDER_OUT_DIR,
         commercial=context.commercial,
     )
 
@@ -212,20 +215,28 @@ def _drive_point_sweep(
         sleep=sleep,
     )
 
+    # Each cell's result JSON is downloaded only so the validity gate can read it, then
+    # discarded — the durable copy stays in S3. The worker runs read-only-rootfs, so the
+    # download target is an ephemeral dir (writable /tmp), torn down when the point ends.
     pointers: list[str] = []
-    for cell in sweep_config.cells():
-        name = get_cell_basename(cell)
-        dest = results_dir / name
-        execute = build_cell_execution(cell, context=execution_context, dest=dest)
-        labeled = task.with_options(tags=get_cell_run_tags(context.point_slug, cell))
-        pointers.append(
-            labeled(
-                digest=context.digest,
-                point_slug=context.point_slug,
-                cell_name=name,
-                execute_func=execute,
-                result_path=dest,
-                result_uri=get_cell_result_uri(context.bucket, context.run_id, cell),
+    with TemporaryDirectory() as scratch:
+        for cell in sweep_config.cells():
+            name = get_cell_basename(cell)
+            dest = Path(scratch) / name
+            execute = build_cell_execution(cell, context=execution_context, dest=dest)
+            labeled = task.with_options(
+                tags=get_cell_run_tags(context.point_slug, cell)
             )
-        )
+            pointers.append(
+                labeled(
+                    digest=context.digest,
+                    point_slug=context.point_slug,
+                    cell_name=name,
+                    execute_func=execute,
+                    result_path=dest,
+                    result_uri=get_cell_result_uri(
+                        context.bucket, context.run_id, cell
+                    ),
+                )
+            )
     return pointers

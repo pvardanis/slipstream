@@ -90,7 +90,6 @@ bench point_slug *args:
       --model-yaml model.yaml \
       --sweep-grid bench/sweep-grid.yaml \
       --vllm-manifest {{ gpu_manifests }} \
-      --results-dir "bench/results/${run_id}/{{ point_slug }}" \
       --sweep-args-b64 "${args_b64}" || rc=$?
 
     # Sync regardless of the sweep's status: a resumed cell is served from S3 and never

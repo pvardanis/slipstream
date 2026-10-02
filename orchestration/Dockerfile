@@ -89,13 +89,6 @@ COPY model.yaml /app/model.yaml
 COPY bench/sweep-grid.yaml /app/bench/sweep-grid.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
-# The directory each point's cells download their results under (register-knob-sweep's --results-dir
-# default). The prefect-worker chart runs the container as an arbitrary uid and pins no fsGroup
-# (terraform/eks/worker.tf sets no securityContext), so the running gid is not fixed to 0 — a
-# group-write grant under gid 0 would not reach it. World-write is the grant that holds for whatever
-# uid/gid the chart assigns, so the uid can write results without a chown.
-RUN mkdir -p /app/results && chmod 0777 /app/results
-
 # The prefect-worker Helm chart supplies the real command (tini -> entrypoint.sh -> prefect
 # worker start …). This default only serves a bare `docker run` — a version print that fails
 # loudly if the install is broken.

@@ -133,14 +133,13 @@ def _grid() -> SweepGrid:
     return SweepGrid.model_validate(yaml.safe_load(_GRID))
 
 
-def _inputs(results_dir: Path) -> KnobSweepInputs:
-    manifest_path = results_dir / "vllm-gpu.yaml"
+def _inputs(manifest_dir: Path) -> KnobSweepInputs:
+    manifest_path = manifest_dir / "vllm-gpu.yaml"
     manifest_path.write_text(_MANIFEST, encoding="utf-8")
     return KnobSweepInputs(
         grid=_grid(),
         grid_path=Path("sweep-grid.yaml"),
         manifest_path=manifest_path,
-        results_dir=results_dir,
         run="run1",
         digest="deadbeef",
         instance_id="i-1",
@@ -151,10 +150,10 @@ def _inputs(results_dir: Path) -> KnobSweepInputs:
 
 
 def _collaborators(
-    results_dir: Path, *, kubectl: _FakeKubectl
+    manifest_dir: Path, *, kubectl: _FakeKubectl
 ) -> tuple[Any, Any, Any, Any]:
     return build_knob_sweep_collaborators(
-        _inputs(results_dir),
+        _inputs(manifest_dir),
         kubectl=kubectl,
         ssm_client=object(),
         s3_client=object(),
@@ -195,7 +194,7 @@ def test_scrape_raises_loud_when_the_log_carries_no_ceiling() -> None:
         _scrape_and_log_ceiling(_POINT, kubectl=kubectl)
 
 
-def test_sweep_one_point_runs_under_the_points_run_id_and_results_subdir(
+def test_sweep_one_point_runs_under_the_points_nested_run_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -216,16 +215,13 @@ def test_sweep_one_point_runs_under_the_points_run_id_and_results_subdir(
             task=cast(Task[..., str], object()),
         )
 
-    # Two distinct points: each nests under the sweep's shared run and lands in its own
-    # per-point subdir, so their identically-named tier-2 cells never collide on disk.
+    # Two distinct points: each nests under the sweep's shared run (<run>/<point-slug>),
+    # so their cells are addressed and keyed apart.
     assert _sweep(_POINT) == [f"ptr:{_POINT.slug()}"]
     assert _sweep(_OTHER_POINT) == [f"ptr:{_OTHER_POINT.slug()}"]
 
     assert calls[0]["context"].run_id == f"run1/{_POINT.slug()}"
-    assert calls[0]["results_dir"] == tmp_path / _POINT.slug()
     assert calls[1]["context"].run_id == f"run1/{_OTHER_POINT.slug()}"
-    assert calls[1]["results_dir"] == tmp_path / _OTHER_POINT.slug()
-    assert calls[0]["results_dir"] != calls[1]["results_dir"]
 
 
 def test_has_pending_cells_is_the_negation_of_point_is_complete(
@@ -269,9 +265,7 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 @pytest.mark.parametrize("field", ["run", "digest", "bucket", "model"])
-def test_empty_keying_input_is_rejected_before_the_redeploy(
-    tmp_path: Path, field: str
-) -> None:
+def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
     # An empty keying field would address cells under a broken key; rejecting it on
     # construction fails the sweep before its first ~20-minute GPU redeploy, not at the
     # S3 probe or silently.
@@ -279,7 +273,6 @@ def test_empty_keying_input_is_rejected_before_the_redeploy(
         "grid": _grid(),
         "grid_path": Path("sweep-grid.yaml"),
         "manifest_path": Path("vllm-gpu.yaml"),
-        "results_dir": tmp_path,
         "run": "run1",
         "digest": "deadbeef",
         "instance_id": "i-1",
@@ -382,8 +375,6 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
             str(grid_yaml),
             "--vllm-manifest",
             str(manifest),
-            "--results-dir",
-            str(tmp_path / "results"),
             "--retries",
             "2",
             "--commercial",
@@ -408,6 +399,40 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     # The commercial arm and the extra load-cell flags reach the inputs the cells run under.
     assert built_inputs["inputs"].commercial is True
     assert built_inputs["inputs"].sweep_args_b64 == "Zm9v"
+
+
+def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
+    # Each point's cell results download into an internal TemporaryDirectory, so the
+    # command carries no --results-dir option an operator could point at a path.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "knob-sweep",
+            "--run-id",
+            "run1",
+            "--instance-id",
+            "i-1",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+            "--model-yaml",
+            str(model_yaml),
+            "--sweep-grid",
+            str(grid_yaml),
+            "--vllm-manifest",
+            str(manifest),
+            "--results-dir",
+            str(tmp_path / "results"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option: --results-dir" in result.output
 
 
 def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
@@ -442,7 +467,6 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
         model_yaml=model_yaml,
         sweep_grid=grid_yaml,
         vllm_manifest=manifest,
-        results_dir=tmp_path / "results",
     )
 
     # Both point sweeps observe the one parent knob-sweep flow run — same name and same
@@ -479,7 +503,6 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
         model_yaml=model_yaml,
         sweep_grid=grid_yaml,
         vllm_manifest=manifest,
-        results_dir=tmp_path / "results",
     )
 
     from prefect.client.orchestration import get_client
@@ -535,14 +558,13 @@ def test_register_knob_sweep_registers_a_module_path_deployment(
         "model_yaml": "/app/model.yaml",
         "sweep_grid": "/app/bench/sweep-grid.yaml",
         "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
-        "results_dir": "/app/results",
         "retries": 0,
         "commercial": False,
         "sweep_args_b64": "",
     }
     # The paths are serialized to str: Prefect runs parameters through serialize_parameters,
     # so a raw Path default would fail at real registration.
-    for key in ("model_yaml", "sweep_grid", "vllm_manifest", "results_dir"):
+    for key in ("model_yaml", "sweep_grid", "vllm_manifest"):
         assert isinstance(captured["parameters"][key], str)
 
 
@@ -715,7 +737,6 @@ def test_register_knob_sweep_creates_a_real_deployment(_harness: None) -> None:
         "model_yaml": "/app/model.yaml",
         "sweep_grid": "/app/bench/sweep-grid.yaml",
         "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
-        "results_dir": "/app/results",
         "retries": 0,
         "commercial": False,
         "sweep_args_b64": "",

@@ -75,9 +75,6 @@ def point_sweep(
             exists=True, dir_okay=False, help="k8s/vllm-gpu.yaml (serving image ref)."
         ),
     ],
-    results_dir: Annotated[
-        Path, typer.Option(help="Local directory each cell's result downloads into.")
-    ],
     retries: Annotated[
         int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
     ] = 0,
@@ -111,7 +108,6 @@ def point_sweep(
     )
     cell_result_uris = run_point_sweep(
         grid_path=sweep_grid,
-        results_dir=results_dir,
         context=context,
         ssm_client=build_ssm_client(region),
         s3_client=build_s3_client(region),
@@ -156,9 +152,6 @@ def knob_sweep(
             help="k8s/vllm-gpu.yaml: the redeploy template and the serving image ref.",
         ),
     ],
-    results_dir: Annotated[
-        Path, typer.Option(help="Local directory each point's cells download under.")
-    ],
     retries: Annotated[
         int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
     ] = 0,
@@ -185,7 +178,6 @@ def knob_sweep(
         model_yaml=model_yaml,
         sweep_grid=sweep_grid,
         vllm_manifest=vllm_manifest,
-        results_dir=results_dir,
         retries=retries,
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
@@ -212,9 +204,6 @@ def register_knob_sweep(
         Path,
         typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
     ] = Path("/app/k8s/vllm-gpu.yaml"),
-    results_dir: Annotated[
-        Path, typer.Option(help="In-image directory each point's cells download under.")
-    ] = Path("/app/results"),
     retries: Annotated[
         int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
     ] = 0,
@@ -251,7 +240,6 @@ def register_knob_sweep(
     :param model_yaml: in-image path to model.yaml, read on the worker at run time.
     :param sweep_grid: in-image path to sweep-grid.yaml, read on the worker at run time.
     :param vllm_manifest: in-image path to k8s/vllm-gpu.yaml, read on the worker.
-    :param results_dir: in-image directory each point's cells download under.
     :param retries: opt-in cell retries for a transient transport fault.
     :param commercial: run the commercial arm (needs a tokenizer).
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
@@ -280,7 +268,6 @@ def register_knob_sweep(
             "model_yaml": str(model_yaml),
             "sweep_grid": str(sweep_grid),
             "vllm_manifest": str(vllm_manifest),
-            "results_dir": str(results_dir),
             "retries": retries,
             "commercial": commercial,
             "sweep_args_b64": sweep_args_b64,
