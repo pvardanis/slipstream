@@ -187,9 +187,12 @@ jobs:
           image="${REGISTRY}/${ECR_REPOSITORY}"
           # Build once, tagged with both the content tag and the floating pointer; the two
           # pushes below share this one build. The worker nodes are amd64, so pin the build
-          # platform rather than inheriting the runner's.
+          # platform rather than inheriting the runner's. Bake the image's own content-tag ref
+          # so the knob-sweep flow running in it can read which orchestration build drove a run;
+          # the content tag is the image's idempotency key, so this value is deterministic per image.
           docker build --platform linux/amd64 \
             -f orchestration/Dockerfile \
+            --build-arg ORCH_IMAGE_REF="${image}:${SHA_TAG}" \
             -t "${image}:${SHA_TAG}" \
             -t "${image}:${MAIN_TAG}" \
             .

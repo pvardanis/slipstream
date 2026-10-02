@@ -89,6 +89,16 @@ COPY model.yaml /app/model.yaml
 COPY bench/sweep-grid.yaml /app/bench/sweep-grid.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
+# This image's own ECR ref (registry/repo:content-tag), passed by orchestration-image.yml at
+# build time and exported so the knob-sweep flow running in this image can read which
+# orchestration build drove a run. A process work pool gives the flow no runtime handle to the
+# worker image, so the ref is baked here rather than discovered at run time; the content tag is
+# the image's own idempotency key, so for a given image the baked value is deterministic. Empty
+# on a bare `docker build` and the PR scan build, which pass no build arg. Placed after the
+# dependency install so this per-commit value rebuilds only its own layer, not the install above.
+ARG ORCH_IMAGE_REF=""
+ENV ORCH_IMAGE_REF=${ORCH_IMAGE_REF}
+
 # The prefect-worker Helm chart supplies the real command (tini -> entrypoint.sh -> prefect
 # worker start …). This default only serves a bare `docker run` — a version print that fails
 # loudly if the install is broken.
