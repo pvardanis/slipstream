@@ -1,0 +1,35 @@
+# 1x1 smoke grid for the unattended knob sweep (ADR-0015). One Tier-1 engine point
+# (mns16_kvfp8_pcon) and one Tier-2 client-load cell (prefix_share=10, max_concurrency=8),
+# so the sweep runs a single cell end to end — the pipeline and its S3 writes, not a real
+# measurement. The point is matched to the live vLLM engine (max_num_seqs=16, kv fp8,
+# prefix caching on) so the per-point redeploy renders a spec already running and kubectl
+# apply is a no-op rollout, never a ~20-min GPU restart. Load knobs are shrunk to the
+# minimum so the cell finishes in about a minute; align_blocks 0 disables prefix alignment
+# so the small total_len does not floor the prefix to 0.
+#
+# Reuse: copy onto the worker pod's writable /tmp and point the deployment run at it,
+#   kubectl -n prefect cp tests/fixtures/mini-grid.yaml prefect/<worker-pod>:/tmp/mini-grid.yaml
+#   prefect deployment run knob-sweep/knob-sweep \
+#     --param run_id=smoke-$(date +%s) --param instance_id=<bench-host> \
+#     --param sweep_grid=/tmp/mini-grid.yaml
+tier1:
+  max_num_seqs: [16]
+  kv_cache_dtype: [fp8]
+  prefix_caching:
+    "on":
+      flag: --enable-prefix-caching
+      prefix_share: [10]
+
+tier2:
+  max_concurrency: [8]
+  burstiness: 1.0
+
+load:
+  total_len: 128
+  num_prompts: 20
+  num_prefixes: 2
+  output_len: 16
+  align_blocks: 0
+  request_rate: .inf
+  seed: 0
+  goodput: ["ttft:1000", "tpot:50"]
