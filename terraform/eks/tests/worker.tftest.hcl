@@ -105,10 +105,11 @@ run "worker_layer_shape" {
 
   # --- IAM permissions: least-privilege S3 + SSM ---
 
-  # S3: read-only on the bench-endpoint results bucket. The bucket's name carries a
-  # random suffix and lives in a stack this one cannot reference without a dependency
-  # cycle, so it is scoped by ARN prefix, not an exact ARN. The host writes objects;
-  # the worker only reads them, so no s3:PutObject.
+  # S3: on the bench-endpoint results bucket. The bucket's name carries a random suffix
+  # and lives in a stack this one cannot reference without a dependency cycle, so it is
+  # scoped by ARN prefix, not an exact ARN. The host writes the sweep result objects the
+  # worker reads back; the worker itself writes only Prefect's own resume state (the
+  # persisted task result and cache-key records) under the prefect/ prefixes.
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "ResultsBucketObjects" && contains(s.Action, "s3:GetObject") && s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*"]) == 1
     error_message = "The policy must allow s3:GetObject on the results bucket objects, scoped by ARN prefix."
@@ -117,11 +118,18 @@ run "worker_layer_shape" {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "ResultsBucketList" && contains(s.Action, "s3:ListBucket") && s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*"]) == 1
     error_message = "The policy must allow s3:ListBucket on the results bucket, scoped by ARN prefix."
   }
+  # The worker persists its resume state with persist_result=True: the task result under
+  # prefect/results and the cache-key records under prefect/cache-keys. PutObject is scoped
+  # to exactly those two prefixes, never the host-owned sweep objects at the bucket root.
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:PutObject")]) == 0
-    error_message = "The worker must not write to S3 — the bench host owns PutObject."
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
+    error_message = "The policy must allow s3:PutObject scoped to the prefect/results and prefect/cache-keys prefixes."
   }
-  # No wildcard or destructive S3 grant slips past the PutObject guard above (s3:*,
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:PutObject") && try(s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*", false)]) == 0
+    error_message = "s3:PutObject must be scoped to the Prefect prefixes, never the bucket-wide objects the host owns."
+  }
+  # No wildcard or destructive S3 grant slips past the scoped PutObject above (s3:*,
   # s3:DeleteObject, or a bare * would all read the results the host owns as writable).
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:*") || contains(s.Action, "s3:DeleteObject") || contains(s.Action, "*")]) == 0
