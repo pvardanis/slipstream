@@ -15,6 +15,7 @@ from slipstream_bench.orchestration.digest import (
     DigestError,
     config_digest,
     read_image_ref,
+    read_vllm_args,
 )
 
 _MODEL = b"model:\n  hfId: Qwen/Qwen3-8B-AWQ\n"
@@ -165,3 +166,37 @@ def test_read_image_ref_rejects_a_non_list_containers(tmp_path: Path) -> None:
 
     with pytest.raises(DigestError, match="not a list"):
         read_image_ref(manifest)
+
+
+def test_read_vllm_args_reads_the_vllm_container_args(tmp_path: Path) -> None:
+    manifest = tmp_path / "vllm-gpu.yaml"
+    manifest.write_text(
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "        - name: vllm\n"
+        "          image: vllm/vllm-openai:v0.29.0\n"
+        "          args:\n"
+        "            - --model\n"
+        "            - Qwen/Qwen3-8B-AWQ\n"
+        "            - --max-num-seqs\n"
+        '            - "${MAX_NUM_SEQS}"\n'
+    )
+
+    assert read_vllm_args(manifest) == [
+        "--model",
+        "Qwen/Qwen3-8B-AWQ",
+        "--max-num-seqs",
+        "${MAX_NUM_SEQS}",
+    ]
+
+
+def test_read_vllm_args_rejects_a_container_without_args(tmp_path: Path) -> None:
+    manifest = tmp_path / "vllm-gpu.yaml"
+    manifest.write_text(
+        "spec:\n  template:\n    spec:\n      containers:\n        - name: vllm\n"
+    )
+
+    with pytest.raises(DigestError, match="args"):
+        read_vllm_args(manifest)
