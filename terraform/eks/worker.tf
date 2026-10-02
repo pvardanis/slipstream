@@ -110,7 +110,7 @@ resource "aws_iam_role_policy" "prefect_worker" {
     Version = "2012-10-17"
     Statement = [
       # The host writes the sweep result objects; the worker reads them back (aws s3 sync
-      # sweeps/…), so GetObject/ListBucket on the bucket at large.
+      # sweeps/…), so GetObject/ListBucket across the whole bucket.
       {
         Sid      = "ResultsBucketObjects"
         Effect   = "Allow"

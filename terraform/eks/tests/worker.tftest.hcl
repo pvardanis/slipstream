@@ -122,15 +122,17 @@ run "worker_layer_shape" {
   # prefect/results and the cache-key records under prefect/cache-keys. PutObject is scoped
   # to exactly those two prefixes, never the host-owned sweep objects at the bucket root.
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
-    error_message = "The policy must allow s3:PutObject scoped to the prefect/results and prefect/cache-keys prefixes."
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && length(s.Resource) == 2 && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(s.Resource, "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
+    error_message = "The policy must allow s3:PutObject scoped to exactly the prefect/results and prefect/cache-keys prefixes."
   }
+  # Resource is normalised to a list so a bucket-wide grant is caught whether it is
+  # written as a bare string or appended to a statement's resource list.
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:PutObject") && try(s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*", false)]) == 0
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:PutObject") && length([for r in try(tolist(s.Resource), [s.Resource]) : r if r == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*"]) > 0]) == 0
     error_message = "s3:PutObject must be scoped to the Prefect prefixes, never the bucket-wide objects the host owns."
   }
   # No wildcard or destructive S3 grant slips past the scoped PutObject above (s3:*,
-  # s3:DeleteObject, or a bare * would all read the results the host owns as writable).
+  # s3:DeleteObject, or a bare * would all grant write on the results the host owns).
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if contains(s.Action, "s3:*") || contains(s.Action, "s3:DeleteObject") || contains(s.Action, "*")]) == 0
     error_message = "The policy must not grant wildcard or destructive S3 actions."
