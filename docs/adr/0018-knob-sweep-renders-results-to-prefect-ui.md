@@ -20,7 +20,7 @@ The reporting building blocks already exist and will live in the `report` member
 (one per engine-point × prefix-share) and rung rows (one per ladder rung), and `chart.py` renders
 each as a Markdown table, a JSON table, and a PNG plot. The S3→local materialization the render
 needs already exists in pattern: `orchestration/completion.py` downloads a point's cell objects from
-S3 to a tempdir keyed exactly as the aggregators read them.
+S3 to a tempdir keyed by the same per-cell basename the aggregators read.
 
 Prefect artifact facts (confirmed against current Prefect v3 docs): a **markdown** artifact embeds
 its text and renders inline and durably in the UI; an **image** artifact renders a PNG inline but

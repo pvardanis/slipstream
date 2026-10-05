@@ -28,7 +28,7 @@ Two concrete smells follow from the single distribution:
   both images carry the whole plotting stack because one distribution installs wholesale. The
   subpackage-plus-extra boundary cannot strip them (ADR-0012 §Amendment deferred the hard split;
   this ADR takes it).
-- **An unnamed shared contract.** `orchestration` reaches into six core-bench modules for ~13
+- **An unnamed shared contract.** `orchestration` reaches into five core-bench modules for ~13
   symbols — `sweep.config` (`CellConfig`, `RESERVED_KEYS`), `sweep.grid` (`SweepGrid`,
   `build_point_sweep_config`, `load_grid`, `list_engine_points`), `sweep.aggregation`
   (`EnginePoint`, `LoadCell`, `SweepAggregationError`), `sweep.runner` (`get_cell_basename`),
