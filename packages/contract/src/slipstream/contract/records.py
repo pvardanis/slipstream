@@ -94,6 +94,16 @@ class EnginePoint:
         caching = "on" if self.prefix_caching else "off"
         return f"mns{self.max_num_seqs}_kv{self.kv_cache_dtype}_pc{caching}"
 
+    @staticmethod
+    def is_point_dirname(name: str) -> bool:
+        """Return whether ``name`` is a point subdir name :meth:`from_dirname` parses.
+
+        The predicate a run-dir scan filters on before parsing: a run directory also
+        holds a predicted-ceilings ledger and a charts subdir, so a caller keeps only
+        the point subdirs rather than letting a stray name reach ``from_dirname``.
+        """
+        return _POINT_PATTERN.match(name) is not None
+
 
 def goodput_fraction(record: dict[str, object], source: Path) -> float:
     """Read the fraction of a cell's completed requests that met the SLO.

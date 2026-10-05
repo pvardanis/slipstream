@@ -3,16 +3,14 @@
 The grid model and its loaders are the contract kernel (:mod:`slipstream.contract.grid`);
 this module renders the slices the recipe loop reads: the Tier-1 points (one per row, keyed
 by the slug an EnginePoint names), the Tier-2 --max-concurrency ladder, and the pinned
-burstiness. The chart label (fp8/fp16) becomes the engine token vLLM accepts (fp16 ->
-float16) here, so the recipe passes it straight through, and a rename of a vLLM token is a
-one-line edit in code rather than a change every grid file must copy.
+burstiness.
 """
 
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import product
 
-from slipstream.contract.grid import KvLabel, SweepGrid, _require_grid_arm
+from slipstream.contract.grid import KvLabel, SweepGrid, require_grid_arm
 from slipstream.contract.records import EnginePoint
 
 # The label->token mapping vLLM's --kv-cache-dtype accepts: the grid carries only the
@@ -67,8 +65,8 @@ def get_engine_args(grid: SweepGrid, point: EnginePoint) -> EngineArgs:
         same fail-fast guard ``build_point_sweep_config`` applies, so a point the grid
         does not sweep never resolves args.
     """
-    arm = _require_grid_arm(grid, point, point.slug())
-    # _require_grid_arm has confirmed the point's dtype is one the grid sweeps, so this
+    arm = require_grid_arm(grid, point, point.slug())
+    # require_grid_arm has confirmed the point's dtype is one the grid sweeps, so this
     # finds the KvLabel-typed key the token mapping is keyed by (no unchecked cast).
     kv_label = next(
         label for label in grid.tier1.kv_cache_dtype if label == point.kv_cache_dtype

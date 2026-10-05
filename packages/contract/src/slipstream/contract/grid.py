@@ -179,7 +179,7 @@ def build_point_sweep_config(
         e.g. a commercial arm whose ``grid.load`` pins no tokenizer.
     """
     point = _parse_point_slug(point_slug)
-    arm = _require_grid_arm(grid, point, point_slug)
+    arm = require_grid_arm(grid, point, point_slug)
     try:
         return SweepConfig(
             **grid.load.model_dump(),
@@ -234,7 +234,7 @@ def _parse_point_slug(point_slug: str) -> EnginePoint:
         raise SweepGridError(str(error)) from error
 
 
-def _require_grid_arm(
+def require_grid_arm(
     grid: SweepGrid, point: EnginePoint, point_slug: str
 ) -> PrefixCachingArm:
     """Return the prefix-caching arm for a point the grid actually sweeps.
