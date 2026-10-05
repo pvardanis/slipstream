@@ -1,11 +1,12 @@
-"""Each boundary-rule package's own source names none of its forbidden imports — the fast guard.
+"""Each boundary-rule package's own source imports within its boundary — the fast guard.
 
 The workspace keeps framework-free and member-isolated packages (ADR-0012 §Amendment,
 ADR-0017): the bench-client image installs a Prefect-free path, and the ``contract`` kernel
 depends on no framework and no other member. This walks every source file of each package in
-``BOUNDARY_RULES`` and fails on any static ``import`` of a root the rule forbids — a fast,
-precise check that names the offending file. It sees only static ``import`` statements in a
-package's own files, not dynamic imports or the transitive closure through other packages;
+``BOUNDARY_RULES`` and fails on any static ``import`` that breaches the rule — a root the rule
+forbids, or (when the rule names an ``allowed`` set) any root outside it — a fast, precise
+check that names the offending file. It sees only static ``import`` statements in a package's
+own files, not dynamic imports or the transitive closure through other packages;
 ``test_import_contract`` covers that whole closure by importing each package with its
 forbidden roots blocked.
 """
@@ -19,18 +20,31 @@ import pytest
 from tests.boundary_rules import BOUNDARY_RULES, BoundaryRule
 
 
-def _imports_forbidden_root(source: str, forbidden: frozenset[str]) -> bool:
-    """Return whether the source's AST holds any import of a forbidden top-level root."""
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
+def _imported_roots(source: str) -> set[str]:
+    """Return the top-level root of every absolute import in the source's AST.
+
+    Relative imports (``from . import x``) are a package's own submodules, never an
+    external dependency, so they are skipped rather than counted as an empty root.
+    """
+    roots: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            if any(alias.name.split(".")[0] in forbidden for alias in node.names):
-                return True
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            if module.split(".")[0] in forbidden:
-                return True
-    return False
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            roots.add((node.module or "").split(".")[0])
+    return roots
+
+
+def _offending_roots(source: str, rule: BoundaryRule) -> set[str]:
+    """Return the imported roots that breach the rule.
+
+    Roots outside the ``allowed`` set when the rule names one (a closed contract), else
+    the roots the rule forbids (an open set minus a few).
+    """
+    roots = _imported_roots(source)
+    if rule.allowed is not None:
+        return roots - rule.allowed
+    return roots & rule.forbidden
 
 
 def _package_dir(package: str) -> Path:
@@ -41,15 +55,14 @@ def _package_dir(package: str) -> Path:
 
 
 @pytest.mark.parametrize("rule", BOUNDARY_RULES, ids=lambda rule: rule.package)
-def test_package_source_imports_nothing_forbidden(rule: BoundaryRule) -> None:
+def test_package_source_imports_within_boundary(rule: BoundaryRule) -> None:
     package_dir = _package_dir(rule.package)
-    offenders = [
-        str(path.relative_to(package_dir))
+    offenders = {
+        str(path.relative_to(package_dir)): sorted(breaches)
         for path in sorted(package_dir.rglob("*.py"))
-        if _imports_forbidden_root(path.read_text(encoding="utf-8"), rule.forbidden)
-    ]
+        if (breaches := _offending_roots(path.read_text(encoding="utf-8"), rule))
+    }
 
-    assert offenders == [], (
-        f"{rule.package} modules import a forbidden root "
-        f"{sorted(rule.forbidden)}: {offenders}"
+    assert offenders == {}, (
+        f"{rule.package} modules import roots outside their boundary: {offenders}"
     )
