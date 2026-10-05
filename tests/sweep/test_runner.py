@@ -11,15 +11,14 @@ import json
 from pathlib import Path
 
 import pytest
+from slipstream.contract import CellConfig, SweepConfig, SweepError, split_lengths
 
-from slipstream_bench.sweep.config import CellConfig, SweepConfig, SweepError
 from slipstream_bench.sweep.runner import (
     CellOutcome,
     cell_command,
     ensure_out_dir,
     execute_cell,
     run_sweep,
-    split_lengths,
 )
 
 _SHARED_KNOBS = {

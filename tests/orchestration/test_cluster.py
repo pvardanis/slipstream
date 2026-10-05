@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 import pytest
 import yaml
+from slipstream.contract import EnginePoint, SweepGrid
 
 from slipstream_bench.orchestration.cluster import (
     KubectlError,
@@ -20,11 +21,8 @@ from slipstream_bench.orchestration.cluster import (
     render_gpu_manifest,
     scrape_ceiling,
 )
-from slipstream_bench.sweep.aggregation import CeilingScrapeError, EnginePoint
-from slipstream_bench.sweep.grid import (
-    SweepGrid,
-    get_engine_args,
-)
+from slipstream_bench.sweep.aggregation import CeilingScrapeError
+from slipstream_bench.sweep.grid import get_engine_args
 
 _GRID = """
 tier1:
@@ -130,7 +128,7 @@ def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
 
 
 def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:
-    from slipstream_bench.sweep.grid import SweepGridError
+    from slipstream.contract import SweepGridError
 
     absent = EnginePoint(max_num_seqs=999, kv_cache_dtype="fp8", prefix_caching=True)
     with pytest.raises(SweepGridError):

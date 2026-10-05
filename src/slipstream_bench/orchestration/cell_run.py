@@ -21,11 +21,10 @@ from typing import Any
 
 import boto3
 import yaml
+from slipstream.contract import RESERVED_KEYS, CellConfig, get_cell_basename
 
 from slipstream_bench.orchestration.ssm import run_command
 from slipstream_bench.orchestration.tasks.cell import CellExecution
-from slipstream_bench.sweep.config import RESERVED_KEYS, CellConfig
-from slipstream_bench.sweep.runner import get_cell_basename
 
 # The host script the orchestration layer runs per cell (dropped at boot on the bench
 # host). It reads the cell env this module prefixes and runs one docker cell.

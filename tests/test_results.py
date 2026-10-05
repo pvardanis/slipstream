@@ -8,8 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
-
-from slipstream_bench.results import ResultError, read_result
+from slipstream.contract import ResultError, read_result
 
 
 def test_reads_a_result_object(tmp_path: Path) -> None:

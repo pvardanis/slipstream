@@ -15,13 +15,13 @@ import json
 from pathlib import Path
 
 import pytest
+from slipstream.contract import ResultError
 
 from slipstream_bench.prefix_cache import (
     CacheState,
     PrefixCacheError,
     scrape_prefix_cache,
 )
-from slipstream_bench.results import ResultError
 
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 

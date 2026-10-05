@@ -12,17 +12,19 @@ import json
 from pathlib import Path
 
 import pytest
-
-from slipstream_bench.results import ResultError
-from slipstream_bench.sweep.aggregation import (
+from slipstream.contract import (
     EnginePoint,
     LoadCell,
+    ResultError,
     SweepAggregationError,
+    classify_failures,
+    goodput_fraction,
+)
+
+from slipstream_bench.sweep.aggregation import (
     aggregate_ceilings,
     aggregate_rungs,
-    classify_failures,
     get_ceiling,
-    goodput_fraction,
     read_cell,
 )
 

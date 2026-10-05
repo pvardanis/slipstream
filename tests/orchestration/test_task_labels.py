@@ -4,8 +4,9 @@ Covers the tier1 knobs parsed off the point slug, the tier2 knobs read off the c
 and the open-loop cell whose absent concurrency cap tags ``mc=open``.
 """
 
+from slipstream.contract import CellConfig
+
 from slipstream_bench.orchestration.task_labels import get_cell_run_tags
-from slipstream_bench.sweep.config import CellConfig
 
 _SHARED_KNOBS = {
     "base_url": "http://localhost:8000",

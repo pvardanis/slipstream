@@ -6,8 +6,7 @@ UI filters a run by any single knob (every ``kv=fp8`` run, the whole ``mns=64`` 
 concurrency ladder) rather than only the composite ``point:cell`` name.
 """
 
-from slipstream_bench.sweep.aggregation import EnginePoint
-from slipstream_bench.sweep.config import CellConfig
+from slipstream.contract import CellConfig, EnginePoint
 
 
 def get_cell_run_tags(point_slug: str, cell: CellConfig) -> list[str]:

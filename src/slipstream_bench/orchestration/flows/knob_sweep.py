@@ -32,6 +32,7 @@ from prefect import Task, flow
 from prefect.artifacts import create_markdown_artifact
 from prefect.client.orchestration import get_client
 from prefect.runtime import flow_run
+from slipstream.contract import EnginePoint, SweepGrid, list_engine_points, load_grid
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
@@ -53,8 +54,6 @@ from slipstream_bench.orchestration.flows.point_sweep import (
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
-from slipstream_bench.sweep.aggregation import EnginePoint
-from slipstream_bench.sweep.grid import SweepGrid, list_engine_points, load_grid
 
 _LOGGER = logging.getLogger(__name__)
 

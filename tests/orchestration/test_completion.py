@@ -15,10 +15,9 @@ from typing import Any
 import pytest
 import yaml
 from botocore.exceptions import ClientError, EndpointConnectionError
+from slipstream.contract import EnginePoint, SweepGrid
 
 from slipstream_bench.orchestration.completion import point_is_complete
-from slipstream_bench.sweep.aggregation import EnginePoint
-from slipstream_bench.sweep.grid import SweepGrid
 
 
 def _client_error(code: str) -> ClientError:

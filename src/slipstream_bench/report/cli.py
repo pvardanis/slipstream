@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from slipstream.contract import ResultError, SweepAggregationError
 
 from slipstream_bench.report.baseline import (
     ReportError,
@@ -18,12 +19,7 @@ from slipstream_bench.report.baseline import (
     render_markdown,
 )
 from slipstream_bench.report.chart import write_artifacts
-from slipstream_bench.results import ResultError
-from slipstream_bench.sweep.aggregation import (
-    SweepAggregationError,
-    aggregate_ceilings,
-    aggregate_rungs,
-)
+from slipstream_bench.sweep.aggregation import aggregate_ceilings, aggregate_rungs
 
 app = typer.Typer()
 

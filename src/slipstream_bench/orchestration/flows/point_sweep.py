@@ -30,6 +30,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from prefect import Task, flow, tags
+from slipstream.contract import build_point_sweep_config, get_cell_basename, load_grid
 
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
@@ -38,8 +39,6 @@ from slipstream_bench.orchestration.cell_run import (
 )
 from slipstream_bench.orchestration.ssm import run_command
 from slipstream_bench.orchestration.task_labels import get_cell_run_tags
-from slipstream_bench.sweep.grid import build_point_sweep_config, load_grid
-from slipstream_bench.sweep.runner import get_cell_basename
 
 # The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
 # per flow, before any cell, so the whole point's ladder shares one proxy.

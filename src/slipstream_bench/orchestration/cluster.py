@@ -23,13 +23,10 @@ import subprocess
 from collections.abc import Callable, Sequence
 
 import yaml
+from slipstream.contract import EnginePoint, SweepGrid
 
-from slipstream_bench.sweep.aggregation import CeilingScrapeError, EnginePoint
-from slipstream_bench.sweep.grid import (
-    EngineArgs,
-    SweepGrid,
-    get_engine_args,
-)
+from slipstream_bench.sweep.aggregation import CeilingScrapeError
+from slipstream_bench.sweep.grid import EngineArgs, get_engine_args
 
 # vLLM logs its VRAM/KV-budget concurrency estimate once at startup, e.g.
 # "Maximum concurrency for 4,096 tokens per request: 10.30x". The scrape reads this

@@ -13,6 +13,7 @@ import base64
 from pathlib import Path
 
 import pytest
+from slipstream.contract import get_cell_basename
 
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
@@ -24,7 +25,6 @@ from slipstream_bench.orchestration.cell_run import (
     render_cell_config,
 )
 from slipstream_bench.sweep.config import load_cell_config, load_sweep_config
-from slipstream_bench.sweep.runner import get_cell_basename
 
 
 def _first_cell():

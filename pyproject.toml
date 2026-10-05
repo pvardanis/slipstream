@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2",
     "pyyaml>=6",
     "seaborn>=0.13",
+    "slipstream-contract",
     "typer>=0.12",
 ]
 
@@ -40,6 +41,15 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The repo is a uv workspace: this root member (slipstream_bench) plus the carved
+# packages/* members resolve against one lockfile, the contract kernel sourced from the
+# workspace rather than an index (ADR-0017).
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+slipstream-contract = { workspace = true }
+
 [tool.ruff]
 line-length = 88
 
@@ -50,7 +60,7 @@ testpaths = ["tests"]
 python-version = "3.11"
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["src", "tests", "packages/contract/src"]
 
 [tool.ty.rules]
 missing-type-argument = "error"
