@@ -11,15 +11,14 @@ import json
 from pathlib import Path
 
 import pytest
-from slipstream.contract import CellConfig, SweepConfig, SweepError, split_lengths
-
-from slipstream_bench.sweep.runner import (
+from slipstream.bench.runner import (
     CellOutcome,
     cell_command,
     ensure_out_dir,
     execute_cell,
     run_sweep,
 )
+from slipstream.contract import CellConfig, SweepConfig, SweepError, split_lengths
 
 _SHARED_KNOBS = {
     "base_url": "http://localhost:8000",

@@ -1,0 +1,27 @@
+# The bench executor member: the per-cell vllm bench serve runner, cost post-processors,
+# and prefix-cache scraper the bench-client image installs, depending inward on the
+# contract kernel alone — no plotting stack, no Prefect (ADR-0017).
+[project]
+name = "slipstream-bench-executor"
+version = "0.1.0"
+description = "The L0 bench executor: run one vllm bench serve cell, price it, scrape its prefix-cache hit rate."
+requires-python = ">=3.11"
+dependencies = [
+    "prometheus-client>=0.26.0",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "slipstream-contract",
+    "typer>=0.12",
+]
+
+[project.scripts]
+slipstream-bench = "slipstream.bench.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13"]
+build-backend = "uv_build"
+
+# slipstream.bench lives under the shared slipstream namespace: the slipstream/ parent
+# carries no __init__.py so it shares the namespace with slipstream.contract.
+[tool.uv.build-backend]
+module-name = "slipstream.bench"

@@ -14,9 +14,8 @@ from pathlib import Path
 import pytest
 import yaml
 from pydantic import ValidationError
+from slipstream.bench.config import load_cell_config, load_sweep_config
 from slipstream.contract import CellConfig, SweepConfig, SweepError
-
-from slipstream_bench.sweep.config import load_cell_config, load_sweep_config
 
 # The experiment-defining knobs the config YAML carries; the loader injects the
 # execution context (base_url, model, out_dir, commercial) on top of these.

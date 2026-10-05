@@ -19,25 +19,27 @@ ARG REVISION=main
 # regardless of which user runs the client.
 ENV HF_HOME=/opt/hf
 
-# Layer the package onto the base image's interpreter, so the slipstream-bench
+# Layer the bench member onto the base image's interpreter, so the slipstream-bench
 # console script lands alongside the vllm CLI on the same Python that provides
-# transformers. The install is uv's, not pip's: slipstream-bench depends on the
+# transformers. The install is uv's, not pip's: the bench member depends on the
 # slipstream-contract workspace member, which resolves only through the root's
 # [tool.uv.sources] (pip cannot see a workspace source, and contract is
-# unpublished). --system installs into the base image's interpreter additively,
-# leaving its vllm and transformers in place, and --no-cache keeps uv's download
-# cache out of the layer. The base's interpreter is a uv-managed CPython carrying
-# a PEP-668 EXTERNALLY-MANAGED marker, so --break-system-packages is required to
-# install into it — the whole point here is to mutate that interpreter, the one
-# the vllm CLI and the tokenizer bake below run on. The uv binary is copied from
-# its own image, pinned by digest like the runtime bases; Dependabot advances it.
+# unpublished); installing ./packages/bench rather than the root member keeps the
+# plotting stack (pandas/seaborn) and Prefect out of the image, which carry the
+# report and orchestration members that do not run here (ADR-0017). --system
+# installs into the base image's interpreter additively, leaving its vllm and
+# transformers in place, and --no-cache keeps uv's download cache out of the layer.
+# The base's interpreter is a uv-managed CPython carrying a PEP-668
+# EXTERNALLY-MANAGED marker, so --break-system-packages is required to install into
+# it — the whole point here is to mutate that interpreter, the one the vllm CLI and
+# the tokenizer bake below run on. The uv binary is copied from its own image,
+# pinned by digest like the runtime bases; Dependabot advances it.
 # uv 0.9.30
 COPY --from=ghcr.io/astral-sh/uv@sha256:538e0b39736e7feae937a65983e49d2ab75e1559d35041f9878b7b7e51de91e4 /uv /bin/uv
 WORKDIR /opt/slipstream-bench
 COPY pyproject.toml ./
-COPY src ./src
 COPY packages ./packages
-RUN uv pip install --system --break-system-packages --no-cache .
+RUN uv pip install --system --break-system-packages --no-cache ./packages/bench
 
 # The experiment config is not baked: knob-sweep and prefix-cache compose a per-point
 # config on the operator's laptop and mount it in as the harness's --config, so the
