@@ -35,6 +35,11 @@ dev = [
     "pytest>=8",
     "ruff>=0.16.7",
     "ty==0.0.84",
+    # The test suite exercises the carved workspace members (the bench executor's
+    # runner, cost, and CLI), so the dev env installs them editable. Not a runtime
+    # dependency of the root member: the image installs bench directly, and nothing
+    # in src/ imports it (ADR-0017).
+    "slipstream-bench-executor",
 ]
 
 [build-system]
@@ -49,6 +54,7 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 slipstream-contract = { workspace = true }
+slipstream-bench-executor = { workspace = true }
 
 [tool.ruff]
 line-length = 88
@@ -60,7 +66,7 @@ testpaths = ["tests"]
 python-version = "3.11"
 
 [tool.ty.src]
-include = ["src", "tests", "packages/contract/src"]
+include = ["src", "tests", "packages/contract/src", "packages/bench/src"]
 
 [tool.ty.rules]
 missing-type-argument = "error"

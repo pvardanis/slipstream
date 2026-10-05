@@ -13,11 +13,9 @@ from pathlib import Path
 
 import pytest
 import yaml
+from slipstream.bench.cli import app, resolve_api_key_env, run_cell
 from slipstream.contract import SweepError
 from typer.testing import CliRunner
-
-from slipstream_bench.cli import app
-from slipstream_bench.sweep.cli import resolve_api_key_env, run_cell
 
 runner = CliRunner()
 
@@ -335,7 +333,7 @@ def test_load_cell_runs_one_cell_and_stamps_its_share(
         Path(result_file).write_text(json.dumps({"model_id": "m"}))
         return 0
 
-    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
+    monkeypatch.setattr("slipstream.bench.cli.run_cell", stub_run_cell)
 
     result = runner.invoke(
         app,
@@ -357,7 +355,7 @@ def test_load_cell_runs_one_cell_and_stamps_its_share(
 def test_load_cell_fails_when_the_cell_errors(monkeypatch, tmp_path: Path) -> None:
     """A cell whose command exits non-zero makes load-cell exit 1."""
     monkeypatch.setattr(
-        "slipstream_bench.sweep.cli.run_cell",
+        "slipstream.bench.cli.run_cell",
         lambda command, *, extra_env=None: 7,
     )
 
@@ -412,7 +410,7 @@ def test_load_cell_threads_the_resolved_key_into_the_runner(
         Path(result_file).write_text(json.dumps({"model_id": "m"}))
         return 0
 
-    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
+    monkeypatch.setattr("slipstream.bench.cli.run_cell", stub_run_cell)
 
     result = runner.invoke(
         app,
@@ -600,7 +598,7 @@ def test_live_sweep_threads_the_resolved_key_into_the_runner(
         Path(result_file).write_text(json.dumps({"model_id": "m"}))
         return 0
 
-    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
+    monkeypatch.setattr("slipstream.bench.cli.run_cell", stub_run_cell)
 
     result = runner.invoke(
         app,
@@ -631,7 +629,7 @@ def test_live_commercial_sweep_without_a_tokenizer_is_rejected(
             "no cell should run when the tokenizer guard rejects the sweep"
         )
 
-    monkeypatch.setattr("slipstream_bench.sweep.cli.run_cell", stub_run_cell)
+    monkeypatch.setattr("slipstream.bench.cli.run_cell", stub_run_cell)
 
     result = runner.invoke(
         app,

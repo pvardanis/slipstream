@@ -57,7 +57,31 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         probe=(
             "import slipstream_bench.sweep.cli as cli\n"
             "names = [command.name for command in cli.app.registered_commands]\n"
-            "assert 'load-sweep' in names, names\n"
+            "assert 'aggregate-sweep' in names, names\n"
+        ),
+    ),
+    BoundaryRule(
+        package="slipstream.bench",
+        # The bench executor the image installs depends inward on the contract kernel
+        # alone (ADR-0017): never Prefect or the plotting stack the image does not ship,
+        # and never another workspace member. report and orchestration live under the
+        # slipstream_bench root, so forbidding that root blocks an import of either; bench
+        # and contract share the slipstream namespace, so the self/kernel imports stay.
+        forbidden=frozenset(
+            {
+                "prefect",
+                "prefect_aws",
+                "boto3",
+                "pandas",
+                "seaborn",
+                "matplotlib",
+                "slipstream_bench",
+            }
+        ),
+        probe=(
+            "import slipstream.bench.cli as cli\n"
+            "names = [command.name for command in cli.app.registered_commands]\n"
+            "assert 'load-cell' in names, names\n"
         ),
     ),
     BoundaryRule(

@@ -30,10 +30,9 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict
+from slipstream.bench.cost.config import load_provenance
+from slipstream.bench.cost.fields import NonEmptyStr, PositiveFiniteFloat
 from slipstream.contract import read_result, to_numeric_metric
-
-from slipstream_bench.cost.config import load_provenance
-from slipstream_bench.cost.fields import NonEmptyStr, PositiveFiniteFloat
 
 _TOKENS_PER_MILLION = 1_000_000
 
@@ -113,7 +112,7 @@ def load_commercial_cost_inputs(path: Path) -> CommercialCostInputs:
     :param path: the provenance YAML file (api, model, quote date, $/1M rates).
     :return: the validated inputs.
     :raise CommercialCostError: on any read/parse/validate failure (see
-        :func:`slipstream_bench.cost.config.load_provenance`).
+        :func:`slipstream.bench.cost.config.load_provenance`).
     """
     return load_provenance(path, CommercialCostInputs, error_cls=CommercialCostError)
 

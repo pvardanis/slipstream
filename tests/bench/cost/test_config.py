@@ -9,12 +9,11 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from slipstream_bench.cost.commercial import (
+from slipstream.bench.cost.commercial import (
     CommercialCostError,
     load_commercial_cost_inputs,
 )
-from slipstream_bench.cost.self_hosted import CostError, load_cost_inputs
+from slipstream.bench.cost.self_hosted import CostError, load_cost_inputs
 
 _COST = {
     "price_per_hour": 2.0,

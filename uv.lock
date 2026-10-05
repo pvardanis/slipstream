@@ -19,6 +19,7 @@ resolution-markers = [
 [manifest]
 members = [
     "slipstream-bench",
+    "slipstream-bench-executor",
     "slipstream-contract",
 ]
 
@@ -3575,6 +3576,7 @@ orchestration = [
 dev = [
     { name = "pytest" },
     { name = "ruff" },
+    { name = "slipstream-bench-executor" },
     { name = "ty" },
 ]
 
@@ -3597,7 +3599,29 @@ provides-extras = ["orchestration"]
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.16.7" },
+    { name = "slipstream-bench-executor", editable = "packages/bench" },
     { name = "ty", specifier = "==0.0.84" },
+]
+
+[[package]]
+name = "slipstream-bench-executor"
+version = "0.1.0"
+source = { editable = "packages/bench" }
+dependencies = [
+    { name = "prometheus-client" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "slipstream-contract" },
+    { name = "typer" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "prometheus-client", specifier = ">=0.26.0" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "slipstream-contract", editable = "packages/contract" },
+    { name = "typer", specifier = ">=0.12" },
 ]
 
 [[package]]
