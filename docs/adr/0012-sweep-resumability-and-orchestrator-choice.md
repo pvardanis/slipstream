@@ -219,3 +219,21 @@ Dependencies flow inward: orchestration depends on core bench-execution, never t
 two-distribution split or a uv workspace is **not** taken now (YAGNI): both ship together at one
 version. Reopen that only at its trigger — orchestration gaining an independent release cadence, or
 being consumed from outside this repo.
+
+## Amendment (2026-10-05): the deferred split is taken, on a reason the trigger did not name
+
+The split parked above is now taken — see [ADR-0017](0017-workspace-split-shared-contract-kernel.md)
+for the structure. Honesty about why: **neither** reopen trigger fired. Orchestration has no
+independent release cadence and no outside consumer. The deferral is overridden for a different
+reason the original list did not carry — **the single distribution forces dead dependencies into
+both deployment images**. `pandas` and `seaborn` are base dependencies (`pyproject.toml`); the
+bench-client image installs `.` and so carries the plotting stack the per-cell executor never
+imports, and the orchestration image installs `.[orchestration]` and carries it too. The in-repo
+subpackage boundary (this §Amendment) cannot strip them: one distribution installs wholesale.
+
+The YAGNI cost that justified the deferral has also dropped. A **uv workspace** shares one lockfile
+and the members ship at one version, so the split costs no independent-release ceremony and no
+version-sync — the exact tax the deferral was avoiding. What remains is a clean removal of the dead
+plotting stack from both images and the naming of the shared contract the layers already pass across
+the SSM seam. The inward-only rule recorded above is unchanged and becomes the seam the split runs
+along; ADR-0017 carries it from a subpackage convention to a distribution boundary.
