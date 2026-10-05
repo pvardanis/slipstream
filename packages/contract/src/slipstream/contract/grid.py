@@ -29,13 +29,14 @@ from slipstream.contract.fields import (
     UniquePositiveInts,
     unique,
 )
-from slipstream.contract.records import EnginePoint, SweepAggregationError
+from slipstream.contract.records import EnginePoint, KvLabel, SweepAggregationError
 
 # The KV-cache dtype and prefix-caching arms are keyed by their chart labels, the
 # same tokens EnginePoint.from_dirname parses off a slug. The grid carries only the
 # label; the token vLLM's --kv-cache-dtype accepts is mapped in the executor's renderer,
 # so a rename of a vLLM token is a one-line edit in code, not a change every grid copies.
-KvLabel = Literal["fp8", "fp16"]
+# KvLabel is the EnginePoint's dtype type (slipstream.contract.records), so the grid's
+# dtype axis and the point it resolves name one set.
 PrefixCachingLabel = Literal["on", "off"]
 
 KvLabels = Annotated[list[KvLabel], Field(min_length=1), AfterValidator(unique)]

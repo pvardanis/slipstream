@@ -16,7 +16,6 @@ from slipstream.contract.config import (
     SweepError,
 )
 from slipstream.contract.grid import (
-    KvLabel,
     SweepGrid,
     SweepGridError,
     build_point_sweep_config,
@@ -28,6 +27,7 @@ from slipstream.contract.naming import get_cell_basename, split_lengths
 from slipstream.contract.records import (
     EnginePoint,
     FailureCohorts,
+    KvLabel,
     LoadCell,
     SweepAggregationError,
     classify_failures,
