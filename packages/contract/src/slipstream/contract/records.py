@@ -13,9 +13,14 @@ layer, not here.
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict, cast
 
 from slipstream.contract.results import to_numeric_metric
+
+# The KV-cache dtype labels the sweep varies: fp8 committed, fp16 the counterfactual
+# baseline. An EnginePoint names one of them, and the grid constrains its dtype axis to
+# the same set, so the value object is no weaker than the grid that feeds it.
+KvLabel = Literal["fp8", "fp16"]
 
 # A point subdir is mns{N}_kv{fp8|fp16}_pc{on|off} — the engine knobs one Tier-1
 # redeploy was rendered with, encoded in the name the recipe nests its JSON under.
@@ -57,7 +62,7 @@ class EnginePoint:
     """
 
     max_num_seqs: int
-    kv_cache_dtype: str
+    kv_cache_dtype: KvLabel
     prefix_caching: bool
 
     @classmethod
@@ -78,7 +83,8 @@ class EnginePoint:
             )
         return cls(
             max_num_seqs=int(match["mns"]),
-            kv_cache_dtype=match["kv"],
+            # The pattern's kv group matches only fp8|fp16, so the capture is a KvLabel.
+            kv_cache_dtype=cast(KvLabel, match["kv"]),
             prefix_caching=match["pc"] == "on",
         )
 
