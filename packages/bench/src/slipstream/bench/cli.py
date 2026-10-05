@@ -2,7 +2,7 @@
 
 Assembles the cost sub-app and registers the single-cell executor commands the
 bench-client image invokes beside it: ``load-cell`` (one ``vllm bench serve`` per
-``docker run``, the grain the container executes now that the grid loop lives in the
+``docker run``, the grain the container executes; the grid loop belongs to the
 orchestration layer, ADR-0012 §Amendment), ``load-sweep`` (the whole grid for a
 laptop run), ``prefix-cache`` (the cold/warm hit-rate delta), and ``zero-leak`` (the
 teardown money-safety check). Depends inward on the ``contract`` kernel alone.

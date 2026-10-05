@@ -1,10 +1,9 @@
 """Composition root for the L0 benchmark reporting surface.
 
 Assembles the sweep-aggregation and report sub-apps onto one root ``slipstream-bench``
-app. The per-cell executor (load-cell/load-sweep), cost post-processors, prefix-cache
-scraper, and leak check now live in the bench member's own CLI (``slipstream.bench.cli``,
-ADR-0017); this root keeps the multi-cell aggregation and reporting that stay behind
-until the report and orchestration members are carved out.
+app: the multi-cell aggregation and reporting surface. The per-cell executor, cost
+post-processors, prefix-cache scraper, and leak check belong to the bench member's own
+CLI (``slipstream.bench.cli``, ADR-0017).
 """
 
 import typer
