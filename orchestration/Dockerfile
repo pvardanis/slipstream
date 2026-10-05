@@ -27,21 +27,24 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Install the locked dependency set first, without the project, so this layer — the slow
-# one — is cached on the lockfile and pyproject alone and survives every source-only edit.
-# --frozen fails if the lockfile is stale rather than silently re-resolving; --no-dev drops
-# the dev group (pytest/ruff/ty); --extra orchestration pulls Prefect + boto3. The cache
-# mount persists uv's download cache across builds without landing in a layer, and the bind
-# mounts read the manifests without copying them into this layer.
+# Install the locked dependency set first, without any workspace member, so this layer — the
+# slow one — is cached on the lockfile and pyproject alone and survives every source-only edit.
+# --no-install-workspace (not --no-install-project) skips the slipstream-contract member too,
+# which has no source in this layer; --frozen fails if the lockfile is stale rather than
+# silently re-resolving; --no-dev drops the dev group (pytest/ruff/ty); --extra orchestration
+# pulls Prefect + boto3. The cache mount persists uv's download cache across builds without
+# landing in a layer, and the bind mounts read the manifests without copying them into this layer.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-project --no-dev --extra orchestration
+    uv sync --frozen --no-install-workspace --no-dev --extra orchestration
 
-# Now the source, then install the project itself into the same venv. --no-editable bakes
-# the package into site-packages so the runtime stage needs no source tree on disk.
+# Now the source, then install the project and its workspace members into the same venv.
+# packages/ carries slipstream-contract, which the root depends on via [tool.uv.sources];
+# --no-editable bakes both into site-packages so the runtime stage needs no source tree on disk.
 COPY pyproject.toml uv.lock ./
 COPY src ./src
+COPY packages ./packages
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra orchestration
 
