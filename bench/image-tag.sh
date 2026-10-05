@@ -55,8 +55,10 @@ fi
 
 # The short hash of the last commit touching any image input. A change to any of
 # these is what a new content tag must capture. The pathspec watches the whole bench/
-# directory and packages/ (the slipstream-contract workspace member the image installs),
-# and bench/load-sweep.yaml and bench/load-cell.yaml live under bench/ — but those
+# directory and the whole packages/ tree (the slipstream-contract workspace member the
+# image installs; only installed members belong under packages/, so watching the tree
+# needs no per-member list and a new installed member rolls the tag on its own). And
+# bench/load-sweep.yaml and bench/load-cell.yaml live under bench/ — but those
 # files are the experiment/cell config mounted into the container at run time, not baked
 # into the image, so they are excluded: editing them leaves the tokenizer-and-harness
 # image unchanged and must not roll the tag or force a rebuild of identical bits. The PR
