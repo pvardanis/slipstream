@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import TypedDict
 
 from slipstream.contract.records import (
-    _POINT_PATTERN,
     EnginePoint,
     FailureCohorts,
     LoadCell,
@@ -117,7 +116,7 @@ def _get_point_dirs(run_dir: Path) -> list[tuple[EnginePoint, Path]]:
     found = [
         (EnginePoint.from_dirname(child.name), child)
         for child in run_dir.iterdir()
-        if child.is_dir() and _POINT_PATTERN.match(child.name)
+        if child.is_dir() and EnginePoint.is_point_dirname(child.name)
     ]
     return sorted(found, key=lambda pair: _get_point_key(pair[0]))
 
