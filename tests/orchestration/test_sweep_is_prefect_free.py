@@ -66,3 +66,47 @@ def test_package_source_imports_within_boundary(rule: BoundaryRule) -> None:
     assert offenders == {}, (
         f"{rule.package} modules import roots outside their boundary: {offenders}"
     )
+
+
+def test_imported_roots_reads_absolute_roots_and_skips_relative() -> None:
+    """The breach check rests on this: absolute roots counted, relative imports skipped."""
+    source = (
+        "import os\n"
+        "import a.b.c\n"
+        "from pkg.sub import thing\n"
+        "from . import sibling\n"
+        "from ..other import thing\n"
+    )
+    assert _imported_roots(source) == {"os", "a", "pkg"}
+
+
+def test_offending_roots_allowlist_flags_roots_outside_allowed() -> None:
+    """A rule with an allowed set flags any import outside it, so a stray dep cannot slip."""
+    rule = BoundaryRule(
+        package="x",
+        forbidden=frozenset(),
+        probe="",
+        allowed=frozenset({"os", "pydantic"}),
+    )
+    assert _offending_roots("import os\nimport numpy\n", rule) == {"numpy"}
+    assert (
+        _offending_roots("import os\nfrom pydantic import BaseModel\n", rule) == set()
+    )
+
+
+def test_offending_roots_denylist_flags_only_forbidden() -> None:
+    """A rule with no allowed set flags only its forbidden roots, leaving the rest free."""
+    rule = BoundaryRule(package="x", forbidden=frozenset({"prefect"}), probe="")
+    assert _offending_roots("import prefect\nimport pandas\n", rule) == {"prefect"}
+    assert _offending_roots("import pandas\n", rule) == set()
+
+
+def test_boundary_rule_rejects_overlapping_allowed_and_forbidden() -> None:
+    """A root in both sets is a contradiction the two guards would read opposite ways."""
+    with pytest.raises(AssertionError):
+        BoundaryRule(
+            package="x",
+            forbidden=frozenset({"os"}),
+            probe="",
+            allowed=frozenset({"os"}),
+        )

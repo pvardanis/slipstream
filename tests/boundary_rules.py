@@ -36,6 +36,19 @@ class BoundaryRule:
     probe: str
     allowed: frozenset[str] | None = None
 
+    def __post_init__(self) -> None:
+        """Reject a rule whose two guards would disagree about the same root.
+
+        A root in both ``allowed`` and ``forbidden`` would pass the AST guard (inside the
+        allowlist) yet be blocked by the subprocess guard — a contradiction, not a boundary.
+        """
+        if self.allowed is not None:
+            overlap = self.allowed & self.forbidden
+            assert not overlap, (
+                f"{self.package}: {sorted(overlap)} is both allowed and forbidden — "
+                f"the AST and subprocess guards would disagree"
+            )
+
 
 BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
     BoundaryRule(
