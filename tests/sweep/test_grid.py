@@ -11,16 +11,19 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from slipstream_bench.sweep.aggregation import EnginePoint
-from slipstream_bench.sweep.config import CellConfig, SweepConfig
-from slipstream_bench.sweep.grid import (
+from slipstream.contract import (
+    CellConfig,
+    EnginePoint,
+    SweepConfig,
     SweepGrid,
     SweepGridError,
     build_point_sweep_config,
-    get_engine_args,
     list_engine_points,
     load_grid,
+)
+
+from slipstream_bench.sweep.grid import (
+    get_engine_args,
     render_burstiness,
     render_ladder,
     render_points,

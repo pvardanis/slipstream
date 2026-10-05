@@ -16,23 +16,17 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-
-from slipstream_bench.results import ResultError
-from slipstream_bench.sweep.aggregation import (
+from slipstream.contract import (
+    ResultError,
     SweepAggregationError,
-    aggregate_ceilings,
-)
-from slipstream_bench.sweep.config import (
     SweepError,
-    load_cell_config,
-    load_sweep_config,
-)
-from slipstream_bench.sweep.grid import (
     SweepGridError,
-    SweepGridPart,
     load_grid,
-    render_part,
 )
+
+from slipstream_bench.sweep.aggregation import aggregate_ceilings
+from slipstream_bench.sweep.config import load_cell_config, load_sweep_config
+from slipstream_bench.sweep.grid import SweepGridPart, render_part
 from slipstream_bench.sweep.runner import (
     CellOutcome,
     cell_command,

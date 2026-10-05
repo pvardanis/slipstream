@@ -16,6 +16,12 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "slipstream-bench",
+    "slipstream-contract",
+]
+
 [[package]]
 name = "aiobotocore"
 version = "3.9.1"
@@ -3554,6 +3560,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "seaborn" },
+    { name = "slipstream-contract" },
     { name = "typer" },
 ]
 
@@ -3581,6 +3588,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "seaborn", specifier = ">=0.13" },
+    { name = "slipstream-contract", editable = "packages/contract" },
     { name = "typer", specifier = ">=0.12" },
 ]
 provides-extras = ["orchestration"]
@@ -3590,6 +3598,21 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.16.7" },
     { name = "ty", specifier = "==0.0.84" },
+]
+
+[[package]]
+name = "slipstream-contract"
+version = "0.1.0"
+source = { editable = "packages/contract" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
 ]
 
 [[package]]

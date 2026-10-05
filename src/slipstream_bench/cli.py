@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from slipstream.contract import ResultError
 
 from slipstream_bench.cost.cli import app as cost_app
 from slipstream_bench.prefix_cache import (
@@ -18,7 +19,6 @@ from slipstream_bench.prefix_cache import (
     scrape_prefix_cache,
 )
 from slipstream_bench.report.cli import app as report_app
-from slipstream_bench.results import ResultError
 from slipstream_bench.sweep.cli import app as sweep_app
 from slipstream_bench.zero_leak import LeakError, find_leaks, read_aws_json
 

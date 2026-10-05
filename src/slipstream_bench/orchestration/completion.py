@@ -28,15 +28,18 @@ from botocore.exceptions import (
 from botocore.exceptions import (
     ConnectionError as BotoConnectionError,
 )
+from slipstream.contract import (
+    EnginePoint,
+    SweepGrid,
+    build_point_sweep_config,
+    get_cell_basename,
+)
 
 from slipstream_bench.orchestration.cell_run import get_cell_s3_key
 from slipstream_bench.orchestration.validity import (
     DEFAULT_MAX_ERROR_RATE,
     is_cell_valid,
 )
-from slipstream_bench.sweep.aggregation import EnginePoint
-from slipstream_bench.sweep.grid import SweepGrid, build_point_sweep_config
-from slipstream_bench.sweep.runner import get_cell_basename
 
 # The point's cells key the same way whatever endpoint or output dir they ran against, so
 # enumerating them needs only non-empty placeholders for the two the addressing ignores.

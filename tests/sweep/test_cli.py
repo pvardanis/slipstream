@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 import yaml
+from slipstream.contract import SweepError
 from typer.testing import CliRunner
 
 from slipstream_bench.cli import app
 from slipstream_bench.sweep.cli import resolve_api_key_env, run_cell
-from slipstream_bench.sweep.config import SweepError
 
 runner = CliRunner()
 

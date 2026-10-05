@@ -38,4 +38,24 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "assert 'load-sweep' in names, names\n"
         ),
     ),
+    BoundaryRule(
+        package="slipstream.contract",
+        # The kernel imports no framework and no other workspace member: it holds pure
+        # data and parse on pydantic/PyYAML/stdlib alone (ADR-0017).
+        forbidden=frozenset(
+            {
+                "prefect",
+                "prefect_aws",
+                "boto3",
+                "pandas",
+                "seaborn",
+                "matplotlib",
+                "slipstream_bench",
+            }
+        ),
+        probe=(
+            "import slipstream.contract as contract\n"
+            "assert contract.CellConfig is not None\n"
+        ),
+    ),
 )
