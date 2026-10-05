@@ -1,48 +1,55 @@
-"""The ``sweep`` package's own source must name no Prefect import — the fast guard.
+"""Each boundary-rule package's own source names none of its forbidden imports — the fast guard.
 
-ADR-0012 §Amendment: the bench-client image installs ``.`` (Prefect-free) and its only
-import path is ``load-sweep`` → ``sweep/``. If any ``sweep`` module imports ``prefect``
-or ``prefect_aws``, that path pulls a dependency the image does not ship and the
-container breaks at import. This walks every ``sweep`` source file's AST and fails on
-any such import — a fast, precise check that names the offending file. It sees only
-static ``import`` statements in ``sweep/``'s own files, not dynamic imports or the
-transitive closure through other packages; ``test_import_contract`` covers that whole
-contract by importing ``sweep`` in a Prefect-free interpreter. Prefect-touching code
-lives in ``slipstream_bench.orchestration`` instead, imported only behind the
-``slipstream-orchestrate`` entry, which guards the extra first.
+The workspace keeps framework-free and member-isolated packages (ADR-0012 §Amendment,
+ADR-0017): the bench-client image installs a Prefect-free path, and the ``contract`` kernel
+depends on no framework and no other member. This walks every source file of each package in
+``BOUNDARY_RULES`` and fails on any static ``import`` of a root the rule forbids — a fast,
+precise check that names the offending file. It sees only static ``import`` statements in a
+package's own files, not dynamic imports or the transitive closure through other packages;
+``test_import_contract`` covers that whole closure by importing each package with its
+forbidden roots blocked.
 """
 
 import ast
+import importlib
 from pathlib import Path
 
-import slipstream_bench.sweep as sweep_pkg
+import pytest
 
-_SWEEP_DIR = Path(sweep_pkg.__file__).parent
-_PREFECT_ROOTS = frozenset({"prefect", "prefect_aws"})
+from tests.boundary_rules import BOUNDARY_RULES, BoundaryRule
 
 
-def _imports_prefect(source: str) -> bool:
-    """Return whether the source's AST holds any top-level or nested prefect import."""
+def _imports_forbidden_root(source: str, forbidden: frozenset[str]) -> bool:
+    """Return whether the source's AST holds any import of a forbidden top-level root."""
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(alias.name.split(".")[0] in _PREFECT_ROOTS for alias in node.names):
+            if any(alias.name.split(".")[0] in forbidden for alias in node.names):
                 return True
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if module.split(".")[0] in _PREFECT_ROOTS:
+            if module.split(".")[0] in forbidden:
                 return True
     return False
 
 
-def test_no_sweep_module_imports_prefect() -> None:
+def _package_dir(package: str) -> Path:
+    """Return the directory holding a package's own source files."""
+    module_file = importlib.import_module(package).__file__
+    assert module_file is not None, f"{package} has no __file__ to walk"
+    return Path(module_file).parent
+
+
+@pytest.mark.parametrize("rule", BOUNDARY_RULES, ids=lambda rule: rule.package)
+def test_package_source_imports_nothing_forbidden(rule: BoundaryRule) -> None:
+    package_dir = _package_dir(rule.package)
     offenders = [
-        str(path.relative_to(_SWEEP_DIR))
-        for path in sorted(_SWEEP_DIR.rglob("*.py"))
-        if _imports_prefect(path.read_text(encoding="utf-8"))
+        str(path.relative_to(package_dir))
+        for path in sorted(package_dir.rglob("*.py"))
+        if _imports_forbidden_root(path.read_text(encoding="utf-8"), rule.forbidden)
     ]
 
     assert offenders == [], (
-        f"sweep modules import prefect: {offenders}; the bench-client image ships no "
-        "prefect, so prefect-touching code must live in slipstream_bench.orchestration"
+        f"{rule.package} modules import a forbidden root "
+        f"{sorted(rule.forbidden)}: {offenders}"
     )
