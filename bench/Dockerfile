@@ -19,14 +19,21 @@ ARG REVISION=main
 # regardless of which user runs the client.
 ENV HF_HOME=/opt/hf
 
-# Layer the package onto the base image's interpreter with its own pip, so the
-# slipstream-bench console script lands alongside the vllm CLI on the same Python
-# that provides transformers. uv governs the package's dev workflow and lockfile;
-# the image needs only the built wheel and its lone runtime dep (typer).
+# Layer the package onto the base image's interpreter, so the slipstream-bench
+# console script lands alongside the vllm CLI on the same Python that provides
+# transformers. The install is uv's, not pip's: slipstream-bench depends on the
+# slipstream-contract workspace member, which resolves only through the root's
+# [tool.uv.sources] (pip cannot see a workspace source, and contract is
+# unpublished). --system installs into the base image's interpreter additively,
+# leaving its vllm and transformers in place, and --no-cache keeps uv's download
+# cache out of the layer. The uv binary is copied from its own image, pinned by
+# digest like the runtime bases; Dependabot advances it.
+COPY --from=ghcr.io/astral-sh/uv@sha256:538e0b39736e7feae937a65983e49d2ab75e1559d35041f9878b7b7e51de91e4 /uv /bin/uv  # uv 0.9.30
 WORKDIR /opt/slipstream-bench
 COPY pyproject.toml ./
 COPY src ./src
-RUN python3 -m pip install --no-cache-dir .
+COPY packages ./packages
+RUN uv pip install --system --no-cache .
 
 # The experiment config is not baked: knob-sweep and prefix-cache compose a per-point
 # config on the operator's laptop and mount it in as the harness's --config, so the
