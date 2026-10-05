@@ -24,9 +24,9 @@ ENV HF_HOME=/opt/hf
 # transformers. The install is uv's, not pip's: the bench member depends on the
 # slipstream-contract workspace member, which resolves only through the root's
 # [tool.uv.sources] (pip cannot see a workspace source, and contract is
-# unpublished); installing ./packages/bench rather than the root member keeps the
-# plotting stack (pandas/seaborn) and Prefect out of the image, which carry the
-# report and orchestration members that do not run here (ADR-0017). --system
+# unpublished); installing ./packages/bench rather than the root member keeps out the
+# plotting stack (pandas/seaborn) and Prefect that the report and orchestration
+# members pull in, neither of which runs here (ADR-0017). --system
 # installs into the base image's interpreter additively, leaving its vllm and
 # transformers in place, and --no-cache keeps uv's download cache out of the layer.
 # The base's interpreter is a uv-managed CPython carrying a PEP-668

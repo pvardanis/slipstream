@@ -222,6 +222,31 @@ def test_prefix_cache_requires_a_cache_state(tmp_path: Path) -> None:
     assert "--cache-state" in _plain(invoked.output)
 
 
+def test_prefix_cache_rejects_a_malformed_result_file(tmp_path: Path) -> None:
+    """Valid paths but an unreadable --result hit the ResultError arm: exit 2, stderr."""
+    _result, before, after = _prefix_cache_fixture(tmp_path)
+    bad_result = tmp_path / "bad.json"
+    bad_result.write_text("{not json")
+
+    invoked = runner.invoke(
+        app,
+        [
+            "prefix-cache",
+            "--cache-state",
+            "cold",
+            "--metrics-before",
+            str(before),
+            "--metrics-after",
+            str(after),
+            "--result",
+            str(bad_result),
+        ],
+    )
+
+    assert invoked.exit_code == 2
+    assert "cannot read" in invoked.output
+
+
 def test_prefix_cache_rejects_a_missing_snapshot(tmp_path: Path) -> None:
     """A metrics-before path that does not exist is rejected before any parsing."""
     result, _, after = _prefix_cache_fixture(tmp_path)

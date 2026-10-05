@@ -3,7 +3,7 @@
 Owns the ``aggregate-sweep`` and ``sweep-grid`` commands: the first folds a
 knob-sweep run's saved results into the concurrency-ceiling table, the second emits
 a validated slice of the knob-sweep grid for ``just knob-sweep`` to read. The
-per-cell executor (``load-cell``/``load-sweep``) now lives in the bench member's CLI
+per-cell executor (``load-cell``/``load-sweep``) belongs to the bench member's CLI
 (``slipstream.bench.cli``, ADR-0017).
 """
 
