@@ -110,9 +110,10 @@ jobs:
           # in the probe step below).
           : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
           # The immutable content tag is the short hash of the last commit that touched
-          # any image input — the package source, the slipstream-contract workspace member
-          # it installs, its locked dependency set, the build definition, and the three
-          # deep-config files the image bakes for the worker
+          # any image input — the package source, the whole packages/ tree (the
+          # slipstream-contract workspace member it installs; only installed members belong
+          # there, so the tree needs no per-member list), its locked dependency set, the
+          # build definition, and the three deep-config files the image bakes for the worker
           # (model.yaml, the sweep grid, the vLLM redeploy manifest). A change to any of
           # these is what a new content tag must capture; a change elsewhere (docs,
           # terraform) leaves the image identical, so the probe below finds the tag present
