@@ -129,6 +129,7 @@ jobs:
               - '!bench/load-sweep.yaml'
               - '!bench/load-cell.yaml'
               - 'src/**'
+              - 'packages/**'
               - 'pyproject.toml'
               - 'model.yaml'
       # Build the image model.yaml describes (hfId + revision via image-tag.sh, yq
@@ -162,6 +163,7 @@ jobs:
             orchestration:
               - 'orchestration/Dockerfile'
               - 'src/**'
+              - 'packages/**'
               - 'pyproject.toml'
               - 'uv.lock'
               - '.dockerignore'
