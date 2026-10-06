@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from slipstream_bench.contract import ResultError
 from slipstream_bench.executor.prefix_cache import (
     CacheState,

@@ -1,5 +1,5 @@
 # The two image builds need only the package's own inputs: bench/Dockerfile copies
-# pyproject.toml + src/ + packages/, and orchestration/Dockerfile also reads uv.lock for its
+# pyproject.toml + packages/, and orchestration/Dockerfile also reads uv.lock for its
 # frozen install and bakes the three deep-config files the registered knob-sweep reads on the
 # worker (model.yaml, the sweep grid, the vLLM redeploy manifest). packages/ carries the
 # slipstream-contract workspace member both installs resolve through [tool.uv.sources].
@@ -10,7 +10,6 @@
 *
 !pyproject.toml
 !uv.lock
-!src
 !packages
 !model.yaml
 !bench/sweep-grid.yaml

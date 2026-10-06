@@ -28,6 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+
 from slipstream_bench.report.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 from slipstream_bench.report.chart import (
     rows_to_json,

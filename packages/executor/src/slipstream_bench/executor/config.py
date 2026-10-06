@@ -12,6 +12,7 @@ from typing import TypeVar
 
 import yaml
 from pydantic import ValidationError
+
 from slipstream_bench.contract.config import (
     RESERVED_KEYS,
     CellConfig,

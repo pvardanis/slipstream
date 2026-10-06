@@ -18,6 +18,7 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
+
 from slipstream_bench.contract import read_result, to_numeric_metric
 from slipstream_bench.executor.cost.config import load_provenance
 from slipstream_bench.executor.cost.fields import NonEmptyStr, PositiveFiniteFloat

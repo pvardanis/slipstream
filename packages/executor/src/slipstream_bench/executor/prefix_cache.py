@@ -21,6 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from prometheus_client.parser import text_string_to_metric_families
+
 from slipstream_bench.contract import read_result
 
 _QUERIES_METRIC = "vllm:prefix_cache_queries"

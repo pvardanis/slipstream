@@ -8,11 +8,9 @@ and the next run re-attempts it. It is keyed ``digest:point-slug:cell-name`` via
 :func:`get_cell_cache_key`, with ``result_storage`` and cache ``key_storage`` pointed at S3
 so resume survives a server or laptop death.
 
-The ``orchestration`` extra Prefect ships in is guarded once, at the
-``slipstream-orchestrate`` entry (:mod:`slipstream_bench.orchestration.__main__`),
-before this module is imported. Each task is its own transaction (Prefect's default):
-callers **must not** wrap the sweep in an enclosing ``transaction()``, which would defer
-every write to flow end and forfeit per-cell resume.
+Each task is its own transaction (Prefect's default): callers **must not** wrap the
+sweep in an enclosing ``transaction()``, which would defer every write to flow end and
+forfeit per-cell resume.
 """
 
 from collections.abc import Callable

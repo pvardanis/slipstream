@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+
 from slipstream_bench.contract import ResultError, SweepError
 from slipstream_bench.executor.config import load_cell_config, load_sweep_config
 from slipstream_bench.executor.cost.cli import app as cost_app

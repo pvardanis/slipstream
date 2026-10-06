@@ -1,63 +1,23 @@
-[project]
-name = "slipstream-bench"
-version = "0.1.0"
-description = "L0 benchmark harness for the slipstream platform: serve sweeps, cost-per-1M, and prefix-cache hit rates."
-requires-python = ">=3.11"
-dependencies = [
-    "prometheus-client>=0.26.0",
-    "pydantic>=2",
-    "pyyaml>=6",
-    "slipstream-contract",
-    # The root reporting front-end (slipstream_bench.cli) composes the report member's
-    # sub-app, so the root member depends on it until #232 dissolves the root and moves
-    # the slipstream-bench-report entry point into report. This is the transitional
-    # root -> report edge ADR-0017 carves in two steps (#231 here, #232 next).
-    "slipstream-report",
-    "typer>=0.12",
-]
-
-# The orchestration layer (Prefect-driven sweep resume) runs at the control point,
-# never in the bench-client image. The image installs `.` (Prefect-free); the
-# driver and CI install `.[orchestration]`. See ADR-0012 §Amendment.
-[project.optional-dependencies]
-orchestration = [
-    "boto3>=1.34",
-    "prefect>=3",
-    "prefect-aws>=0.7.12",
-]
-
-[project.scripts]
-slipstream-bench-report = "slipstream_bench.cli:app"
-# The orchestration driver runs at the control point with the orchestration extra; the
-# script is installed by `.` too, so its entry guards the extra before importing the
-# Prefect-pulling CLI (ADR-0012 §Amendment).
-slipstream-orchestrate = "slipstream_bench.orchestration.__main__:main"
-
+# The uv workspace root: a virtual root (no [project] of its own) over the four carved
+# members under packages/* — the contract kernel and the executor, report, and
+# orchestration members that depend inward on it (ADR-0017). It owns the shared lockfile,
+# the dev tooling, and the suite config; every importable package lives in a member.
 [dependency-groups]
 dev = [
     "pytest>=8",
     "ruff>=0.16.7",
     "ty==0.0.84",
-    # The test suite exercises the carved workspace members (the bench executor's
-    # runner, cost, and CLI), so the dev env installs them editable. Not a runtime
-    # dependency of the root member: the image installs bench directly, and nothing
-    # in src/ imports it (ADR-0017).
+    # The suite exercises every workspace member, so the dev env installs all four
+    # editable. The members resolve from the workspace (not an index) via the sources
+    # table below; the virtual root has no runtime deps of its own.
+    "slipstream-contract",
     "slipstream-bench-executor",
+    "slipstream-report",
+    "slipstream-orchestration",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-# slipstream_bench is a PEP-420 namespace: src/slipstream_bench carries no __init__.py so
-# the executor member contributes slipstream_bench.executor under the same import root.
-# Naming the directory explicitly keeps hatchling from inferring a single top package.
-[tool.hatch.build.targets.wheel]
-packages = ["src/slipstream_bench"]
-
-# The repo is a uv workspace: this root member (slipstream_bench) plus the carved
-# packages/* members resolve against one lockfile, the contract kernel sourced from the
-# workspace rather than an index (ADR-0017).
+# The repo is a uv workspace: the packages/* members resolve against one lockfile, every
+# intra-workspace dependency sourced from the workspace rather than an index (ADR-0017).
 [tool.uv.workspace]
 members = ["packages/*"]
 
@@ -65,9 +25,16 @@ members = ["packages/*"]
 slipstream-contract = { workspace = true }
 slipstream-bench-executor = { workspace = true }
 slipstream-report = { workspace = true }
+slipstream-orchestration = { workspace = true }
 
 [tool.ruff]
 line-length = 88
+
+# The virtual root owns no package named slipstream_bench, so pin the shared namespace as
+# first-party; its members' imports then sort into their own section below the third-party
+# block, the convention every member and test already follows (ADR-0017).
+[tool.ruff.lint.isort]
+known-first-party = ["slipstream_bench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -77,11 +44,11 @@ python-version = "3.11"
 
 [tool.ty.src]
 include = [
-    "src",
     "tests",
     "packages/contract/src",
     "packages/executor/src",
     "packages/report/src",
+    "packages/orchestration/src",
 ]
 
 [tool.ty.rules]

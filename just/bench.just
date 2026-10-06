@@ -1,4 +1,4 @@
-# Benchmark lifecycle: the bench-client image, the load and knob sweeps, the prefix-cache measurement, results sync, and the ephemeral mTLS bench endpoint.
+# Benchmark lifecycle: the bench-client image, the per-point client-load sweep, the prefix-cache measurement, results sync, and the ephemeral mTLS bench endpoint.
 
 # Print the bench-client image reference (ECR repo URL from `just bootstrap`, plus the tag).
 _bench-image-ref: _bootstrap-init
@@ -51,8 +51,8 @@ bench point_slug *args:
     # back to the floating main tag and run the cell on the wrong image.
     image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
     # A UTC timestamp is the run's prefix in the bucket and the local results subdir, so
-    # concurrent or repeated runs never overwrite each other. knob-sweep injects
-    # BENCH_RUN_ID to nest one point's ladder under a shared knob-sweep run; when it is
+    # concurrent or repeated runs never overwrite each other. A set BENCH_RUN_ID nests
+    # this point's ladder under that shared run id (marking it non-standalone); when it is
     # unset this is a standalone point sweep that mints and announces its own id, so a
     # failed run can be resumed by passing that id back as BENCH_RUN_ID.
     if [[ -n "${BENCH_RUN_ID:-}" ]]; then
@@ -80,7 +80,7 @@ bench point_slug *args:
     # the digest read from --model-yaml; the served image ref from --vllm-manifest. Its
     # status is captured, not left to abort the recipe, so the sync below always runs.
     rc=0
-    uv run --extra orchestration slipstream-orchestrate point-sweep \
+    uv run slipstream-orchestrate point-sweep \
       --run-id "${run_id}/{{ point_slug }}" \
       --point-slug "{{ point_slug }}" \
       --instance-id "${instance}" \
@@ -100,120 +100,13 @@ bench point_slug *args:
     aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
     echo "results synced to bench/results/${run_id}/"
     # A standalone point sweep that ended non-zero left cells unmeasured; surface the id
-    # to resume it. Under knob-sweep (standalone=0) the parent owns the resume hint, so
-    # the two never print conflicting resume commands.
+    # to resume it. A nested run (BENCH_RUN_ID set, standalone=0) leaves the resume hint
+    # to its caller, so the two never print conflicting resume commands.
     if ((rc != 0)) && ((standalone == 1)); then
       echo "point sweep ${run_id} incomplete. Resume (re-runs only unmeasured cells):" >&2
       echo "  BENCH_RUN_ID=${run_id} just bench {{ point_slug }}" >&2
     fi
     exit "${rc}"
-
-# Two-tier engine-knob sweep (#33, ADR-0009).
-#
-# Every swept value lives in bench/sweep-grid.yaml, read here through
-# `slipstream-bench-report sweep-grid`, which validates the whole grid before the first
-# deploy — the recipe holds no knob values or knob logic of its own.
-#
-# Tier 1 = engine knobs, one GPU redeploy per point. The knobs live in the vLLM
-# launch args, so every combination needs a fresh `just gpu-deploy`:
-#   max-num-seqs (mns) {16,32,64,128,256} x KV dtype {fp8,fp16} x prefix caching
-#   {on,off} = 20 points, one grid row each.
-# Tier 2 = client load ladder, no redeploy. Against each already-running Tier-1
-# point, `just bench` walks the concurrency ladder {8..256} to find the highest rung
-# that holds goodput at the SLO — the sustained concurrency ceiling for that point.
-# The prefix-share axis rides along, but only where it can matter: {10,50,90} when
-# prefix caching is on, a single 0 baseline when off. With caching off vLLM reuses
-# no prefix KV whatever the share, so a swept share there measures a definitional
-# null (ADR-0009).
-#
-# For each Tier-1 point: render + redeploy the GPU replica, scrape vLLM's predicted
-# concurrency ceiling from the startup log, then drive the Tier-2 ladder against it.
-# Each point's ladder JSON lands under bench/results/<run>/mns{N}_kv{fp8|fp16}_pc{on|off}/,
-# and the predicted ceilings are tabulated alongside. FP8 is the committed rig; fp16
-# is swept only as a counterfactual baseline. Burstiness is pinned to one value: the
-# Tier-2 ladder is closed-loop (the concurrency cap limits in-flight requests and releases
-# a new one as each completes), not open-loop (the request rate drives arrivals on a
-# clock, and burstiness shapes their inter-arrival gaps). Under closed-loop there is no
-# arrival process for burstiness to shape, so it is inert here. A point that fails to
-# deploy or whose ladder reports failures is recorded and the sweep continues, exiting
-# non-zero at the end. Requires a live stack (`just stack-up`).
-[group('bench')]
-knob-sweep:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # Read every engine point from the validated grid before touching a GPU. The read is
-    # captured into a variable so the CLI's exit code is checked and an invalid grid
-    # aborts the sweep here, not mid-run — never `< <(...)`, which would run the CLI in a
-    # subshell and hide its failure under `set -e`. The Tier-2 cells (prefix shares,
-    # concurrency ladder, burstiness) live in the grid too and are enumerated per point
-    # by the orchestrator, so the recipe reads only the Tier-1 knobs each point redeploys.
-    engine_points="$(uv run slipstream-bench-report sweep-grid engine-points)"
-    run_id="$(date -u +%Y%m%dT%H%M%SZ)"
-    echo "==> knob-sweep run ${run_id}" >&2
-    run_dir="bench/results/${run_id}"
-    mkdir -p "${run_dir}"
-    ledger="${run_dir}/predicted-ceilings.tsv"
-    printf 'point\tpredicted_ceiling\n' >"${ledger}"
-    overall=0
-
-    # The cell cache and every point's flow run share one Prefect API for the whole
-    # sweep, so all points group under run=<run_id> in the UI. Bring it up once here; each
-    # per-point `just bench` inherits PREFECT_API_URL and reuses it rather than starting
-    # its own, and the EXIT trap set here stops the local server when the sweep ends.
-    source bench/prefect-server.sh
-    prefect_server_up
-
-    # One grid row per Tier-1 point: slug, max-num-seqs, KV engine token, and prefix-
-    # caching flag. The grid already mapped the KV label to the engine token (fp16 ->
-    # float16), so the recipe deploys the point and hands the ladder to `just bench`. The
-    # trailing per-point prefix shares are enumerated from the grid by the orchestrator,
-    # so the row's last field is read past into `_`.
-    while IFS=$'\t' read -r point mns kv_dtype pc_flag _; do
-      echo "==> knob-sweep point ${point}" >&2
-      # Render + redeploy the GPU replica for this engine-knob point. A failed
-      # deploy leaves the point unmeasurable; record it and move on rather than
-      # abandon the remaining points.
-      if ! MAX_NUM_SEQS="${mns}" KV_CACHE_DTYPE="${kv_dtype}" PREFIX_CACHING_FLAG="${pc_flag}" just gpu-deploy; then
-        echo "!! ${point}: gpu-deploy failed; skipping point" >&2
-        printf '%s\t%s\n' "${point}" "<deploy-failed>" >>"${ledger}"
-        overall=1
-        continue
-      fi
-      # Scrape vLLM's predicted concurrency ceiling from the startup log. It is a
-      # VRAM/KV-budget upper bound, not a measured ceiling (ADR-0009): a cross-check
-      # against the Tier-2 goodput result, never reported as the ceiling. The log
-      # read and the ceiling grep are split so a lost log (kubectl failed) records a
-      # different sentinel than a log that simply carried no ceiling line.
-      # replicas=1, so `logs deploy/vllm-gpu` reads the one pod just rolled out.
-      if ! logs="$(kubectl -n slipstream logs deploy/vllm-gpu 2>/dev/null)"; then
-        echo "!! ${point}: could not read vLLM startup log for predicted ceiling" >&2
-        predicted="<logs-unavailable>"
-      else
-        predicted="$(printf '%s\n' "${logs}" \
-          | grep -oE 'Maximum concurrency for [0-9,]+ tokens per request: [0-9.]+x' \
-          | tail -1)"
-        predicted="${predicted:-<none>}"
-      fi
-      printf '%s\t%s\n' "${point}" "${predicted}" >>"${ledger}"
-      echo "    predicted: ${predicted}" >&2
-      # Tier 2: drive this point's client-load ladder resumably, no redeploy. BENCH_RUN_ID
-      # nests the point's cells under the shared knob-sweep run (bench appends the slug),
-      # so the point's flow run groups under run=<run_id>. `just bench` resumes cells that
-      # already hold a valid measurement and only fails a point whose cells cannot be
-      # measured; a non-zero here keeps the partial results and flags the run.
-      if ! BENCH_RUN_ID="${run_id}" just bench "${point}"; then
-        echo "!! ${point}: Tier-2 ladder reported failures (partial results kept)" >&2
-        overall=1
-      fi
-    done <<<"${engine_points}"
-    echo "knob sweep ${run_id} complete; results in ${run_dir}/ (ceilings: ${ledger})" >&2
-    # A non-zero overall means a point failed to deploy or left cells unmeasured; surface
-    # the id so the whole sweep can be resumed, re-running only the cells still missing.
-    if ((overall != 0)); then
-      echo "knob sweep ${run_id} incomplete. Resume (re-runs only unmeasured cells):" >&2
-      echo "  BENCH_RUN_ID=${run_id} just knob-sweep" >&2
-    fi
-    exit "${overall}"
 
 # Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
 [group('bench')]

@@ -10,8 +10,9 @@ import re
 from pathlib import Path
 
 import yaml
-from slipstream_bench.executor.cli import app
 from typer.testing import CliRunner
+
+from slipstream_bench.executor.cli import app
 
 runner = CliRunner()
 
