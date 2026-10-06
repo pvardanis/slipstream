@@ -3,7 +3,7 @@
 # on the contract kernel alone. The one member that owns the plotting stack, so the
 # executor and orchestration images carry it only when they genuinely render (ADR-0017).
 [project]
-name = "slipstream-report"
+name = "slipstream-bench-report"
 version = "0.1.0"
 description = "The offline analysis and visualization layer: fold a knob-sweep run into ceiling/cliff rows and render them as tables and plots."
 requires-python = ">=3.11"
@@ -11,7 +11,7 @@ dependencies = [
     "matplotlib>=3.9",
     "pandas>=3",
     "seaborn>=0.13",
-    "slipstream-contract",
+    "slipstream-bench-contract",
     "typer>=0.12",
 ]
 

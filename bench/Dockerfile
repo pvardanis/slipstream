@@ -22,7 +22,7 @@ ENV HF_HOME=/opt/hf
 # Layer the executor member onto the base image's interpreter, so the slipstream-bench
 # console script lands alongside the vllm CLI on the same Python that provides
 # transformers. The install is uv's, not pip's: the executor member depends on the
-# slipstream-contract workspace member, which resolves only through the root's
+# slipstream-bench-contract workspace member, which resolves only through the root's
 # [tool.uv.sources] (pip cannot see a workspace source, and contract is
 # unpublished); installing ./packages/executor rather than the root member keeps out the
 # plotting stack (pandas/seaborn) and Prefect that the report and orchestration

@@ -4,7 +4,7 @@
 # contract kernel alone. The one member that carries Prefect and boto3, kept off the
 # bench-client image so the executor never ships them (ADR-0017).
 [project]
-name = "slipstream-orchestration"
+name = "slipstream-bench-orchestration"
 version = "0.1.0"
 description = "The Prefect-driven knob sweep worker: drive a resumable two-tier engine-point sweep from the control point."
 requires-python = ">=3.11"
@@ -13,7 +13,7 @@ dependencies = [
     "prefect>=3",
     "prefect-aws>=0.7.12",
     "pyyaml>=6",
-    "slipstream-contract",
+    "slipstream-bench-contract",
     "typer>=0.12",
 ]
 

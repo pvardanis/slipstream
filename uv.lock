@@ -18,20 +18,20 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "slipstream-bench-contract",
     "slipstream-bench-executor",
-    "slipstream-contract",
-    "slipstream-orchestration",
-    "slipstream-report",
+    "slipstream-bench-orchestration",
+    "slipstream-bench-report",
 ]
 
 [manifest.dependency-groups]
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.16.7" },
+    { name = "slipstream-bench-contract", editable = "packages/contract" },
     { name = "slipstream-bench-executor", editable = "packages/executor" },
-    { name = "slipstream-contract", editable = "packages/contract" },
-    { name = "slipstream-orchestration", editable = "packages/orchestration" },
-    { name = "slipstream-report", editable = "packages/report" },
+    { name = "slipstream-bench-orchestration", editable = "packages/orchestration" },
+    { name = "slipstream-bench-report", editable = "packages/report" },
     { name = "ty", specifier = "==0.0.84" },
 ]
 
@@ -3564,28 +3564,7 @@ wheels = [
 ]
 
 [[package]]
-name = "slipstream-bench-executor"
-version = "0.1.0"
-source = { editable = "packages/executor" }
-dependencies = [
-    { name = "prometheus-client" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "slipstream-contract" },
-    { name = "typer" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "prometheus-client", specifier = ">=0.26.0" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "slipstream-contract", editable = "packages/contract" },
-    { name = "typer", specifier = ">=0.12" },
-]
-
-[[package]]
-name = "slipstream-contract"
+name = "slipstream-bench-contract"
 version = "0.1.0"
 source = { editable = "packages/contract" }
 dependencies = [
@@ -3600,7 +3579,28 @@ requires-dist = [
 ]
 
 [[package]]
-name = "slipstream-orchestration"
+name = "slipstream-bench-executor"
+version = "0.1.0"
+source = { editable = "packages/executor" }
+dependencies = [
+    { name = "prometheus-client" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "slipstream-bench-contract" },
+    { name = "typer" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "prometheus-client", specifier = ">=0.26.0" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "slipstream-bench-contract", editable = "packages/contract" },
+    { name = "typer", specifier = ">=0.12" },
+]
+
+[[package]]
+name = "slipstream-bench-orchestration"
 version = "0.1.0"
 source = { editable = "packages/orchestration" }
 dependencies = [
@@ -3608,7 +3608,7 @@ dependencies = [
     { name = "prefect" },
     { name = "prefect-aws" },
     { name = "pyyaml" },
-    { name = "slipstream-contract" },
+    { name = "slipstream-bench-contract" },
     { name = "typer" },
 ]
 
@@ -3618,19 +3618,19 @@ requires-dist = [
     { name = "prefect", specifier = ">=3" },
     { name = "prefect-aws", specifier = ">=0.7.12" },
     { name = "pyyaml", specifier = ">=6" },
-    { name = "slipstream-contract", editable = "packages/contract" },
+    { name = "slipstream-bench-contract", editable = "packages/contract" },
     { name = "typer", specifier = ">=0.12" },
 ]
 
 [[package]]
-name = "slipstream-report"
+name = "slipstream-bench-report"
 version = "0.1.0"
 source = { editable = "packages/report" }
 dependencies = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "seaborn" },
-    { name = "slipstream-contract" },
+    { name = "slipstream-bench-contract" },
     { name = "typer" },
 ]
 
@@ -3639,7 +3639,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.9" },
     { name = "pandas", specifier = ">=3" },
     { name = "seaborn", specifier = ">=0.13" },
-    { name = "slipstream-contract", editable = "packages/contract" },
+    { name = "slipstream-bench-contract", editable = "packages/contract" },
     { name = "typer", specifier = ">=0.12" },
 ]
 

@@ -10,10 +10,10 @@ dev = [
     # The suite exercises every workspace member, so the dev env installs all four
     # editable. The members resolve from the workspace (not an index) via the sources
     # table below; the virtual root has no runtime deps of its own.
-    "slipstream-contract",
+    "slipstream-bench-contract",
     "slipstream-bench-executor",
-    "slipstream-report",
-    "slipstream-orchestration",
+    "slipstream-bench-report",
+    "slipstream-bench-orchestration",
 ]
 
 # The repo is a uv workspace: the packages/* members resolve against one lockfile, every
@@ -22,10 +22,10 @@ dev = [
 members = ["packages/*"]
 
 [tool.uv.sources]
-slipstream-contract = { workspace = true }
+slipstream-bench-contract = { workspace = true }
 slipstream-bench-executor = { workspace = true }
-slipstream-report = { workspace = true }
-slipstream-orchestration = { workspace = true }
+slipstream-bench-report = { workspace = true }
+slipstream-bench-orchestration = { workspace = true }
 
 [tool.ruff]
 line-length = 88
