@@ -38,6 +38,7 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     build_knob_sweep_collaborators,
     knob_sweep_flow,
 )
+from tests.orchestration.cell_object_fakes import ServingCellS3
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
 # ``--results-dir`` with a reset between the dashes so the literal hides from a
@@ -328,7 +329,12 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     def _fake_s3(region: str) -> object:
         captures["s3_region"] = region
-        return object()
+        # Serve the run's cells so the terminal render task materializes and folds them off
+        # S3 (ADR-0018), rather than an empty object the render's first download would break
+        # on. Recorded so a test asserts the render ran against the flow-built client.
+        s3 = ServingCellS3()
+        captures["s3"] = s3
+        return s3
 
     monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
     monkeypatch.setattr(knob_sweep_module, "build_ssm_client", _fake_ssm)
@@ -409,6 +415,12 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     # The commercial arm and the extra load-cell flags reach the inputs the cells run under.
     assert built_inputs["inputs"].commercial is True
     assert built_inputs["inputs"].sweep_args_b64 == "Zm9v"
+    # After the loop the terminal render task materialized the whole run off the flow-built
+    # S3 client, under the run's prefix — so the flow->render wiring reaches S3 (ADR-0018).
+    assert (
+        "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
+        in captures["s3"].keys
+    )
 
 
 def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:

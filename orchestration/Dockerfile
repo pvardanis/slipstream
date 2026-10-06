@@ -29,8 +29,8 @@ WORKDIR /app
 
 # Install the locked dependency set first, without any workspace member, so this layer — the
 # slow one — is cached on the lockfile and pyproject alone and survives every source-only edit.
-# --no-install-workspace skips the orchestration member and its slipstream-bench-contract
-# dependency, which have no source in this layer; --frozen fails if the lockfile is stale rather
+# --no-install-workspace skips the orchestration member and its slipstream-bench-contract and
+# slipstream-bench-report dependencies, which have no source in this layer; --frozen fails if the lockfile is stale rather
 # than silently re-resolving; --no-dev drops the dev group (pytest/ruff/ty); --package
 # slipstream-bench-orchestration selects the orchestration member, pulling Prefect + boto3. The
 # cache mount persists uv's download cache across builds without landing in a layer, and
@@ -40,11 +40,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-workspace --no-dev --package slipstream-bench-orchestration
 
-# Now the source, then install the orchestration member and its workspace dependency into the
-# same venv. packages/ carries both the orchestration member and the slipstream-bench-contract kernel
-# it depends on via [tool.uv.sources]; --no-editable bakes them into site-packages so the runtime
-# stage needs no source tree on disk. Only orchestration's own dependency tree is installed, so
-# the image carries neither the executor nor the report member's plotting stack.
+# Now the source, then install the orchestration member and its workspace dependencies into the
+# same venv. packages/ carries the orchestration member and the slipstream-bench-contract kernel and
+# slipstream-bench-report member it depends on via [tool.uv.sources]; --no-editable bakes them into
+# site-packages so the runtime stage needs no source tree on disk. Only orchestration's own
+# dependency tree is installed, so the image carries the report member — whose table renderers the
+# terminal result render reads (ADR-0018), pulling report's plotting stack in too — but never the
+# executor.
 COPY pyproject.toml uv.lock ./
 COPY packages ./packages
 RUN --mount=type=cache,target=/root/.cache/uv \

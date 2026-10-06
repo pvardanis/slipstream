@@ -3609,6 +3609,7 @@ dependencies = [
     { name = "prefect-aws" },
     { name = "pyyaml" },
     { name = "slipstream-bench-contract" },
+    { name = "slipstream-bench-report" },
     { name = "typer" },
 ]
 
@@ -3619,6 +3620,7 @@ requires-dist = [
     { name = "prefect-aws", specifier = ">=0.7.12" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "slipstream-bench-contract", editable = "packages/contract" },
+    { name = "slipstream-bench-report", editable = "packages/report" },
     { name = "typer", specifier = ">=0.12" },
 ]
 
