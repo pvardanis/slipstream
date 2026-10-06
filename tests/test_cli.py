@@ -34,6 +34,7 @@ def test_help_lists_the_subcommands() -> None:
     assert "aggregate-sweep" in result.stdout
     assert "sweep-grid" in result.stdout
     assert "report" in result.stdout
+    assert "chart" in result.stdout
 
 
 def test_no_args_shows_help() -> None:
