@@ -177,13 +177,23 @@ def test_folds_the_whole_run_then_publishes_ceiling_then_cliff(tmp_path: Path) -
     ]
     keys = [key for key, _ in published]
     assert keys == ["knob-sweep-ceiling-table", "knob-sweep-goodput-cliff"]
-    # Each table carries its operator-facing heading above the rendered body, blank-line
-    # separated and trailing-newline framed — so a heading or framing regression is caught,
-    # not just the table body.
+    # Each table carries its operator-facing heading and a one-line blurb above the rendered
+    # body, blank-line separated and trailing-newline framed — so a heading, blurb, or framing
+    # regression is caught, not just the table body.
     ceiling_markdown = dict(published)["knob-sweep-ceiling-table"]
     cliff_markdown = dict(published)["knob-sweep-goodput-cliff"]
-    assert ceiling_markdown == "## concurrency ceiling\n\nCEILING-TABLE\n"
-    assert cliff_markdown == "## goodput cliff\n\nCLIFF-TABLE\n"
+    assert ceiling_markdown == (
+        "## concurrency ceiling\n\n"
+        "The highest offered `--max-concurrency` each engine config held within the goodput "
+        "SLO, one row per engine point and prefix-share.\n\n"
+        "CEILING-TABLE\n"
+    )
+    assert cliff_markdown == (
+        "## goodput cliff\n\n"
+        "The goodput fraction at every offered `--max-concurrency`, the per-rung curve each "
+        "ceiling is read off (ADR-0009).\n\n"
+        "CLIFF-TABLE\n"
+    )
 
 
 def test_a_publish_failure_fails_the_render(tmp_path: Path) -> None:
