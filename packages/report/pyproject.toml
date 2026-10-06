@@ -1,0 +1,26 @@
+# The report member: the offline analysis and visualization layer — the multi-cell
+# aggregators, the table renderers, and the matplotlib/seaborn plotters — depending inward
+# on the contract kernel alone. The one member that owns the plotting stack, so the
+# executor and orchestration images carry it only when they genuinely render (ADR-0017).
+[project]
+name = "slipstream-report"
+version = "0.1.0"
+description = "The offline analysis and visualization layer: fold a knob-sweep run into ceiling/cliff rows and render them as tables and plots."
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.9",
+    "pandas>=3",
+    "seaborn>=0.13",
+    "slipstream-contract",
+    "typer>=0.12",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13"]
+build-backend = "uv_build"
+
+# slipstream_bench.report lives under the shared slipstream_bench namespace: the
+# slipstream_bench/ parent carries no __init__.py so it shares the namespace with the
+# root member's slipstream_bench.{sweep,orchestration} subpackages and the other members.
+[tool.uv.build-backend]
+module-name = "slipstream_bench.report"

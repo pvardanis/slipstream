@@ -20,8 +20,7 @@ from slipstream_bench.contract import (
     classify_failures,
     goodput_fraction,
 )
-
-from slipstream_bench.sweep.aggregation import (
+from slipstream_bench.report.aggregation import (
     aggregate_ceilings,
     aggregate_rungs,
     get_ceiling,

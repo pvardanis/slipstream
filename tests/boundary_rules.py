@@ -57,7 +57,7 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         probe=(
             "import slipstream_bench.sweep.cli as cli\n"
             "names = [command.name for command in cli.app.registered_commands]\n"
-            "assert 'aggregate-sweep' in names, names\n"
+            "assert 'sweep-grid' in names, names\n"
         ),
     ),
     BoundaryRule(
@@ -92,6 +92,39 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "import slipstream_bench.executor.cli as cli\n"
             "names = [command.name for command in cli.app.registered_commands]\n"
             "assert 'load-cell' in names, names\n"
+        ),
+    ),
+    BoundaryRule(
+        package="slipstream_bench.report",
+        # The report member owns the plotting stack and depends inward on the contract
+        # kernel alone (ADR-0017): never Prefect, never the executor, never orchestration.
+        # forbidden names the roots the subprocess probe blocks — prefect catches a stray
+        # orchestration import (it pulls prefect transitively) and prometheus_client a
+        # stray executor import (its distinctive root); report imports neither itself, so
+        # blocking them cannot break report's own load. pandas/seaborn/matplotlib are
+        # report's own stack, so they stay off forbidden and on allowed. report shares the
+        # slipstream_bench namespace with its siblings, so that root cannot be forbidden;
+        # allowed holds the AST guard to the closed set report legitimately imports.
+        forbidden=frozenset(
+            {
+                "prefect",
+                "prefect_aws",
+                "boto3",
+                "prometheus_client",
+            }
+        ),
+        allowed=frozenset(sys.stdlib_module_names)
+        | {
+            "slipstream_bench",
+            "matplotlib",
+            "pandas",
+            "seaborn",
+            "typer",
+        },
+        probe=(
+            "import slipstream_bench.report.cli as cli\n"
+            "names = [command.name for command in cli.app.registered_commands]\n"
+            "assert 'chart' in names, names\n"
         ),
     ),
     BoundaryRule(

@@ -1,14 +1,16 @@
 """Composition root for the L0 benchmark reporting surface.
 
-Assembles the sweep-aggregation and report sub-apps onto one root
-``slipstream-bench-report`` app: the multi-cell aggregation and reporting surface. The
-per-cell executor, cost post-processors, prefix-cache scraper, and leak check belong to
+Assembles the sweep sub-app (``sweep-grid``) and the report member's sub-app
+(``aggregate-sweep``/``report``/``chart``) onto one root ``slipstream-bench-report`` app.
+This is the transitional root -> report edge ADR-0017 carves in two steps: the entry point
+stays in the root member here (#231) and moves into report when #232 dissolves the root.
+The per-cell executor, cost post-processors, prefix-cache scraper, and leak check belong to
 the executor member's own CLI (``slipstream_bench.executor.cli``, ADR-0017).
 """
 
 import typer
-
 from slipstream_bench.report.cli import app as report_app
+
 from slipstream_bench.sweep.cli import app as sweep_app
 
 app = typer.Typer(
