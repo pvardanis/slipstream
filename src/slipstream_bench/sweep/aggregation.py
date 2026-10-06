@@ -5,7 +5,7 @@ one subdir per engine-knob point (mns{N}_kv{fp8|fp16}_pc{on|off}), each holding 
 Tier-2 client JSONs `vllm bench serve` wrote across the --max-concurrency ladder.
 The ceiling is the highest ladder rung still holding goodput >= 95% at the shared
 SLO. The per-record value objects (:class:`EnginePoint`, :class:`LoadCell`) and their
-parse are the contract kernel (:mod:`slipstream.contract.records`); this folds the
+parse are the contract kernel (:mod:`slipstream_bench.contract.records`); this folds the
 multi-cell run over them into rows keyed by (max-num-seqs, kv-cache-dtype,
 prefix-caching) with one row per prefix-share within a point — the chart reads the
 engine knobs as x / series / facet and prefix-share as the within-point dimension.
@@ -15,13 +15,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TypedDict
 
-from slipstream.contract.records import (
+from slipstream_bench.contract.records import (
     EnginePoint,
     FailureCohorts,
     LoadCell,
     SweepAggregationError,
 )
-from slipstream.contract.results import read_result
+from slipstream_bench.contract.results import read_result
 
 # Goodput floor the ceiling is read off: a rung holds only if at least this
 # fraction of its completed requests met both SLO thresholds (ADR-0009 §ceiling).
@@ -79,7 +79,7 @@ def read_cell(path: Path) -> LoadCell:
     :raise SweepAggregationError: when the cell lacks its closed-loop cap or its stamped
         prefix-share, or carries a bad goodput or errors field.
     :raise ResultError: when the file cannot be read (see
-        :func:`slipstream.contract.results.read_result`).
+        :func:`slipstream_bench.contract.results.read_result`).
     """
     return LoadCell.from_record(read_result(path), path)
 

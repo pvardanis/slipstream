@@ -1,5 +1,5 @@
 # The pure-data contract kernel: the config-in/result-out types every workspace member
-# depends inward on, under the shared slipstream PEP-420 namespace (ADR-0017).
+# depends inward on, under the shared slipstream_bench PEP-420 namespace (ADR-0017).
 [project]
 name = "slipstream-contract"
 version = "0.1.0"
@@ -14,7 +14,7 @@ dependencies = [
 requires = ["uv_build>=0.12.21,<0.13"]
 build-backend = "uv_build"
 
-# slipstream.contract lives under a shared slipstream namespace: the slipstream/ parent
-# carries no __init__.py so other members can share the namespace.
+# slipstream_bench.contract lives under the shared slipstream_bench namespace: the
+# slipstream_bench/ parent carries no __init__.py so other members can share the namespace.
 [tool.uv.build-backend]
-module-name = "slipstream.contract"
+module-name = "slipstream_bench.contract"

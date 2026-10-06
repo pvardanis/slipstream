@@ -23,7 +23,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 
 import yaml
-from slipstream.contract import EnginePoint, SweepGrid
+from slipstream_bench.contract import EnginePoint, SweepGrid
 
 from slipstream_bench.sweep.aggregation import CeilingScrapeError
 from slipstream_bench.sweep.grid import EngineArgs, get_engine_args

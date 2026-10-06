@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
-from slipstream.contract import (
+from slipstream_bench.contract import (
     EnginePoint,
     LoadCell,
     ResultError,

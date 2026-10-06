@@ -1,6 +1,6 @@
 """Render the knob-sweep grid slices the `just knob-sweep` recipe reads.
 
-The grid model and its loaders are the contract kernel (:mod:`slipstream.contract.grid`);
+The grid model and its loaders are the contract kernel (:mod:`slipstream_bench.contract.grid`);
 this module renders the slices the recipe loop reads: the Tier-1 points (one per row, keyed
 by the slug an EnginePoint names), the Tier-2 --max-concurrency ladder, and the pinned
 burstiness.
@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from itertools import product
 
-from slipstream.contract.grid import KvLabel, SweepGrid, require_grid_arm
-from slipstream.contract.records import EnginePoint
+from slipstream_bench.contract.grid import KvLabel, SweepGrid, require_grid_arm
+from slipstream_bench.contract.records import EnginePoint
 
 # The label->token mapping vLLM's --kv-cache-dtype accepts: the grid carries only the
 # chart label, so the token is resolved here, the single place both the recipe's TSV and

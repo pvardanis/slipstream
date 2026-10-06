@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 import pytest
 import yaml
-from slipstream.contract import EnginePoint, SweepGrid
+from slipstream_bench.contract import EnginePoint, SweepGrid
 
 from slipstream_bench.orchestration.cluster import (
     KubectlError,
@@ -128,7 +128,7 @@ def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
 
 
 def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:
-    from slipstream.contract import SweepGridError
+    from slipstream_bench.contract import SweepGridError
 
     absent = EnginePoint(max_num_seqs=999, kv_cache_dtype="fp8", prefix_caching=True)
     with pytest.raises(SweepGridError):

@@ -28,7 +28,7 @@ from botocore.exceptions import (
 from botocore.exceptions import (
     ConnectionError as BotoConnectionError,
 )
-from slipstream.contract import (
+from slipstream_bench.contract import (
     EnginePoint,
     SweepGrid,
     build_point_sweep_config,

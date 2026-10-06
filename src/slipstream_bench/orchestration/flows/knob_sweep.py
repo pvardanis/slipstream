@@ -32,7 +32,12 @@ from prefect import Task, flow
 from prefect.artifacts import create_markdown_artifact
 from prefect.client.orchestration import get_client
 from prefect.runtime import flow_run
-from slipstream.contract import EnginePoint, SweepGrid, list_engine_points, load_grid
+from slipstream_bench.contract import (
+    EnginePoint,
+    SweepGrid,
+    list_engine_points,
+    load_grid,
+)
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
