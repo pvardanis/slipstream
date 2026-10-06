@@ -4,8 +4,8 @@ Exercises the transport-free render core (drive_render_tables) against injected 
 Prefect server, no S3, no plotting stack — mirroring tests/orchestration/test_knob_sweep.py:
 the materialized run directory is folded by both aggregators while it is live, the two pure
 renderers turn the rows into markdown, and each table is published as its own keyed artifact,
-in ceiling-then-cliff order. A publish failure propagates, so the render task fails loud and
-retries off S3. The S3 materialize collaborator (materialize_run) is exercised against a fake
+in ceiling-then-cliff order. A publish failure propagates, so the render task fails loud and a
+re-run re-renders off S3. The S3 materialize collaborator (materialize_run) is exercised against a fake
 S3 that serves each cell object: it downloads every point's cells into the per-point layout the
 aggregators read, and a missing cell aborts the render rather than aggregating a partial run.
 """
@@ -164,10 +164,13 @@ def test_folds_the_whole_run_then_publishes_ceiling_then_cliff(tmp_path: Path) -
     ]
     keys = [key for key, _ in published]
     assert keys == ["knob-sweep-ceiling-table", "knob-sweep-goodput-cliff"]
+    # Each table carries its operator-facing heading above the rendered body, blank-line
+    # separated and trailing-newline framed — so a heading or framing regression is caught,
+    # not just the table body.
     ceiling_markdown = dict(published)["knob-sweep-ceiling-table"]
     cliff_markdown = dict(published)["knob-sweep-goodput-cliff"]
-    assert "CEILING-TABLE" in ceiling_markdown
-    assert "CLIFF-TABLE" in cliff_markdown
+    assert ceiling_markdown == "## concurrency ceiling\n\nCEILING-TABLE\n"
+    assert cliff_markdown == "## goodput cliff\n\nCLIFF-TABLE\n"
 
 
 def test_a_publish_failure_fails_the_render(tmp_path: Path) -> None:
@@ -176,8 +179,8 @@ def test_a_publish_failure_fails_the_render(tmp_path: Path) -> None:
         events, tmp_path, publish_raises=True
     )
 
-    # A publish failure propagates, so the render task fails loud and retries off S3 — the
-    # cells the sweep already persisted are untouched.
+    # A publish failure propagates, so the render task fails loud and a re-run re-renders off
+    # S3 — the cells the sweep already persisted are untouched.
     with pytest.raises(RuntimeError, match="prefect publish failed"):
         _drive(mat, agg_c, agg_r, render_c, render_r, publish)
 
@@ -243,9 +246,40 @@ def test_materialize_folds_into_the_grids_ceilings() -> None:
     assert all(row["ceiling"] == 128 for row in ceilings)
 
 
+def test_materialize_folds_into_the_grids_rungs() -> None:
+    s3 = ServingCellS3()
+
+    with materialize_run(
+        grid=_grid(),
+        run_prefix="run1",
+        bucket="bench-bucket",
+        s3_client=s3,
+        model=_MODEL,
+    ) as run_dir:
+        rungs = aggregate_rungs(run_dir)
+
+    # Every cell of every arm-and-share unfolds to its own rung — the goodput cliff behind
+    # the ceiling — keyed by (caching, share, offered concurrency), sorted point then share
+    # then cap: both rungs of caching-off share 0, then caching-on shares 10 and 50.
+    rungs_keyed = [
+        (row["prefix_caching"], row["prefix_share"], row["max_concurrency"])
+        for row in rungs
+    ]
+    assert rungs_keyed == [
+        (False, 0, 64),
+        (False, 0, 128),
+        (True, 10, 64),
+        (True, 10, 128),
+        (True, 50, 64),
+        (True, 50, 128),
+    ]
+    # Every cell served a passing goodput fraction, so no rung fell off the cliff.
+    assert all(row["goodput_fraction"] == 1.0 for row in rungs)
+
+
 def test_materialize_propagates_a_missing_cell() -> None:
     # The render runs after every cell is persisted, so an absent object is a real failure,
-    # not a pending cell — it aborts the render, which retries off S3, rather than folding a
+    # not a pending cell — it aborts the render, which a re-run re-reads off S3, rather than folding a
     # partial run into a table that reads as complete.
     s3 = _MissingOneS3("pshare50_burst1.0_mc128.json")
 
