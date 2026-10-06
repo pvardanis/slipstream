@@ -111,7 +111,7 @@ bench point_slug *args:
 # Two-tier engine-knob sweep (#33, ADR-0009).
 #
 # Every swept value lives in bench/sweep-grid.yaml, read here through
-# `slipstream-bench sweep-grid`, which validates the whole grid before the first
+# `slipstream-bench-report sweep-grid`, which validates the whole grid before the first
 # deploy — the recipe holds no knob values or knob logic of its own.
 #
 # Tier 1 = engine knobs, one GPU redeploy per point. The knobs live in the vLLM
@@ -147,7 +147,7 @@ knob-sweep:
     # subshell and hide its failure under `set -e`. The Tier-2 cells (prefix shares,
     # concurrency ladder, burstiness) live in the grid too and are enumerated per point
     # by the orchestrator, so the recipe reads only the Tier-1 knobs each point redeploys.
-    engine_points="$(uv run slipstream-bench sweep-grid engine-points)"
+    engine_points="$(uv run slipstream-bench-report sweep-grid engine-points)"
     run_id="$(date -u +%Y%m%dT%H%M%SZ)"
     echo "==> knob-sweep run ${run_id}" >&2
     run_dir="bench/results/${run_id}"

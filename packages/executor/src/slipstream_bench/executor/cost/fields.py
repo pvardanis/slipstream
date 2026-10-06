@@ -15,7 +15,7 @@ def _require_non_blank(value: str) -> str:
 
     ``Field(min_length=1)`` counts characters, so a whitespace-only pin would pass
     while describing no artifact; this mirrors the strip the result tokenizer pin is
-    guarded with (:func:`slipstream.bench.cost.commercial._read_tokenizer_id`).
+    guarded with (:func:`slipstream_bench.executor.cost.commercial._read_tokenizer_id`).
 
     :raise ValueError: when the value is blank after stripping.
     """

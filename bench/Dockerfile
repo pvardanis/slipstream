@@ -19,12 +19,12 @@ ARG REVISION=main
 # regardless of which user runs the client.
 ENV HF_HOME=/opt/hf
 
-# Layer the bench member onto the base image's interpreter, so the slipstream-bench
+# Layer the executor member onto the base image's interpreter, so the slipstream-bench
 # console script lands alongside the vllm CLI on the same Python that provides
-# transformers. The install is uv's, not pip's: the bench member depends on the
+# transformers. The install is uv's, not pip's: the executor member depends on the
 # slipstream-contract workspace member, which resolves only through the root's
 # [tool.uv.sources] (pip cannot see a workspace source, and contract is
-# unpublished); installing ./packages/bench rather than the root member keeps out the
+# unpublished); installing ./packages/executor rather than the root member keeps out the
 # plotting stack (pandas/seaborn) and Prefect that the report and orchestration
 # members pull in, neither of which runs here (ADR-0017). --system
 # installs into the base image's interpreter additively, leaving its vllm and
@@ -39,7 +39,7 @@ COPY --from=ghcr.io/astral-sh/uv@sha256:538e0b39736e7feae937a65983e49d2ab75e1559
 WORKDIR /opt/slipstream-bench
 COPY pyproject.toml ./
 COPY packages ./packages
-RUN uv pip install --system --break-system-packages --no-cache ./packages/bench
+RUN uv pip install --system --break-system-packages --no-cache ./packages/executor
 
 # The experiment config is not baked: knob-sweep and prefix-cache compose a per-point
 # config on the operator's laptop and mount it in as the harness's --config, so the

@@ -15,6 +15,6 @@ requires = ["uv_build>=0.12.21,<0.13"]
 build-backend = "uv_build"
 
 # slipstream.contract lives under a shared slipstream namespace: the slipstream/ parent
-# carries no __init__.py so other members (slipstream.bench, …) can share the namespace.
+# carries no __init__.py so other members can share the namespace.
 [tool.uv.build-backend]
 module-name = "slipstream.contract"

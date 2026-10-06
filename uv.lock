@@ -3599,14 +3599,14 @@ provides-extras = ["orchestration"]
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.16.7" },
-    { name = "slipstream-bench-executor", editable = "packages/bench" },
+    { name = "slipstream-bench-executor", editable = "packages/executor" },
     { name = "ty", specifier = "==0.0.84" },
 ]
 
 [[package]]
 name = "slipstream-bench-executor"
 version = "0.1.0"
-source = { editable = "packages/bench" }
+source = { editable = "packages/executor" }
 dependencies = [
     { name = "prometheus-client" },
     { name = "pydantic" },

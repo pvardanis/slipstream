@@ -24,7 +24,7 @@ orchestration = [
 ]
 
 [project.scripts]
-slipstream-bench = "slipstream_bench.cli:app"
+slipstream-bench-report = "slipstream_bench.cli:app"
 # The orchestration driver runs at the control point with the orchestration extra; the
 # script is installed by `.` too, so its entry guards the extra before importing the
 # Prefect-pulling CLI (ADR-0012 §Amendment).
@@ -46,6 +46,12 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# slipstream_bench is a PEP-420 namespace: src/slipstream_bench carries no __init__.py so
+# the executor member contributes slipstream_bench.executor under the same import root.
+# Naming the directory explicitly keeps hatchling from inferring a single top package.
+[tool.hatch.build.targets.wheel]
+packages = ["src/slipstream_bench"]
+
 # The repo is a uv workspace: this root member (slipstream_bench) plus the carved
 # packages/* members resolve against one lockfile, the contract kernel sourced from the
 # workspace rather than an index (ADR-0017).
@@ -66,7 +72,7 @@ testpaths = ["tests"]
 python-version = "3.11"
 
 [tool.ty.src]
-include = ["src", "tests", "packages/contract/src", "packages/bench/src"]
+include = ["src", "tests", "packages/contract/src", "packages/executor/src"]
 
 [tool.ty.rules]
 missing-type-argument = "error"

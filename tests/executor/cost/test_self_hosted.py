@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from slipstream.bench.cost.self_hosted import (
+from slipstream_bench.executor.cost.self_hosted import (
     CostError,
     CostInputs,
     price_files,

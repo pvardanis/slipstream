@@ -9,7 +9,12 @@ fails loud rather than reading as "clean" and clearing a still-billing g5.
 from pathlib import Path
 
 import pytest
-from slipstream.bench.zero_leak import Leak, LeakError, find_leaks, read_aws_json
+from slipstream_bench.executor.zero_leak import (
+    Leak,
+    LeakError,
+    find_leaks,
+    read_aws_json,
+)
 
 
 def _instances(*instances: dict[str, object]) -> dict[str, object]:

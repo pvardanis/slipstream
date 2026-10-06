@@ -16,22 +16,22 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from slipstream.bench.config import load_cell_config, load_sweep_config
-from slipstream.bench.cost.cli import app as cost_app
-from slipstream.bench.prefix_cache import (
+from slipstream.contract import ResultError, SweepError
+from slipstream_bench.executor.config import load_cell_config, load_sweep_config
+from slipstream_bench.executor.cost.cli import app as cost_app
+from slipstream_bench.executor.prefix_cache import (
     CacheState,
     PrefixCacheError,
     scrape_prefix_cache,
 )
-from slipstream.bench.runner import (
+from slipstream_bench.executor.runner import (
     CellOutcome,
     cell_command,
     ensure_out_dir,
     execute_cell,
     run_sweep,
 )
-from slipstream.bench.zero_leak import LeakError, find_leaks, read_aws_json
-from slipstream.contract import ResultError, SweepError
+from slipstream_bench.executor.zero_leak import LeakError, find_leaks, read_aws_json
 
 app = typer.Typer(
     name="slipstream-bench",

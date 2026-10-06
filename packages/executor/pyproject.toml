@@ -15,13 +15,14 @@ dependencies = [
 ]
 
 [project.scripts]
-slipstream-bench = "slipstream.bench.cli:app"
+slipstream-bench = "slipstream_bench.executor.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13"]
 build-backend = "uv_build"
 
-# slipstream.bench lives under the shared slipstream namespace: the slipstream/ parent
-# carries no __init__.py so it shares the namespace with slipstream.contract.
+# slipstream_bench.executor lives under the shared slipstream_bench namespace: the
+# slipstream_bench/ parent carries no __init__.py so it shares the namespace with the
+# root member's slipstream_bench.{report,sweep,orchestration} subpackages.
 [tool.uv.build-backend]
-module-name = "slipstream.bench"
+module-name = "slipstream_bench.executor"

@@ -1,4 +1,4 @@
-"""Tests for the bench executor CLI surface (``slipstream.bench.cli``).
+"""Tests for the bench executor CLI surface (``slipstream_bench.executor.cli``).
 
 Pin the image's front-end contract: one app that dispatches the per-cell executor
 and its post-processors — load-cell/load-sweep, cost/commercial-cost, prefix-cache,
@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 import yaml
-from slipstream.bench.cli import app
+from slipstream_bench.executor.cli import app
 from typer.testing import CliRunner
 
 runner = CliRunner()
