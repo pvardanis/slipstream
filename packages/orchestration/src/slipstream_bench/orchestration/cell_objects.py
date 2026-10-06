@@ -5,7 +5,7 @@ the grid is their single source, so enumerating a point's objects needs only the
 knob sweep's run prefix, and the served model, with non-empty placeholders for the endpoint
 and output dir the cell addressing ignores. The redeploy-skip gate
 (:mod:`slipstream_bench.orchestration.completion`) and the terminal result render
-(:mod:`slipstream_bench.orchestration.render`) both read a point's objects this way, so the
+(:mod:`slipstream_bench.orchestration.tasks.render`) both read a point's objects this way, so the
 enumeration lives here once rather than once per reader.
 """
 
