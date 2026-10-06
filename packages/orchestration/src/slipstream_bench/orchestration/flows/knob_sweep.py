@@ -57,6 +57,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
     run_point_sweep,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
+from slipstream_bench.orchestration.render import render_result_tables
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
 
@@ -140,7 +141,9 @@ def knob_sweep_flow(
     transports, and sequences them so one flow run redeploys the GPU, scrapes the ceiling,
     and runs each point's Tier-2 ladder — each point sweep nested under this parent run. A
     resume re-invoked with the same inputs skips a point whose cells already hold valid
-    measurements, so its ~20-minute redeploy and scrape are not re-paid.
+    measurements, so its ~20-minute redeploy and scrape are not re-paid. After the loop, a
+    terminal task folds the whole run off S3 and renders its ceiling and goodput-cliff tables
+    to this parent run page as markdown artifacts (ADR-0018).
 
     The parameters are all serializable (Prefect persists them through
     ``serialize_parameters``); the live handles are built inside the flow, never passed in.
@@ -196,22 +199,37 @@ def knob_sweep_flow(
         digest_inputs=digest_inputs,
         publish=create_markdown_artifact,
     )
+    s3_client = build_s3_client(region)
     deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
         build_knob_sweep_collaborators(
             inputs,
             kubectl=build_kubectl(),
             ssm_client=build_ssm_client(region),
-            s3_client=build_s3_client(region),
+            s3_client=s3_client,
             task=cell_task(bucket, retries=retries),
         )
     )
-    return drive_knob_sweep(
+    pointers = drive_knob_sweep(
         points=list_engine_points(grid),
         deploy_fn=deploy_fn,
         scrape_fn=scrape_fn,
         point_sweep_fn=point_sweep_fn,
         has_pending_cells=has_pending_cells,
     )
+    # The point loop has persisted every cell to S3; render the whole run's ceiling and
+    # goodput-cliff tables to this parent run page as a terminal task (ADR-0018). It folds
+    # the complete grid off S3 — a resumed sweep's cached points fold in too — so the render
+    # is isolated from the persisted cells: a publish or materialize failure fails only the
+    # render, and a retry re-renders off S3 without re-running a cell.
+    render_result_tables(
+        grid=grid,
+        run_prefix=run_id,
+        bucket=bucket,
+        s3_client=s3_client,
+        model=inputs.model,
+        publish=create_markdown_artifact,
+    )
+    return pointers
 
 
 def drive_knob_sweep(

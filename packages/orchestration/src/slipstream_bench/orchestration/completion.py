@@ -29,22 +29,12 @@ from botocore.exceptions import (
     ConnectionError as BotoConnectionError,
 )
 
-from slipstream_bench.contract import (
-    EnginePoint,
-    SweepGrid,
-    build_point_sweep_config,
-    get_cell_basename,
-)
-from slipstream_bench.orchestration.cell_run import get_cell_s3_key
+from slipstream_bench.contract import EnginePoint, SweepGrid
+from slipstream_bench.orchestration.cell_objects import iter_point_cell_objects
 from slipstream_bench.orchestration.validity import (
     DEFAULT_MAX_ERROR_RATE,
     is_cell_valid,
 )
-
-# The point's cells key the same way whatever endpoint or output dir they ran against, so
-# enumerating them needs only non-empty placeholders for the two the addressing ignores.
-_PLACEHOLDER_BASE_URL = "http://127.0.0.1:0"
-_PLACEHOLDER_OUT_DIR = "/tmp"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,20 +76,12 @@ def point_is_complete(
     :raise ClientError: on any S3 error other than an absent object (e.g. 403
         AccessDenied), so a misconfigured run fails loud rather than re-running forever.
     """
-    config = build_point_sweep_config(
-        grid,
-        point.slug(),
-        base_url=_PLACEHOLDER_BASE_URL,
-        model=model,
-        out_dir=_PLACEHOLDER_OUT_DIR,
-        commercial=commercial,
-    )
-    run_id = f"{run_prefix}/{point.slug()}"
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        for cell in config.cells():
-            key = get_cell_s3_key(run_id, cell)
-            dest = tmp_dir / get_cell_basename(cell)
+        for key, basename in iter_point_cell_objects(
+            point, grid=grid, run_prefix=run_prefix, model=model, commercial=commercial
+        ):
+            dest = tmp_dir / basename
             if not _object_is_valid_cell(
                 s3_client, bucket, key, dest, max_error_rate=max_error_rate
             ):
