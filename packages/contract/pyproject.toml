@@ -1,7 +1,7 @@
 # The pure-data contract kernel: the config-in/result-out types every workspace member
 # depends inward on, under the shared slipstream_bench PEP-420 namespace (ADR-0017).
 [project]
-name = "slipstream-contract"
+name = "slipstream-bench-contract"
 version = "0.1.0"
 description = "The pure-data contract kernel every slipstream member depends inward on: config, grid, result, and value-object types with their parse."
 requires-python = ">=3.11"
