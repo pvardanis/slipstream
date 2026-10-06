@@ -317,11 +317,16 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     test asserts the flow threads ``bucket``/``retries``/``region`` from its parameters into
     the transports rather than dropping or hardcoding them.
     """
-    captures: dict[str, Any] = {"task_args": {}}
+    captures: dict[str, Any] = {"task_args": {}, "artifacts": []}
 
     def _fake_cell_task(bucket: str, *, retries: int = 0) -> object:
         captures["task_args"] = {"bucket": bucket, "retries": retries}
         return object()
+
+    def _fake_publish(*, key: str, markdown: str) -> None:
+        # The terminal render task publishes the ceiling and cliff tables through this;
+        # recorded so a test asserts both artifacts land off the flow's render wiring.
+        captures["artifacts"].append((key, markdown))
 
     def _fake_ssm(region: str) -> object:
         captures["ssm_region"] = region
@@ -340,6 +345,7 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(knob_sweep_module, "build_ssm_client", _fake_ssm)
     monkeypatch.setattr(knob_sweep_module, "build_s3_client", _fake_s3)
     monkeypatch.setattr(knob_sweep_module, "cell_task", _fake_cell_task)
+    monkeypatch.setattr(knob_sweep_module, "create_markdown_artifact", _fake_publish)
     return captures
 
 
@@ -421,6 +427,13 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
         in captures["s3"].keys
     )
+    # ...and published both tables to the parent run page, ceiling then cliff, after the
+    # config artifact the flow publishes before the loop — so a broken or dropped publish at
+    # the real render task's seam fails, not just a broken materialize.
+    assert [key for key, _ in captures["artifacts"]][-2:] == [
+        "knob-sweep-ceiling-table",
+        "knob-sweep-goodput-cliff",
+    ]
 
 
 def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:

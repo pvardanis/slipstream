@@ -4,7 +4,9 @@ After the parent knob-sweep point loop persists every cell to S3, one terminal `
 materializes the whole run from S3, folds it with both aggregators, and publishes the ceiling
 and goodput-cliff tables as markdown artifacts on the parent run page. It runs once, at the
 end, off the persisted cells — so a materialize or publish failure fails only the render,
-leaving the cells intact, and a retry re-renders idempotently off S3 without re-running a cell.
+leaving the cells intact, and a re-run re-renders idempotently off S3 without re-running a cell.
+The task carries no retry budget, so recovery is a re-run (manual or a resumed sweep), not an
+automatic Prefect retry.
 
 Three layers mirror the sweep driver (:mod:`slipstream_bench.orchestration.flows.knob_sweep`).
 :func:`drive_render_tables` is the transport-free core: it opens a materialized run directory,
@@ -19,7 +21,9 @@ a zero-argument materialize and calling the driver with the real report-member c
 
 Only the pure table renderers (:mod:`slipstream_bench.report.chart`) and the aggregators
 (:mod:`slipstream_bench.report.aggregation`) are imported here — never the matplotlib plotters,
-so this path pulls no plotting stack (ADR-0018: the plots ship as a later ticket).
+so this path imports no plotting stack (ADR-0018: the plots ship as a later ticket). The worker
+image still carries the plotting stack as a transitive dependency of the report member — see the
+orchestration Dockerfile; this claim is import-scope, not image-scope.
 """
 
 import tempfile
@@ -82,7 +86,9 @@ def drive_render_tables(
     both aggregators while the directory is live, then — after the directory is released —
     renders each fold as a markdown table and publishes it under its own key, ceiling first.
     Any raise (a materialize, aggregate, or publish failure) propagates, so the render task
-    fails loud and retries off S3 rather than publishing a half-rendered run.
+    fails loud and a re-run re-renders off S3. The two publishes are sequential, not atomic: a
+    cliff-publish failure can leave the ceiling artifact published and the cliff absent, but the
+    artifacts are keyed, so a re-run overwrites both and restores the pair.
 
     :param materialize: opens the run directory the aggregators fold, as a context manager
         so the downloaded cells are released once both folds are read.
@@ -124,7 +130,7 @@ def materialize_run(
     materialized into a temporary directory yielded to the caller and removed on exit, so the
     cells live only for the fold. An absent object raises rather than degrading to a partial
     run: the render runs after the sweep persisted every cell, so a missing one is a real
-    failure the retry re-reads off S3, not a pending cell (contrast the redeploy-skip gate).
+    failure a re-run re-reads off S3, not a pending cell (contrast the redeploy-skip gate).
 
     The cell addressing is commercial-independent — a cell keys by its ``pshare/burst/mc``
     coordinate whichever arm produced it — so the run materializes without the sweep's
@@ -139,7 +145,7 @@ def materialize_run(
     :param model: the served model id (folded into each point's sweep config).
     :return: the populated run directory, live for the duration of the ``with`` block.
     :raise ClientError: on any S3 download failure, including an absent object — the render
-        fails loud and retries off S3 rather than folding a partial run.
+        fails loud and a re-run re-reads off S3 rather than folding a partial run.
     """
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
@@ -170,7 +176,8 @@ def render_result_tables(
     with the report member's real aggregators and pure table renderers. One task, not split
     per table: both folds come from the one materialized run, so splitting would re-download
     it. A failure (materialize or publish) is isolated to this task — the sweep's cells are
-    already persisted — and a retry re-renders idempotently off S3.
+    already persisted — and a re-run re-renders idempotently off S3. The task carries no retry
+    budget, so recovery is a re-run, not an automatic Prefect retry.
 
     :param grid: the validated grid the run's points and cells are enumerated from.
     :param run_prefix: the knob sweep's shared run id the cells nest under.

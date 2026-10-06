@@ -220,7 +220,7 @@ def knob_sweep_flow(
     # goodput-cliff tables to this parent run page as a terminal task (ADR-0018). It folds
     # the complete grid off S3 — a resumed sweep's cached points fold in too — so the render
     # is isolated from the persisted cells: a publish or materialize failure fails only the
-    # render, and a retry re-renders off S3 without re-running a cell.
+    # render, and a re-run re-renders off S3 without re-running a cell (no automatic retry).
     render_result_tables(
         grid=grid,
         run_prefix=run_id,
