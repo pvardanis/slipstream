@@ -1,5 +1,5 @@
 # Swept knob grid for `just knob-sweep` (ADR-0009). The recipe reads this file
-# through `slipstream-bench sweep-grid`, which validates it against the SweepGrid
+# through `slipstream-bench-report sweep-grid`, which validates it against the SweepGrid
 # pydantic model; every value the sweep varies lives here, nothing is hard-coded in
 # the recipe.
 tier1:

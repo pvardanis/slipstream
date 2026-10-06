@@ -10,17 +10,17 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from slipstream.bench.cost.commercial import (
+from slipstream.contract import ResultError
+from slipstream_bench.executor.cost.commercial import (
     CommercialCostError,
     load_commercial_cost_inputs,
     price_commercial_files,
 )
-from slipstream.bench.cost.self_hosted import (
+from slipstream_bench.executor.cost.self_hosted import (
     CostError,
     load_cost_inputs,
     price_files,
 )
-from slipstream.contract import ResultError
 
 app = typer.Typer()
 

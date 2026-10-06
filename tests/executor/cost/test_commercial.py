@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from slipstream.bench.cost.commercial import (
+from slipstream_bench.executor.cost.commercial import (
     CommercialCostError,
     CommercialCostInputs,
     price_commercial_files,

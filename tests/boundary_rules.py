@@ -61,12 +61,15 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         ),
     ),
     BoundaryRule(
-        package="slipstream.bench",
+        package="slipstream_bench.executor",
         # The bench executor the image installs depends inward on the contract kernel
-        # alone (ADR-0017): never Prefect or the plotting stack the image does not ship,
-        # and never another workspace member. report and orchestration live under the
-        # slipstream_bench root, so forbidding that root blocks an import of either; bench
-        # and contract share the slipstream namespace, so the self/kernel imports stay.
+        # alone (ADR-0017): never Prefect or the plotting stack the image does not ship.
+        # forbidden names the frameworks the subprocess probe blocks — blocking them also
+        # catches a stray import of the report or orchestration sibling, since each pulls a
+        # blocked framework (pandas/seaborn, Prefect) transitively and the probe would fail.
+        # The executor shares the slipstream_bench namespace with those siblings, so that
+        # root cannot be forbidden outright; allowed holds the AST guard to the closed set
+        # the executor legitimately imports, so a new stray dep fails even off the denylist.
         forbidden=frozenset(
             {
                 "prefect",
@@ -75,11 +78,19 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
                 "pandas",
                 "seaborn",
                 "matplotlib",
-                "slipstream_bench",
             }
         ),
+        allowed=frozenset(sys.stdlib_module_names)
+        | {
+            "slipstream",
+            "slipstream_bench",
+            "pydantic",
+            "yaml",
+            "typer",
+            "prometheus_client",
+        },
         probe=(
-            "import slipstream.bench.cli as cli\n"
+            "import slipstream_bench.executor.cli as cli\n"
             "names = [command.name for command in cli.app.registered_commands]\n"
             "assert 'load-cell' in names, names\n"
         ),

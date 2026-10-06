@@ -18,9 +18,9 @@ p_in = C / (I + r*O); then $/1M-input = p_in * 1e6 and $/1M-output = r * p_in *
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
-from slipstream.bench.cost.config import load_provenance
-from slipstream.bench.cost.fields import NonEmptyStr, PositiveFiniteFloat
 from slipstream.contract import read_result, to_numeric_metric
+from slipstream_bench.executor.cost.config import load_provenance
+from slipstream_bench.executor.cost.fields import NonEmptyStr, PositiveFiniteFloat
 
 _SECONDS_PER_HOUR = 3600
 _TOKENS_PER_MILLION = 1_000_000
@@ -60,7 +60,7 @@ def load_cost_inputs(path: Path) -> CostInputs:
         checksum, vLLM version, quant recipe).
     :return: the validated inputs.
     :raise CostError: on any read/parse/validate failure (see
-        :func:`slipstream.bench.cost.config.load_provenance`).
+        :func:`slipstream_bench.executor.cost.config.load_provenance`).
     """
     return load_provenance(path, CostInputs, error_cls=CostError)
 
