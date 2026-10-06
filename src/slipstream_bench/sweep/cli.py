@@ -1,56 +1,21 @@
-"""The sweep concept's Typer sub-app: aggregate a run and emit the grid.
+"""The sweep concept's Typer sub-app: emit the knob-sweep grid.
 
-Owns the ``aggregate-sweep`` and ``sweep-grid`` commands: the first folds a
-knob-sweep run's saved results into the concurrency-ceiling table, the second emits
-a validated slice of the knob-sweep grid for ``just knob-sweep`` to read. The
-per-cell executor (``load-cell``/``load-sweep``) belongs to the bench member's CLI
+Owns the ``sweep-grid`` command: emit a validated slice of the knob-sweep grid for
+``just knob-sweep`` to read. The multi-cell aggregation (``aggregate-sweep``) now lives in
+the report member's CLI (``slipstream_bench.report.cli``), and the per-cell executor
+(``load-cell``/``load-sweep``) in the executor member's CLI
 (``slipstream_bench.executor.cli``, ADR-0017).
 """
 
-import json
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from slipstream_bench.contract import (
-    ResultError,
-    SweepAggregationError,
-    SweepGridError,
-    load_grid,
-)
+from slipstream_bench.contract import SweepGridError, load_grid
 
-from slipstream_bench.sweep.aggregation import aggregate_ceilings
 from slipstream_bench.sweep.grid import SweepGridPart, render_part
 
 app = typer.Typer()
-
-
-@app.command("aggregate-sweep")
-def aggregate_sweep(
-    *,
-    run_dir: Annotated[
-        Path,
-        typer.Option(
-            exists=True,
-            file_okay=False,
-            help="The bench/results/<run_id> directory the sweep wrote, one subdir "
-            "per engine-knob point.",
-        ),
-    ],
-) -> None:
-    """Aggregate a knob-sweep run's saved results into the concurrency-ceiling table.
-
-    Emits one JSON row per (max-num-seqs, kv-cache-dtype, prefix-caching) point and
-    prefix-share: the measured ceiling and the {timeout, oom, other} failure
-    cohorts. oom and num_preemptions read null — the recipe does not collect the pod
-    events and /metrics snapshots they need (ADR-0009).
-    """
-    try:
-        rows = aggregate_ceilings(run_dir)
-    except (SweepAggregationError, ResultError) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(code=2) from error
-    typer.echo(json.dumps(rows, indent=2))
 
 
 @app.command("sweep-grid")

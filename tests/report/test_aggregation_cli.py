@@ -8,9 +8,8 @@ exit 2 rather than printing an empty table.
 import json
 from pathlib import Path
 
+from slipstream_bench.report.cli import app
 from typer.testing import CliRunner
-
-from slipstream_bench.cli import app
 
 runner = CliRunner()
 

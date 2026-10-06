@@ -4,12 +4,15 @@ version = "0.1.0"
 description = "L0 benchmark harness for the slipstream platform: serve sweeps, cost-per-1M, and prefix-cache hit rates."
 requires-python = ">=3.11"
 dependencies = [
-    "pandas>=3",
     "prometheus-client>=0.26.0",
     "pydantic>=2",
     "pyyaml>=6",
-    "seaborn>=0.13",
     "slipstream-contract",
+    # The root reporting front-end (slipstream_bench.cli) composes the report member's
+    # sub-app, so the root member depends on it until #232 dissolves the root and moves
+    # the slipstream-bench-report entry point into report. This is the transitional
+    # root -> report edge ADR-0017 carves in two steps (#231 here, #232 next).
+    "slipstream-report",
     "typer>=0.12",
 ]
 
@@ -61,6 +64,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 slipstream-contract = { workspace = true }
 slipstream-bench-executor = { workspace = true }
+slipstream-report = { workspace = true }
 
 [tool.ruff]
 line-length = 88
@@ -72,7 +76,13 @@ testpaths = ["tests"]
 python-version = "3.11"
 
 [tool.ty.src]
-include = ["src", "tests", "packages/contract/src", "packages/executor/src"]
+include = [
+    "src",
+    "tests",
+    "packages/contract/src",
+    "packages/executor/src",
+    "packages/report/src",
+]
 
 [tool.ty.rules]
 missing-type-argument = "error"

@@ -1,7 +1,8 @@
-"""The report concept's Typer sub-app: the baseline join and the sweep charts.
+"""The report concept's Typer sub-app: the aggregation, baseline join, and sweep charts.
 
-Owns the ``report`` (baseline $/1M-at-SLO join) and ``chart`` (ceiling and cliff
-tables plus plots) commands.
+Owns the ``aggregate-sweep`` (fold a run into the ceiling table), ``report`` (baseline
+$/1M-at-SLO join), and ``chart`` (ceiling and cliff tables plus plots) commands — the
+offline analysis and visualization surface (ADR-0017).
 """
 
 import json
@@ -11,17 +12,44 @@ from typing import Annotated
 
 import typer
 from slipstream_bench.contract import ResultError, SweepAggregationError
-
+from slipstream_bench.report.aggregation import aggregate_ceilings, aggregate_rungs
 from slipstream_bench.report.baseline import (
     ReportError,
     build_report,
     load_records,
     render_markdown,
 )
-from slipstream_bench.report.chart import write_artifacts
-from slipstream_bench.sweep.aggregation import aggregate_ceilings, aggregate_rungs
+from slipstream_bench.report.plotters import write_artifacts
 
 app = typer.Typer()
+
+
+@app.command("aggregate-sweep")
+def aggregate_sweep(
+    *,
+    run_dir: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=False,
+            help="The bench/results/<run_id> directory the sweep wrote, one subdir "
+            "per engine-knob point.",
+        ),
+    ],
+) -> None:
+    """Aggregate a knob-sweep run's saved results into the concurrency-ceiling table.
+
+    Emits one JSON row per (max-num-seqs, kv-cache-dtype, prefix-caching) point and
+    prefix-share: the measured ceiling and the {timeout, oom, other} failure
+    cohorts. oom and num_preemptions read null — the recipe does not collect the pod
+    events and /metrics snapshots they need (ADR-0009).
+    """
+    try:
+        rows = aggregate_ceilings(run_dir)
+    except (SweepAggregationError, ResultError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
+    typer.echo(json.dumps(rows, indent=2))
 
 
 class ReportFormat(StrEnum):

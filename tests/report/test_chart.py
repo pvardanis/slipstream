@@ -10,8 +10,14 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pytest
-
+from slipstream_bench.report.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 from slipstream_bench.report.chart import (
+    rows_to_json,
+    rows_to_markdown,
+    rungs_to_json,
+    rungs_to_markdown,
+)
+from slipstream_bench.report.plotters import (
     _ceiling_frame,
     _cliff_frame,
     _condition_label,
@@ -20,13 +26,8 @@ from slipstream_bench.report.chart import (
     _point_label,
     _point_order,
     _share_label,
-    rows_to_json,
-    rows_to_markdown,
-    rungs_to_json,
-    rungs_to_markdown,
     write_artifacts,
 )
-from slipstream_bench.sweep.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 
 
 def _row(

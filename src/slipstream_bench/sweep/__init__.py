@@ -1,1 +1,1 @@
-"""The sweep concept: run a knob grid, aggregate ceilings, emit the grid."""
+"""The sweep concept: emit the knob grid's slices and name the ceiling-scrape error."""
