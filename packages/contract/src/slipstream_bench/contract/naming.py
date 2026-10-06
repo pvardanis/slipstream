@@ -7,7 +7,7 @@ result and the worker that addresses it by S3 object and cache key read one name
 place (ADR-0012).
 """
 
-from slipstream.contract.config import CellConfig, SweepError
+from slipstream_bench.contract.config import CellConfig, SweepError
 
 
 def split_lengths(total_len: int, share: int, *, align_blocks: int) -> tuple[int, int]:

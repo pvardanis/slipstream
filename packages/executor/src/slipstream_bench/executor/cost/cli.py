@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from slipstream.contract import ResultError
+from slipstream_bench.contract import ResultError
 from slipstream_bench.executor.cost.commercial import (
     CommercialCostError,
     load_commercial_cost_inputs,

@@ -9,7 +9,7 @@ ceiling scrape raises loud before the point's ladder runs.
 """
 
 import pytest
-from slipstream.contract import EnginePoint
+from slipstream_bench.contract import EnginePoint
 
 from slipstream_bench.orchestration.flows.knob_sweep import drive_knob_sweep
 from slipstream_bench.sweep.aggregation import CeilingScrapeError

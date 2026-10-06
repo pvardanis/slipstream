@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from slipstream.contract import (
+from slipstream_bench.contract import (
     ResultError,
     SweepAggregationError,
     SweepGridError,

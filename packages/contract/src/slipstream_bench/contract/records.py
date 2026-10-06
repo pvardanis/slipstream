@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
-from slipstream.contract.results import to_numeric_metric
+from slipstream_bench.contract.results import to_numeric_metric
 
 # The KV-cache dtype labels the sweep varies: fp8 committed, fp16 the counterfactual
 # baseline. An EnginePoint names one of them, and the grid constrains its dtype axis to

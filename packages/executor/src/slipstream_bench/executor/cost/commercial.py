@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict
-from slipstream.contract import read_result, to_numeric_metric
+from slipstream_bench.contract import read_result, to_numeric_metric
 from slipstream_bench.executor.cost.config import load_provenance
 from slipstream_bench.executor.cost.fields import NonEmptyStr, PositiveFiniteFloat
 
@@ -210,6 +210,6 @@ def price_commercial_files(
     :raise CommercialCostError: on a bad input file (see
         :func:`price_commercial_result`).
     :raise ResultError: when a file cannot be read (see
-        :func:`slipstream.contract.results.read_result`).
+        :func:`slipstream_bench.contract.results.read_result`).
     """
     return [price_commercial_result(read_result(file), file, inputs) for file in files]

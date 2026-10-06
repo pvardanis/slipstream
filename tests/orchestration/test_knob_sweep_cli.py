@@ -23,7 +23,7 @@ import yaml
 from botocore.exceptions import ClientError
 from prefect import Task
 from prefect.testing.utilities import prefect_test_harness
-from slipstream.contract import EnginePoint, SweepGrid
+from slipstream_bench.contract import EnginePoint, SweepGrid
 from typer.testing import CliRunner
 
 from slipstream_bench.orchestration import cli as cli_module

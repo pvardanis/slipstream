@@ -2,7 +2,7 @@
 
 ADR-0012 defines a cell as *done* only when its JSON exists, parses, carries the
 expected fields, **and** passes a semantic sanity check — reusing the
-``aggregate-sweep`` parser (:func:`slipstream.contract.records.LoadCell.from_record`)
+``aggregate-sweep`` parser (:func:`slipstream_bench.contract.records.LoadCell.from_record`)
 as the structural predicate rather than re-deriving field validation here. Structural
 parseability alone is not trusted: a result from an unhealthy server — every request
 errored, goodput 0 — parses and carries all fields yet is not a measurement, so the
@@ -13,7 +13,7 @@ threshold. :func:`validate_cell` raises so the sweep task never caches a failure
 
 from pathlib import Path
 
-from slipstream.contract import (
+from slipstream_bench.contract import (
     LoadCell,
     ResultError,
     SweepAggregationError,

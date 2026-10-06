@@ -22,20 +22,24 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
-from slipstream.contract.config import LoadKnobs, SweepConfig
-from slipstream.contract.fields import (
+from slipstream_bench.contract.config import LoadKnobs, SweepConfig
+from slipstream_bench.contract.fields import (
     NonEmptyStr,
     PrefixShares,
     UniquePositiveInts,
     unique,
 )
-from slipstream.contract.records import EnginePoint, KvLabel, SweepAggregationError
+from slipstream_bench.contract.records import (
+    EnginePoint,
+    KvLabel,
+    SweepAggregationError,
+)
 
 # The KV-cache dtype and prefix-caching arms are keyed by their chart labels, the
 # same tokens EnginePoint.from_dirname parses off a slug. The grid carries only the
 # label; the token vLLM's --kv-cache-dtype accepts is mapped in the executor's renderer,
 # so a rename of a vLLM token is a one-line edit in code, not a change every grid copies.
-# KvLabel is the EnginePoint's dtype type (slipstream.contract.records), so the grid's
+# KvLabel is the EnginePoint's dtype type (slipstream_bench.contract.records), so the grid's
 # dtype axis and the point it resolves name one set.
 PrefixCachingLabel = Literal["on", "off"]
 

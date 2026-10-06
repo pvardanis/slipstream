@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from slipstream.contract import (
+from slipstream_bench.contract import (
     CellConfig,
     EnginePoint,
     SweepConfig,

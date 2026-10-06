@@ -21,8 +21,8 @@ from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 
-from slipstream.contract.config import CellConfig, SweepConfig, SweepError
-from slipstream.contract.naming import get_cell_basename, split_lengths
+from slipstream_bench.contract.config import CellConfig, SweepConfig, SweepError
+from slipstream_bench.contract.naming import get_cell_basename, split_lengths
 
 # A cell runner takes a fully assembled command and returns its process exit code.
 CellRunner = Callable[[list[str]], int]

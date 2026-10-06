@@ -21,7 +21,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from prometheus_client.parser import text_string_to_metric_families
-from slipstream.contract import read_result
+from slipstream_bench.contract import read_result
 
 _QUERIES_METRIC = "vllm:prefix_cache_queries"
 _HITS_METRIC = "vllm:prefix_cache_hits"
@@ -190,7 +190,7 @@ def scrape_prefix_cache(
         missing model selector, a truncated or zero-completed client JSON, or an
         unreadable/unparseable snapshot.
     :raise ResultError: when the result file cannot be read (see
-        :func:`slipstream.contract.results.read_result`).
+        :func:`slipstream_bench.contract.results.read_result`).
     """
     record = read_result(result)
     # A per-cell failure can leave a syntactically-valid but empty/stub result JSON;

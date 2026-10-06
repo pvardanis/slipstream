@@ -15,7 +15,7 @@ from itertools import product
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
-from slipstream.contract.fields import (
+from slipstream_bench.contract.fields import (
     Burstiness,
     ConcurrencyLadder,
     GoodputSlo,

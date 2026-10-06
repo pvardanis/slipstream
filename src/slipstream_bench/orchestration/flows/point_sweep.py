@@ -30,7 +30,11 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from prefect import Task, flow, tags
-from slipstream.contract import build_point_sweep_config, get_cell_basename, load_grid
+from slipstream_bench.contract import (
+    build_point_sweep_config,
+    get_cell_basename,
+    load_grid,
+)
 
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
