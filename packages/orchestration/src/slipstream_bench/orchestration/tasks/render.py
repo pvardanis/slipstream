@@ -16,8 +16,9 @@ injected, so it is tested with fakes and no Prefect server, no S3, no plotting s
 :func:`materialize_run` is the S3 collaborator: it downloads every cell of every point into the
 per-point layout the aggregators read, reusing the cell-object enumeration the redeploy-skip
 gate reads (:mod:`slipstream_bench.orchestration.cell_objects`). :func:`render_result_tables` is
-the ``@task`` the flow runs once after the loop, closing the live S3 client and run inputs over
-a zero-argument materialize and calling the driver with the real report-member collaborators.
+the ``@task`` the flow runs once after the loop, binding the live S3 client and run inputs onto
+:func:`materialize_run` with :func:`functools.partial` and calling the driver with the real
+report-member collaborators.
 
 Only the pure table renderers (:mod:`slipstream_bench.report.chart`) and the aggregators
 (:mod:`slipstream_bench.report.aggregation`) are imported here — never the matplotlib plotters,
@@ -29,6 +30,7 @@ orchestration Dockerfile; this claim is import-scope, not image-scope.
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -171,9 +173,9 @@ def render_result_tables(
 ) -> None:
     """Render the run's ceiling and cliff tables to the parent run page — the terminal task.
 
-    The ``@task`` the knob-sweep flow runs once after its point loop: it closes the live S3
-    client and run inputs over a zero-argument :func:`materialize_run` and drives the render
-    with the report member's real aggregators and pure table renderers. One task, not split
+    The ``@task`` the knob-sweep flow runs once after its point loop: it binds the live S3
+    client and run inputs onto :func:`materialize_run` with :func:`functools.partial` and drives
+    the render with the report member's real aggregators and pure table renderers. One task, not split
     per table: both folds come from the one materialized run, so splitting would re-download
     it. A failure (materialize or publish) is isolated to this task — the sweep's cells are
     already persisted — and a re-run re-renders idempotently off S3. The task carries no retry
@@ -187,17 +189,15 @@ def render_result_tables(
     :param publish: the markdown-artifact publisher (create_markdown_artifact in production).
     """
 
-    def materialize() -> AbstractContextManager[Path]:
-        return materialize_run(
+    drive_render_tables(
+        materialize=partial(
+            materialize_run,
             grid=grid,
             run_prefix=run_prefix,
             bucket=bucket,
             s3_client=s3_client,
             model=model,
-        )
-
-    drive_render_tables(
-        materialize=materialize,
+        ),
         aggregate_ceilings=aggregate_ceilings,
         aggregate_rungs=aggregate_rungs,
         render_ceiling_table=rows_to_markdown,

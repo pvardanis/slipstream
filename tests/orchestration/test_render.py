@@ -19,7 +19,7 @@ import yaml
 from botocore.exceptions import ClientError
 
 from slipstream_bench.contract import SweepGrid
-from slipstream_bench.orchestration.render import (
+from slipstream_bench.orchestration.tasks.render import (
     drive_render_tables,
     materialize_run,
 )

@@ -57,9 +57,9 @@ from slipstream_bench.orchestration.flows.point_sweep import (
     run_point_sweep,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
-from slipstream_bench.orchestration.render import render_result_tables
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
+from slipstream_bench.orchestration.tasks.render import render_result_tables
 
 _LOGGER = logging.getLogger(__name__)
 
