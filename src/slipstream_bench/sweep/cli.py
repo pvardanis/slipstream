@@ -1,7 +1,7 @@
 """The sweep concept's Typer sub-app: emit the knob-sweep grid.
 
 Owns the ``sweep-grid`` command: emit a validated slice of the knob-sweep grid for
-``just knob-sweep`` to read. The multi-cell aggregation (``aggregate-sweep``) now lives in
+``just knob-sweep`` to read. The multi-cell aggregation (``aggregate-sweep``) lives in
 the report member's CLI (``slipstream_bench.report.cli``), and the per-cell executor
 (``load-cell``/``load-sweep``) in the executor member's CLI
 (``slipstream_bench.executor.cli``, ADR-0017).

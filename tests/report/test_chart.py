@@ -1,8 +1,8 @@
-"""Tests for the chart module: the ceiling table's Markdown/JSON artifacts and plots.
+"""Tests for the report renderers: the table artifacts in ``chart`` and the plots in ``plotters``.
 
-Pin the durable data artifacts first — the Markdown and JSON the chart writes beside
-the disposable PNGs — then the facet-derivation helpers and the plots that render to
-non-empty PNG files under the Agg backend.
+Pin the durable data artifacts first — the Markdown and JSON ``chart`` renders beside
+the disposable PNGs — then the facet-derivation helpers and the plots ``plotters`` writes
+to non-empty PNG files under the Agg backend.
 """
 
 import json
