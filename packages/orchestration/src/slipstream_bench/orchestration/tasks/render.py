@@ -73,6 +73,18 @@ _CLIFF_ARTIFACT_KEY = "knob-sweep-goodput-cliff"
 _CEILING_HEADING = "## concurrency ceiling"
 _CLIFF_HEADING = "## goodput cliff"
 
+# A one-line blurb under each heading, so an operator reading the run page knows what the table
+# answers without opening an ADR: the ceiling is the headline capacity per config, the cliff the
+# per-rung curve it was read off.
+_CEILING_BLURB = (
+    "The highest offered `--max-concurrency` each engine config held within the goodput "
+    "SLO, one row per engine point and prefix-share."
+)
+_CLIFF_BLURB = (
+    "The goodput fraction at every offered `--max-concurrency`, the per-rung curve each "
+    "ceiling is read off (ADR-0009)."
+)
+
 
 def drive_render_tables(
     *,
@@ -108,11 +120,11 @@ def drive_render_tables(
         rungs = aggregate_rungs(run_dir)
     publish(
         key=_CEILING_ARTIFACT_KEY,
-        markdown=f"{_CEILING_HEADING}\n\n{render_ceiling_table(ceilings)}\n",
+        markdown=f"{_CEILING_HEADING}\n\n{_CEILING_BLURB}\n\n{render_ceiling_table(ceilings)}\n",
     )
     publish(
         key=_CLIFF_ARTIFACT_KEY,
-        markdown=f"{_CLIFF_HEADING}\n\n{render_cliff_table(rungs)}\n",
+        markdown=f"{_CLIFF_HEADING}\n\n{_CLIFF_BLURB}\n\n{render_cliff_table(rungs)}\n",
     )
 
 
