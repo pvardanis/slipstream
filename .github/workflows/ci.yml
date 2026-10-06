@@ -56,9 +56,10 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       - name: Run pytest
-        # The suite covers the orchestration layer's storage builders, which need
-        # the Prefect extra the bench-client image omits (ADR-0012 §Amendment).
-        run: uv run --extra orchestration pytest
+        # The default dev group installs every workspace member (contract, executor,
+        # report, orchestration), so the suite covers the orchestration layer's
+        # Prefect-backed builders without a separate extra (ADR-0017).
+        run: uv run pytest
 
   terraform:
     name: terraform tests (offline)
@@ -128,7 +129,6 @@ jobs:
               - 'bench/**'
               - '!bench/load-sweep.yaml'
               - '!bench/load-cell.yaml'
-              - 'src/**'
               - 'packages/**'
               - 'pyproject.toml'
               - 'model.yaml'
@@ -162,7 +162,6 @@ jobs:
           filters: |
             orchestration:
               - 'orchestration/Dockerfile'
-              - 'src/**'
               - 'packages/**'
               - 'pyproject.toml'
               - 'uv.lock'

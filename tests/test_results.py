@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from slipstream_bench.contract import ResultError, read_result
 
 

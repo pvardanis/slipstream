@@ -23,11 +23,12 @@ import yaml
 from botocore.exceptions import ClientError
 from prefect import Task
 from prefect.testing.utilities import prefect_test_harness
-from slipstream_bench.contract import EnginePoint, SweepGrid
 from typer.testing import CliRunner
 
+from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import app
+from slipstream_bench.orchestration.cluster import CeilingScrapeError
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
@@ -37,7 +38,6 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     build_knob_sweep_collaborators,
     knob_sweep_flow,
 )
-from slipstream_bench.sweep.aggregation import CeilingScrapeError
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
 # ``--results-dir`` with a reset between the dashes so the literal hides from a

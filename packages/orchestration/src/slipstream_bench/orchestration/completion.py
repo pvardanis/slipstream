@@ -28,13 +28,13 @@ from botocore.exceptions import (
 from botocore.exceptions import (
     ConnectionError as BotoConnectionError,
 )
+
 from slipstream_bench.contract import (
     EnginePoint,
     SweepGrid,
     build_point_sweep_config,
     get_cell_basename,
 )
-
 from slipstream_bench.orchestration.cell_run import get_cell_s3_key
 from slipstream_bench.orchestration.validity import (
     DEFAULT_MAX_ERROR_RATE,

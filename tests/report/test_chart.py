@@ -10,6 +10,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pytest
+
 from slipstream_bench.report.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 from slipstream_bench.report.chart import (
     rows_to_json,

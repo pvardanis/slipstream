@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from slipstream_bench.report.baseline import (
     ReportError,
     build_report,

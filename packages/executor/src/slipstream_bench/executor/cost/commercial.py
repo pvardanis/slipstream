@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict
+
 from slipstream_bench.contract import read_result, to_numeric_metric
 from slipstream_bench.executor.cost.config import load_provenance
 from slipstream_bench.executor.cost.fields import NonEmptyStr, PositiveFiniteFloat

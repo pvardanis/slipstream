@@ -43,8 +43,10 @@ undeploy:
 
 # Render the GPU manifest's swept engine knobs from the environment, defaulting to
 # the committed rig config (max-num-seqs 16, FP8 KV, prefix caching on) so a plain
-# `just gpu-deploy` deploys the committed rig config. `just knob-sweep` sets
-# MAX_NUM_SEQS / KV_CACHE_DTYPE / PREFIX_CACHING_FLAG per sweep point (#33, ADR-0009).
+# `just gpu-deploy` deploys the committed rig config. Setting MAX_NUM_SEQS /
+# KV_CACHE_DTYPE / PREFIX_CACHING_FLAG overrides them for a manual per-point deploy
+# (#33, ADR-0009); the unattended knob sweep renders the same knobs in-cluster from the
+# worker (slipstream_bench.orchestration.cluster), not through this recipe.
 # Only these three placeholders are substituted, so nothing else in the manifest
 # (an image tag, a shell-like token) is touched. Prints to stdout — pipe to
 # `kubectl apply -f -` (or `kubectl diff -f -` to preview before applying).
@@ -62,7 +64,8 @@ _render-gpu-manifest:
 # ~10 GB image pull, and the AWQ weight load — hence the long timeout. Reuses the
 # vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses. The
 # manifest is rendered (see `_render-gpu-manifest`) so the swept engine knobs
-# default to the committed rig unless the knob sweep overrides them.
+# default to the committed rig unless the MAX_NUM_SEQS / KV_CACHE_DTYPE /
+# PREFIX_CACHING_FLAG env vars override them.
 [group('serve')]
 gpu-deploy: _ensure-api-key
     #!/usr/bin/env bash

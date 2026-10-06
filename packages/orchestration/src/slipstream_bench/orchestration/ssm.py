@@ -6,10 +6,6 @@ command against the bench host it stood up. This is the transport the flow's
 per-cell ``execute_func`` calls: send the command, poll the invocation to a terminal
 state, return on ``Success`` and raise :class:`SsmError` (carrying the host's stderr)
 on any other outcome so the failure propagates out of the cell task uncached.
-
-``boto3`` ships in the ``orchestration`` extra (via ``prefect-aws``); the
-``slipstream-orchestrate`` entry (:mod:`slipstream_bench.orchestration.__main__`)
-guards that extra before this module is imported.
 """
 
 from __future__ import annotations

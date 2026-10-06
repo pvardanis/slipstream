@@ -5,7 +5,6 @@ and the open-loop cell whose absent concurrency cap tags ``mc=open``.
 """
 
 from slipstream_bench.contract import CellConfig
-
 from slipstream_bench.orchestration.task_labels import get_cell_run_tags
 
 _SHARED_KNOBS = {

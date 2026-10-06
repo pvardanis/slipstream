@@ -24,8 +24,8 @@ prefect-up:
     # needs no public endpoint.
     source bench/prefect-portforward.sh
     prefect_api_portforward {{ eks_dir }} {{ prefect_port }}
-    uv run --extra orchestration prefect work-pool create {{ prefect_work_pool }} --type process --overwrite
-    uv run --extra orchestration prefect work-pool set-concurrency-limit {{ prefect_work_pool }} 1
+    uv run prefect work-pool create {{ prefect_work_pool }} --type process --overwrite
+    uv run prefect work-pool set-concurrency-limit {{ prefect_work_pool }} 1
 
 # Remove the work pool ahead of `cluster-down`. The server rides the cluster teardown
 # (it is a helm_release in the eks stack), so this only reaps the pool for symmetry —
@@ -45,7 +45,7 @@ prefect-down:
     # port-forward, skipping quietly (exit 0) if that fails.
     source bench/prefect-portforward.sh
     prefect_api_portforward {{ eks_dir }} {{ prefect_port }} || { echo "prefect-down: Prefect API not reachable; nothing to remove" >&2; exit 0; }
-    uv run --extra orchestration prefect work-pool delete {{ prefect_work_pool }} || echo "prefect-down: work-pool delete failed; the pool rides cluster-down regardless" >&2
+    uv run prefect work-pool delete {{ prefect_work_pool }} || echo "prefect-down: work-pool delete failed; the pool rides cluster-down regardless" >&2
 
 # Drain the server's SQLite PVC ahead of `cluster-down`, so the EBS CSI driver reaps the
 # backing volume while it is still installed. The chart's reclaim=Delete gp3 PV and the
@@ -135,7 +135,7 @@ prefect-register:
     # no public endpoint.
     source bench/prefect-portforward.sh
     prefect_api_portforward {{ eks_dir }} {{ prefect_port }}
-    uv run --extra orchestration slipstream-orchestrate register-knob-sweep \
+    uv run slipstream-orchestrate register-knob-sweep \
       --region "${region}" \
       --bucket "${bucket}" \
       --image-ref "${image}" \

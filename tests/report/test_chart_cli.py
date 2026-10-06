@@ -8,8 +8,9 @@ run fails loud at exit 2 rather than writing an empty chart.
 import json
 from pathlib import Path
 
-from slipstream_bench.report.cli import app
 from typer.testing import CliRunner
+
+from slipstream_bench.report.cli import app
 
 runner = CliRunner()
 

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from slipstream_bench.contract import CellConfig, SweepConfig, SweepError, split_lengths
 from slipstream_bench.executor.runner import (
     CellOutcome,

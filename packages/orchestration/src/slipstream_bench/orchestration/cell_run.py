@@ -21,8 +21,8 @@ from typing import Any
 
 import boto3
 import yaml
-from slipstream_bench.contract import RESERVED_KEYS, CellConfig, get_cell_basename
 
+from slipstream_bench.contract import RESERVED_KEYS, CellConfig, get_cell_basename
 from slipstream_bench.orchestration.ssm import run_command
 from slipstream_bench.orchestration.tasks.cell import CellExecution
 

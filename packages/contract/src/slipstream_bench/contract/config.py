@@ -6,7 +6,7 @@ single cell carry (token budget, SLO, seed); ``Knobs`` adds the execution contex
 field is range-checked as the model validates. ``SweepConfig`` adds the grid axes and
 derives one ``CellConfig`` per point via :meth:`SweepConfig.cells`; ``CellConfig`` adds
 the single coordinate the container runs. The loaders that read these from YAML and bind
-the CLI-injected context live in the executor (``slipstream_bench.sweep.config``); this
+the CLI-injected context live in the executor (``slipstream_bench.executor.config``); this
 kernel holds the models and ``RESERVED_KEYS`` both the executor and the worker agree on.
 """
 
@@ -15,6 +15,7 @@ from itertools import product
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
+
 from slipstream_bench.contract.fields import (
     Burstiness,
     ConcurrencyLadder,

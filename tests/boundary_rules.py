@@ -20,7 +20,7 @@ class BoundaryRule:
     """One package's import boundary: the roots it may not pull, optionally the only roots
     it may pull, and a load probe.
 
-    :param package: the importable package the rule governs (e.g. ``slipstream_bench.sweep``).
+    :param package: the importable package the rule governs (e.g. ``slipstream_bench.contract``).
     :param forbidden: the top-level import roots the package must never pull — a framework
         its image does not ship, or another workspace member. Enforced by both guards.
     :param probe: a Python snippet that imports the package and asserts it loaded, run in a
@@ -52,12 +52,41 @@ class BoundaryRule:
 
 BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
     BoundaryRule(
-        package="slipstream_bench.sweep",
-        forbidden=frozenset({"prefect", "prefect_aws"}),
+        package="slipstream_bench.orchestration",
+        # The orchestration worker drives the sweep from the control point on Prefect and
+        # boto3 and depends inward on the contract kernel alone (ADR-0017): never the
+        # report member's plotting stack. forbidden names the roots the subprocess probe
+        # blocks — pandas/seaborn/matplotlib catch a stray report import (its distinctive
+        # stack); orchestration imports none of them itself, so blocking them cannot break
+        # its own load. The executor's distinctive root (prometheus_client) cannot guard
+        # the no-orchestration->executor edge here: Prefect pulls prometheus_client
+        # transitively, so the orchestration image ships it and the probe must not block
+        # it. That edge is held instead by the lockfile and the image build — the executor
+        # is not an orchestration dependency, so --package orchestration never installs its
+        # source. orchestration shares the slipstream_bench namespace with its siblings, so
+        # that root cannot be forbidden; allowed holds the AST guard to the closed set
+        # orchestration legitimately imports — Prefect, boto3, and the contract kernel.
+        forbidden=frozenset(
+            {
+                "pandas",
+                "seaborn",
+                "matplotlib",
+            }
+        ),
+        allowed=frozenset(sys.stdlib_module_names)
+        | {
+            "slipstream_bench",
+            "boto3",
+            "botocore",
+            "prefect",
+            "prefect_aws",
+            "yaml",
+            "typer",
+        },
         probe=(
-            "import slipstream_bench.sweep.cli as cli\n"
+            "import slipstream_bench.orchestration.cli as cli\n"
             "names = [command.name for command in cli.app.registered_commands]\n"
-            "assert 'sweep-grid' in names, names\n"
+            "assert 'point-sweep' in names, names\n"
         ),
     ),
     BoundaryRule(

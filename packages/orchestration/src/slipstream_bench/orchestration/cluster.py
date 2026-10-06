@@ -23,10 +23,21 @@ import subprocess
 from collections.abc import Callable, Sequence
 
 import yaml
-from slipstream_bench.contract import EnginePoint, SweepGrid
 
-from slipstream_bench.sweep.aggregation import CeilingScrapeError
-from slipstream_bench.sweep.grid import EngineArgs, get_engine_args
+from slipstream_bench.contract import EnginePoint, SweepGrid
+from slipstream_bench.orchestration.grid import EngineArgs, get_engine_args
+
+
+class CeilingScrapeError(Exception):
+    """No concurrency ceiling could be scraped for an engine point.
+
+    The parent knob sweep scrapes each redeployed engine's reported ceiling before
+    running the point's Tier-2 ladder (ADR-0015). A scrape that finds none raises this
+    rather than returning empty, so the point fails loudly instead of measuring its
+    ladder against a garbage ceiling — the one failure an unattended sweep cannot
+    tolerate.
+    """
+
 
 # vLLM logs its VRAM/KV-budget concurrency estimate once at startup, e.g.
 # "Maximum concurrency for 4,096 tokens per request: 10.30x". The scrape reads this

@@ -3,7 +3,7 @@
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
 cli-test:
-    uv run --extra orchestration pytest
+    uv run pytest
 
 # Run the request-ID spine stub against a local collector (real OTLP, no cluster).
 [group('test')]

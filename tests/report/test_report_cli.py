@@ -1,9 +1,10 @@
-"""Tests for the root slipstream-bench CLI surface.
+"""Tests for the slipstream-bench-report CLI surface the report member installs.
 
-Pin the reporting front-end that stays behind in the root member: an app that
-dispatches the multi-cell aggregation and report commands and keeps them wired and
-discoverable via --help. The per-cell executor and its post-processors now live in
-the bench member's CLI (tests/bench/test_cli.py).
+Pin the reporting front-end: an app that dispatches the aggregation, baseline report, and
+chart commands and keeps them wired and discoverable via --help, and the baseline report
+command's JSON and Markdown emission and its fail-loud on an unjoinable segment. The
+per-cell executor and its post-processors live in the executor member's CLI
+(tests/executor/test_cli.py).
 """
 
 import json
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from slipstream_bench.cli import app
+from slipstream_bench.report.cli import app
 
 runner = CliRunner()
 
@@ -27,12 +28,11 @@ def _plain(output: str) -> str:
 
 
 def test_help_lists_the_subcommands() -> None:
-    """``--help`` advertises the reporting commands that stay in the root member."""
+    """``--help`` advertises the reporting commands the report member installs."""
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "aggregate-sweep" in result.stdout
-    assert "sweep-grid" in result.stdout
     assert "report" in result.stdout
     assert "chart" in result.stdout
 

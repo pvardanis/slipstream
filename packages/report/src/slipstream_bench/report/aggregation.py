@@ -1,6 +1,6 @@
 """Aggregate a knob-sweep run into the closed-loop concurrency ceiling per point.
 
-Pure post-processing over the JSON the `just knob-sweep` recipe collects (ADR-0009):
+Pure post-processing over the JSON the knob sweep collects (ADR-0009):
 one subdir per engine-knob point (mns{N}_kv{fp8|fp16}_pc{on|off}), each holding the
 Tier-2 client JSONs `vllm bench serve` wrote across the --max-concurrency ladder.
 The ceiling is the highest ladder rung still holding goodput >= 95% at the shared

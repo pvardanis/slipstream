@@ -1,8 +1,9 @@
-"""The report concept's Typer sub-app: the aggregation, baseline join, and sweep charts.
+"""The ``slipstream-bench-report`` CLI: the aggregation, baseline join, and sweep charts.
 
 Owns the ``aggregate-sweep`` (fold a run into the ceiling table), ``report`` (baseline
 $/1M-at-SLO join), and ``chart`` (ceiling and cliff tables plus plots) commands — the
-offline analysis and visualization surface (ADR-0017).
+offline analysis and visualization surface, the console script the report member installs
+(ADR-0017).
 """
 
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+
 from slipstream_bench.contract import ResultError, SweepAggregationError
 from slipstream_bench.report.aggregation import aggregate_ceilings, aggregate_rungs
 from slipstream_bench.report.baseline import (
@@ -21,7 +23,12 @@ from slipstream_bench.report.baseline import (
 )
 from slipstream_bench.report.plotters import write_artifacts
 
-app = typer.Typer()
+app = typer.Typer(
+    name="slipstream-bench-report",
+    help="L0 benchmark reporting: aggregate sweeps and render the cost/latency report.",
+    no_args_is_help=True,
+    add_completion=False,
+)
 
 
 @app.command("aggregate-sweep")

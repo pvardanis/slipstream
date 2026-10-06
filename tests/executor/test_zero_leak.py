@@ -9,6 +9,7 @@ fails loud rather than reading as "clean" and clearing a still-billing g5.
 from pathlib import Path
 
 import pytest
+
 from slipstream_bench.executor.zero_leak import (
     Leak,
     LeakError,

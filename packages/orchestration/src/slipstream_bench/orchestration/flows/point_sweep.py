@@ -15,10 +15,6 @@ Retry classification (``distributed-ml-patterns.md`` §5): a transient transport
 the validity gate uncached and is re-attempted on the next whole-sweep run, not retried
 in place. The proxy is a shared once-per-flow resource: a fully-resumed run still brings
 it up (cheap, idempotent) even though every cached cell skips its SSM side effects.
-
-The ``orchestration`` extra Prefect ships in is guarded once, at the
-``slipstream-orchestrate`` entry (:mod:`slipstream_bench.orchestration.__main__`),
-before this module is imported.
 """
 
 from __future__ import annotations
@@ -30,12 +26,12 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from prefect import Task, flow, tags
+
 from slipstream_bench.contract import (
     build_point_sweep_config,
     get_cell_basename,
     load_grid,
 )
-
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
     build_cell_execution,

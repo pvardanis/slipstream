@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+
 from slipstream_bench.executor.cost.commercial import (
     CommercialCostError,
     load_commercial_cost_inputs,

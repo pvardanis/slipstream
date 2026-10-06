@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 from pydantic import ValidationError
+
 from slipstream_bench.contract import CellConfig, SweepConfig, SweepError
 from slipstream_bench.executor.config import load_cell_config, load_sweep_config
 

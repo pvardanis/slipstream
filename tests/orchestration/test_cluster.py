@@ -11,9 +11,10 @@ from collections.abc import Sequence
 
 import pytest
 import yaml
-from slipstream_bench.contract import EnginePoint, SweepGrid
 
+from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration.cluster import (
+    CeilingScrapeError,
     KubectlError,
     build_kubectl,
     deploy_gpu_point,
@@ -21,8 +22,7 @@ from slipstream_bench.orchestration.cluster import (
     render_gpu_manifest,
     scrape_ceiling,
 )
-from slipstream_bench.sweep.aggregation import CeilingScrapeError
-from slipstream_bench.sweep.grid import get_engine_args
+from slipstream_bench.orchestration.grid import get_engine_args
 
 _GRID = """
 tier1:

@@ -28,7 +28,7 @@ concern's heading:
 | --- | --- | --- |
 | `cluster` | `bootstrap`, `cluster-up` / `cluster-down`, `gpu-pool-up` | Remote-state bootstrap, EKS create/plan/destroy, the GPU node pool. |
 | `serve` | `gpu-deploy`, `gpu-up` / `gpu-down` | The vLLM api-key Secret, the GPU replica, its scale and completion smokes. |
-| `bench` | `bench-image`, `bench`, `knob-sweep`, `prefix-cache` | The bench-client image, the load and knob sweeps, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
+| `bench` | `bench-image`, `bench`, `prefix-cache` | The bench-client image, the per-point client-load sweep, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
 | `obs` | `obs-up` / `obs-down`, `obs-pivot` | The OTel Collector spine stub — deploy, teardown, trace pivot. |
 | `test` | `cli-test` | Local smokes: the Python suite and the shell tests for the OTel spine and bench image (no cluster). |
 | `orchestrate` | `stack-up` / `stack-down`, `cloud-verify` | Whole-stack up/down, the one-shot cloud verification, the zero-leak spend sweep. |
@@ -130,10 +130,6 @@ classifies with). The rewrite from bash is recorded in
   bench-client container executes now that the per-cell loop lives in the
   orchestration layer ([`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)
   §Amendment).
-- **`sweep-grid`** — emit one validated slice (`engine-points`,
-  `concurrency-ladder`, `burstiness`) of the knob grid in `bench/sweep-grid.yaml`
-  for `just knob-sweep` to read, so every swept value is validated up front and
-  nothing is hard-coded in the recipe (ADR-0009).
 - **`aggregate-sweep`** — fold a finished `knob-sweep` run's per-point result JSON
   into the concurrency-ceiling table, the durable artifact of the sweep.
 - **`cost`** — price result JSON files (path arguments) into $/1M input and output
@@ -313,23 +309,27 @@ billing load balancer — a failed endpoint teardown stops the run before that.
 
 ### Knob sweep runbook
 
-`just knob-sweep` is the two-tier engine-knob sweep (ADR-0009). Every swept value
-lives in [`bench/sweep-grid.yaml`](bench/sweep-grid.yaml), read through
-`slipstream-bench sweep-grid`, which validates the whole grid before the first
-deploy — the recipe holds no knob values of its own.
+The knob sweep is the two-tier engine-knob sweep (ADR-0009), run unattended by the
+in-cluster Prefect worker (ADR-0015). Every swept value lives in
+[`bench/sweep-grid.yaml`](bench/sweep-grid.yaml), validated against the `SweepGrid`
+model before the first deploy — nothing is hard-coded in the worker.
 
 - **Tier 1 — engine knobs**, one GPU redeploy per point: `max-num-seqs` ×
   KV-cache dtype (`fp8`/`fp16`) × prefix caching (on/off). The knobs live in the
-  vLLM launch args, so each combination needs a fresh `gpu-deploy`.
+  vLLM launch args, so each combination needs a fresh GPU redeploy, which the worker
+  drives in-cluster over `kubectl`.
 - **Tier 2 — client load ladder**, no redeploy: against each running Tier-1 point,
-  `just bench` walks the concurrency ladder to find the highest rung that holds
+  the worker walks the concurrency ladder to find the highest rung that holds
   goodput at the SLO — that point's sustained concurrency ceiling.
 
-It runs against a live stack, so bring the GPU rig and the bench endpoint up first:
+It runs against a live stack. Bring the rig up, register the deployment on the
+worker's pool, then trigger a run:
 
 ```sh
 just stack-up          # cluster + GPU pool + GPU replica + bench endpoint
-just knob-sweep        # redeploy + drive the ladder per point (long-running)
+just prefect-register  # register the knob-sweep deployment on the worker's pool
+prefect deployment run knob-sweep/knob-sweep \
+  --param run_id=<run-id> --param instance_id=<bench-host-instance-id>
 just stack-down        # tear the rig down; spend → 0
 ```
 

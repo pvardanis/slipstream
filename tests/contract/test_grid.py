@@ -1,16 +1,16 @@
-"""Tests for the knob-sweep grid: load, validate, and emit to the recipe.
+"""Tests for the knob-sweep grid kernel: load, validate, and derive a point's cells.
 
-Covers loading bench/sweep-grid.yaml into the pydantic SweepGrid model, the
-fail-fast validation of every swept value before any GPU deploy, and the TSV/scalar
-the `sweep-grid` CLI emits for the `just knob-sweep` loop to read: one Tier-1 point
-per row keyed by its slug (mns{N}_kv{fp8|fp16}_pc{on|off}), the Tier-2
---max-concurrency ladder, and the pinned burstiness.
+Covers loading bench/sweep-grid.yaml into the pydantic SweepGrid model, the fail-fast
+validation of every swept value before any GPU deploy, deriving one engine point's Tier-2
+cells from the grid, and enumerating the Tier-1 engine points — the contract kernel the
+executor and the orchestration worker both read from (ADR-0017).
 """
 
 from pathlib import Path
 
 import pytest
 import yaml
+
 from slipstream_bench.contract import (
     CellConfig,
     EnginePoint,
@@ -20,13 +20,6 @@ from slipstream_bench.contract import (
     build_point_sweep_config,
     list_engine_points,
     load_grid,
-)
-
-from slipstream_bench.sweep.grid import (
-    get_engine_args,
-    render_burstiness,
-    render_ladder,
-    render_points,
 )
 
 REPO_GRID = Path("bench/sweep-grid.yaml")
@@ -205,34 +198,6 @@ def test_point_sweep_config_rejects_a_malformed_slug(tmp_path: Path) -> None:
         _point_config(tmp_path, "mns64")
 
 
-def test_points_emits_one_row_per_tier1_point(tmp_path: Path) -> None:
-    """5 max-num-seqs x 2 kv-dtype x 2 prefix-caching = 20 Tier-1 points."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    rows = render_points(grid).splitlines()
-    assert len(rows) == 20
-
-
-def test_points_row_carries_slug_engine_token_flag_and_shares(tmp_path: Path) -> None:
-    """A caching-on fp8 row: slug, max-num-seqs, engine token, flag, shares CSV."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    rows = render_points(grid).splitlines()
-    assert "mns64_kvfp8_pcon\t64\tfp8\t--enable-prefix-caching\t10,50,90" in rows
-
-
-def test_points_maps_fp16_label_to_the_engine_token(tmp_path: Path) -> None:
-    """The chart label fp16 emits vLLM's float16 token, not the label."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    rows = render_points(grid).splitlines()
-    assert "mns16_kvfp16_pcon\t16\tfloat16\t--enable-prefix-caching\t10,50,90" in rows
-
-
-def test_points_pins_caching_off_to_a_single_zero_share(tmp_path: Path) -> None:
-    """Caching-off reuses no prefix KV, so it sweeps a single 0 baseline."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    rows = render_points(grid).splitlines()
-    assert "mns32_kvfp8_pcoff\t32\tfp8\t--no-enable-prefix-caching\t0" in rows
-
-
 def test_list_engine_points_enumerates_every_tier1_point(tmp_path: Path) -> None:
     """5 max-num-seqs x 2 kv-dtype x 2 prefix-caching = 20 engine points, as objects."""
     grid = load_grid(_write_grid(tmp_path, _valid_grid()))
@@ -251,60 +216,6 @@ def test_list_engine_points_yields_the_cartesian_product_of_the_knobs(
         EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
         in points
     )
-
-
-def test_list_engine_points_shares_render_points_enumeration(tmp_path: Path) -> None:
-    """The point objects a flow iterates name the same slugs render_points emits.
-
-    Both enumerate the Tier-1 grid, so the parent flow's points and the recipe's TSV
-    rows must be the one set of engine points — never two enumerations that can drift.
-    """
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    slugs_from_points = {point.slug() for point in list_engine_points(grid)}
-    slugs_from_tsv = {row.split("\t")[0] for row in render_points(grid).splitlines()}
-    assert slugs_from_points == slugs_from_tsv
-
-
-def test_engine_args_resolve_a_points_vllm_args(tmp_path: Path) -> None:
-    """A caching-on fp8 point resolves max-num-seqs, the fp8 token, and the on flag."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    point = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
-
-    engine_args = get_engine_args(grid, point)
-
-    assert engine_args.max_num_seqs == 64
-    assert engine_args.kv_engine_token == "fp8"
-    assert engine_args.prefix_caching_flag == "--enable-prefix-caching"
-
-
-def test_engine_args_map_fp16_and_the_caching_off_flag(tmp_path: Path) -> None:
-    """fp16 resolves vLLM's float16 token; the off arm resolves the disable flag."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    point = EnginePoint(max_num_seqs=32, kv_cache_dtype="fp16", prefix_caching=False)
-
-    engine_args = get_engine_args(grid, point)
-
-    assert engine_args.kv_engine_token == "float16"
-    assert engine_args.prefix_caching_flag == "--no-enable-prefix-caching"
-
-
-def test_engine_args_reject_a_point_absent_from_the_grid(tmp_path: Path) -> None:
-    """A point the grid does not sweep never resolves args — it raises."""
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    absent = EnginePoint(max_num_seqs=999, kv_cache_dtype="fp8", prefix_caching=True)
-
-    with pytest.raises(SweepGridError):
-        get_engine_args(grid, absent)
-
-
-def test_ladder_emits_the_max_concurrency_rungs(tmp_path: Path) -> None:
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    assert render_ladder(grid).splitlines() == ["8", "16", "32", "64", "128", "256"]
-
-
-def test_burstiness_emits_the_pinned_scalar(tmp_path: Path) -> None:
-    grid = load_grid(_write_grid(tmp_path, _valid_grid()))
-    assert render_burstiness(grid) == "1.0"
 
 
 @pytest.mark.parametrize(

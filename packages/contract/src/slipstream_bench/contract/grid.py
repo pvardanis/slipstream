@@ -22,6 +22,7 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
+
 from slipstream_bench.contract.config import LoadKnobs, SweepConfig
 from slipstream_bench.contract.fields import (
     NonEmptyStr,
@@ -206,11 +207,9 @@ def list_engine_points(grid: SweepGrid) -> list[EnginePoint]:
     """Enumerate the grid's Tier-1 engine points, one per GPU redeploy.
 
     The cartesian product of the three engine knobs — max-num-seqs x kv-cache-dtype x
-    prefix-caching arm — as :class:`EnginePoint` objects, the point-object form of the
-    same enumeration the executor's ``render_points`` emits as TSV. The parent
-    knob-sweep flow iterates these to drive one point sweep per point (ADR-0015),
-    reading the grid as the single source of the points so the flow and the recipe
-    never enumerate apart.
+    prefix-caching arm — as :class:`EnginePoint` objects. The parent knob-sweep flow
+    iterates these to drive one point sweep per point (ADR-0015), reading the grid as
+    the single source of the points.
     """
     return [
         EnginePoint(

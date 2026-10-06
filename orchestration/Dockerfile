@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Orchestration image: the lean Prefect-worker image that drives the knob sweep
-# (ADR-0012 §Amendment, ADR-0015 unattended-sweep). It carries the package's `.[orchestration]` extra
+# (ADR-0012 §Amendment, ADR-0015 unattended-sweep). It carries the orchestration member
 # — Prefect + boto3 + the sweep flow code — and NOTHING of the model: the worker
 # issues SSM SendCommand to the bench host and reconfigures deploy/vllm-gpu, but never
 # serves or tokenizes, so it shares no base with the bench-client image (bench/Dockerfile).
@@ -29,24 +29,26 @@ WORKDIR /app
 
 # Install the locked dependency set first, without any workspace member, so this layer — the
 # slow one — is cached on the lockfile and pyproject alone and survives every source-only edit.
-# --no-install-workspace (not --no-install-project) skips the slipstream-contract member too,
-# which has no source in this layer; --frozen fails if the lockfile is stale rather than
-# silently re-resolving; --no-dev drops the dev group (pytest/ruff/ty); --extra orchestration
-# pulls Prefect + boto3. The cache mount persists uv's download cache across builds without
-# landing in a layer, and the bind mounts read the manifests without copying them into this layer.
+# --no-install-workspace skips the orchestration member and its slipstream-contract dependency,
+# which have no source in this layer; --frozen fails if the lockfile is stale rather than
+# silently re-resolving; --no-dev drops the dev group (pytest/ruff/ty); --package
+# slipstream-orchestration selects the orchestration member, pulling Prefect + boto3. The
+# cache mount persists uv's download cache across builds without landing in a layer, and
+# the bind mounts read the manifests without copying them into this layer.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-workspace --no-dev --extra orchestration
+    uv sync --frozen --no-install-workspace --no-dev --package slipstream-orchestration
 
-# Now the source, then install the project and its workspace members into the same venv.
-# packages/ carries slipstream-contract, which the root depends on via [tool.uv.sources];
-# --no-editable bakes both into site-packages so the runtime stage needs no source tree on disk.
+# Now the source, then install the orchestration member and its workspace dependency into the
+# same venv. packages/ carries both the orchestration member and the slipstream-contract kernel
+# it depends on via [tool.uv.sources]; --no-editable bakes them into site-packages so the runtime
+# stage needs no source tree on disk. Only orchestration's own dependency tree is installed, so
+# the image carries neither the executor nor the report member's plotting stack.
 COPY pyproject.toml uv.lock ./
-COPY src ./src
 COPY packages ./packages
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --extra orchestration
+    uv sync --frozen --no-dev --no-editable --package slipstream-orchestration
 
 # prefecthq/prefect 3.8.7-python3.11 — the base carries the worker runtime contract the
 # prefect-worker Helm chart's command and securityContext assume (tini as PID-1,
@@ -73,7 +75,7 @@ ADD --chmod=0755 \
     https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl \
     /usr/local/bin/kubectl
 
-# The venv built in the builder stage carries the .[orchestration] deps and the sweep flow code.
+# The venv built in the builder stage carries the orchestration member's deps and flow code.
 # Prepend its bin so the locked `prefect` and the package's console scripts resolve ahead of the
 # base image's own Prefect. The chart runs the container as an arbitrary uid; the venv is copied
 # world-readable (0755 dirs, 0644 files), so that uid can read and execute it without a chown.

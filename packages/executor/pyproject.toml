@@ -23,6 +23,6 @@ build-backend = "uv_build"
 
 # slipstream_bench.executor lives under the shared slipstream_bench namespace: the
 # slipstream_bench/ parent carries no __init__.py so it shares the namespace with the
-# root member's slipstream_bench.{report,sweep,orchestration} subpackages.
+# other members' slipstream_bench.{contract,report,orchestration} subpackages.
 [tool.uv.build-backend]
 module-name = "slipstream_bench.executor"
