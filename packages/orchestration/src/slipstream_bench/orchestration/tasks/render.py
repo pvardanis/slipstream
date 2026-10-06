@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from prefect import task
+from prefect.cache_policies import NO_CACHE
 
 from slipstream_bench.contract import SweepGrid, list_engine_points
 from slipstream_bench.orchestration.cell_objects import iter_point_cell_objects
@@ -161,7 +162,7 @@ def materialize_run(
         yield run_dir
 
 
-@task(name="render-result-tables")
+@task(name="render-result-tables", cache_policy=NO_CACHE)
 def render_result_tables(
     *,
     grid: SweepGrid,
@@ -180,6 +181,11 @@ def render_result_tables(
     it. A failure (materialize or publish) is isolated to this task — the sweep's cells are
     already persisted — and a re-run re-renders idempotently off S3. The task carries no retry
     budget, so recovery is a re-run, not an automatic Prefect retry.
+
+    Caching is off (``cache_policy=NO_CACHE``): the task takes live, unhashable handles — the
+    boto3 S3 client (an SSLContext) and the publish function — which the default inputs-hashing
+    policy cannot serialize into a key, so it would fail to hash on every run. The render is
+    terminal and idempotent off S3, so there is nothing to cache regardless.
 
     :param grid: the validated grid the run's points and cells are enumerated from.
     :param run_prefix: the knob sweep's shared run id the cells nest under.

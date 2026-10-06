@@ -17,11 +17,13 @@ from typing import Any
 import pytest
 import yaml
 from botocore.exceptions import ClientError
+from prefect.cache_policies import NO_CACHE
 
 from slipstream_bench.contract import SweepGrid
 from slipstream_bench.orchestration.tasks.render import (
     drive_render_tables,
     materialize_run,
+    render_result_tables,
 )
 from slipstream_bench.report.aggregation import aggregate_ceilings, aggregate_rungs
 from tests.orchestration.cell_object_fakes import ServingCellS3
@@ -74,6 +76,17 @@ class _MissingOneS3(ServingCellS3):
 
 def _grid() -> SweepGrid:
     return SweepGrid.model_validate(yaml.safe_load(_GRID))
+
+
+# --- render_result_tables: the terminal @task ---------------------------------------------
+
+
+def test_render_task_opts_out_of_caching() -> None:
+    # The task takes live, unhashable handles — the boto3 S3 client (an SSLContext) and the
+    # publish function — so the default inputs-hashing cache policy cannot compute a key and
+    # errors every run. The render is terminal and idempotent off S3 (no retry, a re-run
+    # re-renders), so it opts out of caching rather than hashing handles it must not cache.
+    assert render_result_tables.cache_policy is NO_CACHE
 
 
 # --- drive_render_tables: the transport-free render core ---------------------------------
