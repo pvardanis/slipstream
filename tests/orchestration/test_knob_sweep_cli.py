@@ -324,8 +324,8 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return object()
 
     def _fake_publish(*, key: str, markdown: str) -> None:
-        # The terminal render task publishes the ceiling and cliff tables through this;
-        # recorded so a test asserts both artifacts land off the flow's render wiring.
+        # The terminal render task publishes the ceiling and cliff tables and the two inline
+        # plots through this; recorded so a test asserts all four land off the render wiring.
         captures["artifacts"].append((key, markdown))
 
     def _fake_ssm(region: str) -> object:
@@ -427,12 +427,20 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
         in captures["s3"].keys
     )
-    # ...and published both tables to the parent run page, ceiling then cliff, after the
-    # config artifact the flow publishes before the loop — so a broken or dropped publish at
-    # the real render task's seam fails, not just a broken materialize.
-    assert [key for key, _ in captures["artifacts"]][-2:] == [
+    # ...and published the two tables then the two inline plots to the parent run page, tables
+    # first, after the config artifact the flow publishes before the loop — so a broken or
+    # dropped publish at the real render task's seam fails, not just a broken materialize.
+    assert [key for key, _ in captures["artifacts"]][-4:] == [
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
+        "knob-sweep-ceiling-plot",
+        "knob-sweep-goodput-cliff-plot",
+    ]
+    # Each plot's PNG uploaded to S3 as its durable copy, under the run's charts prefix — so
+    # the render's plot upload reached the flow-built client, not just the inline publish.
+    assert captures["s3"].uploads == [
+        ("sweeps/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
+        ("sweeps/run1/charts/goodput-by-max-concurrency.png", "image/png"),
     ]
 
 

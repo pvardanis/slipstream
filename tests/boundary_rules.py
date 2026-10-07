@@ -54,25 +54,19 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
     BoundaryRule(
         package="slipstream_bench.orchestration",
         # The orchestration worker drives the sweep from the control point on Prefect and
-        # boto3 and depends inward on the contract kernel alone (ADR-0017): never the
-        # report member's plotting stack. forbidden names the roots the subprocess probe
-        # blocks — pandas/seaborn/matplotlib catch a stray report import (its distinctive
-        # stack); orchestration imports none of them itself, so blocking them cannot break
-        # its own load. The executor's distinctive root (prometheus_client) cannot guard
-        # the no-orchestration->executor edge here: Prefect pulls prometheus_client
-        # transitively, so the orchestration image ships it and the probe must not block
-        # it. That edge is held instead by the lockfile and the image build — the executor
-        # is not an orchestration dependency, so --package orchestration never installs its
-        # source. orchestration shares the slipstream_bench namespace with its siblings, so
-        # that root cannot be forbidden; allowed holds the AST guard to the closed set
-        # orchestration legitimately imports — Prefect, boto3, and the contract kernel.
-        forbidden=frozenset(
-            {
-                "pandas",
-                "seaborn",
-                "matplotlib",
-            }
-        ),
+        # boto3, depending inward on the contract kernel and the report member (ADR-0017).
+        # The terminal render task calls report's plotters to draw the run's ceiling and
+        # cliff plots and embed them on the parent run page (ADR-0018), so orchestration
+        # pulls report's plotting stack (pandas/seaborn/matplotlib) through that one task —
+        # the worker image ships it for this reason. No root is forbidden: the executor's
+        # distinctive root (prometheus_client) cannot guard the no-orchestration->executor
+        # edge here, since Prefect pulls it transitively; that edge is held instead by the
+        # lockfile and the image build — the executor is not an orchestration dependency, so
+        # --package orchestration never installs its source. orchestration shares the
+        # slipstream_bench namespace with its siblings, so that root cannot be forbidden;
+        # allowed holds the AST guard to the closed set orchestration legitimately imports —
+        # Prefect, boto3, the report sibling, and the contract kernel.
+        forbidden=frozenset(),
         allowed=frozenset(sys.stdlib_module_names)
         | {
             "slipstream_bench",
