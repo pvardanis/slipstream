@@ -105,7 +105,7 @@ _CLIFF_PLOT_HEADING = "## goodput cliff — plot"
 
 # A one-line blurb under each heading, so an operator reading the run page knows what the table
 # answers without opening an ADR: the ceiling is the headline capacity per config, the cliff the
-# per-rung curve it was read off. Each plot reuses its table's blurb — it draws the same view.
+# per-rung curve it was read off.
 _CEILING_BLURB = (
     "The highest offered `--max-concurrency` each engine config held within the goodput "
     "SLO, one row per engine point and prefix-share."
@@ -113,6 +113,17 @@ _CEILING_BLURB = (
 _CLIFF_BLURB = (
     "The goodput fraction at every offered `--max-concurrency`, the per-rung curve each "
     "ceiling is read off (ADR-0009)."
+)
+
+# Each plot's own blurb reads the drawn shape — its facets, series, and axes — so an operator
+# knows how to read the chart under it, not just the table it mirrors.
+_CEILING_PLOT_BLURB = (
+    "Each facet a caching/prefix-share condition, a line per `kv_cache_dtype`: the "
+    "sustained `--max-concurrency` ceiling against `max_num_seqs`."
+)
+_CLIFF_PLOT_BLURB = (
+    "Each facet an engine point, a line per prefix-share: goodput fraction against "
+    "offered `--max-concurrency` (log-2), the 95% floor the dashed reference line."
 )
 
 
@@ -175,7 +186,7 @@ def drive_render(
         data=ceiling_png,
         s3_key=ceiling_object,
         heading=_CEILING_PLOT_HEADING,
-        blurb=_CEILING_BLURB,
+        blurb=_CEILING_PLOT_BLURB,
     )
     cliff_png = render_cliff_plot(rungs)
     cliff_object = store_plot(name=_CLIFF_PNG_NAME, data=cliff_png)
@@ -184,7 +195,7 @@ def drive_render(
         data=cliff_png,
         s3_key=cliff_object,
         heading=_CLIFF_PLOT_HEADING,
-        blurb=_CLIFF_BLURB,
+        blurb=_CLIFF_PLOT_BLURB,
     )
 
 
