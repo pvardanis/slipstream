@@ -5,7 +5,7 @@
 [dependency-groups]
 dev = [
     "pytest>=8",
-    "ruff>=0.16.7",
+    "ruff>=0.16.9",
     "ty==0.0.84",
     # The suite exercises every workspace member, so the dev env installs all four
     # editable. The members resolve from the workspace (not an index) via the sources
