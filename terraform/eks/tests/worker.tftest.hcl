@@ -127,6 +127,14 @@ run "worker_layer_shape" {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 2 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
     error_message = "The policy must allow s3:PutObject scoped to exactly the prefect/results and prefect/cache-keys prefixes."
   }
+  # The terminal render task uploads each plot's PNG under sweeps/<run>/charts/ as the run's
+  # durable copy (ADR-0018), so the worker needs PutObject on that charts prefix. It is a
+  # separate statement scoped to exactly the charts prefix, never the sibling cell-result
+  # JSONs the host writes under sweeps/<run>/<point>/.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker[0].policy).Statement : s if s.Sid == "ChartObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/sweeps/*/charts/*")]) == 1
+    error_message = "The policy must allow s3:PutObject on the sweeps/<run>/charts/ prefix for the render task's plot uploads."
+  }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
   # written as a bare string or appended to a statement's resource list.
   assert {

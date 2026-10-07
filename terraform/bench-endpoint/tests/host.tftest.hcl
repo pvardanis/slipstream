@@ -273,11 +273,21 @@ run "bench_host_invariants" {
     error_message = "Bench host must attach the SSM managed instance core policy for keyless access."
   }
 
-  # The results bucket blocks all public access; it holds measurement JSON, not
-  # anything meant to be reachable from the internet.
+  # The results bucket keeps ACLs blocked but allows a bucket policy to open one prefix:
+  # the render task serves its chart PNGs as public image artifacts (ADR-0018 Amendment),
+  # so the two *policy* flags are off while the two ACL flags stay on. Access comes from the
+  # scoped bucket policy below, never object ACLs.
   assert {
-    condition     = aws_s3_bucket_public_access_block.results.block_public_acls && aws_s3_bucket_public_access_block.results.block_public_policy && aws_s3_bucket_public_access_block.results.ignore_public_acls && aws_s3_bucket_public_access_block.results.restrict_public_buckets
-    error_message = "Results bucket must block all public access."
+    condition     = aws_s3_bucket_public_access_block.results.block_public_acls && aws_s3_bucket_public_access_block.results.ignore_public_acls && !aws_s3_bucket_public_access_block.results.block_public_policy && !aws_s3_bucket_public_access_block.results.restrict_public_buckets
+    error_message = "Results bucket must block public ACLs but allow a scoped public bucket policy for the chart prefix."
+  }
+
+  # The only public grant is anonymous s3:GetObject on exactly the sweeps/<run>/charts/
+  # prefix — the chart PNGs the image artifacts link to. It must never widen to the bare
+  # bucket or the sibling cell-result JSONs under sweeps/<run>/<point>/.
+  assert {
+    condition     = length(jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement) == 1 && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Effect == "Allow" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Principal == "*" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Action == "s3:GetObject" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Resource == "${aws_s3_bucket.results.arn}/sweeps/*/charts/*"
+    error_message = "Results bucket policy must grant anonymous s3:GetObject on exactly the sweeps/*/charts/* prefix, nothing wider."
   }
 
   # The results bucket is force-destroyed so bench-endpoint-down removes it (and the
