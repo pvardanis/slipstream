@@ -31,6 +31,7 @@ exercises the report member's plotting path and the worker image's matplotlib st
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,49 @@ PlotStore = Callable[..., str]
 # prefect-free; in production the task binds :func:`publish_image_plot`.
 PlotPublisher = Callable[..., None]
 
+
+@dataclass(frozen=True, kw_only=True)
+class RunFold:
+    """The collaborators that open the materialized run and fold it into ceiling and rung rows.
+
+    The render's first stage: ``materialize`` opens the run directory as a context manager so
+    the downloaded cells live only for the fold, and the two aggregators read that live
+    directory into the ceiling and per-rung rows the later stages publish.
+    """
+
+    materialize: Materialize
+    aggregate_ceilings: CeilingAggregator
+    aggregate_rungs: RungAggregator
+
+
+@dataclass(frozen=True, kw_only=True)
+class TablePublish:
+    """The collaborators that render the folded rows into the two markdown table artifacts.
+
+    The render's table stage: the two pure renderers turn the ceiling and rung rows into
+    markdown bodies, and ``publish`` emits each as its own keyed markdown artifact.
+    """
+
+    render_ceiling: CeilingRenderer
+    render_cliff: RungRenderer
+    publish: ArtifactPublisher
+
+
+@dataclass(frozen=True, kw_only=True)
+class PlotPublish:
+    """The collaborators that draw each plot, upload it to S3, and publish it inline.
+
+    The render's plot stage: the two plotters draw the same folded rows to PNG bytes,
+    ``store`` uploads each as the run's durable copy and returns its S3 key, and ``publish``
+    embeds it as an inline image artifact pointing at that key's public URL.
+    """
+
+    render_ceiling: CeilingPlotter
+    render_cliff: RungPlotter
+    store: PlotStore
+    publish: PlotPublisher
+
+
 # Keyed so Prefect keeps a cross-run history/timeline of each table artifact.
 _CEILING_ARTIFACT_KEY = "knob-sweep-ceiling-table"
 _CLIFF_ARTIFACT_KEY = "knob-sweep-goodput-cliff"
@@ -128,16 +172,9 @@ _CLIFF_PLOT_BLURB = (
 
 def drive_render(
     *,
-    materialize: Materialize,
-    aggregate_ceilings: CeilingAggregator,
-    aggregate_rungs: RungAggregator,
-    render_ceiling_table: CeilingRenderer,
-    render_cliff_table: RungRenderer,
-    publish: ArtifactPublisher,
-    render_ceiling_plot: CeilingPlotter,
-    render_cliff_plot: RungPlotter,
-    store_plot: PlotStore,
-    publish_plot: PlotPublisher,
+    fold: RunFold,
+    tables: TablePublish,
+    plots: PlotPublish,
 ) -> None:
     """Fold the materialized run and publish its ceiling and cliff tables and plots as artifacts.
 
@@ -151,44 +188,36 @@ def drive_render(
     sequential, not atomic: a later failure can leave the earlier artifacts published and the
     rest absent, but the artifacts are keyed, so a re-run overwrites and restores the set.
 
-    :param materialize: opens the run directory the aggregators fold, as a context manager
-        so the downloaded cells are released once both folds are read.
-    :param aggregate_ceilings: folds the run directory into ceiling rows, one per
-        point-and-share.
-    :param aggregate_rungs: unfolds the run directory into per-rung rows, the goodput cliff.
-    :param render_ceiling_table: renders the ceiling rows as a markdown table body.
-    :param render_cliff_table: renders the rung rows as a markdown table body.
-    :param publish: the markdown-artifact publisher (create_markdown_artifact in production),
-        called with ``key`` and ``markdown`` per table.
-    :param render_ceiling_plot: draws the ceiling rows straight to PNG bytes.
-    :param render_cliff_plot: draws the rung rows straight to PNG bytes.
-    :param store_plot: uploads a plot's PNG as the run's durable copy, called with ``name`` and
-        ``data`` and returning the S3 object key.
-    :param publish_plot: publishes a plot as an inline image artifact on the run page, called
-        with ``key``, the plot's ``s3_key``, and its ``heading`` and ``blurb``.
+    The collaborators are grouped by render stage: :class:`RunFold` opens and folds the run,
+    :class:`TablePublish` renders and publishes the two tables, and :class:`PlotPublish` draws,
+    uploads, and embeds the two plots.
+
+    :param fold: opens the run directory and folds it into ceiling and rung rows.
+    :param tables: renders the two folds as markdown tables and publishes each as an artifact.
+    :param plots: draws each fold to PNG, uploads it as the durable copy, and embeds it inline.
     """
-    with materialize() as run_dir:
-        ceilings = aggregate_ceilings(run_dir)
-        rungs = aggregate_rungs(run_dir)
-    publish(
+    with fold.materialize() as run_dir:
+        ceilings = fold.aggregate_ceilings(run_dir)
+        rungs = fold.aggregate_rungs(run_dir)
+    tables.publish(
         key=_CEILING_ARTIFACT_KEY,
-        markdown=f"{_CEILING_HEADING}\n\n{_CEILING_BLURB}\n\n{render_ceiling_table(ceilings)}\n",
+        markdown=f"{_CEILING_HEADING}\n\n{_CEILING_BLURB}\n\n{tables.render_ceiling(ceilings)}\n",
     )
-    publish(
+    tables.publish(
         key=_CLIFF_ARTIFACT_KEY,
-        markdown=f"{_CLIFF_HEADING}\n\n{_CLIFF_BLURB}\n\n{render_cliff_table(rungs)}\n",
+        markdown=f"{_CLIFF_HEADING}\n\n{_CLIFF_BLURB}\n\n{tables.render_cliff(rungs)}\n",
     )
-    ceiling_png = render_ceiling_plot(ceilings)
-    ceiling_object = store_plot(name=_CEILING_PNG_NAME, data=ceiling_png)
-    publish_plot(
+    ceiling_png = plots.render_ceiling(ceilings)
+    ceiling_object = plots.store(name=_CEILING_PNG_NAME, data=ceiling_png)
+    plots.publish(
         key=_CEILING_PLOT_KEY,
         s3_key=ceiling_object,
         heading=_CEILING_PLOT_HEADING,
         blurb=_CEILING_PLOT_BLURB,
     )
-    cliff_png = render_cliff_plot(rungs)
-    cliff_object = store_plot(name=_CLIFF_PNG_NAME, data=cliff_png)
-    publish_plot(
+    cliff_png = plots.render_cliff(rungs)
+    cliff_object = plots.store(name=_CLIFF_PNG_NAME, data=cliff_png)
+    plots.publish(
         key=_CLIFF_PLOT_KEY,
         s3_key=cliff_object,
         heading=_CLIFF_PLOT_HEADING,
@@ -342,28 +371,34 @@ def render_results(
     """
 
     drive_render(
-        materialize=partial(
-            materialize_run,
-            grid=grid,
-            run_prefix=run_prefix,
-            bucket=bucket,
-            s3_client=s3_client,
-            model=model,
+        fold=RunFold(
+            materialize=partial(
+                materialize_run,
+                grid=grid,
+                run_prefix=run_prefix,
+                bucket=bucket,
+                s3_client=s3_client,
+                model=model,
+            ),
+            aggregate_ceilings=aggregate_ceilings,
+            aggregate_rungs=aggregate_rungs,
         ),
-        aggregate_ceilings=aggregate_ceilings,
-        aggregate_rungs=aggregate_rungs,
-        render_ceiling_table=rows_to_markdown,
-        render_cliff_table=rungs_to_markdown,
-        publish=publish,
-        render_ceiling_plot=plot_ceilings_png,
-        render_cliff_plot=plot_cliffs_png,
-        store_plot=partial(
-            upload_plot, run_prefix=run_prefix, bucket=bucket, s3_client=s3_client
+        tables=TablePublish(
+            render_ceiling=rows_to_markdown,
+            render_cliff=rungs_to_markdown,
+            publish=publish,
         ),
-        publish_plot=partial(
-            publish_image_plot,
-            bucket=bucket,
-            region=region,
-            publish=publish_image,
+        plots=PlotPublish(
+            render_ceiling=plot_ceilings_png,
+            render_cliff=plot_cliffs_png,
+            store=partial(
+                upload_plot, run_prefix=run_prefix, bucket=bucket, s3_client=s3_client
+            ),
+            publish=partial(
+                publish_image_plot,
+                bucket=bucket,
+                region=region,
+                publish=publish_image,
+            ),
         ),
     )
