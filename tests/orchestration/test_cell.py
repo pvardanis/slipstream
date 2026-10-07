@@ -9,6 +9,7 @@ caching and re-attempt behaviour is exercised under Prefect's test harness.
 """
 
 import json
+import logging
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
@@ -26,6 +27,9 @@ _VALID = {
     "completed": 99,
     "request_goodput": 90.0,
     "request_throughput": 95.0,
+    "p95_ttft_ms": 850.0,
+    "p95_tpot_ms": 42.0,
+    "output_throughput": 1234.5,
     "errors": [""] * 99 + ["Timeout"],
 }
 _DEGENERATE = {
@@ -53,6 +57,20 @@ def _writer(
     return execute
 
 
+def _discard(**_: object) -> None:
+    """A publish stand-in for the runs that never reach the artifact."""
+
+
+def _collector() -> tuple[list[dict[str, object]], Callable[..., None]]:
+    """A publish stand-in that records each artifact call's kwargs for assertion."""
+    calls: list[dict[str, object]] = []
+
+    def publish(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    return calls, publish
+
+
 def _isolated_task(tmp_path: Path):
     """Build a task whose result and cache storage live under this test's tmp dir.
 
@@ -76,11 +94,65 @@ def test_run_cell_returns_the_pointer_on_a_valid_result(tmp_path: Path) -> None:
     calls: list[int] = []
 
     uri = run_cell(
-        _writer(path, _VALID, calls), result_path=path, result_uri="s3://b/cell.json"
+        _writer(path, _VALID, calls),
+        result_path=path,
+        result_uri="s3://b/cell.json",
+        publish=_discard,
     )
 
     assert uri == "s3://b/cell.json"
     assert calls == [1]
+
+
+def test_run_cell_publishes_the_cell_metrics_artifact(tmp_path: Path) -> None:
+    # A valid cell publishes an unkeyed markdown artifact onto its own task run: the S3
+    # pointer and the four headline metrics (goodput, the two p95 SLO gates, the output
+    # token rate), so the sub-task reads its result without opening S3. Unkeyed so it
+    # lands in this task run's own Artifacts tab rather than a cross-run timeline.
+    path = tmp_path / "cell.json"
+    calls, publish = _collector()
+
+    run_cell(
+        _writer(path, _VALID, []),
+        result_path=path,
+        result_uri="s3://b/cell.json",
+        publish=publish,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["key"] is None
+    markdown = calls[0]["markdown"]
+    assert isinstance(markdown, str)
+    assert "s3://b/cell.json" in markdown
+    assert "0.947" in markdown  # goodput fraction: 90.0 / 95.0
+    assert "850" in markdown  # p95 ttft ms
+    assert "42" in markdown  # p95 tpot ms
+    assert "1234.5" in markdown  # output throughput
+
+
+def test_run_cell_survives_a_publish_failure(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The artifact is a UI convenience; the measurement is already durable in S3. A
+    # publish failure must not raise out of the task body — that would leave the cell
+    # uncached and force a re-run of the expensive GPU benchmark (ADR-0012). The pointer
+    # is returned and the failure is logged with the cell's pointer for context.
+    path = tmp_path / "cell.json"
+
+    def boom(**_: object) -> None:
+        raise RuntimeError("prefect API unreachable")
+
+    with caplog.at_level(logging.WARNING):
+        uri = run_cell(
+            _writer(path, _VALID, []),
+            result_path=path,
+            result_uri="s3://b/cell.json",
+            publish=boom,
+        )
+
+    assert uri == "s3://b/cell.json"
+    assert "s3://b/cell.json" in caplog.text
+    assert "prefect API unreachable" in caplog.text
 
 
 def test_run_cell_propagates_an_execution_failure(tmp_path: Path) -> None:
@@ -88,7 +160,12 @@ def test_run_cell_propagates_an_execution_failure(tmp_path: Path) -> None:
         raise RuntimeError("docker run exited 1")
 
     with pytest.raises(RuntimeError, match="docker run"):
-        run_cell(execute, result_path=tmp_path / "cell.json", result_uri="s3://b/c")
+        run_cell(
+            execute,
+            result_path=tmp_path / "cell.json",
+            result_uri="s3://b/c",
+            publish=_discard,
+        )
 
 
 def test_run_cell_raises_on_a_degenerate_result(tmp_path: Path) -> None:
@@ -96,7 +173,10 @@ def test_run_cell_raises_on_a_degenerate_result(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidCellError):
         run_cell(
-            _writer(path, _DEGENERATE, []), result_path=path, result_uri="s3://b/c"
+            _writer(path, _DEGENERATE, []),
+            result_path=path,
+            result_uri="s3://b/c",
+            publish=_discard,
         )
 
 
