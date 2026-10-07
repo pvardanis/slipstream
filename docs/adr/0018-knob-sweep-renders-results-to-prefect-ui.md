@@ -1,4 +1,4 @@
-<!-- ADR recording why the knob-sweep flow renders its grid-level result artifacts to the Prefect UI from a single terminal task that runs after the point loop: the two aggregators fold the whole run, so the ceiling and cliff views are cross-point and belong on the parent run page, not per subflow; the task is a @task (not inline like the config artifact) so a render failure retries idempotently off S3 without discarding the already-persisted cells; tables publish as durable markdown artifacts and plots as image artifacts via a presigned S3 URL (inline but expiring), with the PNG in S3 the durable copy. The cost baseline (report command) stays offline — the knob sweep does not run its arms. Depends on the report member of ADR-0017. -->
+<!-- ADR recording why the knob-sweep flow renders its grid-level result artifacts to the Prefect UI from a single terminal task that runs after the point loop: the two aggregators fold the whole run, so the ceiling and cliff views are cross-point and belong on the parent run page, not per subflow; the task is a @task (not inline like the config artifact) so a render failure retries idempotently off S3 without discarding the already-persisted cells; tables publish as durable markdown artifacts and plots as image artifacts; the 2026-10-07 amendment points those image artifacts at a public, non-expiring S3 URL off a scoped `sweeps/*/charts/*` bucket policy (superseding the presigned/data-URI plans that both rot in the UI). The cost baseline (report command) stays offline — the knob sweep does not run its arms. Depends on the report member of ADR-0017. -->
 
 # ADR-0018: The knob sweep renders grid-level result artifacts to the Prefect UI
 
@@ -115,20 +115,37 @@ only the four run-derived artifacts above go to the UI.
 - This ADR is prose only; the render task ships as a later ticket, after the ADR-0017 carve lands the
   `report` member it calls.
 
-## Amendment (2026-10-07): the plots ship as inline data-URI images, and orchestration's import boundary opens to the plotting stack
+## Amendment (2026-10-07): plots are durable image artifacts off a public charts prefix
 
-The plot ticket landed. Two changes to what the prose above anticipated:
+The original decision fed `create_image_artifact` a **presigned** S3 URL (inline but expiring), and
+the implementation first shipped the data-URI-in-markdown fallback the decision flagged to try. Both
+rot in the UI: the data-URI gives no click-to-zoom (it is an `<img>` inside a markdown blob), and a
+presigned URL minted by the in-cluster worker is capped at the worker's **STS session lifetime**
+(assumed-role temp creds, ~1h), not the SigV4 7-day maximum — so old run pages would 404 within the
+hour. Neither delivers a zoomable plot that survives.
 
-- **Data-URI first, not a presigned URL.** Each plot is embedded inline as a base64 data-URI in a
-  markdown artifact (`![plot](data:image/png;base64,…)`), so the plot renders on the run page with no
-  URL to expire — durable-inline, the thing the prose called "unverified, to be tried." The PNG still
-  uploads to S3 as the durable copy under `sweeps/<run>/charts/`. The presigned `create_image_artifact`
-  path stays the designated fallback if the Prefect UI will not render a data-URI; the render's
-  `publish_plot` seam swaps to it without touching the driver. (Verification against a live UI is
-  pending; swap the fallback if it fails.)
-- **Orchestration's import boundary opens to `pandas`/`seaborn`/`matplotlib`.** The #233 boundary rule
-  forbade orchestration from pulling the plotting stack; this render is the ADR-0018-sanctioned reason
-  orchestration imports `report`'s plotters, so those roots leave orchestration's `forbidden` set in
-  `tests/boundary_rules.py`. The AST guard's `allowed` set already permits the `slipstream_bench` root,
-  so the only guard lost is the one catching a *stray* report import — report is now a legitimate
-  orchestration dependency through this task.
+The plots now publish as `create_image_artifact` fed a **public, virtual-hosted S3 URL**
+(`https://<bucket>.s3.<region>.amazonaws.com/sweeps/<run>/charts/<name>.png`): inline, zoomable, and
+never expiring. The results bucket opens **exactly the `sweeps/*/charts/*` prefix** to anonymous
+`s3:GetObject` via a scoped `aws_s3_bucket_policy`; the sibling cell-result JSONs under
+`sweeps/<run>/<point>/` hold the measurements and stay private. On the bucket's
+`aws_s3_bucket_public_access_block`, the two ACL flags stay on (`block_public_acls`,
+`ignore_public_acls`) and the two policy flags go off (`block_public_policy`,
+`restrict_public_buckets`) so the scoped policy can attach and serve anonymous reads; the policy
+`depends_on` the access block so the flags flip before `PutBucketPolicy`. A tftest asserts the policy
+is a single anonymous `s3:GetObject` on exactly that prefix and no wider.
+
+The heading and blurb ride on the artifact's `description`, since an image artifact carries no
+markdown body. The image publisher is injected into `render_results` alongside the markdown one
+(`publish_image`), so the flow owns both Prefect bindings and the render core stays Prefect-free.
+
+### What this costs
+
+- The chart PNGs are **world-readable** (perf plots — throughput/latency and the swept engine knobs;
+  judged acceptable to expose for this single-operator harness). Keys are not listable
+  (`s3:ListBucket` is not granted), but treat them as public.
+- The results bucket loses the `block_public_policy`/`restrict_public_buckets` guard-rail that would
+  otherwise block a *future* careless policy on the same bucket from exposing the private cell JSONs.
+  The scoped policy + its tftest are the mitigation.
+- The S3 PNG is no longer merely a durable fallback behind an expiring preview — it **is** the object
+  the artifact serves. The durable markdown tables are unchanged.
