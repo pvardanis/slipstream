@@ -317,16 +317,21 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     test asserts the flow threads ``bucket``/``retries``/``region`` from its parameters into
     the transports rather than dropping or hardcoding them.
     """
-    captures: dict[str, Any] = {"task_args": {}, "artifacts": []}
+    captures: dict[str, Any] = {"task_args": {}, "artifacts": [], "images": []}
 
     def _fake_cell_task(bucket: str, *, retries: int = 0) -> object:
         captures["task_args"] = {"bucket": bucket, "retries": retries}
         return object()
 
     def _fake_publish(*, key: str, markdown: str) -> None:
-        # The terminal render task publishes the ceiling and cliff tables and the two inline
-        # plots through this; recorded so a test asserts all four land off the render wiring.
+        # The terminal render task publishes the ceiling and cliff tables through this; recorded
+        # so a test asserts both tables land off the render wiring.
         captures["artifacts"].append((key, markdown))
+
+    def _fake_publish_image(*, image_url: str, key: str, description: str) -> None:
+        # The render task publishes the two plots as image artifacts through this, each pointing
+        # at its public S3 URL; recorded so a test asserts both plots land off the render wiring.
+        captures["images"].append((key, image_url))
 
     def _fake_ssm(region: str) -> object:
         captures["ssm_region"] = region
@@ -346,6 +351,7 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(knob_sweep_module, "build_s3_client", _fake_s3)
     monkeypatch.setattr(knob_sweep_module, "cell_task", _fake_cell_task)
     monkeypatch.setattr(knob_sweep_module, "create_markdown_artifact", _fake_publish)
+    monkeypatch.setattr(knob_sweep_module, "create_image_artifact", _fake_publish_image)
     return captures
 
 
@@ -427,17 +433,34 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
         in captures["s3"].keys
     )
-    # ...and published the two tables then the two inline plots to the parent run page, tables
+    # ...and published the two tables as markdown artifacts to the parent run page, ceiling
     # first, after the config artifact the flow publishes before the loop — so a broken or
     # dropped publish at the real render task's seam fails, not just a broken materialize.
-    assert [key for key, _ in captures["artifacts"]][-4:] == [
+    assert [key for key, _ in captures["artifacts"]][-2:] == [
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
-        "knob-sweep-ceiling-plot",
-        "knob-sweep-goodput-cliff-plot",
+    ]
+    # ...and the two plots as image artifacts, each pointing at its public, virtual-hosted S3
+    # URL in the run's region — so a dropped image publish or a mis-built URL at the render
+    # seam fails (ADR-0018 Amendment).
+    assert captures["images"] == [
+        (
+            "knob-sweep-ceiling-plot",
+            (
+                "https://bench-bucket.s3.us-east-1.amazonaws.com/"
+                "sweeps/run1/charts/ceiling-by-max-num-seqs.png"
+            ),
+        ),
+        (
+            "knob-sweep-goodput-cliff-plot",
+            (
+                "https://bench-bucket.s3.us-east-1.amazonaws.com/"
+                "sweeps/run1/charts/goodput-by-max-concurrency.png"
+            ),
+        ),
     ]
     # Each plot's PNG uploaded to S3 as its durable copy, under the run's charts prefix — so
-    # the render's plot upload reached the flow-built client, not just the inline publish.
+    # the render's plot upload reached the flow-built client, the object the image URL points at.
     assert captures["s3"].uploads == [
         ("sweeps/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
         ("sweeps/run1/charts/goodput-by-max-concurrency.png", "image/png"),

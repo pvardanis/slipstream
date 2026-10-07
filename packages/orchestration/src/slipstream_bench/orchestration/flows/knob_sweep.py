@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from prefect import Task, flow
-from prefect.artifacts import create_markdown_artifact
+from prefect.artifacts import create_image_artifact, create_markdown_artifact
 from prefect.client.orchestration import get_client
 from prefect.runtime import flow_run
 
@@ -225,9 +225,11 @@ def knob_sweep_flow(
         grid=grid,
         run_prefix=run_id,
         bucket=bucket,
+        region=region,
         s3_client=s3_client,
         model=inputs.model,
         publish=create_markdown_artifact,
+        publish_image=create_image_artifact,
     )
     return pointers
 
