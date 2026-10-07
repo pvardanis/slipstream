@@ -59,7 +59,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
-from slipstream_bench.orchestration.tasks.render import render_result_tables
+from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -217,11 +217,11 @@ def knob_sweep_flow(
         has_pending_cells=has_pending_cells,
     )
     # The point loop has persisted every cell to S3; render the whole run's ceiling and
-    # goodput-cliff tables to this parent run page as a terminal task (ADR-0018). It folds
-    # the complete grid off S3 — a resumed sweep's cached points fold in too — so the render
-    # is isolated from the persisted cells: a publish or materialize failure fails only the
-    # render, and a re-run re-renders off S3 without re-running a cell (no automatic retry).
-    render_result_tables(
+    # goodput-cliff tables and plots to this parent run page as a terminal task (ADR-0018). It
+    # folds the complete grid off S3 — a resumed sweep's cached points fold in too — so the
+    # render is isolated from the persisted cells: a publish, materialize, or plot failure fails
+    # only the render, and a re-run re-renders off S3 without re-running a cell (no automatic retry).
+    render_results(
         grid=grid,
         run_prefix=run_id,
         bucket=bucket,

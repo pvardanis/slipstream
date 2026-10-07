@@ -14,6 +14,7 @@ Caching-off carries only its single share-0 baseline, so it holds one primary fa
 caching-on spans the swept shares: a ragged grid, no duplicated null cells.
 """
 
+import io
 from collections.abc import Hashable
 from pathlib import Path
 from typing import Any, TypedDict
@@ -114,6 +115,54 @@ def write_artifacts(
     _save_figure(_plot_ceilings(rows), paths["png"])
     _save_figure(_plot_cliffs(rungs), paths["rungs_png"])
     return paths
+
+
+def plot_ceilings_png(rows: list[CeilingRow]) -> bytes:
+    """Render the primary ceiling chart straight to PNG bytes.
+
+    The in-memory twin of the ``png`` :func:`write_artifacts` writes to disk: the render task
+    uploads the plot to S3 and embeds it inline on the run page, so it needs the chart as bytes,
+    not a file on a worker disk.
+
+    :param rows: the rows
+        :func:`slipstream_bench.report.aggregation.aggregate_ceilings` emitted.
+    :return: the chart encoded as PNG bytes.
+    :raise ValueError: when ``rows`` is empty — an empty run holds no ceiling to draw.
+    """
+    if not rows:
+        raise ValueError(
+            "cannot chart an empty ceiling table: the run aggregated no rows"
+        )
+    return _figure_png(_plot_ceilings(rows))
+
+
+def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
+    """Render the diagnostic goodput-cliff chart straight to PNG bytes.
+
+    The in-memory twin of the ``png`` :func:`write_artifacts` writes to disk, for the same
+    reason as :func:`plot_ceilings_png`: the render task uploads the plot to S3 and embeds it
+    inline on the run page, so it needs the chart as bytes, not a file on a worker disk.
+
+    :param rungs: the rows
+        :func:`slipstream_bench.report.aggregation.aggregate_rungs` emitted.
+    :return: the chart encoded as PNG bytes.
+    :raise ValueError: when ``rungs`` is empty — an empty run holds no cliff to draw.
+    """
+    if not rungs:
+        raise ValueError(
+            "cannot chart an empty cliff table: the run aggregated no rungs"
+        )
+    return _figure_png(_plot_cliffs(rungs))
+
+
+def _figure_png(grid: sns.FacetGrid) -> bytes:
+    """Encode a grid as PNG bytes and close its figure, freeing it even on an encode error."""
+    buffer = io.BytesIO()
+    try:
+        grid.savefig(buffer, format="png")
+    finally:
+        plt.close(grid.figure)
+    return buffer.getvalue()
 
 
 def _save_figure(grid: sns.FacetGrid, path: Path) -> None:

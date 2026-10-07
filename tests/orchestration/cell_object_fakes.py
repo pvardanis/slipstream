@@ -27,6 +27,14 @@ class ServingCellS3:
 
     def __init__(self) -> None:
         self.keys: list[str] = []
+        self.uploads: list[tuple[str, str]] = []
+
+    def put_object(
+        self, *, Bucket: str, Key: str, Body: bytes, ContentType: str
+    ) -> None:
+        # The render uploads each plot's PNG as its durable copy; record the (key, type) so a
+        # test can assert the uploads without a real bucket.
+        self.uploads.append((Key, ContentType))
 
     def download_file(self, _bucket: str, key: str, dest: str) -> None:
         self.keys.append(key)
