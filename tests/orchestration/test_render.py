@@ -282,8 +282,8 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
         ("ceiling-by-max-num-seqs.png", b"CEILING-PNG"),
         ("goodput-by-max-concurrency.png", b"CLIFF-PNG"),
     ]
-    # Each plot carries its own heading and the blurb its table answers, so an operator reads
-    # the drawn shape under the same framing as the numbers.
+    # Each plot carries its own heading and a blurb reading the drawn shape — its facets, series,
+    # and axes — so an operator knows how to read the chart, not just the table it mirrors.
     assert fakes.images == [
         (
             "knob-sweep-ceiling-plot",
@@ -291,8 +291,8 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
             "sweeps/run1/charts/ceiling-by-max-num-seqs.png",
             "## concurrency ceiling — plot",
             (
-                "The highest offered `--max-concurrency` each engine config held within the "
-                "goodput SLO, one row per engine point and prefix-share."
+                "Each facet a caching/prefix-share condition, a line per `kv_cache_dtype`: the "
+                "sustained `--max-concurrency` ceiling against `max_num_seqs`."
             ),
         ),
         (
@@ -301,8 +301,8 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
             "sweeps/run1/charts/goodput-by-max-concurrency.png",
             "## goodput cliff — plot",
             (
-                "The goodput fraction at every offered `--max-concurrency`, the per-rung curve "
-                "each ceiling is read off (ADR-0009)."
+                "Each facet an engine point, a line per prefix-share: goodput fraction against "
+                "offered `--max-concurrency` (log-2), the 95% floor the dashed reference line."
             ),
         ),
     ]
