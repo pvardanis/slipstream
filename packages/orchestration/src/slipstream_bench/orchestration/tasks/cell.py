@@ -2,24 +2,33 @@
 
 ADR-0012 (with its Amendment): the task wraps **one** cell — the grid loop lives in
 the orchestration layer, the container executes the single cell it is handed. The task
-runs the cell, gates the result through :func:`validate_cell`, and returns the cell's
-S3 pointer; an invalid result raises out of the task so Prefect never caches a failure
-and the next run re-attempts it. It is keyed ``digest:point-slug:cell-name`` via
-:func:`get_cell_cache_key`, with ``result_storage`` and cache ``key_storage`` pointed at S3
-so resume survives a server or laptop death.
+runs the cell, gates the result through :func:`validate_cell`, publishes the cell's
+pointer and four headline metrics as a markdown artifact onto its own run, and returns
+the cell's S3 pointer; an invalid result raises out of the task so Prefect never caches
+a failure and the next run re-attempts it. It is keyed ``digest:point-slug:cell-name``
+via :func:`get_cell_cache_key`, with ``result_storage`` and cache ``key_storage``
+pointed at S3 so resume survives a server or laptop death.
+
+The per-cell artifact is published from inside the task body, so it lands on the
+sub-task's own Artifacts tab (``create_markdown_artifact`` binds the artifact to the
+active run context, with no way to target another run's). A cache hit skips the body,
+so a reused cell draws no new artifact — the run that measured it already carries one.
 
 Each task is its own transaction (Prefect's default): callers **must not** wrap the
 sweep in an enclosing ``transaction()``, which would defer every write to flow end and
 forfeit per-cell resume.
 """
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from prefect import Task, task
+from prefect.artifacts import create_markdown_artifact
 from prefect.cache_policies import CachePolicy
 
+from slipstream_bench.contract import LoadCell, read_result
 from slipstream_bench.orchestration import storage
 from slipstream_bench.orchestration.cache_key import get_cell_cache_key
 from slipstream_bench.orchestration.validity import (
@@ -31,6 +40,16 @@ from slipstream_bench.orchestration.validity import (
 # raises on process failure. Stateless and single-op, so a typed Callable, not a
 # Protocol; the orchestration layer names the port and the caller adapts to it.
 CellExecution = Callable[[], None]
+
+# Publishes one markdown artifact onto the running task, injected so run_cell's core
+# stays Prefect-free and the publish path is covered against a fake. Production binds
+# ``prefect.artifacts.create_markdown_artifact``.
+ArtifactPublisher = Callable[..., Any]
+
+# The heading the per-cell artifact carries on its sub-task's Artifacts tab.
+_CELL_ARTIFACT_HEADING = "## cell result"
+
+_LOGGER = logging.getLogger(__name__)
 
 # The task-run name template Prefect fills from the task's ``point_slug`` and
 # ``cell_name`` call parameters, so a run reads its grid coordinate — tier1 point slug,
@@ -109,26 +128,80 @@ def run_cell(
     *,
     result_path: Path,
     result_uri: str,
+    publish: ArtifactPublisher,
     max_error_rate: float = DEFAULT_MAX_ERROR_RATE,
 ) -> str:
-    """Run one cell, gate its result, and return the cell's pointer.
+    """Run one cell, gate its result, publish its metrics, and return the cell's pointer.
 
     The Prefect-free core of the bench task: any raise here (an execution failure or
     an invalid result) leaves the task with no value to cache, so the cell re-attempts
-    on the next run.
+    on the next run. Once the result passes the gate, its pointer and four headline
+    metrics are published as an artifact onto the running task — so the sub-task reads
+    its own result in the Prefect UI without opening S3. The publish runs only on a
+    cache miss, the run that actually measures: a cache hit skips this body and reuses
+    the pointer, so no new artifact is drawn for a cell already measured.
 
     :param execute_func: runs the single cell, raising on process failure.
     :param result_path: where the executed cell wrote its result JSON, gated before
-        the pointer is returned.
+        the pointer is returned and re-read for the artifact's metrics.
     :param result_uri: the cell's S3 pointer, the task's return value and the single
         source of truth Prefect points at (never a competing copy of the numbers).
+    :param publish: the markdown-artifact publisher
+        (:func:`prefect.artifacts.create_markdown_artifact` in production), called with
+        ``key`` and ``markdown``.
     :param max_error_rate: the health threshold passed to :func:`validate_cell`.
     :return: ``result_uri`` once the result passes the validity gate.
     :raise InvalidCellError: when the produced result is not a measurement.
     """
     execute_func()
     validate_cell(result_path, max_error_rate=max_error_rate)
+    cell = LoadCell.from_record(read_result(result_path), result_path)
+    _publish_cell_artifact(publish, cell, result_uri)
     return result_uri
+
+
+def _publish_cell_artifact(
+    publish: ArtifactPublisher, cell: LoadCell, result_uri: str
+) -> None:
+    """Publish the cell's artifact best-effort: drawing it must not void the cell.
+
+    The measurement is already durable in S3 at ``result_uri`` and the artifact is a UI
+    convenience, so any failure in rendering or publishing it — a formatting slip or a
+    transient Prefect API error — is logged with the cell's pointer and swallowed rather
+    than raised. Raising would leave the task uncached and force a re-run of the expensive
+    GPU benchmark (ADR-0012). The validity gate's own raise stays fatal: an invalid result
+    *should* void the cache; a failed UI write should not. ``Exception`` is caught broadly
+    on purpose — nothing in drawing the artifact may outweigh a measured cell.
+    """
+    try:
+        publish(key=None, markdown=_cell_artifact_markdown(cell, result_uri))
+    except Exception:
+        _LOGGER.warning(
+            "failed to publish the cell artifact for %s; the measurement is safe in S3, "
+            "continuing",
+            result_uri,
+            exc_info=True,
+        )
+
+
+def _cell_artifact_markdown(cell: LoadCell, result_uri: str) -> str:
+    """Render one cell's pointer and its four headline metrics as an artifact body.
+
+    The S3 pointer is the single source of the numbers; the one-row table lifts the
+    goodput fraction, the two p95 SLO gates (ttft prefill-bound, tpot decode-bound),
+    and the output token rate onto the sub-task so the rung reads without opening S3.
+    The gates round to whole milliseconds and the rate to one decimal, mirroring the
+    aggregated tables (:mod:`slipstream_bench.report.chart`).
+    """
+    header = "| goodput_fraction | p95_ttft_ms | p95_tpot_ms | output_throughput |"
+    separator = "| --- | --- | --- | --- |"
+    row = (
+        f"| {cell.goodput_fraction:.3f} | {cell.p95_ttft_ms:.0f} "
+        f"| {cell.p95_tpot_ms:.0f} | {cell.output_throughput:.1f} |"
+    )
+    return (
+        f"{_CELL_ARTIFACT_HEADING}\n\n`{result_uri}`\n\n{header}\n{separator}\n{row}\n"
+    )
 
 
 def _bench_cell(
@@ -157,4 +230,9 @@ def _bench_cell(
     :return: ``result_uri`` once the result passes the validity gate.
     :raise InvalidCellError: when the produced result is not a measurement.
     """
-    return run_cell(execute_func, result_path=result_path, result_uri=result_uri)
+    return run_cell(
+        execute_func,
+        result_path=result_path,
+        result_uri=result_uri,
+        publish=create_markdown_artifact,
+    )

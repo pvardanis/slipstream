@@ -38,6 +38,9 @@ def _row(
     prefix_caching: bool = True,
     prefix_share: int = 50,
     ceiling: int | None = 32,
+    p95_ttft_ms: float | None = 850.0,
+    p95_tpot_ms: float | None = 42.0,
+    output_throughput: float | None = 1234.5,
     timeout: int = 0,
     other: int = 0,
 ) -> CeilingRow:
@@ -47,6 +50,9 @@ def _row(
         "prefix_caching": prefix_caching,
         "prefix_share": prefix_share,
         "ceiling": ceiling,
+        "p95_ttft_ms": p95_ttft_ms,
+        "p95_tpot_ms": p95_tpot_ms,
+        "output_throughput": output_throughput,
         "failures": {"timeout": timeout, "other": other, "oom": None},
         "num_preemptions": None,
     }
@@ -57,21 +63,26 @@ def test_markdown_header_and_separator_name_every_column() -> None:
     header, separator = rows_to_markdown([_row()]).splitlines()[:2]
     assert header == (
         "| max_num_seqs | kv_cache_dtype | prefix_caching | prefix_share | "
-        "ceiling | timeout | other | oom | num_preemptions |"
+        "ceiling | p95_ttft_ms | p95_tpot_ms | output_throughput | "
+        "timeout | other | oom | num_preemptions |"
     )
-    assert separator == "| " + " | ".join(["---"] * 9) + " |"
+    assert separator == "| " + " | ".join(["---"] * 12) + " |"
 
 
-def test_markdown_row_flattens_the_failure_cohorts_and_keys() -> None:
-    """A row renders its keys, ceiling, and the timeout/other/oom cohorts in order."""
+def test_markdown_row_flattens_the_gates_throughput_cohorts_and_keys() -> None:
+    """A row renders its keys, ceiling, the gates at the ceiling rung, its token rate,
+    then the timeout/other/oom cohorts in order."""
     body = rows_to_markdown([_row(ceiling=32, timeout=2, other=1)]).splitlines()[2]
-    assert body == "| 64 | fp8 | True | 50 | 32 | 2 | 1 |  |  |"
+    assert body == "| 64 | fp8 | True | 50 | 32 | 850 | 42 | 1234.5 | 2 | 1 |  |  |"
 
 
-def test_markdown_renders_a_missing_ceiling_as_a_blank_cell() -> None:
-    """A point that held no rung has no ceiling — a blank cell, not a zero rung."""
-    body = rows_to_markdown([_row(ceiling=None)]).splitlines()[2]
-    assert body.split(" | ")[4] == ""
+def test_markdown_renders_a_missing_ceiling_and_its_gates_as_blank_cells() -> None:
+    """A point that held no rung has no ceiling and no measurement at it — the ceiling
+    and the three gate/throughput cells are blank, not zero rungs."""
+    body = rows_to_markdown(
+        [_row(ceiling=None, p95_ttft_ms=None, p95_tpot_ms=None, output_throughput=None)]
+    ).splitlines()[2]
+    assert body.split(" | ")[4:8] == ["", "", "", ""]
 
 
 def test_markdown_writes_one_line_per_row_after_the_header_and_rule() -> None:
@@ -161,6 +172,9 @@ def _rung(
     prefix_share: int = 50,
     max_concurrency: int = 32,
     goodput_fraction: float = 0.98,
+    p95_ttft_ms: float = 850.0,
+    p95_tpot_ms: float = 42.0,
+    output_throughput: float = 1234.5,
 ) -> RungRow:
     return {
         "max_num_seqs": max_num_seqs,
@@ -169,6 +183,9 @@ def _rung(
         "prefix_share": prefix_share,
         "max_concurrency": max_concurrency,
         "goodput_fraction": goodput_fraction,
+        "p95_ttft_ms": p95_ttft_ms,
+        "p95_tpot_ms": p95_tpot_ms,
+        "output_throughput": output_throughput,
     }
 
 
@@ -177,15 +194,25 @@ def test_rungs_markdown_header_and_separator_name_every_column() -> None:
     header, separator = rungs_to_markdown([_rung()]).splitlines()[:2]
     assert header == (
         "| max_num_seqs | kv_cache_dtype | prefix_caching | prefix_share | "
-        "max_concurrency | goodput_fraction |"
+        "max_concurrency | goodput_fraction | p95_ttft_ms | p95_tpot_ms | "
+        "output_throughput |"
     )
-    assert separator == "| " + " | ".join(["---"] * 6) + " |"
+    assert separator == "| " + " | ".join(["---"] * 9) + " |"
 
 
 def test_rungs_markdown_renders_the_goodput_fraction_to_three_decimals() -> None:
     """The human view rounds the messy goodput/throughput ratio; the JSON keeps it."""
     body = rungs_to_markdown([_rung(goodput_fraction=0.937541)]).splitlines()[2]
-    assert body == "| 64 | fp8 | True | 50 | 32 | 0.938 |"
+    assert body == "| 64 | fp8 | True | 50 | 32 | 0.938 | 850 | 42 | 1234.5 |"
+
+
+def test_rungs_markdown_rounds_gates_to_whole_ms_and_throughput_to_a_decimal() -> None:
+    """The gates read in whole milliseconds (sub-ms noise is meaningless at SLO
+    scale); the token rate keeps one decimal."""
+    body = rungs_to_markdown(
+        [_rung(p95_ttft_ms=849.7, p95_tpot_ms=41.4, output_throughput=1234.56)]
+    ).splitlines()[2]
+    assert body == "| 64 | fp8 | True | 50 | 32 | 0.980 | 850 | 41 | 1234.6 |"
 
 
 def test_rungs_json_round_trips_the_full_precision_fraction() -> None:

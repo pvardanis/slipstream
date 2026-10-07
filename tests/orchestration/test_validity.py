@@ -28,6 +28,9 @@ _HEALTHY = {
     "completed": 98,
     "request_goodput": 90.0,
     "request_throughput": 95.0,
+    "p95_ttft_ms": 850.0,
+    "p95_tpot_ms": 42.0,
+    "output_throughput": 1234.5,
     "errors": [""] * 98 + ["Timeout"] * 2,
 }
 

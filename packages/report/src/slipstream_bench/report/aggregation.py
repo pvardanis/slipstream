@@ -33,7 +33,9 @@ class CeilingRow(TypedDict):
 
     ``ceiling`` is ``None`` for a point-and-share that held no passing rung, and
     ``num_preemptions`` ``None`` when the sweep took no /metrics snapshot — both
-    not-captured, never an invented zero (ADR-0009).
+    not-captured, never an invented zero (ADR-0009). The two p95 SLO gates and the
+    token rate are read at the ceiling rung itself — the measurement at the capacity
+    edge — and are ``None`` alongside a ``None`` ceiling, since no rung held to measure.
     """
 
     max_num_seqs: int
@@ -41,6 +43,9 @@ class CeilingRow(TypedDict):
     prefix_caching: bool
     prefix_share: int
     ceiling: int | None
+    p95_ttft_ms: float | None
+    p95_tpot_ms: float | None
+    output_throughput: float | None
     failures: FailureCohorts
     num_preemptions: int | None
 
@@ -49,7 +54,9 @@ class RungRow(TypedDict):
     """One unfolded row: a single ladder rung's goodput at its offered concurrency.
 
     The cliff before :class:`CeilingRow` folds each ladder to one number — the point
-    knobs, the rung's prefix-share and ``max_concurrency``, and its goodput fraction.
+    knobs, the rung's prefix-share and ``max_concurrency``, its goodput fraction, the
+    two p95 SLO gates the fraction folds (ttft prefill-bound, tpot decode-bound), and
+    its output token rate.
     """
 
     max_num_seqs: int
@@ -58,6 +65,9 @@ class RungRow(TypedDict):
     prefix_share: int
     max_concurrency: int
     goodput_fraction: float
+    p95_ttft_ms: float
+    p95_tpot_ms: float
+    output_throughput: float
 
 
 def read_cell(path: Path) -> LoadCell:
@@ -73,23 +83,21 @@ def read_cell(path: Path) -> LoadCell:
     return LoadCell.from_record(read_result(path), path)
 
 
-def get_ceiling(cells: list[LoadCell]) -> int | None:
-    """Return the highest offered concurrency whose goodput held at the SLO.
+def get_ceiling(cells: list[LoadCell]) -> LoadCell | None:
+    """Return the ceiling rung: the highest-concurrency cell whose goodput held.
 
     The ceiling is the highest ``--max-concurrency`` rung meeting the 95% goodput
     floor (ADR-0009). Taking the highest passing rung — not the last before the
-    first dip — keeps a single noisy rung from truncating the ceiling early.
+    first dip — keeps a single noisy rung from truncating the ceiling early. The
+    whole cell is returned, not just its cap, so the fold can read that rung's own
+    gates and token rate at the capacity edge without re-scanning the ladder.
 
     :param cells: the ladder rungs for one point-and-share group.
-    :return: the highest offered concurrency at or above the floor, or None when no
+    :return: the highest-concurrency cell at or above the floor, or None when no
         rung held (or none was measured) — never a zero that reads as a real rung.
     """
-    passing = [
-        cell.max_concurrency
-        for cell in cells
-        if cell.goodput_fraction >= _GOODPUT_FLOOR
-    ]
-    return max(passing) if passing else None
+    passing = [cell for cell in cells if cell.goodput_fraction >= _GOODPUT_FLOOR]
+    return max(passing, key=lambda cell: cell.max_concurrency) if passing else None
 
 
 def _get_point_dirs(run_dir: Path) -> list[tuple[EnginePoint, Path]]:
@@ -164,7 +172,8 @@ def _get_rungs_for_point(point: EnginePoint, subdir: Path) -> list[RungRow]:
 
 
 def _get_rung_row(point: EnginePoint, cell: LoadCell) -> RungRow:
-    """Build one per-rung row: the point knobs, the rung's share, cap, and goodput."""
+    """Build one per-rung row: the point knobs, the rung's share, cap, goodput, the
+    two p95 gates, and its output token rate."""
     return {
         "max_num_seqs": point.max_num_seqs,
         "kv_cache_dtype": point.kv_cache_dtype,
@@ -172,6 +181,9 @@ def _get_rung_row(point: EnginePoint, cell: LoadCell) -> RungRow:
         "prefix_share": cell.prefix_share,
         "max_concurrency": cell.max_concurrency,
         "goodput_fraction": cell.goodput_fraction,
+        "p95_ttft_ms": cell.p95_ttft_ms,
+        "p95_tpot_ms": cell.p95_tpot_ms,
+        "output_throughput": cell.output_throughput,
     }
 
 
@@ -182,13 +194,18 @@ def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> Cei
     ``oom`` and ``num_preemptions`` stay ``None``: oom needs the pod OOMKilled event
     and engine-log scrape, num_preemptions a /metrics snapshot — neither collected by
     the sweep recipe (ADR-0009), and an invented zero would read as measured-and-none.
+    The gates and token rate are the ceiling rung's own, or ``None`` when no rung held.
     """
+    ceiling_cell = get_ceiling(cells)
     return {
         "max_num_seqs": point.max_num_seqs,
         "kv_cache_dtype": point.kv_cache_dtype,
         "prefix_caching": point.prefix_caching,
         "prefix_share": share,
-        "ceiling": get_ceiling(cells),
+        "ceiling": ceiling_cell.max_concurrency if ceiling_cell else None,
+        "p95_ttft_ms": ceiling_cell.p95_ttft_ms if ceiling_cell else None,
+        "p95_tpot_ms": ceiling_cell.p95_tpot_ms if ceiling_cell else None,
+        "output_throughput": (ceiling_cell.output_throughput if ceiling_cell else None),
         "failures": {
             "timeout": sum(cell.failures["timeout"] for cell in cells),
             "other": sum(cell.failures["other"] for cell in cells),

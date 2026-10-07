@@ -202,12 +202,19 @@ class LoadCell:
 
     The two client knobs the ladder varies without a redeploy — the closed-loop
     ``--max-concurrency`` the rung offered and the prefix-share it ran — plus the
-    fraction of its completed requests that met the SLO and its failure cohorts.
+    fraction of its completed requests that met the SLO and its failure cohorts. The
+    two SLO gates the fraction folds, ``p95_ttft_ms`` (prefill-bound) and
+    ``p95_tpot_ms`` (decode-bound), travel alongside so a fallen rung says which gate
+    bit, and ``output_throughput`` (generated tokens per second) reads the rung's
+    capacity next to its pass fraction.
     """
 
     max_concurrency: int
     prefix_share: int
     goodput_fraction: float
+    p95_ttft_ms: float
+    p95_tpot_ms: float
+    output_throughput: float
     failures: FailureCohorts
 
     @classmethod
@@ -216,15 +223,25 @@ class LoadCell:
 
         :param record: the cell's parsed ``vllm bench serve --save-result`` record.
         :param source: the cell's result file, for the error message.
-        :return: the cell's offered concurrency, prefix-share, goodput fraction, and
-            failure cohorts.
+        :return: the cell's offered concurrency, prefix-share, goodput fraction, the
+            two p95 SLO gates, its output token rate, and failure cohorts.
         :raise SweepAggregationError: when the cell lacks its closed-loop cap or its
-            stamped prefix-share, or carries a bad goodput or errors field.
+            stamped prefix-share, carries a bad goodput, ttft, tpot, throughput, or
+            errors field.
         """
         return cls(
             max_concurrency=_require_int(record, source, "max_concurrency"),
             prefix_share=_require_int(record, source, "prefix_share"),
             goodput_fraction=goodput_fraction(record, source),
+            p95_ttft_ms=to_numeric_metric(
+                record, source, "p95_ttft_ms", error_cls=SweepAggregationError
+            ),
+            p95_tpot_ms=to_numeric_metric(
+                record, source, "p95_tpot_ms", error_cls=SweepAggregationError
+            ),
+            output_throughput=to_numeric_metric(
+                record, source, "output_throughput", error_cls=SweepAggregationError
+            ),
             failures=classify_failures(record, source),
         )
 

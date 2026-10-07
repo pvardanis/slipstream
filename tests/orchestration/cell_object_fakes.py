@@ -45,6 +45,9 @@ class ServingCellS3:
             "max_concurrency": int(match["cap"]),
             "request_goodput": 1.0,
             "request_throughput": 1.0,
+            "p95_ttft_ms": 850.0,
+            "p95_tpot_ms": 42.0,
+            "output_throughput": 1234.5,
             "errors": [""],
         }
         Path(dest).write_text(json.dumps(record), encoding="utf-8")
