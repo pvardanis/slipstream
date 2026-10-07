@@ -23,6 +23,9 @@ from prefect.cache_policies import NO_CACHE
 
 from slipstream_bench.contract import SweepGrid
 from slipstream_bench.orchestration.tasks.render import (
+    PlotPublish,
+    RunFold,
+    TablePublish,
     drive_render,
     materialize_run,
     publish_image_plot,
@@ -218,16 +221,22 @@ def _fakes(
 
 def _drive(fakes: _Fakes) -> None:
     drive_render(
-        materialize=fakes.materialize,
-        aggregate_ceilings=fakes.aggregate_ceilings,
-        aggregate_rungs=fakes.aggregate_rungs,
-        render_ceiling_table=fakes.render_ceiling_table,
-        render_cliff_table=fakes.render_cliff_table,
-        publish=fakes.publish,
-        render_ceiling_plot=fakes.render_ceiling_plot,
-        render_cliff_plot=fakes.render_cliff_plot,
-        store_plot=fakes.store_plot,
-        publish_plot=fakes.publish_plot,
+        fold=RunFold(
+            materialize=fakes.materialize,
+            aggregate_ceilings=fakes.aggregate_ceilings,
+            aggregate_rungs=fakes.aggregate_rungs,
+        ),
+        tables=TablePublish(
+            render_ceiling=fakes.render_ceiling_table,
+            render_cliff=fakes.render_cliff_table,
+            publish=fakes.publish,
+        ),
+        plots=PlotPublish(
+            render_ceiling=fakes.render_ceiling_plot,
+            render_cliff=fakes.render_cliff_plot,
+            store=fakes.store_plot,
+            publish=fakes.publish_plot,
+        ),
     )
 
 
