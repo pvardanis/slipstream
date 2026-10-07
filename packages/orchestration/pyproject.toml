@@ -9,7 +9,7 @@ version = "0.1.0"
 description = "The Prefect-driven knob sweep worker: drive a resumable two-tier engine-point sweep from the control point."
 requires-python = ">=3.11"
 dependencies = [
-    "boto3>=1.34",
+    "boto3>=1.43.106",
     "prefect>=3",
     "prefect-aws>=0.7.12",
     "pyyaml>=6",
