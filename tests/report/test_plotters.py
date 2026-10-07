@@ -84,7 +84,7 @@ def test_plot_cliffs_png_renders_a_png() -> None:
 
 
 def test_rendering_a_plot_leaves_no_open_figure() -> None:
-    # _figure_png closes each grid's figure after encoding, so a long-lived worker that renders
+    # _get_figure_png_bytes closes each grid's figure after encoding, so a long-lived worker that renders
     # every run does not leak a matplotlib figure per plot.
     plt.close("all")
 
