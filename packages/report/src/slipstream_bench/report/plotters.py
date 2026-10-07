@@ -136,7 +136,7 @@ def plot_ceilings_png(rows: list[CeilingRow]) -> bytes:
         raise ValueError(
             "cannot chart an empty ceiling table: the run aggregated no rows"
         )
-    return _figure_png(_plot_ceilings(rows))
+    return _get_figure_png_bytes(_plot_ceilings(rows))
 
 
 def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
@@ -155,10 +155,10 @@ def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
         raise ValueError(
             "cannot chart an empty cliff table: the run aggregated no rungs"
         )
-    return _figure_png(_plot_cliffs(rungs))
+    return _get_figure_png_bytes(_plot_cliffs(rungs))
 
 
-def _figure_png(grid: sns.FacetGrid) -> bytes:
+def _get_figure_png_bytes(grid: sns.FacetGrid) -> bytes:
     """Encode a grid as PNG bytes and close its figure, freeing it even on an encode error."""
     buffer = io.BytesIO()
     try:
@@ -354,7 +354,7 @@ def _annotate_cliff(grid: sns.FacetGrid, frame: pd.DataFrame, order: list[str]) 
     for point, ax in zip(order, grid.axes.flat, strict=False):
         facet = frame[frame["point"] == point]
         for _, share_rungs in facet.groupby("prefix_share"):
-            for record in _diagnostic_rungs(share_rungs.to_dict("records")):
+            for record in _get_diagnostic_rungs(share_rungs.to_dict("records")):
                 ax.annotate(
                     _rung_annotation(record),
                     (record["max_concurrency"], record["goodput_fraction"]),
@@ -364,7 +364,7 @@ def _annotate_cliff(grid: sns.FacetGrid, frame: pd.DataFrame, order: list[str]) 
                 )
 
 
-def _diagnostic_rungs(
+def _get_diagnostic_rungs(
     rungs: list[dict[Hashable, Any]],
 ) -> list[dict[Hashable, Any]]:
     """Pick the rungs worth labeling in one share line: the ceiling and the fallen rungs.
