@@ -11,7 +11,6 @@ serves each cell object: it downloads every point's cells into the per-point lay
 aggregators read, and a missing cell aborts the render rather than aggregating a partial run.
 """
 
-import base64
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +25,7 @@ from slipstream_bench.contract import SweepGrid
 from slipstream_bench.orchestration.tasks.render import (
     drive_render,
     materialize_run,
-    publish_data_uri_plot,
+    publish_image_plot,
     render_results,
     upload_plot,
 )
@@ -113,7 +112,7 @@ class _Fakes:
     publish_plot: Any
     published: list[tuple[str, str]]
     stored: list[tuple[str, bytes]]
-    images: list[tuple[str, bytes, str, str, str]]
+    images: list[tuple[str, str, str, str]]
 
 
 def _fakes(
@@ -194,13 +193,11 @@ def _fakes(
         stored.append((name, data))
         return f"sweeps/run1/charts/{name}"
 
-    images: list[tuple[str, bytes, str, str, str]] = []
+    images: list[tuple[str, str, str, str]] = []
 
-    def publish_plot(
-        *, key: str, data: bytes, s3_key: str, heading: str, blurb: str
-    ) -> None:
+    def publish_plot(*, key: str, s3_key: str, heading: str, blurb: str) -> None:
         events.append(f"publish-image:{key}")
-        images.append((key, data, s3_key, heading, blurb))
+        images.append((key, s3_key, heading, blurb))
 
     return _Fakes(
         materialize=materialize,
@@ -287,7 +284,6 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
     assert fakes.images == [
         (
             "knob-sweep-ceiling-plot",
-            b"CEILING-PNG",
             "sweeps/run1/charts/ceiling-by-max-num-seqs.png",
             "## concurrency ceiling — plot",
             (
@@ -297,7 +293,6 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
         ),
         (
             "knob-sweep-goodput-cliff-plot",
-            b"CLIFF-PNG",
             "sweeps/run1/charts/goodput-by-max-concurrency.png",
             "## goodput cliff — plot",
             (
@@ -528,34 +523,37 @@ def test_upload_plot_puts_the_png_under_the_runs_charts_prefix() -> None:
     ]
 
 
-# --- publish_data_uri_plot: the inline preview -------------------------------------------
+# --- publish_image_plot: the inline image artifact ---------------------------------------
 
 
-def test_publish_data_uri_plot_embeds_the_png_as_a_base64_data_uri() -> None:
-    published: list[tuple[str, str]] = []
+def test_publish_image_plot_points_an_image_artifact_at_the_public_s3_url() -> None:
+    calls: list[dict[str, str]] = []
 
-    def publish(*, key: str, markdown: str) -> None:
-        published.append((key, markdown))
+    def publish(*, image_url: str, key: str, description: str) -> None:
+        calls.append({"image_url": image_url, "key": key, "description": description})
 
-    publish_data_uri_plot(
+    publish_image_plot(
         key="knob-sweep-ceiling-plot",
-        data=b"CEILING-PNG",
         s3_key="sweeps/run1/charts/ceiling-by-max-num-seqs.png",
         heading="## concurrency ceiling — plot",
         blurb="The ceiling per engine config.",
+        bucket="slipstream-bench-endpoint-results-abc123",
+        region="eu-west-1",
         publish=publish,
     )
 
-    # The PNG is embedded inline as a base64 data-URI under the heading and blurb, so the plot
-    # renders on the run page with no URL to expire; the durable copy is the S3 object.
-    encoded = base64.b64encode(b"CEILING-PNG").decode("ascii")
-    assert published == [
-        (
-            "knob-sweep-ceiling-plot",
-            (
-                "## concurrency ceiling — plot\n\n"
-                "The ceiling per engine config.\n\n"
-                f"![concurrency ceiling — plot](data:image/png;base64,{encoded})\n"
+    # The plot publishes as an image artifact pointing at its public, virtual-hosted S3 URL, so
+    # the UI renders it inline and zoomable and the link never expires (the bucket's charts
+    # prefix is world-readable). The heading and blurb ride on the artifact's description.
+    assert calls == [
+        {
+            "image_url": (
+                "https://slipstream-bench-endpoint-results-abc123.s3.eu-west-1."
+                "amazonaws.com/sweeps/run1/charts/ceiling-by-max-num-seqs.png"
             ),
-        )
+            "key": "knob-sweep-ceiling-plot",
+            "description": (
+                "## concurrency ceiling — plot\n\nThe ceiling per engine config."
+            ),
+        }
     ]
