@@ -114,3 +114,21 @@ only the four run-derived artifacts above go to the UI.
   the durable markdown tables as the lasting record.
 - This ADR is prose only; the render task ships as a later ticket, after the ADR-0017 carve lands the
   `report` member it calls.
+
+## Amendment (2026-10-07): the plots ship as inline data-URI images, and orchestration's import boundary opens to the plotting stack
+
+The plot ticket landed. Two changes to what the prose above anticipated:
+
+- **Data-URI first, not a presigned URL.** Each plot is embedded inline as a base64 data-URI in a
+  markdown artifact (`![plot](data:image/png;base64,…)`), so the plot renders on the run page with no
+  URL to expire — durable-inline, the thing the prose called "unverified, to be tried." The PNG still
+  uploads to S3 as the durable copy under `sweeps/<run>/charts/`. The presigned `create_image_artifact`
+  path stays the designated fallback if the Prefect UI will not render a data-URI; the render's
+  `publish_plot` seam swaps to it without touching the driver. (Verification against a live UI is
+  pending; swap the fallback if it fails.)
+- **Orchestration's import boundary opens to `pandas`/`seaborn`/`matplotlib`.** The #233 boundary rule
+  forbade orchestration from pulling the plotting stack; this render is the ADR-0018-sanctioned reason
+  orchestration imports `report`'s plotters, so those roots leave orchestration's `forbidden` set in
+  `tests/boundary_rules.py`. The AST guard's `allowed` set already permits the `slipstream_bench` root,
+  so the only guard lost is the one catching a *stray* report import — report is now a legitimate
+  orchestration dependency through this task.
