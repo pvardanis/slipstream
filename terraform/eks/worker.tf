@@ -135,6 +135,15 @@ resource "aws_iam_role_policy" "prefect_worker" {
           "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/prefect/cache-keys/*",
         ]
       },
+      # The terminal render task uploads each plot's PNG under sweeps/<run>/charts/ as the
+      # run's durable copy (ADR-0018). PutObject is scoped to exactly that charts prefix,
+      # never the sibling cell-result JSONs the host writes under sweeps/<run>/<point>/.
+      {
+        Sid      = "ChartObjects"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/sweeps/*/charts/*"
+      },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;
       # the send is split so the document is unconditional and the instance target is
