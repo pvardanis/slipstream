@@ -441,16 +441,10 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         "knob-sweep-goodput-cliff",
     ]
     # ...and the two plots as image artifacts, each pointing at its public, virtual-hosted S3
-    # URL in the run's region — so a dropped image publish or a mis-built URL at the render
-    # seam fails (ADR-0018 Amendment).
+    # URL in the run's region — the cliff plot first, so a no-ceiling run keeps its diagnostic
+    # before the ceiling plot raises — so a dropped image publish or a mis-built URL at the
+    # render seam fails (ADR-0018 Amendment).
     assert captures["images"] == [
-        (
-            "knob-sweep-ceiling-plot",
-            (
-                "https://bench-bucket.s3.us-east-1.amazonaws.com/"
-                "sweeps/run1/charts/ceiling-by-max-num-seqs.png"
-            ),
-        ),
         (
             "knob-sweep-goodput-cliff-plot",
             (
@@ -458,12 +452,19 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
                 "sweeps/run1/charts/goodput-by-max-concurrency.png"
             ),
         ),
+        (
+            "knob-sweep-ceiling-plot",
+            (
+                "https://bench-bucket.s3.us-east-1.amazonaws.com/"
+                "sweeps/run1/charts/ceiling-by-max-num-seqs.png"
+            ),
+        ),
     ]
     # Each plot's PNG uploaded to S3 as its durable copy, under the run's charts prefix — so
     # the render's plot upload reached the flow-built client, the object the image URL points at.
     assert captures["s3"].uploads == [
-        ("sweeps/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
         ("sweeps/run1/charts/goodput-by-max-concurrency.png", "image/png"),
+        ("sweeps/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
     ]
 
 
