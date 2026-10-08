@@ -7,8 +7,9 @@ renderers turn the rows into markdown, the two plotters draw them to PNG bytes, 
 and plot is published as its own keyed artifact: the tables ceiling-then-cliff, the plots
 cliff-then-ceiling so a no-ceiling run still publishes its diagnostic cliff before the ceiling
 plot raises on the empty fold. A publish or upload failure propagates, so the render task fails
-loud and a re-run re-renders off S3. The S3 materialize collaborator (materialize_run) is exercised against a fake S3 that
-serves each cell object: it downloads every point's cells into the per-point layout the
+loud and a re-run re-renders off S3. The S3 materialize collaborator (materialize_run) is
+exercised against a fake S3 that serves each cell object: it downloads every point's cells
+into the per-point layout the
 aggregators read, and a missing cell aborts the render rather than aggregating a partial run.
 """
 
@@ -180,7 +181,11 @@ def _fakes(
         assert rows == [{"row": "ceiling"}]
         events.append("render-plot:ceiling")
         if ceiling_plot_raises:
-            raise RuntimeError("plot render failed")
+            # The real plot_ceilings_png raises ValueError on a no-ceiling run; match that
+            # type and message so this fake exercises the contract drive_render propagates.
+            raise ValueError(
+                "cannot chart an empty ceiling table: no point held a ceiling within the SLO"
+            )
         return b"CEILING-PNG"
 
     def render_cliff_plot(rows: list[dict[str, Any]]) -> bytes:
@@ -377,11 +382,12 @@ def test_a_ceiling_plot_render_failure_leaves_the_tables_and_cliff_plot_publishe
     events: list[str] = []
     fakes = _fakes(events, tmp_path, ceiling_plot_raises=True)
 
-    # The ceiling plot is the one that raises on a run that reached no ceiling. It draws last,
-    # after both tables and the whole cliff plot are already on the run page — so a no-ceiling
-    # run keeps its diagnostic cliff plot and the raise is isolated to the ceiling plot, which a
-    # re-render recovers off S3 once the run holds a ceiling.
-    with pytest.raises(RuntimeError, match="plot render failed"):
+    # In production the ceiling plotter raises on a no-ceiling run; the fake is forced to
+    # raise the same ValueError here. The ceiling plot draws last, after both tables and the
+    # whole cliff plot are already on the run page — so a no-ceiling run keeps its diagnostic
+    # cliff plot and the raise is isolated to the ceiling plot, which a re-render recovers off
+    # S3 once the run holds a ceiling.
+    with pytest.raises(ValueError, match="no point held a ceiling"):
         _drive(fakes)
 
     assert [key for key, _ in fakes.published] == [
