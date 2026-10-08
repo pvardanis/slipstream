@@ -60,6 +60,13 @@ resource "aws_lb" "bench_endpoint" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnets
 
+  # A sweep rung under deep concurrency leaves a request queued in vLLM with no
+  # response byte for longer than the 60s default, so the default idle timeout would
+  # sever the connection and the bench client would record a transport drop instead of
+  # a slow measurement. Hold the connection open past the bench client's per-request
+  # wait so the client, not the load balancer, bounds a request.
+  idle_timeout = 600
+
   tags = local.tags
 }
 
