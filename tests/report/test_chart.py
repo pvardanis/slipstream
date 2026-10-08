@@ -372,6 +372,22 @@ def test_write_artifacts_rejects_empty_rungs(tmp_path: Path) -> None:
     assert not (tmp_path / "charts").exists()
 
 
+def test_write_artifacts_keeps_the_cliff_plot_when_no_point_held_a_ceiling(
+    tmp_path: Path,
+) -> None:
+    """A run whose every point fell below the SLO holds no ceiling: the ceiling plot
+    raises, but the cliff diagnostic that shows why each point fell must still be on
+    disk. The cliff plot is drawn before the ceiling plot so a no-ceiling run keeps it,
+    matching the render task's publish order.
+    """
+    charts_dir = tmp_path / "charts"
+    rows = [_row(ceiling=None), _row(prefix_share=10, ceiling=None)]
+    with pytest.raises(ValueError, match="no point held a ceiling"):
+        write_artifacts(rows, _grid_rungs(), charts_dir)
+    assert (charts_dir / "goodput-by-max-concurrency.png").is_file()
+    assert not (charts_dir / "ceiling-by-max-num-seqs.png").exists()
+
+
 def test_plot_cliffs_refline_sits_at_the_aggregators_floor() -> None:
     """The crimson reference line tracks the aggregator's floor, not a copied number."""
     grid = _plot_cliffs(_grid_rungs())

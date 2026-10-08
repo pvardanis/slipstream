@@ -112,8 +112,9 @@ def test_plot_ceilings_png_renders_when_some_points_held_no_ceiling() -> None:
 
 def test_plot_ceilings_png_rejects_a_table_with_no_ceiling_anywhere() -> None:
     # When no point in the run held a ceiling, there is nothing to draw, so it raises
-    # rather than rendering a blank figure — the same guard the empty table trips.
-    with pytest.raises(ValueError, match="empty ceiling"):
+    # rather than rendering a blank figure — a sibling of the empty-table guard, naming
+    # the all-null cause. Match that message, not the shared prefix, to pin this branch.
+    with pytest.raises(ValueError, match="no point held a ceiling"):
         plot_ceilings_png([_row(ceiling=None), _row(prefix_share=10, ceiling=None)])
 
 
