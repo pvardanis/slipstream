@@ -14,11 +14,12 @@ on:
     inputs:
       instance_id:
         description: >-
-          Bench host instance id the sweep drives over SSM (the bench-endpoint stack's
-          bench_host_instance_id output). Required: a wrong id runs the sweep against
-          the wrong host, so it is not defaulted.
-        required: true
+          Bench host instance id the sweep drives over SSM. Leave blank to resolve it
+          from the running bench host's tags; set it only to override that (e.g. to
+          target a specific host when more than one is running).
+        required: false
         type: string
+        default: ""
       run_id:
         description: >-
           Run id to tag this sweep's results under in S3. Leave blank to generate a
@@ -87,9 +88,37 @@ jobs:
           : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
           aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
 
-      - name: Trigger the sweep over a transient port-forward
+      - name: Resolve the bench host instance id
+        id: host
         env:
           INSTANCE_ID: ${{ inputs.instance_id }}
+        run: |
+          set -euo pipefail
+          host_id="${INSTANCE_ID}"
+          if [[ -z "${host_id}" ]]; then
+            : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
+            # The bench-endpoint stack names its host ${cluster_name}-bench-endpoint-host
+            # and tags it Project=slipstream (terraform/bench-endpoint). One running host
+            # per live stack, so exactly one id is expected: zero means the stack is not
+            # up, and more than one is ambiguous — both fail loud rather than guess, and
+            # the input is the override for the ambiguous case.
+            resolved="$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=${EKS_CLUSTER_NAME}-bench-endpoint-host" \
+                        "Name=tag:Project,Values=slipstream" \
+                        "Name=instance-state-name,Values=running" \
+              --query 'Reservations[].Instances[].InstanceId' --output text)"
+            read -ra ids <<<"${resolved}"
+            case "${#ids[@]}" in
+              1) host_id="${ids[0]}" ;;
+              0) echo "::error::no running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host — is the stack up (just stack-up)?"; exit 1 ;;
+              *) echo "::error::multiple running bench hosts matched (${ids[*]}); set the instance_id input to disambiguate"; exit 1 ;;
+            esac
+          fi
+          echo "instance_id=${host_id}" >>"${GITHUB_OUTPUT}"
+
+      - name: Trigger the sweep over a transient port-forward
+        env:
+          INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
           RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
