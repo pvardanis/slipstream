@@ -101,6 +101,22 @@ def test_plot_ceilings_png_rejects_an_empty_table() -> None:
         plot_ceilings_png([])
 
 
+def test_plot_ceilings_png_renders_when_some_points_held_no_ceiling() -> None:
+    # A point whose every rung fell below the SLO carries a null ceiling: it plots as a
+    # gap, not a zero. The chart still renders off the points that did hold a ceiling —
+    # a null-ceiling row must not drop the whole y-column and crash the render.
+    png = plot_ceilings_png([_row(ceiling=32), _row(prefix_share=10, ceiling=None)])
+
+    assert png.startswith(_PNG_MAGIC)
+
+
+def test_plot_ceilings_png_rejects_a_table_with_no_ceiling_anywhere() -> None:
+    # When no point in the run held a ceiling, there is nothing to draw, so it raises
+    # rather than rendering a blank figure — the same guard the empty table trips.
+    with pytest.raises(ValueError, match="empty ceiling"):
+        plot_ceilings_png([_row(ceiling=None), _row(prefix_share=10, ceiling=None)])
+
+
 def test_plot_cliffs_png_rejects_an_empty_table() -> None:
     with pytest.raises(ValueError, match="empty cliff"):
         plot_cliffs_png([])
