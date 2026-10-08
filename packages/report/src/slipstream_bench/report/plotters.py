@@ -76,8 +76,10 @@ def write_artifacts(
 
     The Markdown and JSON are the durable data artifacts; the PNGs are the disposable
     view of them. The primary chart plots the ceiling per point, the diagnostic the
-    goodput cliff each ceiling was read off. The directory is created on the way out,
-    so the run directory need not pre-hold it.
+    goodput cliff each ceiling was read off. The cliff plot is drawn before the ceiling
+    plot so a run that held no ceiling anywhere — every point fell below the SLO — keeps
+    the cliff diagnostic on disk before the ceiling plot raises on its empty table. The
+    directory is created on the way out, so the run directory need not pre-hold it.
 
     :param rows: the rows :func:`slipstream_bench.report.aggregation.aggregate_ceilings`
         emitted.
@@ -90,7 +92,9 @@ def write_artifacts(
     :raise ValueError: when ``rows`` or ``rungs`` is empty — an empty run holds neither a
         ceiling nor a cliff and must not be written as a header-only table and a blank
         plot. The two are non-empty together for a run aggregated off one directory, but
-        the parameters are independent, so each is guarded.
+        the parameters are independent, so each is guarded. Also when no row held a
+        ceiling (every point fell below the SLO): the tables and cliff plot are written,
+        then the ceiling plot raises on its empty table.
     :raise OSError: when the directory cannot be made or an artifact cannot be written.
     """
     if not rows:
@@ -115,8 +119,8 @@ def write_artifacts(
     paths["json"].write_text(rows_to_json(rows))
     paths["rungs_markdown"].write_text(rungs_to_markdown(rungs))
     paths["rungs_json"].write_text(rungs_to_json(rungs))
-    _save_figure(_plot_ceilings(rows), paths["png"])
     _save_figure(_plot_cliffs(rungs), paths["rungs_png"])
+    _save_figure(_plot_ceilings(rows), paths["png"])
     return paths
 
 
@@ -243,7 +247,8 @@ def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
     A point whose every rung fell below the SLO carries a null ceiling, kept as a gap in
     its line rather than a zero. When no point in the run held a ceiling at all the whole
     y-column is null, which seaborn reads as an absent column — there is nothing to draw,
-    so this raises the same empty-ceiling guard an empty table trips.
+    so this raises a sibling empty-ceiling-table error to the one an empty row list trips,
+    naming the all-null cause rather than the no-rows one.
 
     :param rows: the aggregated ceiling rows.
     :return: the seaborn FacetGrid, ready to save — the caller closes its figure.
