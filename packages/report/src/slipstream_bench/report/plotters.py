@@ -240,10 +240,20 @@ def _condition_order(frame: pd.DataFrame) -> list[str]:
 def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
     """Draw the primary ceiling chart onto a faceted grid.
 
+    A point whose every rung fell below the SLO carries a null ceiling, kept as a gap in
+    its line rather than a zero. When no point in the run held a ceiling at all the whole
+    y-column is null, which seaborn reads as an absent column — there is nothing to draw,
+    so this raises the same empty-ceiling guard an empty table trips.
+
     :param rows: the aggregated ceiling rows.
     :return: the seaborn FacetGrid, ready to save — the caller closes its figure.
+    :raise ValueError: when no row held a ceiling, so the chart would be blank.
     """
     frame = _ceiling_frame(rows)
+    if frame["ceiling"].isna().all():
+        raise ValueError(
+            "cannot chart an empty ceiling table: no point held a ceiling within the SLO"
+        )
     grid = sns.relplot(
         data=frame,
         kind="line",
