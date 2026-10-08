@@ -44,6 +44,16 @@ run "exposure_invariants" {
     error_message = "Must be an ALB: only the application load balancer terminates mutual TLS."
   }
 
+  # A sweep rung under deep concurrency leaves a request queued in vLLM with no
+  # response byte for far longer than the ALB's 60s default idle timeout, so the ALB
+  # would sever the connection and the bench client would read a transport drop
+  # instead of a slow measurement. The idle timeout must exceed the bench client's
+  # per-request wait so the client, not the load balancer, bounds a request.
+  assert {
+    condition     = aws_lb.bench_endpoint.idle_timeout == 600
+    error_message = "ALB idle timeout must be 600s so a queued sweep request is measured, not severed at the 60s default."
+  }
+
   # The HTTPS listener terminates mutual TLS in verify mode against a trust store.
   assert {
     condition     = aws_lb_listener.https.port == 443
