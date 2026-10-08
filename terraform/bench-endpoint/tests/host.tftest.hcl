@@ -358,6 +358,13 @@ run "bench_proxy_config" {
     condition     = strcontains(local.bench_proxy_conf, "worker_connections 4096")
     error_message = "Proxy must raise worker_connections above the 512 default so a max_concurrency 256 rung does not exhaust the connection pool."
   }
+  # nginx caps worker_connections at the worker's file-descriptor limit, so the 4096 cap
+  # is only real if the fd limit is raised to match; without this the cap silently reverts
+  # to the host's default ulimit.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "worker_rlimit_nofile 8192")
+    error_message = "Proxy must raise worker_rlimit_nofile above the worker_connections cap or nginx bounds connections at the host's default fd limit."
+  }
   # It forwards to the ALB DNS name on 443, terminating mutual TLS upstream.
   assert {
     condition     = strcontains(local.bench_proxy_conf, "proxy_pass ${aws_lb.bench_endpoint.dns_name}:443")
