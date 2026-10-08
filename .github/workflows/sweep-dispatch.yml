@@ -1,0 +1,135 @@
+# Manual CI trigger for the unattended knob sweep (ADR-0015 'CI later' arm, ADR-0012
+# 'CI/CD later'). A workflow_dispatch that fires `prefect deployment run` against the
+# self-hosted, no-public-endpoint Prefect server, so a sweep is kicked off from the
+# GitHub UI without a workstation's kubectl. It only triggers a run of an
+# already-registered deployment against an already-live stack — it does not stand the
+# cluster up (`just stack-up`) or register the deployment (`just prefect-register`),
+# which stay deliberate operator steps that bracket the GPU spend (ADR-0015). The run
+# itself executes in-cluster on the worker to completion; this workflow returns as soon
+# as the run is created (no --watch), the fire-and-forget the ADR calls for.
+name: sweep-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_id:
+        description: >-
+          Bench host instance id the sweep drives over SSM (the bench-endpoint stack's
+          bench_host_instance_id output). Required: a wrong id runs the sweep against
+          the wrong host, so it is not defaulted.
+        required: true
+        type: string
+      run_id:
+        description: >-
+          Run id to tag this sweep's results under in S3. Leave blank to generate a
+          UTC timestamp (the same default the manual `just bench` arm uses).
+        required: false
+        type: string
+        default: ""
+
+# Least privilege at the top: only read. The trigger job raises id-token for the OIDC
+# exchange itself, scoped to the one job that needs it.
+permissions:
+  contents: read
+
+# The sweep pool is concurrency 1 server-side, so a second run queues behind a live one
+# rather than preempting it. This guard only stops two dispatches racing the same
+# trigger; never cancel an in-flight trigger, so a dispatch mid-port-forward is not torn
+# down.
+concurrency:
+  group: sweep-dispatch
+  cancel-in-progress: false
+
+env:
+  # Region and cluster name come from repo variables set from the eks stack's `region`
+  # and `cluster_name` outputs (see README), so they track the infrastructure terraform
+  # created rather than restating its values here. The Prefect namespace comes from the
+  # eks stack's `prefect_namespace` output the same way.
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+  PREFECT_NAMESPACE: ${{ vars.PREFECT_NAMESPACE }}
+
+jobs:
+  trigger:
+    name: trigger the knob-sweep deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # OIDC needs a token to exchange for the dispatch role; checkout needs read. No
+    # other scope — the job creates a Prefect run, it does not write to the repo.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Run the Prefect CLI from the repo's lockfile so its version matches the prefect
+      # the worker image was built against — a client/server skew is the one failure a
+      # bare `pip install prefect` would invite.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Authenticate to AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_SWEEP_DISPATCH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Point kubectl at the cluster
+        run: |
+          set -euo pipefail
+          # Fail loud with a fix hint if a repo variable is unset/empty rather than
+          # letting an empty name reach the AWS API as a vague error.
+          : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the eks region output (see README)}"
+          : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
+          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+
+      - name: Trigger the sweep over a transient port-forward
+        env:
+          INSTANCE_ID: ${{ inputs.instance_id }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
+          # An empty run id means "generate one" — the same UTC-timestamp default the
+          # manual `just bench` arm uses, so a CI-triggered run is named like a local one.
+          sweep_run_id="${RUN_ID}"
+          if [[ -z "${sweep_run_id}" ]]; then
+            sweep_run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+          fi
+
+          # Reach the in-cluster API over a transient port-forward (no public endpoint,
+          # ADR-0015), reaped on exit so it never outlives the job. This mirrors
+          # bench/prefect-portforward.sh, which resolves the namespace from local
+          # terraform state the runner does not have — here it comes from the repo var.
+          kubectl -n "${PREFECT_NAMESPACE}" port-forward svc/prefect-server 4200:4200 \
+            >/tmp/prefect-pf.log 2>&1 &
+          pf=$!
+          trap 'kill "${pf}" 2>/dev/null || true' EXIT
+          export PREFECT_API_URL="http://127.0.0.1:4200/api"
+
+          # Wait for the forwarded API to answer, failing fast if the forward died
+          # rather than spinning to the deadline against a port nothing is serving.
+          deadline=$((SECONDS + 30))
+          until curl -sf "${PREFECT_API_URL}/health" >/dev/null 2>&1; do
+            if ! kill -0 "${pf}" 2>/dev/null; then
+              echo "::error::port-forward to svc/prefect-server exited; see the log below"
+              cat /tmp/prefect-pf.log >&2
+              exit 1
+            fi
+            ((SECONDS < deadline)) || {
+              echo "::error::Prefect API not reachable over port-forward within 30s — is the stack up (just stack-up)?"
+              exit 1
+            }
+            sleep 1
+          done
+
+          # Create the run and return; the worker picks it up and runs it to completion
+          # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). A missing
+          # deployment fails loud here — register it first with `just prefect-register`.
+          uv run prefect deployment run knob-sweep/knob-sweep \
+            --param "run_id=${sweep_run_id}" \
+            --param "instance_id=${INSTANCE_ID}"
