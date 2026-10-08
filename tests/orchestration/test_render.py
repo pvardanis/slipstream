@@ -4,9 +4,10 @@ Exercises the transport-free render core (drive_render) against injected fakes �
 Prefect server, no S3, no plotting stack — mirroring tests/orchestration/test_knob_sweep.py:
 the materialized run directory is folded by both aggregators while it is live, the two pure
 renderers turn the rows into markdown, the two plotters draw them to PNG bytes, and each table
-and plot is published as its own keyed artifact, tables-then-plots in ceiling-then-cliff order.
-A publish or upload failure propagates, so the render task fails loud and a re-run re-renders
-off S3. The S3 materialize collaborator (materialize_run) is exercised against a fake S3 that
+and plot is published as its own keyed artifact: the tables ceiling-then-cliff, the plots
+cliff-then-ceiling so a no-ceiling run still publishes its diagnostic cliff before the ceiling
+plot raises on the empty fold. A publish or upload failure propagates, so the render task fails
+loud and a re-run re-renders off S3. The S3 materialize collaborator (materialize_run) is exercised against a fake S3 that
 serves each cell object: it downloads every point's cells into the per-point layout the
 aggregators read, and a missing cell aborts the render rather than aggregating a partial run.
 """
@@ -135,7 +136,7 @@ def _fakes(
     is set. The two plot renderers return sentinel PNG bytes off the same rows, the ceiling
     plotter raising when ``ceiling_plot_raises`` is set; ``store_plot`` logs each plot name and
     returns its S3 object key, raising on every call when ``store_raises`` is set or only for
-    the plot named by ``store_raises_name`` (so a failure can be placed after the ceiling plot
+    the plot named by ``store_raises_name`` (so a failure can be placed after the cliff plot
     is already published); ``publish_plot`` logs each plot ``key`` it embeds inline. Each stands
     in for its Prefect or S3 counterpart so the core is exercised with no server, no bucket, and
     no plotting stack.
@@ -248,7 +249,10 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
 
     # Both aggregators fold the run inside the materialized context; after it is released the
     # two tables publish (ceiling first), then each plot is drawn off the same rows, uploaded
-    # to S3 as its durable copy, and embedded inline on the run page — ceiling plot first.
+    # to S3 as its durable copy, and embedded inline on the run page. The cliff plot draws
+    # first: it renders off any run that held a rung, so a run where no point reached a ceiling
+    # still publishes its diagnostic cliff before the ceiling plot — the plot that has nothing
+    # to draw on a no-ceiling run — is attempted.
     assert events == [
         "materialize:enter",
         "aggregate_ceilings",
@@ -256,12 +260,12 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
         "materialize:exit",
         "publish:knob-sweep-ceiling-table",
         "publish:knob-sweep-goodput-cliff",
-        "render-plot:ceiling",
-        "store:ceiling-by-max-num-seqs.png",
-        "publish-image:knob-sweep-ceiling-plot",
         "render-plot:cliff",
         "store:goodput-by-max-concurrency.png",
         "publish-image:knob-sweep-goodput-cliff-plot",
+        "render-plot:ceiling",
+        "store:ceiling-by-max-num-seqs.png",
+        "publish-image:knob-sweep-ceiling-plot",
     ]
     keys = [key for key, _ in fakes.published]
     assert keys == ["knob-sweep-ceiling-table", "knob-sweep-goodput-cliff"]
@@ -285,21 +289,12 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
     # Each plot's rendered bytes are uploaded as the durable copy and handed to the inline
     # publisher under its own S3 object key.
     assert fakes.stored == [
-        ("ceiling-by-max-num-seqs.png", b"CEILING-PNG"),
         ("goodput-by-max-concurrency.png", b"CLIFF-PNG"),
+        ("ceiling-by-max-num-seqs.png", b"CEILING-PNG"),
     ]
     # Each plot carries its own heading and a blurb reading the drawn shape — its facets, series,
     # and axes — so an operator knows how to read the chart, not just the table it mirrors.
     assert fakes.images == [
-        (
-            "knob-sweep-ceiling-plot",
-            "sweeps/run1/charts/ceiling-by-max-num-seqs.png",
-            "## concurrency ceiling — plot",
-            (
-                "Each facet a caching/prefix-share condition, a line per `kv_cache_dtype`: the "
-                "sustained `--max-concurrency` ceiling against `max_num_seqs`."
-            ),
-        ),
         (
             "knob-sweep-goodput-cliff-plot",
             "sweeps/run1/charts/goodput-by-max-concurrency.png",
@@ -307,6 +302,15 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
             (
                 "Each facet an engine point, a line per prefix-share: goodput fraction against "
                 "offered `--max-concurrency` (log-2), the 95% floor the dashed reference line."
+            ),
+        ),
+        (
+            "knob-sweep-ceiling-plot",
+            "sweeps/run1/charts/ceiling-by-max-num-seqs.png",
+            "## concurrency ceiling — plot",
+            (
+                "Each facet a caching/prefix-share condition, a line per `kv_cache_dtype`: the "
+                "sustained `--max-concurrency` ceiling against `max_num_seqs`."
             ),
         ),
     ]
@@ -332,7 +336,8 @@ def test_a_plot_upload_failure_leaves_the_tables_published(tmp_path: Path) -> No
 
     # A plot upload failure propagates and fails the render, but it lands after both tables
     # publish, so the #233 table artifacts are already on the run page — the plot failure is
-    # isolated to the plots, and a re-run re-renders the pair off S3.
+    # isolated to the plots, and a re-run re-renders the pair off S3. The cliff plot uploads
+    # first, so its store is the one that fails here.
     with pytest.raises(RuntimeError, match="s3 upload failed"):
         _drive(fakes)
 
@@ -340,16 +345,18 @@ def test_a_plot_upload_failure_leaves_the_tables_published(tmp_path: Path) -> No
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
     ]
-    assert events[-1] == "store:ceiling-by-max-num-seqs.png"
+    assert events[-1] == "store:goodput-by-max-concurrency.png"
     assert fakes.images == []
 
 
-def test_a_cliff_plot_failure_leaves_the_ceiling_plot_published(tmp_path: Path) -> None:
+def test_a_ceiling_plot_upload_failure_leaves_the_cliff_plot_published(
+    tmp_path: Path,
+) -> None:
     events: list[str] = []
-    fakes = _fakes(events, tmp_path, store_raises_name="goodput-by-max-concurrency.png")
+    fakes = _fakes(events, tmp_path, store_raises_name="ceiling-by-max-num-seqs.png")
 
-    # The publishes are sequential, not atomic: the cliff plot's upload fails only after the
-    # ceiling table, cliff table, and ceiling plot are already on the run page. The failure
+    # The publishes are sequential, not atomic: the ceiling plot's upload fails only after the
+    # ceiling table, cliff table, and cliff plot are already on the run page. The failure
     # propagates (the render fails loud), leaving that partial state behind — the exact run a
     # re-render recovers by overwriting the keyed artifacts off S3.
     with pytest.raises(RuntimeError, match="s3 upload failed"):
@@ -359,18 +366,21 @@ def test_a_cliff_plot_failure_leaves_the_ceiling_plot_published(tmp_path: Path) 
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
     ]
-    assert fakes.stored == [("ceiling-by-max-num-seqs.png", b"CEILING-PNG")]
-    assert [key for key, *_ in fakes.images] == ["knob-sweep-ceiling-plot"]
-    assert events[-1] == "store:goodput-by-max-concurrency.png"
+    assert fakes.stored == [("goodput-by-max-concurrency.png", b"CLIFF-PNG")]
+    assert [key for key, *_ in fakes.images] == ["knob-sweep-goodput-cliff-plot"]
+    assert events[-1] == "store:ceiling-by-max-num-seqs.png"
 
 
-def test_a_plot_render_failure_leaves_the_tables_published(tmp_path: Path) -> None:
+def test_a_ceiling_plot_render_failure_leaves_the_tables_and_cliff_plot_published(
+    tmp_path: Path,
+) -> None:
     events: list[str] = []
     fakes = _fakes(events, tmp_path, ceiling_plot_raises=True)
 
-    # A plot-render failure propagates like an upload failure, and lands after both tables
-    # publish, so the table artifacts are already on the run page and no plot is uploaded or
-    # embedded — the drawing failure is isolated to the plots.
+    # The ceiling plot is the one that raises on a run that reached no ceiling. It draws last,
+    # after both tables and the whole cliff plot are already on the run page — so a no-ceiling
+    # run keeps its diagnostic cliff plot and the raise is isolated to the ceiling plot, which a
+    # re-render recovers off S3 once the run holds a ceiling.
     with pytest.raises(RuntimeError, match="plot render failed"):
         _drive(fakes)
 
@@ -378,8 +388,8 @@ def test_a_plot_render_failure_leaves_the_tables_published(tmp_path: Path) -> No
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
     ]
-    assert fakes.stored == []
-    assert fakes.images == []
+    assert fakes.stored == [("goodput-by-max-concurrency.png", b"CLIFF-PNG")]
+    assert [key for key, *_ in fakes.images] == ["knob-sweep-goodput-cliff-plot"]
     assert events[-1] == "render-plot:ceiling"
 
 

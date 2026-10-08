@@ -182,11 +182,14 @@ def drive_render(
     aggregators while the directory is live, then — after the directory is released — publishes
     each fold as a markdown table (ceiling first) and then, off the same rows, draws each plot,
     uploads it to S3 as its durable copy, and publishes it as an inline image artifact on the run
-    page (ceiling plot first). The tables publish before the plots, so a plot or upload failure
-    leaves the tables on the run page. Any raise (a materialize, aggregate, publish, plot, or upload failure)
-    propagates, so the render task fails loud and a re-run re-renders off S3. The publishes are
-    sequential, not atomic: a later failure can leave the earlier artifacts published and the
-    rest absent, but the artifacts are keyed, so a re-run overwrites and restores the set.
+    page. The tables publish before the plots, so a plot or upload failure leaves the tables on
+    the run page. The cliff plot draws before the ceiling plot: the cliff renders off any run that
+    held a rung, while the ceiling plot has nothing to draw when no point reached a ceiling and
+    raises — so a no-ceiling run still publishes its diagnostic cliff plot before that raise. Any
+    raise (a materialize, aggregate, publish, plot, or upload failure) propagates, so the render
+    task fails loud and a re-run re-renders off S3. The publishes are sequential, not atomic: a
+    later failure can leave the earlier artifacts published and the rest absent, but the artifacts
+    are keyed, so a re-run overwrites and restores the set.
 
     The collaborators are grouped by render stage: :class:`RunFold` opens and folds the run,
     :class:`TablePublish` renders and publishes the two tables, and :class:`PlotPublish` draws,
@@ -207,14 +210,6 @@ def drive_render(
         key=_CLIFF_ARTIFACT_KEY,
         markdown=f"{_CLIFF_HEADING}\n\n{_CLIFF_BLURB}\n\n{tables.render_cliff(rungs)}\n",
     )
-    ceiling_png = plots.render_ceiling(ceilings)
-    ceiling_object = plots.store(name=_CEILING_PNG_NAME, data=ceiling_png)
-    plots.publish(
-        key=_CEILING_PLOT_KEY,
-        s3_key=ceiling_object,
-        heading=_CEILING_PLOT_HEADING,
-        blurb=_CEILING_PLOT_BLURB,
-    )
     cliff_png = plots.render_cliff(rungs)
     cliff_object = plots.store(name=_CLIFF_PNG_NAME, data=cliff_png)
     plots.publish(
@@ -222,6 +217,14 @@ def drive_render(
         s3_key=cliff_object,
         heading=_CLIFF_PLOT_HEADING,
         blurb=_CLIFF_PLOT_BLURB,
+    )
+    ceiling_png = plots.render_ceiling(ceilings)
+    ceiling_object = plots.store(name=_CEILING_PNG_NAME, data=ceiling_png)
+    plots.publish(
+        key=_CEILING_PLOT_KEY,
+        s3_key=ceiling_object,
+        heading=_CEILING_PLOT_HEADING,
+        blurb=_CEILING_PLOT_BLURB,
     )
 
 
