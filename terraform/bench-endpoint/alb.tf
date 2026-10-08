@@ -60,11 +60,12 @@ resource "aws_lb" "bench_endpoint" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnets
 
-  # A sweep rung under deep concurrency leaves a request queued in vLLM with no
-  # response byte for longer than the 60s default, so the default idle timeout would
-  # sever the connection and the bench client would record a transport drop instead of
-  # a slow measurement. Hold the connection open past the bench client's per-request
-  # wait so the client, not the load balancer, bounds a request.
+  # idle_timeout bounds a no-byte window, not total request duration. Under a saturated
+  # top rung a request sits queued in vLLM with no response byte while it waits for a
+  # decode slot, and that pre-first-token wait is the only zero-byte window — once tokens
+  # stream they reset the timer. The 60s default severs that wait and the bench client
+  # records a transport drop instead of a slow measurement; 600s covers the queue wait of
+  # the deepest rung with headroom.
   idle_timeout = 600
 
   tags = local.tags
