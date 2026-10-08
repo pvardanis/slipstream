@@ -351,6 +351,13 @@ run "bench_proxy_config" {
     condition     = strcontains(local.bench_proxy_conf, "stream {")
     error_message = "Proxy must be an L4 stream proxy so it does not buffer the token stream."
   }
+  # Each proxied request holds two connections (client to proxy, proxy to ALB), so the
+  # worker connection cap must sit well above twice the grid's top max_concurrency rung;
+  # the nginx 512 default caps the proxy at ~256 streams and the 256 rung exhausts it.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "worker_connections 4096")
+    error_message = "Proxy must raise worker_connections above the 512 default so a max_concurrency 256 rung does not exhaust the connection pool."
+  }
   # It forwards to the ALB DNS name on 443, terminating mutual TLS upstream.
   assert {
     condition     = strcontains(local.bench_proxy_conf, "proxy_pass ${aws_lb.bench_endpoint.dns_name}:443")
