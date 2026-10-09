@@ -13,6 +13,7 @@ into the per-point layout the
 aggregators read, and a missing cell aborts the render rather than aggregating a partial run.
 """
 
+import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -319,6 +320,24 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
             ),
         ),
     ]
+
+
+def test_drive_render_logs_a_start_and_a_published_milestone(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The terminal render task's two progress milestones an operator reads off its own task run
+    # page: a start line as the fold begins and a published line once both tables and plots are
+    # on the run page (ADR-0020). Without them the task shows no logs while it works.
+    fakes = _fakes([], tmp_path)
+
+    with caplog.at_level(
+        logging.INFO, logger="slipstream_bench.orchestration.tasks.render"
+    ):
+        _drive(fakes)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("render" in m and "starting" in m for m in messages)
+    assert any("render" in m and "published" in m for m in messages)
 
 
 def test_a_table_publish_failure_fails_the_render(tmp_path: Path) -> None:

@@ -109,8 +109,9 @@ def test_run_cell_logs_a_start_and_a_done_gate_milestone(
 ) -> None:
     # The cell's two progress milestones an operator reads off its task run page: a start
     # line as the ~minutes-long benchmark begins, and a done line carrying its SLO-gate
-    # result — the goodput fraction the run cleared the validity gate with (ADR-0020). A
-    # cache hit skips this body entirely, so a resumed cell draws neither line.
+    # result — the goodput fraction the run cleared the validity gate with and the output
+    # token rate it sustained, the four headline numbers that match its artifact table
+    # (ADR-0020). A cache hit skips this body entirely, so a resumed cell draws neither line.
     path = tmp_path / "cell.json"
 
     with caplog.at_level(
@@ -126,7 +127,8 @@ def test_run_cell_logs_a_start_and_a_done_gate_milestone(
     messages = [record.getMessage() for record in caplog.records]
     assert any("s3://b/cell.json" in m and "starting" in m for m in messages)
     assert any(
-        "s3://b/cell.json" in m and "done" in m and "0.947" in m for m in messages
+        "s3://b/cell.json" in m and "done" in m and "0.947" in m and "1234.5" in m
+        for m in messages
     )
 
 

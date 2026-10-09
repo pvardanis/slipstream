@@ -28,6 +28,7 @@ The pure table renderers (:mod:`slipstream_bench.report.chart`), the aggregators
 exercises the report member's plotting path and the worker image's matplotlib stack (ADR-0018).
 """
 
+import logging
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -49,6 +50,8 @@ from slipstream_bench.report.aggregation import (
 )
 from slipstream_bench.report.chart import rows_to_markdown, rungs_to_markdown
 from slipstream_bench.report.plotters import plot_ceilings_png, plot_cliffs_png
+
+_LOGGER = logging.getLogger(__name__)
 
 # The run directory a materialize collaborator opens for the fold: a context manager so the
 # downloaded cells live only for the aggregation and are released before the publish.
@@ -199,6 +202,9 @@ def drive_render(
     :param tables: renders the two folds as markdown tables and publishes each as an artifact.
     :param plots: draws each fold to PNG, uploads it as the durable copy, and embeds it inline.
     """
+    _LOGGER.info(
+        "render starting: folding the run into its ceiling and cliff tables and plots"
+    )
     with fold.materialize() as run_dir:
         ceilings = fold.aggregate_ceilings(run_dir)
         rungs = fold.aggregate_rungs(run_dir)
@@ -226,6 +232,7 @@ def drive_render(
         heading=_CEILING_PLOT_HEADING,
         blurb=_CEILING_PLOT_BLURB,
     )
+    _LOGGER.info("render published: ceiling and cliff tables and plots to the run page")
 
 
 @contextmanager
