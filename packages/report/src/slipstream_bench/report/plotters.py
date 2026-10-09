@@ -65,10 +65,9 @@ _CLIFF_TITLE = (
     "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)"
 )
 
-# matplotlib's tight_layout reserves no room for a figure suptitle, so on a multi-row
-# facet grid the title lands on the top row's facet titles. The cliff lays its axes out
-# within a rect that leaves this fixed-height band at the top for the title: a height in
-# inches, not a figure fraction, so the gap stays one title tall whatever the row count.
+# Height of the band _reserve_title_band leaves above the axes for a figure suptitle: a
+# height in inches, not a figure fraction, so the gap stays one title tall whatever the
+# row count.
 _SUPTITLE_BAND_INCHES = 0.6
 
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
@@ -187,6 +186,19 @@ def _save_figure(grid: sns.FacetGrid, path: Path) -> None:
         plt.close(grid.figure)
 
 
+def _reserve_title_band(grid: sns.FacetGrid, title: str) -> None:
+    """Lay a grid's axes out below a fixed-height band holding its suptitle.
+
+    matplotlib's tight_layout reserves no room for a figure suptitle, so on a multi-row
+    facet grid the title lands on the top row's facet titles. The axes lay out within a
+    rect that leaves the band at the top, and the title centres in it.
+    """
+    figure = grid.figure
+    top = 1 - _SUPTITLE_BAND_INCHES / figure.get_figheight()
+    grid.tight_layout(rect=(0, 0, 1, top))
+    figure.suptitle(title, y=(top + 1) / 2, va="center")
+
+
 class _ShareRow(TypedDict):
     """The caching/share pair a share label reads, shared by ceiling and rung rows."""
 
@@ -279,8 +291,7 @@ def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
     )
     grid.set_axis_labels("max-num-seqs", _CEILING_AXIS_LABEL)
     grid.set_titles("{col_name}")
-    grid.figure.suptitle(_SLO_TITLE)
-    grid.tight_layout()
+    _reserve_title_band(grid, _SLO_TITLE)
     return grid
 
 
@@ -341,8 +352,5 @@ def _plot_cliffs(rungs: list[RungRow]) -> sns.FacetGrid:
         ax.set_xscale("log", base=2)
     grid.set_axis_labels("--max-concurrency", _CLIFF_AXIS_LABEL)
     grid.set_titles("{col_name}")
-    figure = grid.figure
-    top = 1 - _SUPTITLE_BAND_INCHES / figure.get_figheight()
-    grid.tight_layout(rect=(0, 0, 1, top))
-    figure.suptitle(_CLIFF_TITLE, y=(top + 1) / 2, va="center")
+    _reserve_title_band(grid, _CLIFF_TITLE)
     return grid
