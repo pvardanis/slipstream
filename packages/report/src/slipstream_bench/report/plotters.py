@@ -65,6 +65,12 @@ _CLIFF_TITLE = (
     "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)"
 )
 
+# matplotlib's tight_layout reserves no room for a figure suptitle, so on a multi-row
+# facet grid the title lands on the top row's facet titles. The cliff lays its axes out
+# within a rect that leaves this fixed-height band at the top for the title: a height in
+# inches, not a figure fraction, so the gap stays one title tall whatever the row count.
+_SUPTITLE_BAND_INCHES = 0.6
+
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
 # a swept value — its own facet, ordered ahead of the swept shares.
 _NO_SHARE_LABEL = "n/a"
@@ -335,6 +341,8 @@ def _plot_cliffs(rungs: list[RungRow]) -> sns.FacetGrid:
         ax.set_xscale("log", base=2)
     grid.set_axis_labels("--max-concurrency", _CLIFF_AXIS_LABEL)
     grid.set_titles("{col_name}")
-    grid.figure.suptitle(_CLIFF_TITLE)
-    grid.tight_layout()
+    figure = grid.figure
+    top = 1 - _SUPTITLE_BAND_INCHES / figure.get_figheight()
+    grid.tight_layout(rect=(0, 0, 1, top))
+    figure.suptitle(_CLIFF_TITLE, y=(top + 1) / 2, va="center")
     return grid
