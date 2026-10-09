@@ -57,11 +57,12 @@ _SLO_TITLE = (
 # report.aggregation._GOODPUT_FLOOR itself (imported, not copied), so the line the cliff
 # crosses always marks the aggregator's true floor. The title's "0.95"/"floor" text and
 # the ttft/tpot thresholds stay hand-mirrored prose — the rung rows carry the goodput
-# fraction, not the SLO it was read at.
+# fraction, not the SLO it was read at. The per-rung gates and token rate read from the
+# goodput-cliff table and each cell's own artifact, not from the plot, so the facets stay
+# clean and the title holds one line.
 _CLIFF_AXIS_LABEL = "goodput fraction (met SLO / completed)"
 _CLIFF_TITLE = (
-    "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)\n"
-    "marker labels: ttft / tpot in ms, output rate in tokens/s"
+    "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)"
 )
 
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
@@ -296,9 +297,6 @@ def _cliff_frame(rungs: list[RungRow]) -> pd.DataFrame:
             "prefix_share": _share_label(rung),
             "max_concurrency": rung["max_concurrency"],
             "goodput_fraction": rung["goodput_fraction"],
-            "p95_ttft_ms": rung["p95_ttft_ms"],
-            "p95_tpot_ms": rung["p95_tpot_ms"],
-            "output_throughput": rung["output_throughput"],
         }
         for rung in rungs
     ]
@@ -335,64 +333,8 @@ def _plot_cliffs(rungs: list[RungRow]) -> sns.FacetGrid:
     grid.refline(y=_GOODPUT_FLOOR, color="crimson", linestyle="--")
     for ax in grid.axes.flat:
         ax.set_xscale("log", base=2)
-    _annotate_cliff(grid, frame, _point_order(frame))
     grid.set_axis_labels("--max-concurrency", _CLIFF_AXIS_LABEL)
     grid.set_titles("{col_name}")
     grid.figure.suptitle(_CLIFF_TITLE)
     grid.tight_layout()
     return grid
-
-
-def _rung_annotation(record: dict[Hashable, Any]) -> str:
-    """The per-marker label: the rung's two SLO gates and its token rate, three lines.
-
-    The units are named once in the cliff's chart title, so each marker carries only the
-    numbers — ttft and tpot in whole milliseconds, the output rate in whole tokens/s —
-    to keep a dense facet readable.
-    """
-    return (
-        f"ttft {record['p95_ttft_ms']:.0f}\n"
-        f"tpot {record['p95_tpot_ms']:.0f}\n"
-        f"{record['output_throughput']:.0f} t/s"
-    )
-
-
-def _annotate_cliff(grid: sns.FacetGrid, frame: pd.DataFrame, order: list[str]) -> None:
-    """Annotate each facet's diagnostic markers with their gates and token rate.
-
-    The facets draw in ``order``, so each axis is matched to its point's rows. Only the
-    rungs worth reading are labeled: within each share line, the ceiling rung (the highest
-    one still holding goodput) and every rung that fell below the floor. The passing rungs
-    below the ceiling read the same flat gates as the ceiling, so labeling them would wall
-    the facet in redundant numbers.
-    """
-    for point, ax in zip(order, grid.axes.flat, strict=False):
-        facet = frame[frame["point"] == point]
-        for _, share_rungs in facet.groupby("prefix_share"):
-            for record in _get_diagnostic_rungs(share_rungs.to_dict("records")):
-                ax.annotate(
-                    _rung_annotation(record),
-                    (record["max_concurrency"], record["goodput_fraction"]),
-                    textcoords="offset points",
-                    xytext=(4, 4),
-                    fontsize="xx-small",
-                )
-
-
-def _get_diagnostic_rungs(
-    rungs: list[dict[Hashable, Any]],
-) -> list[dict[Hashable, Any]]:
-    """Pick the rungs worth labeling in one share line: the ceiling and the fallen rungs.
-
-    The ceiling is the highest-concurrency rung still at or above the goodput floor — the
-    capacity edge whose gates matter — and the fallen rungs are those below the floor,
-    which carry the diagnostic of which gate (ttft prefill / tpot decode) bit on the fall.
-    The passing rungs below the ceiling are dropped as redundant.
-    """
-    passing = [r for r in rungs if r["goodput_fraction"] >= _GOODPUT_FLOOR]
-    ceiling_cc = max(r["max_concurrency"] for r in passing) if passing else None
-    return [
-        r
-        for r in rungs
-        if r["goodput_fraction"] < _GOODPUT_FLOOR or r["max_concurrency"] == ceiling_cc
-    ]
