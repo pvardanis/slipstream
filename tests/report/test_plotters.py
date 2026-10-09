@@ -17,10 +17,13 @@ from slipstream_bench.report.plotters import (
 )
 
 
+# grid is a seaborn FacetGrid, which ships no type stub, so the parameter is untyped.
 def _title_overlaps_facets(grid) -> bool:  # type: ignore[no-untyped-def]
     # Draw once so every text has a laid-out window extent, then test the figure
     # suptitle against each facet title: a real pixel overlap is the symptom a reserved
-    # title band removes, on a grid of any row count.
+    # title band removes, on a grid of any row count. get_suptitle() returns only the
+    # string, so reaching the Text artist for its window extent needs the private
+    # figure._suptitle: an undocumented attribute that an AttributeError here would point at.
     figure = grid.figure
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
@@ -152,15 +155,12 @@ def test_cliff_facets_carry_no_metric_annotations() -> None:
     labels = [text.get_text() for ax in grid.axes.flat for text in ax.texts]
     plt.close(grid.figure)
 
-    assert not any(
-        "ttft" in label or "tpot" in label or "t/s" in label for label in labels
-    )
+    assert labels == []
 
 
 def test_cliff_title_is_a_single_line() -> None:
     # The title names the run's fixed conditions on one line, so it does not wrap down
-    # over the top row of facet titles. The marker-label legend is gone with the
-    # annotations it described.
+    # over the top row of facet titles. The title carries no marker-label legend.
     grid = _plot_cliffs([_rung()])
     title = grid.figure.get_suptitle()
     plt.close(grid.figure)
