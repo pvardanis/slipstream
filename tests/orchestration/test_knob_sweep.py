@@ -18,6 +18,7 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     SweepOutcome,
     build_sweep_summary,
     drive_knob_sweep,
+    enable_milestone_logging,
 )
 
 _P1 = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
@@ -188,6 +189,24 @@ def test_each_point_logs_a_done_milestone_with_its_run_or_resume_split(
     messages = [record.getMessage() for record in caplog.records]
     assert any(_P2.slug() in m and "run" in m for m in messages)
     assert any(_P1.slug() in m and "resumed" in m for m in messages)
+
+
+def test_enable_milestone_logging_lifts_the_package_logger_to_info() -> None:
+    # PREFECT_LOGGING_EXTRA_LOGGERS attaches a handler to the slipstream_bench logger but sets
+    # no level, so the package inherits root's WARNING default and every INFO milestone the
+    # Prefect-free core emits is filtered before that handler sees it. The flow lifts the
+    # package logger to INFO at its composition root so the core's stdlib lines clear the
+    # threshold and reach the UI; starting from the real-world WARNING default pins that lift.
+    package = logging.getLogger("slipstream_bench")
+    original = package.level
+    package.setLevel(logging.WARNING)
+    try:
+        core_logger = logging.getLogger("slipstream_bench.orchestration.tasks.cell")
+        assert not core_logger.isEnabledFor(logging.INFO)
+        enable_milestone_logging()
+        assert core_logger.isEnabledFor(logging.INFO)
+    finally:
+        package.setLevel(original)
 
 
 def test_run_resume_counts_sum_each_points_cells_not_its_points() -> None:
