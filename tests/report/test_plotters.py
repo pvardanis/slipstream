@@ -11,6 +11,7 @@ import pytest
 
 from slipstream_bench.report.aggregation import CeilingRow, RungRow
 from slipstream_bench.report.plotters import (
+    _plot_ceilings,
     _plot_cliffs,
     plot_ceilings_png,
     plot_cliffs_png,
@@ -167,6 +168,19 @@ def test_cliff_title_is_a_single_line() -> None:
 
     assert "\n" not in title
     assert "marker labels" not in title
+
+
+def test_ceiling_title_clears_the_facets_on_a_multi_row_grid() -> None:
+    # The ceiling plot reserves the same title band as the cliff: on a grid wide enough
+    # to wrap into five rows (one facet per caching/share condition) the suptitle would
+    # otherwise land on the top row's facet titles. Twenty distinct shares → twenty
+    # condition facets → five rows at col_wrap=4.
+    rows = [_row(prefix_share=share, ceiling=32) for share in range(1, 21)]
+    grid = _plot_ceilings(rows)
+    overlaps = _title_overlaps_facets(grid)
+    plt.close(grid.figure)
+
+    assert not overlaps
 
 
 def test_cliff_title_clears_the_facets_on_a_multi_row_grid() -> None:
