@@ -21,7 +21,7 @@ from typing import Any, cast
 import pytest
 import yaml
 from botocore.exceptions import ClientError
-from prefect import Task
+from prefect import Task, flow
 from prefect.testing.utilities import prefect_test_harness
 from typer.testing import CliRunner
 
@@ -32,6 +32,7 @@ from slipstream_bench.orchestration.cluster import CeilingScrapeError
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
+    SweepOutcome,
     _point_has_pending_cells,
     _scrape_and_log_ceiling,
     _sweep_one_point,
@@ -173,15 +174,26 @@ def _collaborators(
 
 
 def test_deploy_fn_applies_the_points_deployment_then_waits_the_rollout(
-    tmp_path: Path,
+    tmp_path: Path, _harness: None, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # The deploy runs under a flow-run context (its milestones go to the run page through
+    # get_run_logger, ADR-0020), so it is driven inside the harness here; the ~20-minute
+    # redeploy is bracketed by a start and a finish line naming the point.
     kubectl = _FakeKubectl()
     deploy_fn, _scrape, _sweep, _pending = _collaborators(tmp_path, kubectl=kubectl)
 
-    deploy_fn(_POINT)
+    @flow
+    def _drive() -> None:
+        deploy_fn(_POINT)
+
+    with caplog.at_level(logging.INFO):
+        _drive()
 
     assert kubectl.calls[0][0] == ["apply", "-n", "slipstream", "-f", "-"]
     assert kubectl.calls[1][0][:2] == ["rollout", "status"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(_POINT.slug() in m and "redeploy starting" in m for m in messages)
+    assert any(_POINT.slug() in m and "redeploy finished" in m for m in messages)
 
 
 def test_scrape_logs_the_predicted_ceiling(
@@ -362,11 +374,15 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     captures = _stub_transports(monkeypatch)
     captured: dict[str, Any] = {}
 
-    def _fake_drive(**kwargs: Any) -> list[str]:
+    def _fake_drive(**kwargs: Any) -> SweepOutcome:
         captured.update(kwargs)
-        return [
-            "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
-        ]
+        return SweepOutcome(
+            pointers=[
+                "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
+            ],
+            cells_run=1,
+            cells_resumed=0,
+        )
 
     monkeypatch.setattr(knob_sweep_module, "drive_knob_sweep", _fake_drive)
 
@@ -541,6 +557,39 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     assert [name for name, _id in seen] == ["knob-sweep", "knob-sweep"]
     assert len({run_id for _name, run_id in seen}) == 1
     assert len(pointers) == 2
+
+
+def test_knob_sweep_flow_logs_run_start_render_published_and_final_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _harness: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The flow's own run-page milestones (ADR-0020): a start line naming the run and its
+    # engine-point count, a render-published line once the terminal task draws the run's
+    # tables, and a final summary filed under run=<run-id> carrying the cell split. All
+    # three go through get_run_logger, so they are asserted under the harness.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+
+    with caplog.at_level(logging.INFO):
+        knob_sweep_flow(
+            run_id="run1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench-bucket",
+            image_ref="repo:tag",
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("run1" in m and "starting" in m for m in messages)
+    assert any("render" in m and "published" in m for m in messages)
+    assert any("run=run1" in m and "complete" in m for m in messages)
 
 
 def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(

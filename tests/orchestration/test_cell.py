@@ -104,6 +104,32 @@ def test_run_cell_returns_the_pointer_on_a_valid_result(tmp_path: Path) -> None:
     assert calls == [1]
 
 
+def test_run_cell_logs_a_start_and_a_done_gate_milestone(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The cell's two progress milestones an operator reads off its task run page: a start
+    # line as the ~minutes-long benchmark begins, and a done line carrying its SLO-gate
+    # result — the goodput fraction the run cleared the validity gate with (ADR-0020). A
+    # cache hit skips this body entirely, so a resumed cell draws neither line.
+    path = tmp_path / "cell.json"
+
+    with caplog.at_level(
+        logging.INFO, logger="slipstream_bench.orchestration.tasks.cell"
+    ):
+        run_cell(
+            _writer(path, _VALID, []),
+            result_path=path,
+            result_uri="s3://b/cell.json",
+            publish=_discard,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("s3://b/cell.json" in m and "starting" in m for m in messages)
+    assert any(
+        "s3://b/cell.json" in m and "done" in m and "0.947" in m for m in messages
+    )
+
+
 def test_run_cell_publishes_the_cell_metrics_artifact(tmp_path: Path) -> None:
     # A valid cell publishes an unkeyed markdown artifact onto its own task run: the S3
     # pointer and the four headline metrics (goodput, the two p95 SLO gates, the output

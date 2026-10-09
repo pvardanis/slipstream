@@ -84,6 +84,14 @@ ADD --chmod=0755 \
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:${PATH}"
 
+# Capture the sweep's own module loggers into the Prefect run logs. Prefect intercepts only
+# the loggers it is told about, so the stdlib `slipstream_bench.*` milestone lines the
+# Prefect-free sweep core emits (ADR-0020) reach the run page and worker stdout only with this
+# set; the parent `slipstream_bench` name covers every submodule. Baked into the image rather
+# than a work-pool or profile setting so a manual `slipstream-orchestrate knob-sweep` run off
+# this image captures them too, not only the in-cluster worker.
+ENV PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench
+
 # The three deep-config inputs the registered knob-sweep deployment reads on the worker at run
 # time (register-knob-sweep's in-image default paths, slipstream_bench.orchestration.cli): model.yaml
 # and sweep-grid.yaml are the served model and the sweep's grid, vllm-gpu.yaml is the redeploy template
