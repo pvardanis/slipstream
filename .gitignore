@@ -36,8 +36,11 @@ kubeconfig
 # Benchmark result JSON (raw client output, regenerated per run)
 bench/results/
 
-# analyze-bench recommendation reports (derived per run)
-reports/
+# analyze-bench recommendation reports are tracked (text: trimmed tables, linked plots).
+# Keep any stray binary out.
+reports/**/*.png
+reports/**/*.jpg
+reports/**/*.jpeg
 
 # macOS
 .DS_Store

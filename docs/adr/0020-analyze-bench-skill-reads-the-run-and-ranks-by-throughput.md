@@ -59,11 +59,12 @@ row across all buckets.
 
 The report (`reports/<run_id>/RECOMMENDATION.md`, outside `bench/` so it does not sit
 among shipped code and images) always names the runner-up and why it lost. It is all
-text: the ceiling and goodput-cliff tables are embedded verbatim so the decision's
-evidence lives in the report, and the two plots are linked by their public S3 URL (the
-`sweeps/*/charts/*` prefix is public-read by bucket policy) rather than downloaded. That
-keeps binaries out of the repo and lets a kept report be promoted into version control as
-a single self-contained file. A bespoke winner-highlighted chart is deferred: it belongs
+text: a trimmed evidence slice of the tables — the top N configs by throughput per
+prefix-share bucket and the recommended config's cliff rungs, with the full tables left
+on the Prefect run — plus the two plots linked by their public S3 URL (the
+`sweeps/*/charts/*` prefix is public-read by bucket policy) rather than downloaded. With
+no binaries and no 240-row dumps, the report is a decision document, committed to the
+repo under `reports/<run_id>/`. A bespoke winner-highlighted chart is deferred: it belongs
 as a tested plot function in the `report` package, not a throwaway plotting snippet in
 the skill.
 

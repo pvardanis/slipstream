@@ -70,7 +70,7 @@ If a `$/hr` was supplied, also compute `$/1M-tokens = ($/hr) / (output_throughpu
 
 ## Step 4 — Write the report
 
-The report is all text: tables are embedded verbatim, plots are linked to their public S3 URLs. No binaries are written, so the file is self-contained and survives even if the Prefect run ages out.
+The report is all text: a trimmed slice of the tables plus plots linked to their public S3 URLs. No binaries are written, so the file is self-contained, survives the Prefect run aging out, and is committed to the repo.
 
 ```bash
 mkdir -p "reports/<run_id>"
@@ -80,10 +80,10 @@ Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 
 1. **Run** — the `run_id` and the SLO honored (`ttft`/`tpot` thresholds, `0.95` floor).
 2. **Pick** — one line: the recommended `(max_num_seqs, kv_cache_dtype, prefix_caching)` and the workload it is for.
-3. **Ranking** — the contenders ranked by `output_throughput` at the ceiling; add a `$/1M` column only if a price was given.
+3. **Ranking** — per `prefix_share` bucket, the top **N = 3** configs by `output_throughput` at the ceiling (N tunable at invocation), with their `ceiling`, `p95_ttft_ms`, `p95_tpot_ms`; add a `$/1M` column only if a price was given. This is the ceiling evidence.
 4. **Tradeoff** — narrate the pick against the runner-up (e.g. "A beats B on throughput but B is within N% and sweeps a simpler knob → pick B"). Always name the runner-up and why it lost.
-5. **Tables** — the `knob-sweep-ceiling-table` and `knob-sweep-goodput-cliff` markdown embedded verbatim, so the decision's evidence lives in the report itself.
-6. **Plots** — link the two plots by their public S3 URL (`![ceiling](<ceiling-plot-url>)`, `![goodput cliff](<cliff-plot-url>)`) with one line each on what they show. If an artifact was missing (Step 2), say so instead of linking.
+5. **Winner ladders** — from the cliff table, the rungs of each bucket's recommended config only — the one ladder whose fall through the 0.95 floor sets the ceiling. Not the full 240-row cliff; link the Prefect run page for the complete tables.
+6. **Plots** — the two plots as plain links to their S3 URI (`[ceiling](<ceiling-plot-url>)`, `[goodput cliff](<cliff-plot-url>)`), not image embeds, with one line each on what they show. The URIs are the image artifacts' `data` field. If an artifact was missing (Step 2), say so instead of linking.
 7. **Caveats** — fixed single GPU (ranking is cost-exact only on this hardware), the SLO is the run's own, `0.95` floor, plots render while the S3 object lives.
 
 Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up.
