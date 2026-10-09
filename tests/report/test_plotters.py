@@ -16,6 +16,22 @@ from slipstream_bench.report.plotters import (
     plot_cliffs_png,
 )
 
+
+def _title_overlaps_facets(grid) -> bool:  # type: ignore[no-untyped-def]
+    # Draw once so every text has a laid-out window extent, then test the figure
+    # suptitle against each facet title: a real pixel overlap is the symptom a reserved
+    # title band removes, on a grid of any row count.
+    figure = grid.figure
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    suptitle_box = figure._suptitle.get_window_extent(renderer)
+    return any(
+        suptitle_box.overlaps(ax.title.get_window_extent(renderer))
+        for ax in grid.axes.flat
+        if ax.get_title()
+    )
+
+
 # A PNG file leads with this 8-byte signature; asserting it pins the bytes are a real PNG, not
 # an empty buffer or a stray format.
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -151,3 +167,27 @@ def test_cliff_title_is_a_single_line() -> None:
 
     assert "\n" not in title
     assert "marker labels" not in title
+
+
+def test_cliff_title_clears_the_facets_on_a_multi_row_grid() -> None:
+    # tight_layout reserves no room for a figure suptitle, so on a full grid's facets (one
+    # per engine point, wrapped into five rows) the title lands on the top row's facet
+    # titles. The layout reserves a band above the axes for it, so the title clears them.
+    rungs = [
+        _rung(
+            max_num_seqs=m,
+            kv_cache_dtype=kv,
+            prefix_caching=caching,
+            prefix_share=50 if caching else 0,
+            max_concurrency=mc,
+        )
+        for m in (16, 32, 64, 128, 256)
+        for kv in ("fp8", "fp16")
+        for caching in (True, False)
+        for mc in (8, 256)
+    ]
+    grid = _plot_cliffs(rungs)
+    overlaps = _title_overlaps_facets(grid)
+    plt.close(grid.figure)
+
+    assert not overlaps
