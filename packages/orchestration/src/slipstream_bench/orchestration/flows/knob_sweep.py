@@ -64,6 +64,25 @@ from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
 
+# The package whose stdlib loggers carry the Prefect-free core's milestone lines. The
+# image's PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench attaches a handler to this logger
+# but sets no level, so it inherits root's WARNING default and the INFO milestones are
+# filtered before the handler sees them.
+_PACKAGE_LOGGER = "slipstream_bench"
+
+
+def enable_milestone_logging() -> None:
+    """Lift the package logger to INFO so the core's stdlib milestones reach the UI.
+
+    ``PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench`` wires the API log handler onto the
+    package logger but leaves its level unset, so the core's ``_LOGGER.info`` milestones
+    (cell start/done, point done, ceiling scrape) stay below the inherited WARNING threshold
+    and never reach that handler. The flow calls this at its composition root — the Prefect
+    layer, not the Prefect-free core — to drop the threshold to INFO so those lines surface.
+    """
+    logging.getLogger(_PACKAGE_LOGGER).setLevel(logging.INFO)
+
+
 # The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
 DeployFn = Callable[[EnginePoint], None]
@@ -200,6 +219,7 @@ def knob_sweep_flow(
     :return: the S3 pointer for each cell of every point, in order.
     """
     logger = get_run_logger()
+    enable_milestone_logging()
     _tag_run_with_group(run_id)
     grid = load_grid(sweep_grid)
     points = list_engine_points(grid)
