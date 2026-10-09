@@ -592,6 +592,67 @@ def test_knob_sweep_flow_logs_run_start_render_published_and_final_summary(
     assert any("run=run1" in m and "complete" in m for m in messages)
 
 
+def test_knob_sweep_flow_logs_when_the_orchestration_image_ref_is_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _harness: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A local or test build bakes no ORCH_IMAGE_REF, so the config artifact records the
+    # orchestration image as "unknown". Log that fallback, so a cluster run whose env should
+    # carry the ref but doesn't leaves a trace rather than silently reading "unknown".
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+    monkeypatch.delenv("ORCH_IMAGE_REF", raising=False)
+
+    with caplog.at_level(logging.INFO):
+        knob_sweep_flow(
+            run_id="run1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench-bucket",
+            image_ref="repo:tag",
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("ORCH_IMAGE_REF" in m and "unknown" in m for m in messages)
+
+
+def test_knob_sweep_flow_does_not_log_the_fallback_when_the_image_ref_is_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _harness: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A real image bakes ORCH_IMAGE_REF, so the fallback line must stay silent — it fires
+    # only when the ref is genuinely missing, not on every run.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+    monkeypatch.setenv("ORCH_IMAGE_REF", "registry/repo:sha256-abc")
+
+    with caplog.at_level(logging.INFO):
+        knob_sweep_flow(
+            run_id="run1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench-bucket",
+            image_ref="repo:tag",
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert not any("ORCH_IMAGE_REF" in m for m in messages)
+
+
 def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:

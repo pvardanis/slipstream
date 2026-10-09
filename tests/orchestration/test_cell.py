@@ -181,6 +181,31 @@ def test_run_cell_survives_a_publish_failure(
     assert "prefect API unreachable" in caplog.text
 
 
+def test_run_cell_propagates_a_markdown_render_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Building the artifact markdown is pure formatting off the gated cell, not the publish
+    # I/O: a defect there is a local code bug, not a transient Prefect-API failure, so it
+    # must raise rather than be swallowed and mislabeled "failed to publish". Only the
+    # publish call itself is best-effort.
+    from slipstream_bench.orchestration.tasks import cell as cell_module
+
+    path = tmp_path / "cell.json"
+
+    def boom(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError("markdown render bug")
+
+    monkeypatch.setattr(cell_module, "_cell_artifact_markdown", boom)
+
+    with pytest.raises(RuntimeError, match="markdown render bug"):
+        run_cell(
+            _writer(path, _VALID, []),
+            result_path=path,
+            result_uri="s3://b/cell.json",
+            publish=_discard,
+        )
+
+
 def test_run_cell_propagates_an_execution_failure(tmp_path: Path) -> None:
     def execute() -> None:
         raise RuntimeError("docker run exited 1")

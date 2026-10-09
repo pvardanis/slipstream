@@ -174,15 +174,18 @@ def _publish_cell_artifact(
     """Publish the cell's artifact best-effort: drawing it must not void the cell.
 
     The measurement is already durable in S3 at ``result_uri`` and the artifact is a UI
-    convenience, so any failure in rendering or publishing it — a formatting slip or a
-    transient Prefect API error — is logged with the cell's pointer and swallowed rather
-    than raised. Raising would leave the task uncached and force a re-run of the expensive
-    GPU benchmark (ADR-0012). The validity gate's own raise stays fatal: an invalid result
-    *should* void the cache; a failed UI write should not. ``Exception`` is caught broadly
-    on purpose — nothing in drawing the artifact may outweigh a measured cell.
+    convenience, so a failure in the publish I/O — a transient Prefect API error — is logged
+    with the cell's pointer and swallowed rather than raised. Raising would leave the task
+    uncached and force a re-run of the expensive GPU benchmark (ADR-0012). The validity
+    gate's own raise stays fatal: an invalid result *should* void the cache; a failed UI
+    write should not. ``Exception`` is caught broadly on purpose — nothing in the publish
+    call may outweigh a measured cell. The markdown is built *before* the try: rendering is
+    pure formatting off the gated cell, so a defect there is a local code bug, not a UI-write
+    failure, and must surface rather than be swallowed and mislabeled a publish failure.
     """
+    markdown = _cell_artifact_markdown(cell, result_uri)
     try:
-        publish(key=None, markdown=_cell_artifact_markdown(cell, result_uri))
+        publish(key=None, markdown=markdown)
     except Exception:
         _LOGGER.warning(
             "failed to publish the cell artifact for %s; the measurement is safe in S3, "

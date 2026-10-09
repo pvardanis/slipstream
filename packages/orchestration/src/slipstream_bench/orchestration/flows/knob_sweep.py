@@ -227,12 +227,19 @@ def knob_sweep_flow(
     # verbatim config bodies (model.yaml, sweep-grid.yaml), the manifest's serving image ref,
     # and the vLLM container args verbatim, so an operator inspects exactly what the run
     # executed without the files leaving the image. The orchestration image bakes its own ref
-    # as ORCH_IMAGE_REF; a local or test build bakes none, so it reads as "unknown".
+    # as ORCH_IMAGE_REF; a local or test build bakes none, so it reads as "unknown" — logged
+    # so a cluster run whose env should carry the ref but doesn't leaves a trace.
+    orch_ref = os.environ.get("ORCH_IMAGE_REF")
+    if not orch_ref:
+        logger.info(
+            'ORCH_IMAGE_REF unset; recording the orchestration image as "unknown"'
+        )
+        orch_ref = "unknown"
     publish_config_artifact(
         run_id=run_id,
         images=ImageRefs(
             bench=image_ref,
-            orch=os.environ.get("ORCH_IMAGE_REF") or "unknown",
+            orch=orch_ref,
         ),
         digest_inputs=digest_inputs,
         publish=create_markdown_artifact,
