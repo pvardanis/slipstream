@@ -123,37 +123,31 @@ def test_plot_cliffs_png_rejects_an_empty_table() -> None:
         plot_cliffs_png([])
 
 
-def test_cliff_markers_carry_their_metric_labels() -> None:
-    # Each rung marker is annotated with its own SLO gates and token rate, so the cliff
-    # reads not only where a rung fell but which gate bit (ttft prefill / tpot decode) and
-    # at what capacity. The label text is pinned, not the pixels.
-    grid = _plot_cliffs(
-        [_rung(p95_ttft_ms=850.0, p95_tpot_ms=42.0, output_throughput=1235.0)]
-    )
-    labels = [text.get_text() for ax in grid.axes.flat for text in ax.texts]
-    plt.close(grid.figure)
-
-    assert any(
-        "ttft 850" in label and "tpot 42" in label and "1235 t/s" in label
-        for label in labels
-    )
-
-
-def test_cliff_labels_only_the_ceiling_and_the_rungs_that_fell() -> None:
-    # A passing rung below the ceiling reads the same flat gates as the ceiling, so it is
-    # left unlabeled to spare the facet a wall of redundant numbers. The ceiling (highest
-    # passing rung) and every failing rung keep their labels — those are the ones that tell
-    # which gate bit on the fall.
+def test_cliff_facets_carry_no_metric_annotations() -> None:
+    # The per-rung SLO gates and token rate live in the goodput-cliff table and each
+    # cell's own artifact, not stamped on the plot: the facets stay clean so the cliff
+    # shape reads at a glance. No marker carries ttft / tpot / token-rate text.
     grid = _plot_cliffs(
         [
-            _rung(max_concurrency=1, goodput_fraction=0.99, p95_ttft_ms=100.0),
-            _rung(max_concurrency=2, goodput_fraction=0.97, p95_ttft_ms=200.0),
-            _rung(max_concurrency=4, goodput_fraction=0.50, p95_ttft_ms=300.0),
+            _rung(max_concurrency=8, goodput_fraction=0.98),
+            _rung(max_concurrency=16, goodput_fraction=0.50),
         ]
     )
     labels = [text.get_text() for ax in grid.axes.flat for text in ax.texts]
     plt.close(grid.figure)
 
-    assert not any("ttft 100" in label for label in labels)
-    assert any("ttft 200" in label for label in labels)
-    assert any("ttft 300" in label for label in labels)
+    assert not any(
+        "ttft" in label or "tpot" in label or "t/s" in label for label in labels
+    )
+
+
+def test_cliff_title_is_a_single_line() -> None:
+    # The title names the run's fixed conditions on one line, so it does not wrap down
+    # over the top row of facet titles. The marker-label legend is gone with the
+    # annotations it described.
+    grid = _plot_cliffs([_rung()])
+    title = grid.figure.get_suptitle()
+    plt.close(grid.figure)
+
+    assert "\n" not in title
+    assert "marker labels" not in title
