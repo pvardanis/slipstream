@@ -16,7 +16,7 @@
 # advances them.
 
 # uv 0.9.30-python3.11-bookworm-slim
-FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS builder
+FROM ghcr.io/astral-sh/uv@sha256:61d393e44e249f2e4b526b6c7ddcecce245946826e608e11c93ad4f5bba55b21 AS builder
 
 # Byte-compile on install so the worker doesn't pay first-import compilation, and copy
 # packages into the venv rather than symlinking the uv cache, so the venv is self-contained
@@ -56,7 +56,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # prefect-worker Helm chart's command and securityContext assume (tini as PID-1,
 # /opt/prefect/entrypoint.sh, an arbitrary-uid writable HOME). A bare python:slim base
 # lacks all three, so the chart's `tini -g -- /opt/prefect/entrypoint.sh` never starts.
-FROM prefecthq/prefect@sha256:b3cdfebebff039d1c171947a61a0c37688c6336a1aa659841c3642265d0b2484
+FROM prefecthq/prefect@sha256:100044e13170771546fcf29d76d8edffa269baf3f452a1cc5fd2fffc176d02cc
 
 # The pinned digest freezes the base's apt package set, which drifts behind Debian security
 # updates (openssl, kernel headers). Pull the fixed OS packages so the image clears the Trivy
