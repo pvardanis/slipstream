@@ -1,0 +1,13 @@
+# Trivy vulnerability waivers for the orchestration content image.
+#
+# kubectl (usr/local/bin/kubectl, orchestration/Dockerfile) is flagged for two CVEs in
+# the Go stdlib it is compiled against, not in kubectl's own code. No kubectl release
+# built on a patched Go (1.26.9 / 1.27.2) exists yet — v1.36.5 (the EKS-pinned minor)
+# and v1.37.1 (latest) both ship go1.26.8 — so there is nothing to bump to. Both are
+# denial-of-service on server-side surfaces the worker's kubectl never exposes: it is a
+# client talking only to the AWS-managed EKS API, never an HTTP or TLS server.
+#
+# Drop each line once upstream kubectl rebuilds on the patched Go. The exp date forces
+# the scan to fail again and this file to be revisited rather than rot silently.
+CVE-2026-78667 exp:2026-11-08
+CVE-2026-97031 exp:2026-11-08
