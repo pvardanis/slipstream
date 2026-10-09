@@ -36,6 +36,9 @@ kubeconfig
 # Benchmark result JSON (raw client output, regenerated per run)
 bench/results/
 
+# analyze-bench recommendation reports (derived per run)
+reports/
+
 # macOS
 .DS_Store
 
@@ -47,10 +50,11 @@ bench/results/
 .scratch/
 
 # Claude Code local state (agent worktrees, local settings). The shared PR-review
-# guard is tracked; everything else under .claude/ stays local.
+# guard and the team skills are tracked; everything else under .claude/ stays local.
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+!.claude/skills/
 
 # MLSD review scorecard (local artifact, not tracked)
 mlsd-scorecard-slipstream.md
