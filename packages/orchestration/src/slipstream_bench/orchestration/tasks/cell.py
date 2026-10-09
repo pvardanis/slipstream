@@ -159,11 +159,12 @@ def run_cell(
     cell = LoadCell.from_record(read_result(result_path), result_path)
     _publish_cell_artifact(publish, cell, result_uri)
     _LOGGER.info(
-        "cell %s done: goodput %.3f (p95 ttft %.0fms, p95 tpot %.0fms)",
+        "cell %s done: goodput %.3f (p95 ttft %.0fms, p95 tpot %.0fms, output %.1f tok/s)",
         result_uri,
         cell.goodput_fraction,
         cell.p95_ttft_ms,
         cell.p95_tpot_ms,
+        cell.output_throughput,
     )
     return result_uri
 
