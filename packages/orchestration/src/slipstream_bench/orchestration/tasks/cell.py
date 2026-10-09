@@ -153,10 +153,18 @@ def run_cell(
     :return: ``result_uri`` once the result passes the validity gate.
     :raise InvalidCellError: when the produced result is not a measurement.
     """
+    _LOGGER.info("cell %s starting", result_uri)
     execute_func()
     validate_cell(result_path, max_error_rate=max_error_rate)
     cell = LoadCell.from_record(read_result(result_path), result_path)
     _publish_cell_artifact(publish, cell, result_uri)
+    _LOGGER.info(
+        "cell %s done: goodput %.3f (p95 ttft %.0fms, p95 tpot %.0fms)",
+        result_uri,
+        cell.goodput_fraction,
+        cell.p95_ttft_ms,
+        cell.p95_tpot_ms,
+    )
     return result_uri
 
 

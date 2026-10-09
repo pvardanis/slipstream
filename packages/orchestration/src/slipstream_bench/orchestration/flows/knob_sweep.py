@@ -31,6 +31,7 @@ from typing import Any
 from prefect import Task, flow
 from prefect.artifacts import create_image_artifact, create_markdown_artifact
 from prefect.client.orchestration import get_client
+from prefect.logging import get_run_logger
 from prefect.runtime import flow_run
 
 from slipstream_bench.contract import (
@@ -80,6 +81,21 @@ PointSweepFn = Callable[[EnginePoint], list[str]]
 # The redeploy-skip gate: whether the point still has cells to run (ADR-0015). False
 # when every cell already holds a valid measurement, so the point is skipped entirely.
 PendingCellsFn = Callable[[EnginePoint], bool]
+
+
+@dataclass(frozen=True)
+class SweepOutcome:
+    """The knob sweep's result: its ordered pointers and the run/resume cell split.
+
+    ``pointers`` is the S3 pointer for each cell of every point, in order — the flow's
+    return value. ``cells_run`` and ``cells_resumed`` split those cells by whether the
+    point they belong to was swept as a run (its cells were pending, so it redeployed) or
+    resumed from cache, the breakdown the flow's final-summary milestone reports (ADR-0020).
+    """
+
+    pointers: list[str]
+    cells_run: int
+    cells_resumed: int
 
 
 @dataclass(frozen=True)
@@ -164,8 +180,11 @@ def knob_sweep_flow(
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
     :return: the S3 pointer for each cell of every point, in order.
     """
+    logger = get_run_logger()
     _tag_run_with_group(run_id)
     grid = load_grid(sweep_grid)
+    points = list_engine_points(grid)
+    logger.info("knob sweep run=%s starting: %d engine points", run_id, len(points))
     digest_inputs = DigestInputs(
         model_yaml=model_yaml,
         sweep_grid=sweep_grid,
@@ -209,8 +228,8 @@ def knob_sweep_flow(
             task=cell_task(bucket, retries=retries),
         )
     )
-    pointers = drive_knob_sweep(
-        points=list_engine_points(grid),
+    outcome = drive_knob_sweep(
+        points=points,
         deploy_fn=deploy_fn,
         scrape_fn=scrape_fn,
         point_sweep_fn=point_sweep_fn,
@@ -231,7 +250,9 @@ def knob_sweep_flow(
         publish=create_markdown_artifact,
         publish_image=create_image_artifact,
     )
-    return pointers
+    logger.info("render published to the run page")
+    logger.info(build_sweep_summary(run_id, outcome))
+    return outcome.pointers
 
 
 def drive_knob_sweep(
@@ -241,13 +262,19 @@ def drive_knob_sweep(
     scrape_fn: ScrapeFn,
     point_sweep_fn: PointSweepFn,
     has_pending_cells: PendingCellsFn,
-) -> list[str]:
+) -> SweepOutcome:
     """Iterate the points, redeploying and scraping each pending one, then sweeping all.
 
     The redeploy and scrape — the ~20-minute GPU rollout and its ceiling read — are gated
     on the point having pending cells, so a resume never re-pays them to run zero cells
     (ADR-0015). The sweep runs for every point regardless: for a fully-cached point it
     hits the cache and re-executes nothing, returning the point's cached pointers.
+
+    Each point ends with a milestone naming it, its cell count, and whether its cells ran
+    this invocation or resumed from cache, and the pointers are returned alongside the
+    run/resume cell split the flow's final summary reports (ADR-0020). The split keys off
+    the same pending gate that decides the redeploy: a point whose cells are pending is
+    swept as a run, a fully-cached point as a resume.
 
     :param points: the grid's engine points, in enumeration order.
     :param deploy_fn: redeploy the GPU for a point's knobs (Tier-1).
@@ -257,18 +284,52 @@ def drive_knob_sweep(
     :param has_pending_cells: whether a point still has cells to run; a point with none
         skips its redeploy and scrape — the two expensive tasks — but still runs its
         resumable sweep, which returns its cached pointers (resume).
-    :return: the S3 pointer for each cell of every point, in order.
+    :return: the outcome — the ordered pointers and the run/resume cell split.
     """
     pointers: list[str] = []
+    cells_run = 0
+    cells_resumed = 0
     for point in points:
-        if has_pending_cells(point):
+        pending = has_pending_cells(point)
+        if pending:
             deploy_fn(point)
             # Scrape for its raise-on-empty side effect: a point whose engine reported no
             # ceiling must fail before its ladder runs (ADR-0015). The grid fixes the
             # ladder shape, so the scraped value is recorded by the task, not threaded here.
             scrape_fn(point)
-        pointers.extend(point_sweep_fn(point))
-    return pointers
+        point_pointers = point_sweep_fn(point)
+        pointers.extend(point_pointers)
+        if pending:
+            cells_run += len(point_pointers)
+        else:
+            cells_resumed += len(point_pointers)
+        _LOGGER.info(
+            "point %s done: %d cells %s",
+            point.slug(),
+            len(point_pointers),
+            "run" if pending else "resumed",
+        )
+    return SweepOutcome(
+        pointers=pointers, cells_run=cells_run, cells_resumed=cells_resumed
+    )
+
+
+def build_sweep_summary(run_id: str, outcome: SweepOutcome) -> str:
+    """Render the knob sweep's one-line final summary: its run and its cell split.
+
+    The flow emits this as the run's closing milestone, filed under ``run=<run-id>`` — the
+    one summary line that carries the run id (ADR-0020). A failed cell never reaches here:
+    it raises and aborts the run, surfaced by an ERROR line, not folded into this count.
+
+    :param run_id: the shared run the sweep is filed under.
+    :param outcome: the driver's result — the pointers and the run/resume cell split.
+    :return: the summary line, naming the run, its total cells, and the run/resume split.
+    """
+    total = outcome.cells_run + outcome.cells_resumed
+    return (
+        f"knob sweep run={run_id} complete: {total} cells "
+        f"({outcome.cells_run} run, {outcome.cells_resumed} resumed)"
+    )
 
 
 def build_knob_sweep_collaborators(
@@ -299,7 +360,7 @@ def build_knob_sweep_collaborators(
         :func:`drive_knob_sweep` takes them.
     """
     deploy_fn: DeployFn = partial(
-        deploy_gpu_point,
+        _deploy_and_log,
         grid=inputs.grid,
         manifest_text=inputs.manifest_path.read_text(encoding="utf-8"),
         kubectl=kubectl,
@@ -316,6 +377,22 @@ def build_knob_sweep_collaborators(
         _point_has_pending_cells, inputs=inputs, s3_client=s3_client
     )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
+
+
+def _deploy_and_log(
+    point: EnginePoint, *, grid: SweepGrid, manifest_text: str, kubectl: Kubectl
+) -> None:
+    """Redeploy the GPU for a point's knobs, bracketing it with run-page milestones.
+
+    The ~20-minute rollout is the sweep's longest silent step; the start and finish lines
+    go to the parent run page through ``get_run_logger`` so an operator sees the point
+    enter and clear its redeploy (ADR-0020). Called inside the flow run, where the bound
+    logger has a run context.
+    """
+    logger = get_run_logger()
+    logger.info("point %s redeploy starting", point.slug())
+    deploy_gpu_point(point, grid=grid, manifest_text=manifest_text, kubectl=kubectl)
+    logger.info("point %s redeploy finished", point.slug())
 
 
 def _scrape_and_log_ceiling(point: EnginePoint, *, kubectl: Kubectl) -> None:
