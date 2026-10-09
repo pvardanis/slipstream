@@ -88,14 +88,33 @@ class SweepOutcome:
     """The knob sweep's result: its ordered pointers and the run/resume cell split.
 
     ``pointers`` is the S3 pointer for each cell of every point, in order — the flow's
-    return value. ``cells_run`` and ``cells_resumed`` split those cells by whether the
-    point they belong to was swept as a run (its cells were pending, so it redeployed) or
-    resumed from cache, the breakdown the flow's final-summary milestone reports (ADR-0020).
+    return value. ``cells_run`` and ``cells_resumed`` split those cells by their point's
+    redeploy gate: every cell of a point that had any pending cell (so it redeployed)
+    counts as run, every cell of a fully-cached point as resumed. The split is
+    point-granular, not a per-cell execution count — a partially-cached point counts all
+    its cells as run, including any that resumed from cache within the point. It is the
+    breakdown the flow's final-summary milestone reports (ADR-0020).
     """
 
-    pointers: list[str]
+    pointers: tuple[str, ...]
     cells_run: int
     cells_resumed: int
+
+    def __post_init__(self) -> None:
+        """Reject a split that does not account for every pointer.
+
+        Frozen, so validating on construction makes the value valid for its whole life.
+        :func:`build_sweep_summary` presents ``cells_run + cells_resumed`` as the run's
+        cell count and trusts it matches the pointers, so a miscounted split would surface
+        as a wrong operator-facing number rather than a raise — guard it here instead.
+        """
+        if self.cells_run < 0 or self.cells_resumed < 0:
+            raise ValueError("SweepOutcome cell counts must be non-negative")
+        if self.cells_run + self.cells_resumed != len(self.pointers):
+            raise ValueError(
+                "SweepOutcome cells_run + cells_resumed must equal len(pointers): "
+                f"{self.cells_run} + {self.cells_resumed} != {len(self.pointers)}"
+            )
 
 
 @dataclass(frozen=True)
@@ -252,7 +271,7 @@ def knob_sweep_flow(
     )
     logger.info("render published to the run page")
     logger.info(build_sweep_summary(run_id, outcome))
-    return outcome.pointers
+    return list(outcome.pointers)
 
 
 def drive_knob_sweep(
@@ -270,11 +289,12 @@ def drive_knob_sweep(
     (ADR-0015). The sweep runs for every point regardless: for a fully-cached point it
     hits the cache and re-executes nothing, returning the point's cached pointers.
 
-    Each point ends with a milestone naming it, its cell count, and whether its cells ran
-    this invocation or resumed from cache, and the pointers are returned alongside the
-    run/resume cell split the flow's final summary reports (ADR-0020). The split keys off
-    the same pending gate that decides the redeploy: a point whose cells are pending is
-    swept as a run, a fully-cached point as a resume.
+    Each point ends with a milestone naming it, its cell count, and whether it was swept as
+    a run or resumed from cache, and the pointers are returned alongside the run/resume cell
+    split the flow's final summary reports (ADR-0020). The split is point-granular: it keys
+    off the same pending gate that decides the redeploy — a point with any pending cell is
+    swept as a run and all its cells count as run (including any that resume from cache
+    within the point), a fully-cached point as a resume.
 
     :param points: the grid's engine points, in enumeration order.
     :param deploy_fn: redeploy the GPU for a point's knobs (Tier-1).
@@ -310,16 +330,17 @@ def drive_knob_sweep(
             "run" if pending else "resumed",
         )
     return SweepOutcome(
-        pointers=pointers, cells_run=cells_run, cells_resumed=cells_resumed
+        pointers=tuple(pointers), cells_run=cells_run, cells_resumed=cells_resumed
     )
 
 
 def build_sweep_summary(run_id: str, outcome: SweepOutcome) -> str:
     """Render the knob sweep's one-line final summary: its run and its cell split.
 
-    The flow emits this as the run's closing milestone, filed under ``run=<run-id>`` — the
-    one summary line that carries the run id (ADR-0020). A failed cell never reaches here:
-    it raises and aborts the run, surfaced by an ERROR line, not folded into this count.
+    The flow emits this as the run's closing milestone, filed under ``run=<run-id>`` — one
+    of the two lines that carry the run id, the run-start line being the other (ADR-0020). A
+    failed cell never reaches here: it raises and aborts the run — Prefect marks the run
+    failed — rather than being folded into this count.
 
     :param run_id: the shared run the sweep is filed under.
     :param outcome: the driver's result — the pointers and the run/resume cell split.

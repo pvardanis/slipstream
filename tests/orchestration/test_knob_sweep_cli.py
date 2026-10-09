@@ -377,9 +377,9 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     def _fake_drive(**kwargs: Any) -> SweepOutcome:
         captured.update(kwargs)
         return SweepOutcome(
-            pointers=[
-                "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
-            ],
+            pointers=(
+                "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json",
+            ),
             cells_run=1,
             cells_resumed=0,
         )
