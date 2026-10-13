@@ -23,6 +23,7 @@ from slipstream_bench.contract import (
 )
 
 REPO_GRID = Path("bench/sweep-grid.yaml")
+PARKED_FULL_GRID = Path("bench/sweep-grid.full.yaml")
 
 _LOAD = {
     "total_len": 1000,
@@ -60,6 +61,12 @@ def _write_grid(tmp_path: Path, grid: dict[str, object]) -> Path:
 def test_repo_grid_file_is_valid() -> None:
     """The checked-in grid the recipe reads loads and validates."""
     grid = load_grid(REPO_GRID)
+    assert isinstance(grid, SweepGrid)
+
+
+def test_parked_full_grid_file_is_valid() -> None:
+    """The parked full grid stays loadable, so restoring it is a rename."""
+    grid = load_grid(PARKED_FULL_GRID)
     assert isinstance(grid, SweepGrid)
 
 
