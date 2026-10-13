@@ -1,4 +1,12 @@
-# slipstream
+<p align="center"><img src="docs/logo.svg" alt="slipstream" width="400"></p>
+
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+- [Quickstart](#quickstart)
+- [Recipes](#recipes)
+- [Roadmap](#roadmap)
+- [Non-goals](#non-goals)
 
 A self-hosted LLM inference platform on AWS EKS. Today it serves an AWQ-quantized open
 model with vLLM on a Karpenter-provisioned `g5` GPU node and benchmarks it from outside

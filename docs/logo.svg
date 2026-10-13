@@ -1,0 +1,16 @@
+<!-- slipstream logo: a body pointing right with its wake of tapering lines and token dots, beside the wordmark. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 120" width="460" height="120" role="img" aria-labelledby="title">
+  <title id="title">slipstream</title>
+  <g fill="#12A594">
+    <!-- leading body, pointing right -->
+    <path d="M92 42 C118 42 134 52 140 60 C134 68 118 78 92 78 C84 78 80 70 80 60 C80 50 84 42 92 42 Z"/>
+    <!-- wake: tapering lines spreading behind the body, each ending in a token dot -->
+    <polygon points="76,56 76,64 24,61.5 24,58.5"/>
+    <circle cx="15" cy="60" r="3.5"/>
+    <polygon points="82,46 82,51 40,38 40,36"/>
+    <circle cx="32" cy="36.5" r="2.8"/>
+    <polygon points="82,69 82,74 40,84 40,82"/>
+    <circle cx="32" cy="83.5" r="2.8"/>
+    <text x="160" y="76" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="48" font-weight="600" letter-spacing="-0.5">slipstream</text>
+  </g>
+</svg>
