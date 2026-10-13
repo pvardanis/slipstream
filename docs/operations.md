@@ -16,7 +16,7 @@ before creating the run if no worker is polling the pool.
 
 Each dispatch re-registers the deployment with defaults resolved from the live stack
 and `main`'s image, so it **overwrites** any override a manual `just prefect-register`
-set (a pinned `bench_image_tag`, retries, the commercial arm).
+set (a pinned `bench_image_tag`, retries).
 
 **From a workstation:**
 
