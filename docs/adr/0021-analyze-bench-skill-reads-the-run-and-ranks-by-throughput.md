@@ -1,6 +1,6 @@
 <!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). -->
 
-# ADR-0020: analyze-bench reads the run and ranks by throughput
+# ADR-0021: analyze-bench reads the run and ranks by throughput
 
 - Status: Accepted
 - Date: 2026-10-09
