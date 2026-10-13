@@ -256,3 +256,25 @@ The deep digest's input set is unchanged — the artifact reads `model.yaml`,
 `sweep-grid.yaml`, and the vLLM manifest for display only, and does not fold the
 orchestration image ref into the digest. A **three-level artifact layout** reopens only if a
 point or a cell gains configuration that is not already encoded in its slug or cell name.
+
+## Amendment (2026-10-13): the CI trigger arm is taken
+
+The "CI later" arm of the trigger decision is taken as a manual `workflow_dispatch`
+(`.github/workflows/sweep-dispatch.yml`), not a merge or image-bump gate: a sweep still burns
+a GPU and stays a deliberate act, so CI removes only the need for a workstation, not the
+operator's decision. The workflow runs the same `prefect deployment run` the manual arm does,
+over a transient `kubectl port-forward` — the server keeps **no public endpoint** — and stays
+fire-and-forget: it returns once the run is created.
+
+**Access is an OIDC role plus namespaced RBAC.** The workflow assumes a bootstrap-stack role
+through the repo's main-branch OIDC trust; the role's IAM grant is only `eks:DescribeCluster`
+on this cluster and region-scoped `ec2:DescribeInstances` to resolve the bench host from its
+tags. An EKS access entry maps the role to a Kubernetes group bound to a Role in the Prefect
+namespace allowing only the port-forward — no AWS-managed access policy, no cluster-wide
+grant. The access entry is gated with the worker layer, like the rest of the sweep path.
+
+**Consequences.** A green dispatch means the run was created against a registered deployment
+whose work pool had a worker polling it; the workflow checks both before creating the run. It
+neither stands the stack up nor registers the deployment — `just stack-up` and
+`just prefect-register` stay operator steps bracketing the GPU spend. The **schedule** stays
+declined, for the reason above.
