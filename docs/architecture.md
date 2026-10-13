@@ -32,8 +32,8 @@ flowchart LR
     bimg -- OIDC --> brole --> ecr
     oimg -- OIDC --> orole --> ecr
     disp -- OIDC --> drole
-    drole -- describe cluster + bench host,<br/>port-forward svc/prefect-server --> ps
-    disp -- register knob-sweep<br/>+ deployment run --> ps
+    drole -- port-forward --> ps
+    disp -- register + run<br/>knob-sweep --> ps
 ```
 
 - **No long-lived keys.** Every AWS call assumes an OIDC role created by
@@ -56,7 +56,7 @@ flowchart LR
 ## Benchmark data path
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph eks[EKS]
         ps[Prefect server<br/>SQLite on EBS]
         pw[Prefect worker<br/>Pod Identity: S3 + SSM]
