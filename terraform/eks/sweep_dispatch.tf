@@ -26,7 +26,11 @@ resource "aws_eks_access_entry" "sweep_dispatch" {
 
 # What `kubectl port-forward svc/prefect-server` needs: read the Service to resolve its
 # backing pod, read that pod, and open the forward on the pods/portforward subresource.
-# Namespaced (not a ClusterRole), so the grant cannot reach beyond prefect.
+# kubectl opens the forward over WebSockets, an HTTP GET authorized as `get`, and the
+# cluster additionally checks `create` on that upgrade
+# (AuthorizePodWebsocketUpgradeCreatePermission); the SPDY path is `create` alone. So
+# the subresource carries both verbs. Namespaced (not a ClusterRole), so the grant
+# cannot reach beyond prefect.
 resource "kubernetes_role_v1" "sweep_dispatch" {
   count = local.worker_enabled ? 1 : 0
   metadata {
@@ -42,7 +46,7 @@ resource "kubernetes_role_v1" "sweep_dispatch" {
   rule {
     api_groups = [""]
     resources  = ["pods/portforward"]
-    verbs      = ["create"]
+    verbs      = ["get", "create"]
   }
 
   # The prefect namespace is created by the server's Helm release.
