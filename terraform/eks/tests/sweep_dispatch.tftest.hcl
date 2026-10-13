@@ -87,19 +87,28 @@ run "sweep_dispatch_access_shape" {
     condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if contains(r.resources, "services") && contains(r.resources, "pods") && contains(r.verbs, "get") && contains(r.verbs, "list")]) == 1
     error_message = "The Role must allow get/list on services and pods so port-forward can resolve the server pod."
   }
+  # The forward is authorized as `get` when kubectl opens it over WebSockets and as
+  # `create` over SPDY (and on the WebSocket upgrade where the cluster also checks
+  # create), so both verbs are needed and no others.
   assert {
-    condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if length(r.resources) == 1 && contains(r.resources, "pods/portforward") && length(r.verbs) == 1 && contains(r.verbs, "create")]) == 1
-    error_message = "The Role must allow create on pods/portforward."
+    condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if length(r.resources) == 1 && contains(r.resources, "pods/portforward") && length(r.verbs) == 2 && contains(r.verbs, "get") && contains(r.verbs, "create")]) == 1
+    error_message = "The Role must allow get and create on pods/portforward, and nothing else on it."
   }
   # Every verb outside the portforward rule is a read, so the group can open the forward
   # and nothing else: no writes, deletes, exec, or wildcards.
   assert {
     condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if !(length(r.resources) == 1 && contains(r.resources, "pods/portforward")) && length(setsubtract(r.verbs, ["get", "list"])) > 0]) == 0
-    error_message = "Apart from create on pods/portforward, the Role must grant only get/list."
+    error_message = "Apart from pods/portforward, the Role must grant only get/list."
   }
   assert {
     condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if contains(r.verbs, "*") || contains(r.resources, "*")]) == 0
     error_message = "The sweep-dispatch Role must not use wildcard verbs or resources."
+  }
+  # Every rule is on the core API group, so "services" and "pods" mean the core kinds and
+  # no wildcard group widens them.
+  assert {
+    condition     = alltrue([for r in kubernetes_role_v1.sweep_dispatch[0].rule : length(r.api_groups) == 1 && contains(r.api_groups, "")])
+    error_message = "Every sweep-dispatch Role rule must be on the core API group only."
   }
 
   # The RoleBinding grants that Role to the access entry's group, in the same namespace.
@@ -108,12 +117,14 @@ run "sweep_dispatch_access_shape" {
     error_message = "The sweep-dispatch RoleBinding must live in the prefect namespace."
   }
   assert {
-    condition     = kubernetes_role_binding_v1.sweep_dispatch[0].subject[0].kind == "Group" && kubernetes_role_binding_v1.sweep_dispatch[0].subject[0].name == "sweep-dispatch"
-    error_message = "The RoleBinding must bind the sweep-dispatch group the access entry maps."
+    condition     = length(kubernetes_role_binding_v1.sweep_dispatch[0].subject) == 1 && kubernetes_role_binding_v1.sweep_dispatch[0].subject[0].kind == "Group" && kubernetes_role_binding_v1.sweep_dispatch[0].subject[0].name == "sweep-dispatch"
+    error_message = "The RoleBinding must bind only the sweep-dispatch group the access entry maps."
   }
+  # A namespaced Role, never a ClusterRole, so the binding cannot reach past the
+  # prefect namespace's grant.
   assert {
-    condition     = kubernetes_role_binding_v1.sweep_dispatch[0].role_ref[0].name == kubernetes_role_v1.sweep_dispatch[0].metadata[0].name
-    error_message = "The RoleBinding must reference the sweep-dispatch Role."
+    condition     = kubernetes_role_binding_v1.sweep_dispatch[0].role_ref[0].kind == "Role" && kubernetes_role_binding_v1.sweep_dispatch[0].role_ref[0].name == kubernetes_role_v1.sweep_dispatch[0].metadata[0].name
+    error_message = "The RoleBinding must reference the namespaced sweep-dispatch Role."
   }
 }
 
