@@ -86,7 +86,7 @@ just cli-test    # local suite, no cluster
 
 Work from a dedicated IAM user, not the account root: root cannot hold an EKS access
 entry. Create the user (VPC/EKS permissions, console access + MFA), give it an access
-key, then:
+key, and sign in to the console as that user to inspect EKS there. Then:
 
 ```sh
 aws configure --profile slipstream-admin   # access key + region (eu-west-1)
@@ -99,7 +99,8 @@ will not find the resources.
 
 ### New environment or fork
 
-Once per AWS account / repository:
+Once per AWS account / repository. The image workflows need the repo variables, which
+need a cluster, and the worker needs the published image, hence the order:
 
 1. In a fork or renamed repo, set `github_oidc_sub_prefix` in `terraform/bootstrap` to
    the repo's OIDC subject prefix, otherwise every workflow fails with
@@ -108,10 +109,11 @@ Once per AWS account / repository:
    gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
    ```
 2. `just bootstrap` — remote-state bucket, ECR repositories, GitHub OIDC roles.
-3. Merge to `main` (or dispatch `bench-image` and `orchestration-image`) to publish the
-   images.
-4. `just enable_prefect_worker=true cluster-up`, then `just gh-vars` — sets the eight
-   repo variables the workflows read from the bootstrap and eks outputs.
+3. `just cluster-up`, then `just gh-vars` — sets the eight repo variables the workflows
+   read from the bootstrap and eks outputs.
+4. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
+5. `just enable_prefect_worker=true cluster-up` — adds the Prefect worker and the
+   sweep-dispatch access.
 
 ## Quickstart
 
@@ -124,9 +126,12 @@ just stack-down                            # tear down, then zero-leak sweep (sp
 
 The bench endpoint is public and every node bills while up: **run `just stack-down`
 when done.** Only the state bucket and ECR repositories survive it; the results bucket
-is deleted with its contents, so sync first. Running a sweep
-locally, single points, and the cloud-verify check are in
-[`docs/operations.md`](docs/operations.md).
+is deleted with its contents, so sync first. `stack-down` exits non-zero if a tagged
+instance or volume survived, and skips `cluster-down` (leaving the cluster billing) if
+the endpoint teardown failed: fix that and rerun. Running a sweep locally, single
+points, pinned images and the cloud-verify check are in
+[`docs/operations.md`](docs/operations.md); `uv run slipstream-bench --help` lists the
+bench CLI.
 
 ## Recipes
 
