@@ -71,10 +71,10 @@ flowchart TB
 
     ps -- flow run --> pw
     pw -- "Tier 1: kubectl redeploy<br/>per engine point" --> vllm
-    pw -- "Tier 2: SSM send-command<br/>one docker run per cell" --> host
+    pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
     host -- result JSON<br/>sweeps/run-id/ --> s3
-    pw -- "reads results; writes cache keys, chart PNGs" --> s3
+    pw -- "cache, charts" --> s3
     pw -- ceiling tables<br/>as run artifacts --> ps
 ```
 
