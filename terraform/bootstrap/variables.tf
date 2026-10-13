@@ -52,3 +52,15 @@ variable "orchestration_image_push_role_name" {
   type        = string
   default     = "slipstream-orchestration-image-push"
 }
+
+variable "sweep_dispatch_role_name" {
+  description = "Name of the IAM role the sweep-dispatch GitHub Actions workflow assumes via OIDC to reach the cluster and trigger the knob sweep."
+  type        = string
+  default     = "slipstream-sweep-dispatch"
+}
+
+variable "cluster_name" {
+  description = "Name of the EKS cluster the sweep-dispatch role may describe. Must match the eks stack's cluster_name (both default to slipstream)."
+  type        = string
+  default     = "slipstream"
+}

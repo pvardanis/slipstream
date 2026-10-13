@@ -38,3 +38,8 @@ output "orchestration_image_push_role_arn" {
   description = "ARN of the IAM role the orchestration-image GitHub Actions workflow assumes via OIDC to push to ECR; set as the role-to-assume in that workflow."
   value       = aws_iam_role.orchestration_image_push.arn
 }
+
+output "sweep_dispatch_role_arn" {
+  description = "ARN of the IAM role the sweep-dispatch GitHub Actions workflow assumes via OIDC; set as the AWS_SWEEP_DISPATCH_ROLE_ARN repo variable, and read by the eks stack to grant it Kubernetes access."
+  value       = aws_iam_role.sweep_dispatch.arn
+}
