@@ -74,7 +74,7 @@ flowchart TB
     pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
     host -- result JSON<br/>sweeps/run-id/ --> s3
-    pw -- "cache, charts" --> s3
+    pw -- "cache, charts" ---> s3
     pw -- ceiling tables<br/>as run artifacts --> ps
 ```
 
