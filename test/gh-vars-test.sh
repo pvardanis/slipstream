@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Unit test for bench/gh-vars.sh: terraform and gh are stubbed on PATH so the
+# test asserts the repo variables the script sets from the stack outputs, never
+# a real terraform read or GitHub write. It checks that all eight variables are
+# set with their output values (the ECR repository names stripped of their
+# registry host), and that a failed or empty output aborts the script before
+# any variable is set, so a half-set variable list never ships.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+script="${repo_root}/bench/gh-vars.sh"
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+
+# Stub terraform: answer `-chdir=<dir> output -raw <name>` from a fixed table.
+# EKS_EXIT makes every eks read fail (no cluster up); EMPTY_OUTPUT names one
+# output that resolves to exit-0 empty stdout.
+mkdir -p "${tmp}/bin"
+cat >"${tmp}/bin/terraform" <<'EOF'
+#!/usr/bin/env bash
+dir="${1#-chdir=}" name="$4"
+if [[ "${dir}" == eks && "${EKS_EXIT:-0}" != 0 ]]; then
+  echo "No outputs found" >&2
+  exit 1
+fi
+[[ "${name}" == "${EMPTY_OUTPUT:-}" ]] && exit 0
+case "${dir}/${name}" in
+  bootstrap/region) echo eu-west-1 ;;
+  bootstrap/bench_image_push_role_arn) echo arn:bench-push ;;
+  bootstrap/bench_image_repo_url) echo 123.dkr.ecr.eu-west-1.amazonaws.com/slipstream/bench ;;
+  bootstrap/orchestration_image_push_role_arn) echo arn:orch-push ;;
+  bootstrap/orchestration_image_repo_url) echo 123.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orch ;;
+  bootstrap/sweep_dispatch_role_arn) echo arn:dispatch ;;
+  eks/cluster_name) echo slipstream ;;
+  eks/prefect_namespace) echo prefect ;;
+  *) echo "unexpected output ${dir}/${name}" >&2; exit 1 ;;
+esac
+EOF
+# Stub gh: append one line per call so every variable set is recorded.
+cat >"${tmp}/bin/gh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"${tmp}/gh-calls"
+EOF
+chmod +x "${tmp}/bin/terraform" "${tmp}/bin/gh"
+
+fail=0
+run() {
+  : >"${tmp}/gh-calls"
+  PATH="${tmp}/bin:${PATH}" "${script}" bootstrap eks 2>"${tmp}/stderr"
+}
+check() {
+  local label="$1" want="$2"
+  if grep -qxF -- "${want}" "${tmp}/gh-calls"; then
+    echo "ok   ${label}"
+  else
+    echo "FAIL ${label}: '${want}' not in gh calls" >&2
+    fail=1
+  fi
+}
+check_aborted() {
+  local label="$1" want_err="$2"
+  if run; then
+    echo "FAIL ${label}: script exited 0" >&2
+    fail=1
+  elif [[ -s "${tmp}/gh-calls" ]]; then
+    echo "FAIL ${label}: gh called before abort" >&2
+    fail=1
+  elif ! grep -qF -- "${want_err}" "${tmp}/stderr"; then
+    echo "FAIL ${label}: stderr lacks '${want_err}'" >&2
+    fail=1
+  else
+    echo "ok   ${label}"
+  fi
+}
+
+# Happy path: every variable the workflows read, set from its output.
+run
+check "region" "variable set AWS_REGION --body eu-west-1"
+check "bench push role" "variable set AWS_BENCH_IMAGE_PUSH_ROLE_ARN --body arn:bench-push"
+check "bench repo name" "variable set ECR_REPOSITORY --body slipstream/bench"
+check "orch push role" "variable set AWS_ORCHESTRATION_IMAGE_PUSH_ROLE_ARN --body arn:orch-push"
+check "orch repo name" "variable set ORCHESTRATION_ECR_REPOSITORY --body slipstream/orch"
+check "dispatch role" "variable set AWS_SWEEP_DISPATCH_ROLE_ARN --body arn:dispatch"
+check "cluster name" "variable set EKS_CLUSTER_NAME --body slipstream"
+check "prefect namespace" "variable set PREFECT_NAMESPACE --body prefect"
+got="$(wc -l <"${tmp}/gh-calls" | tr -d ' ')"
+if [[ "${got}" == 8 ]]; then
+  echo "ok   exactly eight variables"
+else
+  echo "FAIL exactly eight variables: got ${got}" >&2
+  fail=1
+fi
+
+# No cluster up: the eks reads fail, and the script names the fix.
+EKS_EXIT=1 check_aborted "eks state missing" "just cluster-up"
+# An output that resolves to nothing aborts rather than setting an empty variable.
+EMPTY_OUTPUT=sweep_dispatch_role_arn check_aborted "empty bootstrap output" "sweep_dispatch_role_arn is empty"
+EMPTY_OUTPUT=prefect_namespace check_aborted "empty eks output" "prefect_namespace is empty"
+
+exit "${fail}"

@@ -46,6 +46,12 @@ cluster-plan: _bootstrap-init
       -var="enable_prefect_worker={{ enable_prefect_worker }}" \
       -var="state_bucket=${bucket}"
 
+# Needs `gh` authenticated and a cluster up (`just cluster-up`) for the eks outputs.
+# Set the GitHub repo variables the CI workflows read from the bootstrap and eks outputs.
+[group('cluster')]
+gh-vars: _bootstrap-init
+    {{ justfile_directory() }}/bench/gh-vars.sh {{ bootstrap_dir }} {{ eks_dir }}
+
 # Apply the GPU node pool (NodePool + EC2NodeClass) and the NVIDIA device plugin.
 # Karpenter provisions no node until a pod tolerates the GPU taint and requests
 # nvidia.com/gpu — the GPU replica (`just gpu-deploy`, #91) does that.
