@@ -6,7 +6,8 @@
 # cluster up (`just stack-up`) or register the deployment (`just prefect-register`),
 # which stay deliberate operator steps that bracket the GPU spend (ADR-0015). The run
 # itself executes in-cluster on the worker to completion; this workflow returns as soon
-# as the run is created (no --watch), the fire-and-forget the ADR calls for.
+# as the run is created (no --watch), consistent with the ADR's fire-and-forget trigger.
+# Dispatch it from main: the OIDC role trusts only main-branch runs.
 name: sweep-dispatch
 
 on:
@@ -42,10 +43,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Region and cluster name come from repo variables set from the eks stack's `region`
-  # and `cluster_name` outputs (see README), so they track the infrastructure terraform
-  # created rather than restating its values here. The Prefect namespace comes from the
-  # eks stack's `prefect_namespace` output the same way.
+  # Repo variables (see README), so the workflow tracks the infrastructure terraform
+  # created rather than restating its values here: AWS_REGION is the one the image
+  # workflows set from the bootstrap `region` output; the cluster name and Prefect
+  # namespace come from the eks stack's `cluster_name` and `prefect_namespace` outputs.
   AWS_REGION: ${{ vars.AWS_REGION }}
   EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
   PREFECT_NAMESPACE: ${{ vars.PREFECT_NAMESPACE }}
@@ -61,6 +62,18 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # The dispatch role trusts only main-branch runs, so a dispatch from any other ref
+      # would fail at the OIDC exchange with an opaque STS error; fail here with the fix.
+      - name: Require a main-branch dispatch
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${REF}" != "refs/heads/main" ]]; then
+            echo "::error::dispatch sweep-dispatch from main (got ${REF}); the OIDC role trusts only main-branch runs"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -84,7 +97,7 @@ jobs:
           set -euo pipefail
           # Fail loud with a fix hint if a repo variable is unset/empty rather than
           # letting an empty name reach the AWS API as a vague error.
-          : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the eks region output (see README)}"
+          : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
           : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
           aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
 
@@ -94,27 +107,43 @@ jobs:
           INSTANCE_ID: ${{ inputs.instance_id }}
         run: |
           set -euo pipefail
-          host_id="${INSTANCE_ID}"
-          if [[ -z "${host_id}" ]]; then
-            : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
-            # The bench-endpoint stack names its host ${cluster_name}-bench-endpoint-host
-            # and tags it Project=slipstream (terraform/bench-endpoint). One running host
-            # per live stack, so exactly one id is expected: zero means the stack is not
-            # up, and more than one is ambiguous — both fail loud rather than guess, and
-            # the input is the override for the ambiguous case.
-            resolved="$(aws ec2 describe-instances \
-              --filters "Name=tag:Name,Values=${EKS_CLUSTER_NAME}-bench-endpoint-host" \
-                        "Name=tag:Project,Values=slipstream" \
-                        "Name=instance-state-name,Values=running" \
-              --query 'Reservations[].Instances[].InstanceId' --output text)"
-            read -ra ids <<<"${resolved}"
-            case "${#ids[@]}" in
-              1) host_id="${ids[0]}" ;;
-              0) echo "::error::no running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host — is the stack up (just stack-up)?"; exit 1 ;;
-              *) echo "::error::multiple running bench hosts matched (${ids[*]}); set the instance_id input to disambiguate"; exit 1 ;;
-            esac
+          : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
+          # The bench-endpoint stack names its host ${cluster_name}-bench-endpoint-host
+          # and tags it Project=slipstream (terraform/bench-endpoint). The same filters
+          # resolve the host when the input is blank and validate it when set, so an
+          # override must still name a running bench host. One running host per live
+          # stack, so exactly one id is expected: zero means the stack is not up (or the
+          # override is not a running bench host), and more than one is ambiguous — both
+          # fail loud rather than guess, and the input is the override for the ambiguous
+          # case. JSON output, because text output applies the query per page.
+          # The override, if any, rides in the positional args ("$@" expands to nothing
+          # when unset, under set -u on any bash).
+          set --
+          if [[ -n "${INSTANCE_ID}" ]]; then
+            set -- --instance-ids "${INSTANCE_ID}"
           fi
-          echo "instance_id=${host_id}" >>"${GITHUB_OUTPUT}"
+          resolved="$(aws ec2 describe-instances "$@" \
+            --filters "Name=tag:Name,Values=${EKS_CLUSTER_NAME}-bench-endpoint-host" \
+                      "Name=tag:Project,Values=slipstream" \
+                      "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' --output json)"
+          count="$(jq 'length' <<<"${resolved}")"
+          case "${count}" in
+            1) ;;
+            0)
+              if [[ -n "${INSTANCE_ID}" ]]; then
+                echo "::error::instance_id ${INSTANCE_ID} is not a running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host"
+              else
+                echo "::error::no running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host — is the stack up (just stack-up)?"
+              fi
+              exit 1
+              ;;
+            *)
+              echo "::error::multiple running bench hosts matched ($(jq -r 'join(" ")' <<<"${resolved}")); set the instance_id input to disambiguate"
+              exit 1
+              ;;
+          esac
+          echo "instance_id=$(jq -r '.[0]' <<<"${resolved}")" >>"${GITHUB_OUTPUT}"
 
       - name: Trigger the sweep over a transient port-forward
         env:
@@ -122,6 +151,7 @@ jobs:
           RUN_ID: ${{ inputs.run_id }}
         run: |
           set -euo pipefail
+          : "${INSTANCE_ID:?resolved instance id is empty}"
           : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
           # An empty run id means "generate one" — the same UTC-timestamp default the
           # manual `just bench` arm uses, so a CI-triggered run is named like a local one.
@@ -131,34 +161,36 @@ jobs:
           fi
 
           # Reach the in-cluster API over a transient port-forward (no public endpoint,
-          # ADR-0015), reaped on exit so it never outlives the job. This mirrors
-          # bench/prefect-portforward.sh, which resolves the namespace from local
-          # terraform state the runner does not have — here it comes from the repo var.
-          kubectl -n "${PREFECT_NAMESPACE}" port-forward svc/prefect-server 4200:4200 \
-            >/tmp/prefect-pf.log 2>&1 &
-          pf=$!
-          trap 'kill "${pf}" 2>/dev/null || true' EXIT
-          export PREFECT_API_URL="http://127.0.0.1:4200/api"
+          # ADR-0015), reaped on exit so it never outlives the job — the same helper the
+          # lifecycle recipes use, given the namespace from the repo var because the
+          # runner has no terraform state to resolve it from.
+          # shellcheck source=/dev/null
+          source bench/prefect-portforward.sh
+          prefect_api_portforward "${PREFECT_NAMESPACE}" 4200
 
-          # Wait for the forwarded API to answer, failing fast if the forward died
-          # rather than spinning to the deadline against a port nothing is serving.
-          deadline=$((SECONDS + 30))
-          until curl -sf "${PREFECT_API_URL}/health" >/dev/null 2>&1; do
-            if ! kill -0 "${pf}" 2>/dev/null; then
-              echo "::error::port-forward to svc/prefect-server exited; see the log below"
-              cat /tmp/prefect-pf.log >&2
-              exit 1
-            fi
-            ((SECONDS < deadline)) || {
-              echo "::error::Prefect API not reachable over port-forward within 30s — is the stack up (just stack-up)?"
-              exit 1
-            }
-            sleep 1
-          done
+          # `prefect deployment run` only creates the run; it exits 0 whether or not a
+          # worker is there to pick it up. Check before creating it that the deployment
+          # is registered and that its work pool is READY (a worker is polling), so a
+          # green job means the sweep will actually start.
+          deployment_name="knob-sweep/knob-sweep"
+          deployment="$(curl -sf --max-time 10 "${PREFECT_API_URL}/deployments/name/${deployment_name}")" || {
+            echo "::error::deployment ${deployment_name} is not registered — run just prefect-register"
+            exit 1
+          }
+          pool="$(jq -er '.work_pool_name' <<<"${deployment}")"
+          pool_status="$(curl -sf --max-time 10 "${PREFECT_API_URL}/work_pools/${pool}" | jq -er '.status')" || {
+            echo "::error::could not read work pool ${pool} from the Prefect API"
+            exit 1
+          }
+          if [[ "${pool_status}" != "READY" ]]; then
+            echo "::error::work pool ${pool} is ${pool_status}, not READY — no worker is polling it, so the run would sit unstarted; check the prefect-worker deployment"
+            exit 1
+          fi
 
           # Create the run and return; the worker picks it up and runs it to completion
-          # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). A missing
-          # deployment fails loud here — register it first with `just prefect-register`.
-          uv run prefect deployment run knob-sweep/knob-sweep \
-            --param "run_id=${sweep_run_id}" \
-            --param "instance_id=${INSTANCE_ID}"
+          # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
+          # go as one JSON object so each value stays a string (--param parses values as
+          # JSON, which would turn a numeric run id into a number).
+          uv run prefect deployment run "${deployment_name}" \
+            --params "$(jq -nc --arg run_id "${sweep_run_id}" --arg instance_id "${INSTANCE_ID}" \
+              '{run_id: $run_id, instance_id: $instance_id}')"
