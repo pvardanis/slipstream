@@ -159,21 +159,23 @@ jobs:
           set -euo pipefail
           : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
           : "${ECR_REPOSITORY:?repo variable ECR_REPOSITORY is empty — set it to the bench-client ECR repository name (see README)}"
-          # The same bench-client image ref `_bench-image-ref` resolves locally: the bootstrap
-          # repository URL (<account>.dkr.ecr.<region>.amazonaws.com/<name>) and the
-          # floating main tag image-tag.sh derives from model.yaml.
+          # The same bench-client image ref `_bench-image-ref` resolves locally with no
+          # bench_image_tag pin: the bootstrap repository URL
+          # (<account>.dkr.ecr.<region>.amazonaws.com/<name>) and the floating main tag
+          # image-tag.sh derives from model.yaml.
           account="$(aws sts get-caller-identity --query Account --output text)"
           tag="$(bench/image-tag.sh main-tag)"
           echo "image_ref=${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${tag}" >>"${GITHUB_OUTPUT}"
 
           # The bench-endpoint stack names the results bucket by prefix
-          # (${cluster_name}-bench-endpoint-results-<suffix>), so the suffix changes with
-          # every bench-endpoint-up and the bucket is found by listing. One bucket per live
+          # (${cluster_name}-bench-endpoint-results-<suffix>), so the suffix changes whenever
+          # the bucket is recreated and the bucket is found by listing. One bucket per live
           # stack: zero means bench-endpoint is not up, and more than one is ambiguous —
           # both fail loud rather than guess.
           prefix="${EKS_CLUSTER_NAME}-bench-endpoint-results-"
           buckets="$(aws s3api list-buckets --prefix "${prefix}" --query 'Buckets[].Name' --output json)"
-          case "$(jq 'length' <<<"${buckets}")" in
+          count="$(jq 'length' <<<"${buckets}")"
+          case "${count}" in
             1) ;;
             0)
               echo "::error::no results bucket named ${prefix}* — is bench-endpoint up (just stack-up)?"
@@ -195,6 +197,8 @@ jobs:
         run: |
           set -euo pipefail
           : "${INSTANCE_ID:?resolved instance id is empty}"
+          : "${BUCKET:?resolved results bucket is empty}"
+          : "${IMAGE_REF:?resolved bench-client image ref is empty}"
           : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
           # An empty run id means "generate one" — the same UTC-timestamp default the
           # manual `just bench` arm uses, so a CI-triggered run is named like a local one.
