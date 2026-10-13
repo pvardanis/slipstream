@@ -262,19 +262,23 @@ point or a cell gains configuration that is not already encoded in its slug or c
 The "CI later" arm of the trigger decision is taken as a manual `workflow_dispatch`
 (`.github/workflows/sweep-dispatch.yml`), not a merge or image-bump gate: a sweep still burns
 a GPU and stays a deliberate act, so CI removes only the need for a workstation, not the
-operator's decision. The workflow runs the same `prefect deployment run` the manual arm does,
-over a transient `kubectl port-forward` — the server keeps **no public endpoint** — and stays
-fire-and-forget: it returns once the run is created.
+operator's decision. Over a transient `kubectl port-forward` — the server keeps **no public
+endpoint** — the workflow registers the knob-sweep deployment with the same command the manual
+arm's `just prefect-register` runs, then runs the same `prefect deployment run`, and stays
+fire-and-forget: it returns once the run is created. Registering on every dispatch is cheap
+and idempotent (it overwrites the deployment), and it is what keeps the trigger working after
+a `cluster-down`, which wipes the server's SQLite and every deployment in it.
 
 **Access is an OIDC role plus namespaced RBAC.** The workflow assumes a bootstrap-stack role
 through the repo's main-branch OIDC trust; the role's IAM grant is only `eks:DescribeCluster`
-on this cluster and region-scoped `ec2:DescribeInstances` to resolve the bench host from its
-tags. An EKS access entry maps the role to a Kubernetes group bound to a Role in the Prefect
+on this cluster, region-scoped `ec2:DescribeInstances` to resolve the bench host from its
+tags, and `s3:ListAllMyBuckets` to resolve the results bucket the deployment is registered
+against — bench-endpoint names it by prefix, so its full name changes with every stack-up. An EKS access entry maps the role to a Kubernetes group bound to a Role in the Prefect
 namespace allowing only the port-forward — no AWS-managed access policy, no cluster-wide
 grant. The access entry is gated with the worker layer, like the rest of the sweep path.
 
-**Consequences.** A green dispatch means the run was created against a registered deployment
-whose work pool had a worker polling it; the workflow checks both before creating the run. It
-neither stands the stack up nor registers the deployment — `just stack-up` and
-`just prefect-register` stay operator steps bracketing the GPU spend. The **schedule** stays
+**Consequences.** A green dispatch means the run was created against a deployment registered
+from `main` whose work pool had a worker polling it; the workflow checks the pool before
+creating the run. It does not stand the stack up — `just stack-up` stays the operator step
+bracketing the GPU spend, and `just prefect-register` stays for the manual arm. The **schedule** stays
 declined, for the reason above.
