@@ -14,7 +14,7 @@ The build spec is [`docs/spec.md`](docs/spec.md); decisions are recorded in
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
     op([Operator])
 
     subgraph gha[GitHub Actions]
