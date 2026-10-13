@@ -74,8 +74,7 @@ flowchart TB
     pw -- "Tier 2: SSM send-command<br/>one docker run per cell" --> host
     host -- vllm bench serve --> alb --> vllm
     host -- result JSON<br/>sweeps/run-id/ --> s3
-    pw -- validity gate reads result,<br/>Prefect results + cache keys --> s3
-    pw -- chart PNGs --> s3
+    pw -- "reads results; writes cache keys, chart PNGs" --> s3
     pw -- ceiling tables<br/>as run artifacts --> ps
 ```
 
