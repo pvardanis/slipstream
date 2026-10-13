@@ -65,6 +65,7 @@ run "worker_layer_shape" {
     values = {
       outputs = {
         orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
       }
     }
   }
@@ -391,6 +392,7 @@ run "worker_requires_a_content_tag" {
     values = {
       outputs = {
         orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
       }
     }
   }
@@ -421,6 +423,7 @@ run "worker_rejects_multiple_content_tags" {
     values = {
       outputs = {
         orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
       }
     }
   }
