@@ -1,8 +1,9 @@
-# GitHub OIDC trust and the IAM role a GitHub Actions workflow assumes to push the
-# bench-client image to ECR (see ecr.tf). It lives in the bootstrap stack because
-# it is durable, account-wide identity that must exist before any workflow can
-# publish and must outlive `just cluster-down`. No long-lived AWS keys: the
-# workflow exchanges its short-lived OIDC token for this role via STS.
+# GitHub OIDC trust and the IAM roles GitHub Actions workflows assume: the image-push
+# roles (see ecr.tf) and the sweep-dispatch role the CI sweep trigger uses to reach the
+# cluster. They live in the bootstrap stack because they are durable, account-wide
+# identity that must exist before any workflow runs and must outlive
+# `just cluster-down`. No long-lived AWS keys: each workflow exchanges its short-lived
+# OIDC token for its role via STS.
 
 locals {
   github_oidc_host     = "token.actions.githubusercontent.com"
@@ -100,7 +101,36 @@ locals {
       },
     ]
   }
+
+  # The sweep-dispatch workflow's AWS reads, made before it port-forwards to the Prefect
+  # server: DescribeCluster backs `aws eks update-kubeconfig` and is scoped to this one
+  # cluster's ARN; DescribeInstances resolves the bench host from its tags. Describe
+  # actions take no resource scope, so that grant is on "*", narrowed to the stack's
+  # region by condition. The port-forward itself is Kubernetes access, granted by the
+  # eks stack's access entry + namespaced RBAC, not by this policy.
+  sweep_dispatch_permissions_policy = {
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DescribeCluster"
+        Effect   = "Allow"
+        Action   = "eks:DescribeCluster"
+        Resource = "arn:aws:eks:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.cluster_name}"
+      },
+      {
+        Sid      = "DescribeInstances"
+        Effect   = "Allow"
+        Action   = "ec2:DescribeInstances"
+        Resource = "*"
+        Condition = {
+          StringEquals = { "aws:RequestedRegion" = var.region }
+        }
+      },
+    ]
+  }
 }
+
+data "aws_caller_identity" "current" {}
 
 # AWS uses its own library of trusted root CAs to validate GitHub's issuer, so no
 # thumbprint_list is configured (an explicit list would need a network read of the
@@ -130,4 +160,17 @@ resource "aws_iam_role_policy" "orchestration_image_push" {
   name   = "orchestration-push"
   role   = aws_iam_role.orchestration_image_push.id
   policy = jsonencode(local.orchestration_push_permissions_policy)
+}
+
+# Shares the repo-main trust with the push roles: only a main-branch run of this repo
+# can assume it, which is where the workflow_dispatch runs.
+resource "aws_iam_role" "sweep_dispatch" {
+  name               = var.sweep_dispatch_role_name
+  assume_role_policy = jsonencode(local.github_push_trust_policy)
+}
+
+resource "aws_iam_role_policy" "sweep_dispatch" {
+  name   = "sweep-dispatch"
+  role   = aws_iam_role.sweep_dispatch.id
+  policy = jsonencode(local.sweep_dispatch_permissions_policy)
 }

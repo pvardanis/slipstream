@@ -4,7 +4,16 @@
 # role, and that the role can push to the bench-client repo and nothing else —
 # without creating a real IAM provider or role. The real end-to-end proof (a
 # workflow actually assumes the role and pushes) is the cloud tier.
-mock_provider "aws" {}
+mock_provider "aws" {
+  # A fixed account id so the sweep-dispatch policy's cluster ARN is known at plan and
+  # assertable exactly.
+  mock_data "aws_caller_identity" {
+    defaults = {
+      account_id = "111122223333"
+      arn        = "arn:aws:iam::111122223333:user/test"
+    }
+  }
+}
 mock_provider "random" {}
 
 run "github_oidc_trust_and_permissions" {
@@ -103,5 +112,36 @@ run "orchestration_push_permissions" {
   assert {
     condition     = local.orchestration_push_permissions_policy.Statement[2].Action == "ecr:DescribeImages"
     error_message = "A separate statement must grant DescribeImages for the content-hash existence check."
+  }
+}
+
+# The sweep-dispatch role shares the repo-main trust, so only a main-branch run of this
+# repo's sweep-dispatch workflow can assume it. Its permissions are the two reads the
+# workflow makes before the port-forward: DescribeCluster for `aws eks update-kubeconfig`,
+# scoped to this one cluster, and DescribeInstances to resolve the bench host from its
+# tags. Kubernetes access (the port-forward itself) is not IAM — it is the eks stack's
+# access entry + namespaced RBAC.
+run "sweep_dispatch_permissions" {
+  command = plan
+
+  assert {
+    condition     = aws_iam_role.sweep_dispatch.name == "slipstream-sweep-dispatch"
+    error_message = "The sweep-dispatch role must be named slipstream-sweep-dispatch."
+  }
+
+  # Exactly two statements, so no grant beyond the two reads slips in alongside them.
+  assert {
+    condition     = length(local.sweep_dispatch_permissions_policy.Statement) == 2
+    error_message = "The sweep-dispatch policy must carry exactly the DescribeCluster and DescribeInstances statements."
+  }
+  assert {
+    condition     = length([for s in local.sweep_dispatch_permissions_policy.Statement : s if s.Sid == "DescribeCluster" && s.Action == "eks:DescribeCluster" && s.Resource == "arn:aws:eks:eu-west-1:111122223333:cluster/slipstream"]) == 1
+    error_message = "eks:DescribeCluster must be scoped to the slipstream cluster ARN."
+  }
+  # Describe actions take no resource scope, so the grant is on "*" and narrowed to the
+  # stack's region by condition instead.
+  assert {
+    condition     = length([for s in local.sweep_dispatch_permissions_policy.Statement : s if s.Sid == "DescribeInstances" && s.Action == "ec2:DescribeInstances" && s.Resource == "*" && try(s.Condition.StringEquals["aws:RequestedRegion"], null) == "eu-west-1"]) == 1
+    error_message = "ec2:DescribeInstances must be granted on * and limited to the stack's region."
   }
 }
