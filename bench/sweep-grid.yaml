@@ -1,62 +1,31 @@
-# Swept knob grid for the unattended knob sweep (ADR-0009, ADR-0015). The orchestration
-# worker reads this file through the contract's load_grid, which validates it against the
-# SweepGrid pydantic model; every value the sweep varies lives here, nothing is hard-coded
-# in the worker.
+# One-point knob grid for an end-to-end check of the CI sweep trigger (#180): one engine
+# point and one Tier-2 cell with a small request count, so the benchmark itself finishes
+# in seconds. The engine point's GPU redeploy and ceiling scrape still run. The full grid
+# is parked in bench/sweep-grid.full.yaml. The orchestration worker reads this file
+# through the contract's load_grid, which validates it against the SweepGrid pydantic
+# model (ADR-0009, ADR-0015).
 tier1:
-  max_num_seqs: [16, 32, 64, 128, 256]
-
-  # KV cache dtype chart labels; slipstream_bench.orchestration.grid maps each to the
-  # token vLLM's --kv-cache-dtype accepts (fp16 -> float16).
-  kv_cache_dtype: [fp8, fp16]
-
-  # Prefix-caching arm: its deploy flag, and which prefix shares to sweep under it.
-  # Caching off reuses no prefix KV, so it sweeps a single 0 baseline (ADR-0009).
+  max_num_seqs: [16]
+  kv_cache_dtype: [fp8]
   # The keys are quoted so YAML keeps them as the strings "on"/"off", not booleans.
   prefix_caching:
     "on":
       flag: --enable-prefix-caching
-      prefix_share: [10, 50, 90]
-    "off":
-      flag: --no-enable-prefix-caching
-      prefix_share: [0]
+      prefix_share: [50]
 
 tier2:
-  max_concurrency: [8, 16, 32, 64, 128, 256]
-  # Arrival-process shape for the open-loop path; inert here because the ceiling
-  # method is closed-loop (request_rate: inf, below), where vLLM ignores burstiness.
-  # Parked at 1.0 (neutral) for the future open-loop autoscaler sweep, whose bursty
-  # arrivals (burstiness < 1) it will drive.
+  max_concurrency: [8]
+  # Inert under the closed-loop ceiling method (request_rate: inf, below).
   burstiness: 1.0
 
-# Fixed client-load knobs every cell runs with. The grid is the single source of a
-# point's cells the orchestration driver enumerates (ADR-0012): the recipe / driver
-# inject --base-url, --model (model.yaml is the served-model source of truth) and
-# --out-dir; everything that defines the workload lives here.
+# Fixed client-load knobs, as in the full grid except the request count and output
+# length, which are cut so the single cell completes in seconds.
 load:
-  # Prefix+suffix token budget, split by each prefix-share.
   total_len: 1000
-  # Requests per cell; vLLM's argparse default, giving ~50 samples above p95 so the
-  # p95 TTFT gate rests on a real tail and the closed-loop rungs reach steady state.
-  num_prompts: 1000
-  # Distinct shared prefixes to synthesise.
+  num_prompts: 32
   num_prefixes: 5
-  # Output tokens per request.
-  output_len: 128
-  # Floor the prefix to a multiple of vLLM's 16-token KV block so the shared prefix
-  # lands on block boundaries and the caching-on arm scores clean cache hits (an
-  # unaligned prefix recomputes its trailing tokens). 0 disables alignment.
+  output_len: 32
   align_blocks: 16
-  # Unthrottled arrivals so the --max-concurrency ladder is the sole limiter: the
-  # closed-loop ceiling method (ADR-0009) measures a count of simultaneous requests,
-  # not an arrival rate. A finite rate would let the in-flight count float and queue
-  # depth, not replica capacity, would set the SLO cliff. The open-loop autoscaler
-  # sweep will set a finite requests/sec here instead.
   request_rate: .inf
-  # RNG seed, fixed so runs replay identical prefixes.
   seed: 0
-  # Goodput SLO passed to vllm bench serve.
   goodput: ["ttft:1000", "tpot:50"]
-  # Local tokenizer for prompt synthesis; omit for the self-hosted arm (vLLM defaults
-  # it to --model). Required for the commercial arm, whose provider model is not a
-  # loadable HF tokenizer.
-  # tokenizer: Qwen/Qwen2.5-0.5B-Instruct
