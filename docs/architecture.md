@@ -20,10 +20,10 @@ flowchart LR
     end
 
     subgraph aws[AWS]
-        brole[bench push role]
-        orole[orchestration push role]
-        drole[sweep-dispatch role]
-        ecr[(ECR)]
+        brole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/iam-role.svg", label: "bench push role", pos: "b", w: 48, h: 48, constraint: "on" }
+        orole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/iam-role.svg", label: "orchestration push role", pos: "b", w: 48, h: 48, constraint: "on" }
+        drole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/iam-role.svg", label: "sweep-dispatch role", pos: "b", w: 48, h: 48, constraint: "on" }
+        ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
         subgraph eks[EKS]
             ps[Prefect server]
         end
@@ -64,9 +64,9 @@ flowchart LR
     end
 
     subgraph endpoint[bench-endpoint stack]
-        alb[ALB<br/>mutual TLS]
-        host[Bench host EC2<br/>no inbound]
-        s3[(results bucket)]
+        alb@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/alb.svg", label: "ALB, mutual TLS", pos: "b", w: 48, h: 48, constraint: "on" }
+        host@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/ec2-instance.svg", label: "Bench host, no inbound", pos: "b", w: 48, h: 48, constraint: "on" }
+        s3@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/s3-bucket.svg", label: "results bucket", pos: "b", w: 48, h: 48, constraint: "on" }
     end
 
     ps -- flow run --> pw

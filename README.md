@@ -24,15 +24,15 @@ flowchart LR
     end
 
     subgraph aws[AWS]
-        ecr[(ECR)]
+        ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
         subgraph eks[EKS]
             vllm[vLLM on g5<br/>Karpenter]
             ps[Prefect server]
             pw[Prefect worker]
         end
-        alb[mTLS ALB]
-        host[Bench host EC2]
-        s3[(S3 results)]
+        alb@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/alb.svg", label: "mTLS ALB", pos: "b", w: 48, h: 48, constraint: "on" }
+        host@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/ec2-instance.svg", label: "Bench host", pos: "b", w: 48, h: 48, constraint: "on" }
+        s3@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/docs/readme-revamp/docs/icons/aws/s3-bucket.svg", label: "S3 results", pos: "b", w: 48, h: 48, constraint: "on" }
     end
 
     op -- push / PR --> ci
