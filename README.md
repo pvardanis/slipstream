@@ -333,6 +333,43 @@ prefect deployment run knob-sweep/knob-sweep \
 just stack-down        # tear the rig down; spend → 0
 ```
 
+The same trigger can be fired from CI without a workstation's kubectl: the
+[`sweep-dispatch`](.github/workflows/sweep-dispatch.yml) workflow (ADR-0015's 'CI
+later' arm) is a manual `workflow_dispatch` that authenticates to AWS via OIDC,
+points kubectl at the cluster, and runs the same `prefect deployment run` over a
+transient port-forward. It only *triggers* a run — the stack must already be up
+(`just stack-up`, with the worker layer enabled) and the deployment registered
+(`just prefect-register`); the workflow does neither, and fails before creating
+the run if the deployment is missing or its work pool has no worker polling it.
+Run it from the Actions tab **on `main`** — the role trusts only main-branch runs —
+with no inputs: it resolves the bench host `instance_id` from the running host's
+tags, and generates a `run_id` (a UTC timestamp) when blank. Both inputs are
+overrides; set `instance_id` to pick a host when more than one is running.
+
+Its AWS access is two pieces of terraform, applied in this order:
+
+1. `just bootstrap` creates the `slipstream-sweep-dispatch` OIDC role, which can
+   only describe the cluster (for `aws eks update-kubeconfig`) and the bench host.
+2. `just enable_prefect_worker=true cluster-up` creates an EKS access entry that
+   maps the role to a `sweep-dispatch` Kubernetes group, bound to a Role in the
+   Prefect namespace that allows only the port-forward to `svc/prefect-server`.
+   The eks stack reads the role's ARN from the bootstrap outputs, so its plan fails
+   until step 1 has been applied.
+
+It reads four repo variables. `AWS_REGION` is the one the image workflows already
+set from the bootstrap stack. The role ARN also comes from the bootstrap stack;
+the cluster name and Prefect namespace come from the eks stack, so set those while
+a cluster is up:
+
+```sh
+gh variable set AWS_SWEEP_DISPATCH_ROLE_ARN \
+  --body "$(terraform -chdir=terraform/bootstrap output -raw sweep_dispatch_role_arn)"
+gh variable set EKS_CLUSTER_NAME \
+  --body "$(terraform -chdir=terraform/eks output -raw cluster_name)"
+gh variable set PREFECT_NAMESPACE \
+  --body "$(terraform -chdir=terraform/eks output -raw prefect_namespace)"
+```
+
 Each point's ladder JSON lands under `bench/results/<run-id>/<point>/`, with the
 per-point predicted ceilings tabulated alongside. A point that fails to deploy or
 whose ladder reports failures is recorded and the sweep continues, exiting non-zero
