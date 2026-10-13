@@ -3,8 +3,9 @@
 # test asserts the repo variables the script sets from the stack outputs, never
 # a real terraform read or GitHub write. It checks that all eight variables are
 # set with their output values (the ECR repository names stripped of their
-# registry host), and that a failed or empty output aborts the script before
-# any variable is set, so a half-set variable list never ships.
+# registry host); that a failed, empty or malformed output, or an unauthenticated
+# gh, aborts the script before any variable is set; and that a gh failure
+# mid-update exits non-zero and says to rerun.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,18 +13,27 @@ script="${repo_root}/bench/gh-vars.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
-# Stub terraform: answer `-chdir=<dir> output -raw <name>` from a fixed table.
-# EKS_EXIT makes every eks read fail (no cluster up); EMPTY_OUTPUT names one
-# output that resolves to exit-0 empty stdout.
+# Stub terraform: answer `-chdir=<dir> output -raw <name>` from a fixed table,
+# rejecting any other call shape. EKS_EXIT makes every eks read fail (no cluster
+# up); EMPTY_OUTPUT names one output that resolves to exit-0 empty stdout;
+# FAIL_OUTPUT names one whose read fails after printing junk to stdout;
+# BAD_REPO_URL makes the bench repository URL lose its registry host.
 mkdir -p "${tmp}/bin"
 cat >"${tmp}/bin/terraform" <<'EOF'
 #!/usr/bin/env bash
+[[ "$#" == 4 && "$2" == output && "$3" == -raw ]] || { echo "unexpected call: $*" >&2; exit 2; }
 dir="${1#-chdir=}" name="$4"
 if [[ "${dir}" == eks && "${EKS_EXIT:-0}" != 0 ]]; then
   echo "No outputs found" >&2
   exit 1
 fi
 [[ "${name}" == "${EMPTY_OUTPUT:-}" ]] && exit 0
+if [[ "${name}" == "${FAIL_OUTPUT:-}" ]]; then
+  echo junk
+  echo "Output ${name} not found" >&2
+  exit 1
+fi
+[[ "${name}" == bench_image_repo_url && "${BAD_REPO_URL:-0}" != 0 ]] && { echo slipstream-bench; exit 0; }
 case "${dir}/${name}" in
   bootstrap/region) echo eu-west-1 ;;
   bootstrap/bench_image_push_role_arn) echo arn:bench-push ;;
@@ -36,9 +46,12 @@ case "${dir}/${name}" in
   *) echo "unexpected output ${dir}/${name}" >&2; exit 1 ;;
 esac
 EOF
-# Stub gh: append one line per call so every variable set is recorded.
+# Stub gh: `auth status` exits ${GH_AUTH_EXIT:-0}; every variable set appends one
+# line, except the one named by GH_FAIL_ON, which fails unrecorded.
 cat >"${tmp}/bin/gh" <<EOF
 #!/usr/bin/env bash
+[[ "\$1" == auth ]] && exit "\${GH_AUTH_EXIT:-0}"
+[[ "\$3" == "\${GH_FAIL_ON:-}" ]] && { echo "HTTP 502" >&2; exit 1; }
 printf '%s\n' "\$*" >>"${tmp}/gh-calls"
 EOF
 chmod +x "${tmp}/bin/terraform" "${tmp}/bin/gh"
@@ -74,7 +87,10 @@ check_aborted() {
 }
 
 # Happy path: every variable the workflows read, set from its output.
-run
+run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
 check "region" "variable set AWS_REGION --body eu-west-1"
 check "bench push role" "variable set AWS_BENCH_IMAGE_PUSH_ROLE_ARN --body arn:bench-push"
 check "bench repo name" "variable set ECR_REPOSITORY --body slipstream/bench"
@@ -96,5 +112,23 @@ EKS_EXIT=1 check_aborted "eks state missing" "just cluster-up"
 # An output that resolves to nothing aborts rather than setting an empty variable.
 EMPTY_OUTPUT=sweep_dispatch_role_arn check_aborted "empty bootstrap output" "sweep_dispatch_role_arn is empty"
 EMPTY_OUTPUT=prefect_namespace check_aborted "empty eks output" "prefect_namespace is empty"
+# A failed read never passes its stdout through as a value, and says it failed.
+FAIL_OUTPUT=region check_aborted "failed bootstrap read" "cannot read bootstrap output region"
+FAIL_OUTPUT=cluster_name check_aborted "failed eks read" "cannot read eks output cluster_name"
+# A repository URL without a registry host would set the URL itself as the name.
+BAD_REPO_URL=1 check_aborted "repo url without host" "bench_image_repo_url is not <registry>/<name>"
+# An unauthenticated gh stops the script before the first variable.
+GH_AUTH_EXIT=1 check_aborted "gh not authenticated" "gh auth login"
+
+# A gh failure mid-update leaves earlier variables set; the script says to rerun.
+if GH_FAIL_ON=ORCHESTRATION_ECR_REPOSITORY run; then
+  echo "FAIL gh failure mid-update: script exited 0" >&2
+  fail=1
+elif ! grep -qF "rerun \`just gh-vars\`" "${tmp}/stderr"; then
+  echo "FAIL gh failure mid-update: stderr lacks the rerun hint" >&2
+  fail=1
+else
+  echo "ok   gh failure mid-update"
+fi
 
 exit "${fail}"

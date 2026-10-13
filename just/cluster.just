@@ -46,7 +46,7 @@ cluster-plan: _bootstrap-init
       -var="enable_prefect_worker={{ enable_prefect_worker }}" \
       -var="state_bucket=${bucket}"
 
-# Needs `gh` authenticated and a cluster up (`just cluster-up`) for the eks outputs.
+# Needs `gh` authenticated, a cluster up and terraform/eks initialised (`just cluster-up`).
 # Set the GitHub repo variables the CI workflows read from the bootstrap and eks outputs.
 [group('cluster')]
 gh-vars: _bootstrap-init
