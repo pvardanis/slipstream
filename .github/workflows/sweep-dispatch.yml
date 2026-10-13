@@ -74,9 +74,12 @@ jobs:
             exit 1
           fi
 
+      # Full history, so the grid summary can read the sweep grid at the commit the
+      # worker image was built from, not only at main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       # Run the Prefect CLI from the repo's lockfile so its version matches the prefect
       # the worker image was built against — a client/server skew is the one failure a
@@ -186,6 +189,43 @@ jobs:
             echo "::error::work pool ${pool} is ${pool_status}, not READY — no worker is polling it, so the run would sit unstarted; check the prefect-worker deployment"
             exit 1
           fi
+
+          # Show the grid this run will sweep in the job summary. The worker reads the
+          # grid baked into its image, not this checkout: the deployment's sweep_grid
+          # parameter is the in-image path (the Dockerfile copies repo files under
+          # /app/), and the worker image's tag is the commit it was built from
+          # (orchestration-image.yml), so that commit's copy of the file is the grid
+          # the worker runs. A grid that differs from main's means the worker has not
+          # been re-pinned since the grid changed.
+          sweep_grid="$(jq -er '.parameters.sweep_grid' <<<"${deployment}")" || {
+            echo "::error::deployment ${deployment_name} has no sweep_grid parameter — re-run just prefect-register"
+            exit 1
+          }
+          grid_repo_path="${sweep_grid#/app/}"
+          worker_images="$(kubectl -n "${PREFECT_NAMESPACE}" get pods \
+            -l app.kubernetes.io/name=prefect-worker --field-selector=status.phase=Running \
+            -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)"
+          if [[ -z "${worker_images}" || "${worker_images}" == *$'\n'* ]]; then
+            echo "::error::expected one running prefect-worker image, got: ${worker_images:-none}"
+            exit 1
+          fi
+          worker_commit="${worker_images##*:}"
+          grid_yaml="$(git show "${worker_commit}:${grid_repo_path}")" || {
+            echo "::error::cannot read ${grid_repo_path} at worker image commit ${worker_commit}"
+            exit 1
+          }
+          if ! git diff --quiet "${worker_commit}" HEAD -- "${grid_repo_path}"; then
+            echo "::warning::the worker runs ${grid_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just enable_prefect_worker=true cluster-up) to sweep main's grid"
+          fi
+          {
+            echo "## Sweep grid"
+            echo
+            echo "Run \`${sweep_run_id}\` sweeps \`${grid_repo_path}\` as built into worker image \`${worker_images}\`."
+            echo
+            echo '```yaml'
+            echo "${grid_yaml}"
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
 
           # Create the run and return; the worker picks it up and runs it to completion
           # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
