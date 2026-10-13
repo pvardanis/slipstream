@@ -1,12 +1,18 @@
-<p align="center"><img src="docs/logo.svg" alt="slipstream" width="400"></p>
+<div align="center">
 
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-- [Quickstart](#quickstart)
-- [Recipes](#recipes)
-- [Roadmap](#roadmap)
-- [Non-goals](#non-goals)
+<img src="docs/logo.svg" alt="slipstream" width="400">
+<br><br>
+
+[![ci](https://github.com/pvardanis/slipstream/actions/workflows/ci.yml/badge.svg)](https://github.com/pvardanis/slipstream/actions/workflows/ci.yml)
+[![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![ruff](https://img.shields.io/badge/ruff-0.16.7-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
+[![ty](https://img.shields.io/badge/ty-0.0.84-261230)](https://github.com/astral-sh/ty)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![terraform](https://img.shields.io/badge/terraform-%E2%89%A51.11-7B42BC?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
+[![vLLM](https://img.shields.io/badge/vLLM-0.29.0-30A2FF)](https://github.com/vllm-project/vllm)
+[![platform](https://img.shields.io/badge/platform-AWS%20EKS-FF9900)](#architecture)
+
+</div>
 
 A self-hosted LLM inference platform on AWS EKS. Today it serves an AWQ-quantized open
 model with vLLM on a Karpenter-provisioned `g5` GPU node and benchmarks it from outside
