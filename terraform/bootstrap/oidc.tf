@@ -107,7 +107,11 @@ locals {
   # server: DescribeCluster backs `aws eks update-kubeconfig` and is scoped to this one
   # cluster's ARN; DescribeInstances resolves the bench host from its tags. Describe
   # actions take no resource scope, so that grant is on "*", narrowed to the stack's
-  # region by condition. The port-forward itself is Kubernetes access, granted by the
+  # region by condition. ListAllMyBuckets resolves the results bucket the workflow
+  # registers the deployment against: the bench-endpoint stack names it by prefix, so
+  # its full name changes with every bench-endpoint-up and is found by listing. The
+  # action is account-wide and takes no resource scope, and it returns bucket names
+  # only, never objects. The port-forward itself is Kubernetes access, granted by the
   # eks stack's access entry + namespaced RBAC, not by this policy.
   sweep_dispatch_permissions_policy = {
     Version = "2012-10-17"
@@ -126,6 +130,12 @@ locals {
         Condition = {
           StringEquals = { "aws:RequestedRegion" = var.region }
         }
+      },
+      {
+        Sid      = "ListAllMyBuckets"
+        Effect   = "Allow"
+        Action   = "s3:ListAllMyBuckets"
+        Resource = "*"
       },
     ]
   }
