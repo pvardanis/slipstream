@@ -338,11 +338,14 @@ The same trigger can be fired from CI without a workstation's kubectl: the
 later' arm) is a manual `workflow_dispatch` that authenticates to AWS via OIDC,
 points kubectl at the cluster, and over a transient port-forward registers the
 deployment (the same command `just prefect-register` runs) and then runs the same
-`prefect deployment run`. Registration resolves the results bucket and the
-bench-client image ref from the live stack and `main`, so no separate
-`just prefect-register` is needed. The stack must already be up (`just stack-up`,
-with the worker layer enabled); the workflow does not stand it up, and fails
-before creating the run if the work pool has no worker polling it.
+`prefect deployment run`. The workflow resolves the results bucket and the
+bench-client image ref from the live stack and `main` before registering, so no
+separate `just prefect-register` is needed. Registration overwrites the deployment
+with those defaults, so a dispatch replaces any override a manual
+`just prefect-register` set (a pinned `bench_image_tag`, retries, the commercial
+arm). The stack must already be up (`just stack-up`, with the worker layer
+enabled); the workflow does not stand it up, and fails before creating the run if
+the work pool has no worker polling it.
 Run it from the Actions tab **on `main`** — the role trusts only main-branch runs —
 with no inputs: it resolves the bench host `instance_id` from the running host's
 tags, and generates a `run_id` (a UTC timestamp) when blank. Both inputs are
@@ -352,19 +355,18 @@ Its AWS access is two pieces of terraform, applied in this order:
 
 1. `just bootstrap` creates the `slipstream-sweep-dispatch` OIDC role, which can
    only describe the cluster (for `aws eks update-kubeconfig`) and the bench host,
-   and list bucket names (to find the results bucket, whose name changes with
-   every bench-endpoint-up).
+   and list bucket names (to find the results bucket, whose name changes whenever
+   it is recreated).
 2. `just enable_prefect_worker=true cluster-up` creates an EKS access entry that
    maps the role to a `sweep-dispatch` Kubernetes group, bound to a Role in the
    Prefect namespace that allows only the port-forward to `svc/prefect-server`.
    The eks stack reads the role's ARN from the bootstrap outputs, so its plan fails
    until step 1 has been applied.
 
-It reads five repo variables. `AWS_REGION` and `ECR_REPOSITORY` are the ones the
-bench image workflow already sets from the bootstrap stack. The role ARN also comes
-from the bootstrap stack;
-the cluster name and Prefect namespace come from the eks stack, so set those while
-a cluster is up:
+It reads five repo variables. `AWS_REGION` and `ECR_REPOSITORY` are already set
+for the image workflows (see above). The role ARN also comes from the bootstrap
+stack; the cluster name and Prefect namespace come from the eks stack, so set
+those while a cluster is up:
 
 ```sh
 gh variable set AWS_SWEEP_DISPATCH_ROLE_ARN \
