@@ -1,9 +1,9 @@
-# Plan-level tests for the GitHub OIDC push role on the bootstrap stack. They run
-# offline: the aws provider is mocked, so the assertions check the trust and
-# permission shape — that only main-branch workflows of this repo can assume the
-# role, and that the role can push to the bench-client repo and nothing else —
-# without creating a real IAM provider or role. The real end-to-end proof (a
-# workflow actually assumes the role and pushes) is the cloud tier.
+# Plan-level tests for the GitHub OIDC roles on the bootstrap stack: the bench-client
+# and orchestration image-push roles and the sweep-dispatch role. They run offline: the
+# aws provider is mocked, so the assertions check the trust and permission shape — that
+# only main-branch workflows of this repo can assume each role, and that each role can do
+# its one job and nothing else — without creating a real IAM provider or role. The real
+# end-to-end proof (a workflow actually assumes a role and uses it) is the cloud tier.
 mock_provider "aws" {
   # A fixed account id so the sweep-dispatch policy's cluster ARN is known at plan and
   # assertable exactly.
@@ -124,24 +124,51 @@ run "orchestration_push_permissions" {
 run "sweep_dispatch_permissions" {
   command = plan
 
+  # A fixed provider ARN so the role's rendered trust policy is known at plan and can be
+  # compared against the shared main-branch trust.
+  override_resource {
+    target          = aws_iam_openid_connect_provider.github
+    override_during = plan
+    values = {
+      arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+    }
+  }
+
   assert {
     condition     = aws_iam_role.sweep_dispatch.name == "slipstream-sweep-dispatch"
     error_message = "The sweep-dispatch role must be named slipstream-sweep-dispatch."
   }
 
-  # Exactly two statements, so no grant beyond the two reads slips in alongside them.
+  # The role's own trust document, not just the shared local, is the main-scoped OIDC
+  # trust — so pointing the role at a looser document fails here.
   assert {
-    condition     = length(local.sweep_dispatch_permissions_policy.Statement) == 2
+    condition     = jsondecode(aws_iam_role.sweep_dispatch.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:pvardanis@37624791/slipstream@1357264197:ref:refs/heads/main"
+    error_message = "The sweep-dispatch role must trust only this repo's main branch."
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.sweep_dispatch.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    error_message = "The sweep-dispatch role must require the sts.amazonaws.com audience claim."
+  }
+  assert {
+    condition     = length(jsondecode(aws_iam_role.sweep_dispatch.assume_role_policy).Statement) == 1
+    error_message = "The sweep-dispatch trust policy must carry only the main-branch OIDC statement."
+  }
+
+  # The assertions read the policy attached to the role, so swapping the attachment to a
+  # broader document fails them. Exactly two statements, so no grant beyond the two reads
+  # slips in alongside them.
+  assert {
+    condition     = length(jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement) == 2
     error_message = "The sweep-dispatch policy must carry exactly the DescribeCluster and DescribeInstances statements."
   }
   assert {
-    condition     = length([for s in local.sweep_dispatch_permissions_policy.Statement : s if s.Sid == "DescribeCluster" && s.Action == "eks:DescribeCluster" && s.Resource == "arn:aws:eks:eu-west-1:111122223333:cluster/slipstream"]) == 1
+    condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "DescribeCluster" && s.Action == "eks:DescribeCluster" && s.Resource == "arn:aws:eks:eu-west-1:111122223333:cluster/slipstream"]) == 1
     error_message = "eks:DescribeCluster must be scoped to the slipstream cluster ARN."
   }
   # Describe actions take no resource scope, so the grant is on "*" and narrowed to the
   # stack's region by condition instead.
   assert {
-    condition     = length([for s in local.sweep_dispatch_permissions_policy.Statement : s if s.Sid == "DescribeInstances" && s.Action == "ec2:DescribeInstances" && s.Resource == "*" && try(s.Condition.StringEquals["aws:RequestedRegion"], null) == "eu-west-1"]) == 1
+    condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "DescribeInstances" && s.Action == "ec2:DescribeInstances" && s.Resource == "*" && try(s.Condition.StringEquals["aws:RequestedRegion"], null) == "eu-west-1"]) == 1
     error_message = "ec2:DescribeInstances must be granted on * and limited to the stack's region."
   }
 }

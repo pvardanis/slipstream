@@ -17,9 +17,10 @@ locals {
   # subject would not match that token.
   github_push_subject = "${var.github_oidc_sub_prefix}:ref:refs/heads/main"
 
-  # Shared by both image-push roles (bench-client and orchestration): the trust is
-  # scoped to this repo's main branch, not to any one image, so the same policy backs
-  # every push role. Each role's *permissions* are what narrow it to a single repo.
+  # Shared by every role here (the bench-client and orchestration image-push roles and
+  # the sweep-dispatch role): the trust is scoped to this repo's main branch, not to any
+  # one workflow, so the same policy backs each role. Each role's *permissions* are what
+  # narrow it to its one job.
   github_push_trust_policy = {
     Version = "2012-10-17"
     Statement = [{

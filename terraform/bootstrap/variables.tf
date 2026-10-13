@@ -1,6 +1,6 @@
 # Inputs for the state-bootstrap stack.
 variable "region" {
-  description = "AWS region hosting the Terraform state bucket."
+  description = "AWS region hosting the Terraform state bucket and the stacks the bootstrap roles reach (the sweep-dispatch role's cluster ARN and DescribeInstances region condition)."
   type        = string
   default     = "eu-west-1"
 }
