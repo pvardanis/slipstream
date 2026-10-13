@@ -17,8 +17,7 @@
 A self-hosted LLM inference platform on AWS EKS. Today it serves an AWQ-quantized open
 model with vLLM on a Karpenter-provisioned `g5` GPU node and benchmarks it from outside
 the cluster. An unattended two-tier knob sweep (engine knobs × client concurrency)
-finds each configuration's sustained concurrency ceiling at an SLO, and the cost tooling
-prices the result in $/1M tokens. `just stack-up` /
+finds each configuration's sustained concurrency ceiling at an SLO. `just stack-up` /
 `just stack-down` conjure and destroy the whole rig. Like the low-drag wake it is named
 after, every layer exists to move more tokens per dollar.
 
