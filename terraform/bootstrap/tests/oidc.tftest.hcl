@@ -116,10 +116,11 @@ run "orchestration_push_permissions" {
 }
 
 # The sweep-dispatch role shares the repo-main trust, so only a main-branch run of this
-# repo's sweep-dispatch workflow can assume it. Its permissions are the two reads the
+# repo's sweep-dispatch workflow can assume it. Its permissions are the three reads the
 # workflow makes before the port-forward: DescribeCluster for `aws eks update-kubeconfig`,
-# scoped to this one cluster, and DescribeInstances to resolve the bench host from its
-# tags. Kubernetes access (the port-forward itself) is not IAM — it is the eks stack's
+# scoped to this one cluster, DescribeInstances to resolve the bench host from its tags,
+# and ListAllMyBuckets to resolve the results bucket the deployment is registered
+# against. Kubernetes access (the port-forward itself) is not IAM — it is the eks stack's
 # access entry + namespaced RBAC.
 run "sweep_dispatch_permissions" {
   command = plan
@@ -155,11 +156,11 @@ run "sweep_dispatch_permissions" {
   }
 
   # The assertions read the policy attached to the role, so swapping the attachment to a
-  # broader document fails them. Exactly two statements, so no grant beyond the two reads
-  # slips in alongside them.
+  # broader document fails them. Exactly three statements, so no grant beyond the three
+  # reads slips in alongside them.
   assert {
-    condition     = length(jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement) == 2
-    error_message = "The sweep-dispatch policy must carry exactly the DescribeCluster and DescribeInstances statements."
+    condition     = length(jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement) == 3
+    error_message = "The sweep-dispatch policy must carry exactly the DescribeCluster, DescribeInstances and ListAllMyBuckets statements."
   }
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "DescribeCluster" && s.Action == "eks:DescribeCluster" && s.Resource == "arn:aws:eks:eu-west-1:111122223333:cluster/slipstream"]) == 1
@@ -170,5 +171,11 @@ run "sweep_dispatch_permissions" {
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "DescribeInstances" && s.Action == "ec2:DescribeInstances" && s.Resource == "*" && try(s.Condition.StringEquals["aws:RequestedRegion"], null) == "eu-west-1"]) == 1
     error_message = "ec2:DescribeInstances must be granted on * and limited to the stack's region."
+  }
+  # ListAllMyBuckets is account-wide and takes no bucket scope, so the grant is on "*";
+  # it lists bucket names only and reads no object.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "ListAllMyBuckets" && s.Action == "s3:ListAllMyBuckets" && s.Resource == "*"]) == 1
+    error_message = "s3:ListAllMyBuckets must be granted on *, the only resource it takes."
   }
 }
