@@ -37,15 +37,16 @@ flowchart LR
 ```
 
 - **No long-lived keys.** Every AWS call assumes an OIDC role created by
-  `terraform/bootstrap`; no workflow reads a secret. The roles trust only this repo
-  (`github_oidc_sub_prefix`), and the sweep-dispatch role only `main`.
+  `terraform/bootstrap`; no workflow reads a secret. All three roles trust only `main`
+  of this repo (`github_oidc_sub_prefix`).
 - **Image publishing is content-addressed.** Each image workflow computes the image's
   content tag, skips the build if ECR already has it, and otherwise pushes
-  `<slug>-<sha>` plus the floating `<slug>-main`. Only `main` publishes; pull requests
-  get a no-push build in `ci.yml` ([ADR-0008](adr/0008-ci-built-bench-image-and-model-definition.md)).
+  `<slug>-<sha>` plus the floating `<slug>-main`, which only `main` CI publishes
+  (`just bench-image` pushes a content tag from a workstation). Pull requests get a
+  no-push build in `ci.yml` ([ADR-0008](adr/0008-ci-built-bench-image-and-model-definition.md)).
 - **Sweep dispatch is least-privilege.** The role can describe the cluster and bench
   host and list buckets. An EKS access entry maps it to a Kubernetes group that can only
-  port-forward to `svc/prefect-server` (`terraform/eks`, gated by
+  read and port-forward within the Prefect namespace (`terraform/eks`, gated by
   `enable_prefect_worker`).
 - **Repo variables** (`just gh-vars`): `AWS_REGION`, `ECR_REPOSITORY`,
   `AWS_BENCH_IMAGE_PUSH_ROLE_ARN`, `ORCHESTRATION_ECR_REPOSITORY`,
@@ -74,7 +75,8 @@ flowchart LR
     host -- vllm bench serve --> alb --> vllm
     host -- result JSON<br/>sweeps/run-id/ --> s3
     pw -- validity gate reads result,<br/>Prefect results + cache keys --> s3
-    pw -- ceiling tables + charts --> s3
+    pw -- chart PNGs --> s3
+    pw -- ceiling tables<br/>as run artifacts --> ps
 ```
 
 - **External vantage.** The bench host sits outside the cluster and reaches vLLM
@@ -86,8 +88,9 @@ flowchart LR
   ladder against that point to find the highest rung that holds goodput at the SLO
   ([ADR-0009](adr/0009-knob-sweep-rig-and-ceiling-method.md)). All values come from
   [`bench/sweep-grid.yaml`](../bench/sweep-grid.yaml).
-- **Resumable.** Each cell is a Prefect task keyed by its config digest, with results
-  and cache keys on S3, so a rerun skips cells that already hold a valid measurement
+- **Resumable.** Each cell is a Prefect task keyed by its config digest (not the run
+  id), with results and cache keys on S3, so a rerun skips any cell whose config already
+  holds a valid measurement
   ([ADR-0012](adr/0012-sweep-resumability-and-orchestrator-choice.md)).
 
 ## Terraform stacks

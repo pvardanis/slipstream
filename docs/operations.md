@@ -1,8 +1,7 @@
 # Operations
 
-Runbooks for the live rig. Every one assumes the stack is up
-(`just enable_prefect_worker=true stack-up`) unless it says otherwise, and every one
-ends with `just stack-down`.
+Runbooks for the live rig. All but cloud verify assume the stack is up
+(`just enable_prefect_worker=true stack-up`) and end with `just stack-down`.
 
 ## Knob sweep
 
@@ -31,8 +30,8 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-swe
 ```
 
 A point that fails to deploy, or whose ladder reports failures, is recorded and the
-sweep continues, exiting non-zero at the end. A rerun with the same `run_id` resumes,
-skipping cells that already hold a valid measurement.
+sweep continues, exiting non-zero at the end. A rerun skips any cell whose config
+already holds a valid measurement.
 
 **Results** land in the results bucket under `sweeps/<run-id>/`, which `stack-down`
 deletes. Pull them first, then build the artifacts locally:
@@ -48,19 +47,23 @@ uv run slipstream-bench chart --run-dir bench/results/<run-id>             # tab
 Against whatever engine point is currently deployed, over the bench endpoint:
 
 ```sh
-just bench mns64_kvfp8_pcon   # that point's client-load ladder (slug names the live engine point)
+just bench mns16_kvfp8_pcon   # the deployed engine point's client-load ladder (its grid slug)
 just prefix-cache 90 1.0      # cold/warm prefix-cache hit-rate for one cell
 ```
 
 ## Benchmarking an unmerged branch
 
-Pull requests never publish images and the endpoint defaults to the `-main` tag. Push
-the branch's content image and pin the endpoint to it:
+Pull requests never publish images, and every recipe defaults to the `-main` tag. Push
+the branch's content image, then pin the run to it with the `bench_image_tag` variable:
 
 ```sh
 just bench-image
-terraform -chdir=terraform/bench-endpoint apply -var bench_image_tag="$(bench/image-tag.sh sha-tag)"
+just bench_image_tag="$(bench/image-tag.sh sha-tag)" bench <point-slug>
+just bench_image_tag="$(bench/image-tag.sh sha-tag)" prefect-register   # for a knob sweep
 ```
+
+A `sweep-dispatch` run re-registers with the `-main` image, so trigger a pinned knob
+sweep from a workstation.
 
 ## Cloud verify
 
