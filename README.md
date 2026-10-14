@@ -41,7 +41,7 @@ flowchart TB
         subgraph eks[EKS]
             ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
             vllm[vLLM on g5<br/>Karpenter]
-            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/k8s/pod.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
+            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
             pw[Prefect worker]
         end
         alb@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/alb.svg", label: "mTLS ALB", pos: "b", w: 48, h: 48, constraint: "on" }
