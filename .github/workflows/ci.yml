@@ -191,8 +191,9 @@ jobs:
           # image-tag-test.sh asserts the content sha, derived from git history.
           fetch-depth: 0
       # The image-identity and repo-variable scripts' unit tests (yq preinstalled;
-      # build-image-test stubs docker and gh-vars-test stubs terraform and gh, so no
-      # build or GitHub write runs). Wiring them here is what makes them more
+      # build-image-test stubs docker, gh-vars-test stubs terraform and gh, and
+      # orchestration-image-check-test stubs terraform and aws, so no build, GitHub write
+      # or AWS call runs). Wiring them here is what makes them more
       # than decorative — a regression in the shared build command fails CI.
       - name: Run shell unit tests
         run: |
@@ -200,3 +201,4 @@ jobs:
           bash test/image-tag-test.sh
           bash test/build-image-test.sh
           bash test/gh-vars-test.sh
+          bash test/orchestration-image-check-test.sh
