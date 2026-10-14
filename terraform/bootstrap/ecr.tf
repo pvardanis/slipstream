@@ -96,14 +96,16 @@ locals {
   ]
 
   # Same priority-ordered scheme as the bench-client rules above: rule 1 shields the
-  # floating -main tag from rule 2's -sha count sweep, rule 3 reaps untagged leftovers.
+  # floating main tag from rule 2's -sha count sweep, rule 3 reaps untagged leftovers.
+  # The orchestration-image workflow publishes that pointer as plain `main`, not
+  # `<slug>-main`, so the pattern is the exact tag.
   orchestration_lifecycle_rules = [
     {
       rulePriority = 1
-      description  = "Keep the floating -main tag; claimed before the -sha count rule so it is never expired."
+      description  = "Keep the floating main tag; claimed before the -sha count rule so it is never expired."
       selection = {
         tagStatus      = "tagged"
-        tagPatternList = ["*-main"]
+        tagPatternList = ["main"]
         countType      = "imageCountMoreThan"
         countNumber    = 1
       }
