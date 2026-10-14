@@ -1,14 +1,13 @@
 """The knob-sweep composition root: wire the four collaborators, drive the parent flow.
 
 Exercises ``build_knob_sweep_collaborators`` — the factory that binds the injected
-callables the parent flow sequences — against a fake kubectl and a faked point sweep and
-redeploy-skip gate: no cluster, no AWS. Asserts the deploy applies the point's Deployment
-and waits its rollout, the scrape logs the predicted ceiling and raises loud on an empty
+callables the parent flow sequences — against a fake kubectl and a faked point sweep: no
+cluster, no AWS. Asserts the deploy applies the point's Deployment and waits its rollout, the scrape logs the predicted ceiling and raises loud on an empty
 one, and each point sweep runs under its own results subdir and the sweep's nested run
 id (the gate itself is covered against real cache storage in
 ``test_redeploy_skip_gate``). The ``knob-sweep`` command runs the real
-``knob_sweep_flow`` against an ephemeral Prefect server with the transports and the
-sequencing driver faked, so the command->flow->driver wiring is covered without a
+``knob_sweep_flow`` against an ephemeral Prefect server with the transports (the gate's
+cache lookup among them) and the sequencing driver faked, so the command->flow->driver wiring is covered without a
 cluster; ``register-knob-sweep`` is driven with ``deploy`` faked, asserting the deployment
 is registered as a module-path entrypoint on the process pool with no image build.
 """

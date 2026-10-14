@@ -28,6 +28,7 @@ from prefect import Task, task
 from prefect.artifacts import create_markdown_artifact
 from prefect.cache_policies import CachePolicy
 from prefect.results import ResultStore, get_result_store
+from prefect.settings import PREFECT_TASKS_REFRESH_CACHE
 
 from slipstream_bench.contract import LoadCell, read_result
 from slipstream_bench.orchestration import storage
@@ -133,17 +134,28 @@ def is_cell_cached(
     :func:`get_cell_cache_key` from the same three call parameters the task is invoked
     with, and the lookup goes through the result store Prefect derives from ``task``
     itself — its result storage and its cache policy's key storage — so the gate and the
-    task read the one cache record and cannot disagree. Prefect's existence check reads
-    any storage error as "no record", so an unreadable store reports the cell pending.
+    task read the one cache record and cannot disagree. A task that refreshes its cache
+    (its ``refresh_cache`` option, else the ``PREFECT_TASKS_REFRESH_CACHE`` setting, as
+    Prefect's task engine resolves it) re-runs every cell, so it reports none cached.
+    Prefect's existence check reads any storage error as "no record", so an unreadable
+    store reports the cell pending.
 
     :param task: the cell task (from :func:`cell_task` or :func:`build_cell_task`)
         whose cache is consulted.
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, a cache-key part.
     :param cell_name: the client-load cell name, a cache-key part.
-    :return: True when a record exists for the cell's key, so a run serves it from cache.
+    :return: True when a record exists for the cell's key and ``task`` does not refresh
+        its cache, so a run serves the cell from cache.
     :raise CacheKeyError: when a key part is blank.
     """
+    refresh = (
+        task.refresh_cache
+        if task.refresh_cache is not None
+        else PREFECT_TASKS_REFRESH_CACHE.value()
+    )
+    if refresh:
+        return False
     key = get_cell_cache_key(
         None, {"digest": digest, "point_slug": point_slug, "cell_name": cell_name}
     )
