@@ -66,9 +66,10 @@ def check_cache_key_storage(cache_keys: Any, *, bucket: str) -> None:
     repeated runs leave no litter and cannot collide with a ``digest:slug:cell`` key.
 
     :param cache_keys: the block Prefect stores cache records into; its
-        ``write_path``/``read_path`` dispatch synchronously when called from sync code
-        such as the flow body. Tests pass a tmp ``LocalFileSystem``; production passes
-        the S3 block.
+        ``write_path``/``read_path`` are forced synchronous with ``_sync=True``, since
+        under a running event loop they would return a coroutine that never runs and
+        the probe would pass unchecked. Tests pass a tmp ``LocalFileSystem``; production
+        passes the S3 block.
     :param bucket: the results bucket ``cache_keys`` is rooted in, named in the error.
     :raise StorageError: when the probe cannot be written or read back.
     """
@@ -78,8 +79,8 @@ def check_cache_key_storage(cache_keys: Any, *, bucket: str) -> None:
         "on that prefix"
     )
     try:
-        cache_keys.write_path(_PREFLIGHT_PROBE_KEY, _PREFLIGHT_CONTENT)
-        cache_keys.read_path(_PREFLIGHT_PROBE_KEY)
+        cache_keys.write_path(_PREFLIGHT_PROBE_KEY, _PREFLIGHT_CONTENT, _sync=True)
+        cache_keys.read_path(_PREFLIGHT_PROBE_KEY, _sync=True)
     except Exception as exc:  # any S3 or filesystem failure means the cache is unusable
         raise StorageError(
             f"cache-key storage at {location} failed its write/read probe "

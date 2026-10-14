@@ -7,6 +7,7 @@ pin that fact and the preflight that proves the cache-key storage is writable an
 readable before a sweep trusts it.
 """
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -77,3 +78,18 @@ def test_check_cache_key_storage_names_the_bucket_and_prefix_on_failure(
     assert f"s3://{_BUCKET}/prefect/cache-keys" in message
     assert "IAM" in message
     assert isinstance(raised.value.__cause__, OSError)
+
+
+def test_check_cache_key_storage_probes_from_inside_an_event_loop(
+    tmp_path: Path,
+) -> None:
+    # Prefect's storage methods return an un-awaited coroutine when called under a running
+    # event loop; the probe must still run, or an unwritable bucket would pass unnoticed.
+    root = tmp_path / "not-a-dir"
+    root.write_text("", encoding="utf-8")
+
+    async def probe() -> None:
+        check_cache_key_storage(LocalFileSystem(basepath=str(root)), bucket=_BUCKET)
+
+    with pytest.raises(StorageError):
+        asyncio.run(probe())
