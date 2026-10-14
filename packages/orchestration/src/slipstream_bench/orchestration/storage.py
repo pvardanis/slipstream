@@ -67,9 +67,10 @@ def check_cache_key_storage(cache_keys: Any, *, bucket: str) -> None:
 
     :param cache_keys: the block Prefect stores cache records into; its
         ``write_path``/``read_path`` are forced synchronous with ``_sync=True``, since
-        under a running event loop they would return a coroutine that never runs and
-        the probe would pass unchecked. Tests pass a tmp ``LocalFileSystem``; production
-        passes the S3 block.
+        in an async context (an async flow or task, or a running event loop) they would
+        return a coroutine that never runs and the probe would pass unchecked. Any
+        storage block whose ``write_path``/``read_path`` are async-dispatched fits;
+        production passes the S3 block.
     :param bucket: the results bucket ``cache_keys`` is rooted in, named in the error.
     :raise StorageError: when the probe cannot be written or read back.
     """
@@ -92,8 +93,9 @@ def _require_bucket(bucket: str) -> str:
     """Reject a blank bucket name at any builder entry.
 
     The bucket's existence and permissions are not checked here;
-    :func:`check_cache_key_storage` probes them once the flow has registered the
-    storage blocks.
+    :func:`check_cache_key_storage` probes the cache-key prefix once the flow has
+    registered the storage blocks, and the result prefix is first exercised when a
+    cell persists.
     """
     name = bucket.strip()
     if not name:

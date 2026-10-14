@@ -673,9 +673,8 @@ def _sweep_on_local_cache_storage(
     The real ``cell_task`` registers both storage blocks and runs the preflight, with the
     two S3 builders swapped for local filesystems so ``cache_key_root`` decides whether
     the probe can land. The real cache gate reads that storage, which starts empty, so
-    every point is pending and
-    a sweep that gets past the preflight redeploys each point; each redeploy appends its
-    slug to ``deployed`` rather than run.
+    every point is pending and a sweep that gets past the preflight redeploys each
+    point; each redeploy appends its slug to ``deployed`` rather than run.
     """
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
