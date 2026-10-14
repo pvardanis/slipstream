@@ -40,7 +40,7 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     knob_sweep_flow,
 )
 from slipstream_bench.orchestration.storage import StorageError
-from slipstream_bench.orchestration.tasks.cell import cell_task
+from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from tests.orchestration.cell_object_fakes import ServingCellS3
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
@@ -672,12 +672,15 @@ def _sweep_on_local_cache_storage(
 
     The real ``cell_task`` registers both storage blocks and runs the preflight, with the
     two S3 builders swapped for local filesystems so ``cache_key_root`` decides whether
-    the probe can land. Every point is pending, so a sweep that gets past the preflight
-    redeploys each point; each redeploy appends its slug to ``deployed`` rather than run.
+    the probe can land. The real cache gate reads that storage, which starts empty, so
+    every point is pending and
+    a sweep that gets past the preflight redeploys each point; each redeploy appends its
+    slug to ``deployed`` rather than run.
     """
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
     monkeypatch.setattr(knob_sweep_module, "cell_task", cell_task)
+    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", is_cell_cached)
     monkeypatch.setattr(
         storage_module,
         "result_storage",
@@ -694,7 +697,6 @@ def _sweep_on_local_cache_storage(
         lambda point, **_k: deployed.append(point.slug()),
     )
     monkeypatch.setattr(knob_sweep_module, "scrape_ceiling", lambda *_a, **_k: 12.5)
-    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: False)
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
 
     knob_sweep_flow(
