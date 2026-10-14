@@ -69,7 +69,8 @@ sweep from a workstation.
 
 `just cloud-verify` is the hand-triggered, real-spend end-to-end check
 ([ADR-0002](adr/0002-infrastructure-testing-strategy.md)). Run it **from a clean slate** — it
-aborts if the eks stack holds any resource, so `just stack-down` first.
+aborts if the eks stack holds any resource, so `just stack-down` first. It needs the
+orchestration image published, because `cluster-up` deploys the Prefect worker from it.
 
 It runs `cluster-up` → `gpu-pool-up` → `gpu-deploy`, asserts the replica returns a
 well-formed completion, tears everything down, then sweeps EC2 for any
