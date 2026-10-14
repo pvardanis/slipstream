@@ -22,11 +22,12 @@ forfeit per-cell resume.
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from prefect import Task, task
 from prefect.artifacts import create_markdown_artifact
 from prefect.cache_policies import CachePolicy
+from prefect.results import ResultStore, get_result_store
 
 from slipstream_bench.contract import LoadCell, read_result
 from slipstream_bench.orchestration import storage
@@ -121,6 +122,35 @@ def build_cell_task(
         retries=retries,
     )
     return as_task(_bench_cell)
+
+
+def is_cell_cached(
+    task: Task[..., str], *, digest: str, point_slug: str, cell_name: str
+) -> bool:
+    """Report whether a cell holds a cache record, i.e. whether ``task`` would skip it.
+
+    The redeploy-skip gate's per-cell check (ADR-0015). The key is built by
+    :func:`get_cell_cache_key` from the same three call parameters the task is invoked
+    with, and the lookup goes through the result store Prefect derives from ``task``
+    itself — its result storage and its cache policy's key storage — so the gate and the
+    task read the one cache record and cannot disagree. Prefect's existence check reads
+    any storage error as "no record", so an unreadable store reports the cell pending.
+
+    :param task: the cell task (from :func:`cell_task` or :func:`build_cell_task`)
+        whose cache is consulted.
+    :param digest: the deep config digest, a cache-key part.
+    :param point_slug: the engine-knob point slug, a cache-key part.
+    :param cell_name: the client-load cell name, a cache-key part.
+    :return: True when a record exists for the cell's key, so a run serves it from cache.
+    :raise CacheKeyError: when a key part is blank.
+    """
+    key = get_cell_cache_key(
+        None, {"digest": digest, "point_slug": point_slug, "cell_name": cell_name}
+    )
+    # ``update_for_task`` is async-dispatched, typed as a store or its coroutine; called
+    # from the sync knob-sweep flow it runs the sync implementation and returns the store.
+    store = cast(ResultStore, get_result_store().update_for_task(task))
+    return store.exists(key)
 
 
 def run_cell(

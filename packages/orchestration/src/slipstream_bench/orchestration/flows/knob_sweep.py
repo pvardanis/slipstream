@@ -40,6 +40,7 @@ from slipstream_bench.contract import (
     list_engine_points,
     load_grid,
 )
+from slipstream_bench.orchestration.cell_objects import iter_point_cell_objects
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
@@ -47,7 +48,6 @@ from slipstream_bench.orchestration.cluster import (
     deploy_gpu_point,
     scrape_ceiling,
 )
-from slipstream_bench.orchestration.completion import point_is_complete
 from slipstream_bench.orchestration.config_artifact import (
     ImageRefs,
     publish_config_artifact,
@@ -59,7 +59,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
 )
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
-from slipstream_bench.orchestration.tasks.cell import cell_task
+from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
@@ -402,7 +402,7 @@ def build_knob_sweep_collaborators(
     :param inputs: the per-run inputs every point of the sweep shares.
     :param kubectl: the transport the redeploy and ceiling scrape are issued through.
     :param ssm_client: the boto3 SSM client each point sweep sends cells through.
-    :param s3_client: the boto3 S3 client the cell downloads and the pending probe read.
+    :param s3_client: the boto3 S3 client each point sweep downloads its cells with.
     :param task: the cell task each point sweep caches and gates its cells with.
     :return: the (deploy, scrape, point-sweep, has-pending-cells) callables, in the order
         :func:`drive_knob_sweep` takes them.
@@ -422,7 +422,7 @@ def build_knob_sweep_collaborators(
         task=task,
     )
     has_pending_cells: PendingCellsFn = partial(
-        _point_has_pending_cells, inputs=inputs, s3_client=s3_client
+        _point_has_pending_cells, inputs=inputs, task=task
     )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
 
@@ -472,17 +472,25 @@ def _sweep_one_point(
 
 
 def _point_has_pending_cells(
-    point: EnginePoint, *, inputs: KnobSweepInputs, s3_client: Any
+    point: EnginePoint, *, inputs: KnobSweepInputs, task: Task[..., str]
 ) -> bool:
-    """Report whether a point still has cells to run — the redeploy-skip probe negated."""
-    return not point_is_complete(
-        point,
-        grid=inputs.grid,
-        run_prefix=inputs.run,
-        bucket=inputs.bucket,
-        s3_client=s3_client,
-        model=inputs.model,
-        commercial=inputs.commercial,
+    """Report whether a point still has cells to run — any cell without a cache record.
+
+    Each cell is checked against the cell task's own cache, keyed by the same digest,
+    point slug, and cell name the point sweep calls the task with, so a point is skipped
+    only when every one of its cells will be served from cache.
+    """
+    return not all(
+        is_cell_cached(
+            task, digest=inputs.digest, point_slug=point.slug(), cell_name=cell_name
+        )
+        for _key, cell_name in iter_point_cell_objects(
+            point,
+            grid=inputs.grid,
+            run_prefix=inputs.run,
+            model=inputs.model,
+            commercial=inputs.commercial,
+        )
     )
 
 

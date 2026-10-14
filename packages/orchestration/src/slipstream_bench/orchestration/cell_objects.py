@@ -3,10 +3,11 @@
 A point's cells key the same whatever endpoint or output dir they ran against (ADR-0012):
 the grid is their single source, so enumerating a point's objects needs only the grid, the
 knob sweep's run prefix, and the served model, with non-empty placeholders for the endpoint
-and output dir the cell addressing ignores. The redeploy-skip gate
-(:mod:`slipstream_bench.orchestration.completion`) and the terminal result render
-(:mod:`slipstream_bench.orchestration.tasks.render`) both read a point's objects this way, so the
-enumeration lives here once rather than once per reader.
+and output dir the cell addressing ignores. The terminal result render
+(:mod:`slipstream_bench.orchestration.tasks.render`) reads a point's objects this way, and the
+redeploy-skip gate (:mod:`slipstream_bench.orchestration.flows.knob_sweep`) enumerates a
+point's cell names from the same basenames, so the enumeration lives here once rather than
+once per reader.
 """
 
 from collections.abc import Iterator
