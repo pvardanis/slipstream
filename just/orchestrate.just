@@ -55,6 +55,7 @@ stack-down:
     if ! just _zero-leak-sweep "${region}"; then overall=1; fi
     exit "${overall}"
 
+# Needs the orchestration image published, since `cluster-up` deploys the worker from it.
 # End-to-end cloud verification of the GPU path (ADR-0002 item 4, #92). Real GPU
 # spend, hand-triggered. Brings the cluster and GPU replica up, asserts the engine
 # serves a well-formed completion, then tears everything down and sweeps AWS for a
@@ -62,7 +63,6 @@ stack-down:
 # and the sweep run even when the smoke fails, so a failed check never orbits a
 # live g5. Exits non-zero if the smoke failed, teardown failed, or a leftover
 # survived. Every fallible step is guarded so `set -e` cannot skip the teardown.
-# Needs the orchestration image published, since `cluster-up` deploys the worker from it.
 [group('orchestrate')]
 cloud-verify:
     #!/usr/bin/env bash
