@@ -147,9 +147,14 @@ def is_cell_cached(
     key = get_cell_cache_key(
         None, {"digest": digest, "point_slug": point_slug, "cell_name": cell_name}
     )
-    # ``update_for_task`` is async-dispatched, typed as a store or its coroutine; called
-    # from the sync knob-sweep flow it runs the sync implementation and returns the store.
-    store = cast(ResultStore, get_result_store().update_for_task(task))
+    # ``update_for_task`` is async-dispatched: ``_sync=True`` forces the sync
+    # implementation, as Prefect's task engine calls it, so the result is the store
+    # itself. The dispatch wrapper's signature declares neither the flag nor the narrowed
+    # return, hence the ignore and the cast.
+    store = cast(
+        ResultStore,
+        get_result_store().update_for_task(task, _sync=True),  # ty: ignore[unknown-argument]
+    )
     return store.exists(key)
 
 
