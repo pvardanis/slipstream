@@ -20,6 +20,16 @@ resource "aws_eks_access_entry" "sweep_dispatch" {
   kubernetes_groups = [local.sweep_dispatch_group]
 
   tags = local.tags
+
+  # gh-vars sets EKS_CLUSTER_NAME from the bootstrap output, so the workflow targets the
+  # cluster bootstrap names; fail the plan if that is not this one. try() turns a
+  # bootstrap applied before the output existed into the same actionable failure.
+  lifecycle {
+    precondition {
+      condition     = try(data.terraform_remote_state.bootstrap.outputs.cluster_name, null) == var.cluster_name
+      error_message = "The bootstrap cluster_name output must equal this stack's cluster_name (${var.cluster_name}), or the sweep-dispatch workflow targets another cluster. Set both to the same value and re-run `just bootstrap` then `just gh-vars`."
+    }
+  }
 }
 
 # What `kubectl port-forward svc/prefect-server` needs: read the Service to resolve its
@@ -44,6 +54,15 @@ resource "kubernetes_role_v1" "sweep_dispatch" {
     api_groups = [""]
     resources  = ["pods/portforward"]
     verbs      = ["get", "create"]
+  }
+
+  # gh-vars sets PREFECT_NAMESPACE from the bootstrap output, so the workflow
+  # port-forwards into the namespace bootstrap names; fail the plan if that is not this one.
+  lifecycle {
+    precondition {
+      condition     = try(data.terraform_remote_state.bootstrap.outputs.prefect_namespace, null) == local.prefect_namespace
+      error_message = "The bootstrap prefect_namespace output must equal the namespace the Prefect server runs in (${local.prefect_namespace}), or the sweep-dispatch workflow port-forwards into nothing. Set it in terraform/bootstrap and re-run `just bootstrap` then `just gh-vars`."
+    }
   }
 
   # The prefect namespace is created by the server's Helm release.
