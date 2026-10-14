@@ -9,6 +9,7 @@ whether the sweep redeploys the point and which of its cells run or come from ca
 """
 
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal
@@ -70,6 +71,9 @@ spec:
         - name: vllm
           image: vllm/vllm-openai:v0.6.0
 """
+
+# The logger the gate names a pending point's first uncached cell on.
+_GATE_LOGGER = "slipstream_bench.orchestration.flows.knob_sweep"
 
 # The point's last enumerated cell, the one the failure tests break.
 _LAST_CELL = "pshare50_burst1.0_mc64.json"
@@ -133,6 +137,7 @@ class _CellS3:
         result = _VALID_RESULT
         if self._broken and key.endswith(self._broken) and key not in self._served:
             self._served.add(key)
+            # Only the first fetch misbehaves, so a resumed sweep re-runs the cell cleanly.
             if self._mode == "raise":
                 raise RuntimeError(f"cell object {key} could not be fetched")
             result = _DEGENERATE_RESULT
@@ -142,13 +147,15 @@ class _CellS3:
 class _Sweep:
     """One knob sweep's production gate and point sweep, over a shared cell task."""
 
-    def __init__(self, tmp_path: Path, task: Task[..., str], *, digest: str) -> None:
+    def __init__(
+        self, tmp_path: Path, task: Task[..., str], *, digest: str, grid: str = _GRID
+    ) -> None:
         grid_path = tmp_path / "sweep-grid.yaml"
-        grid_path.write_text(_GRID, encoding="utf-8")
+        grid_path.write_text(grid, encoding="utf-8")
         manifest_path = tmp_path / "vllm-gpu.yaml"
         manifest_path.write_text(_MANIFEST, encoding="utf-8")
         self._inputs = KnobSweepInputs(
-            grid=SweepGrid.model_validate(yaml.safe_load(_GRID)),
+            grid=SweepGrid.model_validate(yaml.safe_load(grid)),
             grid_path=grid_path,
             manifest_path=manifest_path,
             run="run1",
@@ -159,7 +166,7 @@ class _Sweep:
             model="Qwen/Qwen2.5-0.5B-Instruct",
         )
         self._task = task
-        (self.point,) = list_engine_points(self._inputs.grid)
+        self.point, *self.other_points = list_engine_points(self._inputs.grid)
         self.ssm = _FakeSsm()
         self.deployed: list[EnginePoint] = []
 
@@ -172,10 +179,10 @@ class _Sweep:
             task=self._task,
         )
 
-    def is_pending(self) -> bool:
-        """Ask the production gate whether the point still has cells to run."""
+    def is_pending(self, point: EnginePoint | None = None) -> bool:
+        """Ask the production gate whether a point (the first by default) has cells to run."""
         *_rest, has_pending_cells = self._collaborators(_CellS3())
-        return has_pending_cells(self.point)
+        return has_pending_cells(point or self.point)
 
     def run(self, s3: _CellS3 | None = None) -> SweepOutcome:
         """Drive the sweep, recording each redeploy; the ceiling scrape is a no-op."""
@@ -241,14 +248,16 @@ def test_a_digest_change_redeploys_the_point_and_re_runs_its_cells(
 
 
 def test_a_failed_cell_leaves_its_point_pending_and_only_it_re_runs(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     task = _isolated_task(tmp_path)
     with pytest.raises(CellResultError, match=_LAST_CELL):
         _Sweep(tmp_path, task, digest="digest-a").run(_CellS3(_LAST_CELL, "raise"))
 
     resume = _Sweep(tmp_path, task, digest="digest-a")
-    assert resume.is_pending() is True
+    with caplog.at_level(logging.INFO, logger=_GATE_LOGGER):
+        assert resume.is_pending() is True
+    assert f"cell {_LAST_CELL} has no cache record" in caplog.text
     resume.run()
 
     assert resume.deployed == [resume.point]
@@ -268,3 +277,31 @@ def test_a_degenerate_cell_is_not_cached_and_its_point_stays_pending(
 
     assert resume.deployed == [resume.point]
     assert resume.ssm.cell_runs == 1  # the degenerate cell re-runs, the valid one stays
+
+
+def test_a_completed_point_leaves_another_point_with_the_same_cells_pending(
+    tmp_path: Path,
+) -> None:
+    # Two engine points (mns64, mns128) sharing the same two cell names: only the slug
+    # tells their cache records apart.
+    grid = _GRID.replace("max_num_seqs: [64]", "max_num_seqs: [64, 128]")
+    sweep = _Sweep(tmp_path, _isolated_task(tmp_path), digest="digest-a", grid=grid)
+    sweep.run()  # runs the first point only
+    (other,) = sweep.other_points
+
+    assert sweep.is_pending() is False
+    assert sweep.is_pending(other) is True
+
+
+def test_a_refreshing_task_leaves_a_completed_point_pending(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+    _Sweep(tmp_path, task, digest="digest-a").run()
+
+    # A refreshing task overwrites its cache records instead of reading them, so every
+    # cell re-runs: the gate must redeploy the point rather than skip it.
+    refresh = _Sweep(tmp_path, task.with_options(refresh_cache=True), digest="digest-a")
+    assert refresh.is_pending() is True
+    refresh.run()
+
+    assert refresh.deployed == [refresh.point]
+    assert refresh.ssm.cell_runs == 2

@@ -479,20 +479,24 @@ def _point_has_pending_cells(
 
     Each cell is checked against the cell task's own cache, keyed by the same digest,
     point slug, and cell name the point sweep calls the task with, so a point is skipped
-    only when every one of its cells will be served from cache.
+    only when every one of its cells will be served from cache. The first uncached cell
+    is logged, naming why the point redeploys.
     """
-    return not all(
-        is_cell_cached(
+    for _key, cell_name in iter_point_cell_objects(
+        point,
+        grid=inputs.grid,
+        run_prefix=inputs.run,
+        model=inputs.model,
+        commercial=inputs.commercial,
+    ):
+        if not is_cell_cached(
             task, digest=inputs.digest, point_slug=point.slug(), cell_name=cell_name
-        )
-        for _key, cell_name in iter_point_cell_objects(
-            point,
-            grid=inputs.grid,
-            run_prefix=inputs.run,
-            model=inputs.model,
-            commercial=inputs.commercial,
-        )
-    )
+        ):
+            _LOGGER.info(
+                "point %s pending: cell %s has no cache record", point.slug(), cell_name
+            )
+            return True
+    return False
 
 
 def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepContext:
