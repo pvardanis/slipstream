@@ -60,7 +60,7 @@ variable "sweep_dispatch_role_name" {
 }
 
 variable "cluster_name" {
-  description = "Name of the EKS cluster the sweep-dispatch role may describe. Must match the eks stack's cluster_name (both default to slipstream)."
+  description = "Name of the EKS cluster the sweep-dispatch role may describe, also published as the cluster_name output gh-vars sets as EKS_CLUSTER_NAME. Must match the eks stack's cluster_name (both default to slipstream); the eks plan fails if they differ."
   type        = string
   default     = "slipstream"
 }
