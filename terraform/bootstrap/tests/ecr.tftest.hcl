@@ -69,22 +69,24 @@ run "retention_count_is_configurable" {
 }
 
 # The orchestration image (the baked Prefect-worker image) gets its own repo and the
-# same priority-ordered lifecycle: -main protected by a higher-priority rule, last N
-# -sha builds kept, untagged swept after 7 days.
+# same priority-ordered lifecycle: the floating main tag protected by a higher-priority
+# rule, last N -sha builds kept, untagged swept after 7 days. The orchestration-image
+# workflow publishes the pointer as plain `main` (not `<slug>-main`), and the eks stack
+# resolves the worker image through it, so rule 1 must match exactly that tag.
 run "orchestration_lifecycle_rules" {
   command = plan
 
   assert {
-    condition     = local.orchestration_lifecycle_rules[0].selection.tagPatternList[0] == "*-main"
-    error_message = "The highest-priority rule must match the floating -main tag."
+    condition     = local.orchestration_lifecycle_rules[0].selection.tagPatternList == ["main"]
+    error_message = "The highest-priority rule must match exactly the floating main tag the orchestration-image workflow publishes."
   }
   assert {
     condition     = local.orchestration_lifecycle_rules[0].rulePriority < local.orchestration_lifecycle_rules[1].rulePriority
-    error_message = "The -main protection rule must be applied before the -sha count rule."
+    error_message = "The main protection rule must be applied before the -sha count rule."
   }
   assert {
     condition     = local.orchestration_lifecycle_rules[0].selection.countType == "imageCountMoreThan" && local.orchestration_lifecycle_rules[0].selection.countNumber == 1
-    error_message = "The -main rule must keep the single newest -main image (imageCountMoreThan 1)."
+    error_message = "The main rule must keep the single main image (imageCountMoreThan 1)."
   }
   assert {
     condition     = local.orchestration_lifecycle_rules[1].selection.tagPatternList[0] == "*"
