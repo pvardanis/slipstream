@@ -96,13 +96,13 @@ locals {
   ]
 
   # Same priority-ordered scheme as the bench-client rules above: rule 1 shields the
-  # floating main tag from rule 2's -sha count sweep, rule 3 reaps untagged leftovers.
-  # The orchestration-image workflow publishes that pointer as plain `main`, not
-  # `<slug>-main`, so the pattern is the exact tag.
+  # floating main tag from rule 2's content-sha count sweep, rule 3 reaps untagged
+  # leftovers. The orchestration-image workflow publishes that pointer as plain `main`,
+  # not `<slug>-main`, so the pattern is the exact tag.
   orchestration_lifecycle_rules = [
     {
       rulePriority = 1
-      description  = "Keep the floating main tag; claimed before the -sha count rule so it is never expired."
+      description  = "Keep the floating main tag; claimed before the content-sha count rule so it is never expired."
       selection = {
         tagStatus      = "tagged"
         tagPatternList = ["main"]
@@ -113,7 +113,7 @@ locals {
     },
     {
       rulePriority = 2
-      description  = "Keep the last ${var.orchestration_image_keep_count} content-tagged (-sha) images; expire older ones."
+      description  = "Keep the last ${var.orchestration_image_keep_count} content-sha-tagged images; expire older ones."
       selection = {
         tagStatus      = "tagged"
         tagPatternList = ["*"]
