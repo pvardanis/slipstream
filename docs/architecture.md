@@ -25,14 +25,15 @@ flowchart LR
         drole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/iam-role.svg", label: "sweep-dispatch role", pos: "b", w: 48, h: 48, constraint: "on" }
         ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
         subgraph eks[EKS]
-            ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
-            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/k8s/pod.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
+            ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 48, h: 48, constraint: "on" }
+            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
         end
     end
 
     bimg -- OIDC --> brole --> ecr
     oimg -- OIDC --> orole --> ecr
     disp -- OIDC --> drole
+    ekscp ~~~ ps
     drole -- port-forward --> ps
     disp -- register + run<br/>knob-sweep --> ps
 ```
@@ -59,9 +60,9 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph eks[EKS]
-        ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
-        ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/k8s/pod.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
-        ebs@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ebs-gp3-volume.svg", label: "EBS gp3 volume", pos: "b", w: 48, h: 48, constraint: "on" }
+        ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 48, h: 48, constraint: "on" }
+        ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
+        ebs@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ebs-gp3-volume.svg", label: "EBS", pos: "b", w: 48, h: 48, constraint: "on" }
         pw[Prefect worker<br/>Pod Identity: S3 + SSM]
         vllm[vLLM replica<br/>g5.xlarge via Karpenter]
     end
