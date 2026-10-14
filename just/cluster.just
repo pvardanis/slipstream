@@ -103,7 +103,10 @@ cluster-down: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ eks_dir }} destroy -auto-approve -var="state_bucket=${bucket}"
+    # -refresh=false destroys from the recorded state without reading the bootstrap remote
+    # state or the orchestration image, so a missing image or unreadable bootstrap state
+    # cannot leave the cluster up and billing.
+    terraform -chdir={{ eks_dir }} destroy -auto-approve -refresh=false -var="state_bucket=${bucket}"
 
 # Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new

@@ -1,7 +1,8 @@
-# Read-only references the Prefect worker layer (worker.tf) needs: the bootstrap stack's
-# outputs and the orchestration image it holds. The orchestration ECR repository lives in
-# bootstrap because it must outlive `just cluster-down`; the worker reads its URL here and
-# resolves the current content-sha tag from ECR to pin the Deployment to an immutable ref.
+# Read-only references the Prefect worker layer (worker.tf) and the sweep-dispatch access
+# (sweep_dispatch.tf) need: the bootstrap stack's outputs and the orchestration image it
+# holds. The orchestration ECR repository lives in bootstrap because it must outlive
+# `just cluster-down`; the worker reads its URL here and resolves the current content-sha
+# tag from ECR to pin the Deployment to an immutable ref.
 
 # The bootstrap stack's outputs, for the orchestration image repository URL and the
 # sweep-dispatch role ARN.

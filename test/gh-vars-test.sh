@@ -108,6 +108,8 @@ EMPTY_OUTPUT=prefect_namespace check_aborted "empty namespace output" "prefect_n
 # A failed read never passes its stdout through as a value, and says it failed.
 FAIL_OUTPUT=region check_aborted "failed bootstrap read" "cannot read bootstrap output region"
 FAIL_OUTPUT=cluster_name check_aborted "failed cluster name read" "cannot read bootstrap output cluster_name"
+# A bootstrap applied before an output existed fails the read; the script names the fix.
+FAIL_OUTPUT=prefect_namespace check_aborted "missing output names the fix" "run \`just bootstrap\`"
 # A repository URL without a registry host would set the URL itself as the name.
 BAD_REPO_URL=1 check_aborted "repo url without host" "bench_image_repo_url is not <registry>/<name>"
 # An unauthenticated gh stops the script before the first variable.

@@ -16,7 +16,7 @@ bootstrap_dir="$1"
 read_output() {
   local dir="$1" name="$2" value
   if ! value="$(terraform -chdir="${dir}" output -raw "${name}")"; then
-    echo "cannot read ${dir} output ${name}" >&2
+    echo "cannot read ${dir} output ${name}; if the bootstrap stack predates it, run \`just bootstrap\`" >&2
     return 1
   fi
   if [[ -z "${value}" ]]; then

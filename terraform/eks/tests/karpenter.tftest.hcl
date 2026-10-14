@@ -58,6 +58,8 @@ override_data {
     outputs = {
       orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
       sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+      cluster_name                 = "slipstream"
+      prefect_namespace            = "prefect"
     }
   }
 }

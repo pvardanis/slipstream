@@ -48,6 +48,8 @@ override_data {
     outputs = {
       orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
       sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+      cluster_name                 = "slipstream"
+      prefect_namespace            = "prefect"
     }
   }
 }
@@ -128,4 +130,43 @@ run "sweep_dispatch_access_shape" {
     condition     = kubernetes_role_binding_v1.sweep_dispatch.role_ref[0].kind == "Role" && kubernetes_role_binding_v1.sweep_dispatch.role_ref[0].name == kubernetes_role_v1.sweep_dispatch.metadata[0].name
     error_message = "The RoleBinding must reference the namespaced sweep-dispatch Role."
   }
+}
+
+# gh-vars sets EKS_CLUSTER_NAME and PREFECT_NAMESPACE from the bootstrap outputs, so a
+# bootstrap that names a different cluster or namespace than this stack would point the
+# sweep-dispatch workflow at nothing. The plan fails instead of deploying that mismatch.
+run "sweep_dispatch_rejects_a_different_bootstrap_cluster" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        cluster_name                 = "other-cluster"
+        prefect_namespace            = "prefect"
+      }
+    }
+  }
+
+  expect_failures = [aws_eks_access_entry.sweep_dispatch]
+}
+
+run "sweep_dispatch_rejects_a_different_bootstrap_namespace" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        cluster_name                 = "slipstream"
+        prefect_namespace            = "other-namespace"
+      }
+    }
+  }
+
+  expect_failures = [kubernetes_role_v1.sweep_dispatch]
 }
