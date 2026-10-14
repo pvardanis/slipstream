@@ -285,3 +285,11 @@ from `main` whose work pool had a worker polling it; the workflow reads the depl
 and checks the pool before creating the run. It does not stand the stack up — `just stack-up`
 stays the operator step bracketing the GPU spend, and `just prefect-register` stays for the
 manual arm. The **schedule** stays declined, for the reason above.
+
+## Amendment (2026-10-14): the worker and sweep-dispatch access come up with every cluster
+
+`just cluster-up` always deploys the Prefect worker and the sweep-dispatch access entry; they
+are no longer gated behind a toggle. So `cluster-up` needs the orchestration image published
+first, and `just gh-vars` reads every repo variable from the bootstrap stack's outputs, so the
+workflow variables can be set before any cluster exists. The eks plan fails if the bootstrap
+cluster name or Prefect namespace differs from the cluster it creates.
