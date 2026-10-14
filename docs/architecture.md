@@ -19,13 +19,12 @@ flowchart LR
         disp[sweep-dispatch.yml]
     end
 
-    subgraph aws[AWS]
+    subgraph aws["<img src='https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/aws-cloud.svg' width='20' height='20'/> AWS"]
         brole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/iam-role.svg", label: "bench push role", pos: "b", w: 48, h: 48, constraint: "on" }
         orole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/iam-role.svg", label: "orchestration push role", pos: "b", w: 48, h: 48, constraint: "on" }
         drole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/iam-role.svg", label: "sweep-dispatch role", pos: "b", w: 48, h: 48, constraint: "on" }
         ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
-        subgraph eks[EKS]
-            ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 48, h: 48, constraint: "on" }
+        subgraph eks["<img src='https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg' width='20' height='20'/> EKS"]
             ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
         end
     end
@@ -33,7 +32,6 @@ flowchart LR
     bimg -- OIDC --> brole --> ecr
     oimg -- OIDC --> orole --> ecr
     disp -- OIDC --> drole
-    ekscp ~~~ ps
     drole -- port-forward --> ps
     disp -- register + run<br/>knob-sweep --> ps
 ```
@@ -59,8 +57,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph eks[EKS]
-        ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 48, h: 48, constraint: "on" }
+    subgraph eks["<img src='https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg' width='20' height='20'/> EKS"]
         ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
         ebs@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ebs-gp3-volume.svg", label: "EBS", pos: "b", w: 48, h: 48, constraint: "on" }
         pw[Prefect worker<br/>Pod Identity: S3 + SSM]

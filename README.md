@@ -36,10 +36,9 @@ flowchart TB
         disp[sweep-dispatch]
     end
 
-    subgraph aws[AWS]
+    subgraph aws["<img src='https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/aws-cloud.svg' width='20' height='20'/> AWS"]
         ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
-        subgraph eks[EKS]
-            ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
+        subgraph eks["<img src='https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg' width='20' height='20'/> EKS"]
             vllm[vLLM on g5<br/>Karpenter]
             ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
             pw[Prefect worker]
