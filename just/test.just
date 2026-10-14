@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine, bench image tagging/build, and the repo-variable setter (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine, bench image tagging/build, and the repo-variable setter and orchestration image check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -24,3 +24,8 @@ build-image-test:
 [group('test')]
 gh-vars-test:
     bash test/gh-vars-test.sh
+
+# Assert orchestration-image-check.sh looks up the orchestration :main image from the bootstrap outputs and fails naming the publish step when it is missing (terraform and aws stubbed).
+[group('test')]
+orchestration-image-check-test:
+    bash test/orchestration-image-check-test.sh

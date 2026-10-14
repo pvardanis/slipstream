@@ -20,8 +20,9 @@ cluster-up: _bootstrap-init
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
     # The worker layer requires the orchestration image published: the eks stack reads the
     # bootstrap orchestration ECR repo URL (via the remote state in state_bucket) and
-    # resolves the image's content-sha tag, failing loudly if :main is absent or its
-    # manifest carries no single content tag.
+    # resolves the image's content-sha tag, failing loudly if its manifest carries no
+    # single content tag. The check first fails a missing :main with the publish step.
+    {{ justfile_directory() }}/bench/orchestration-image-check.sh {{ bootstrap_dir }}
     terraform -chdir={{ eks_dir }} apply -auto-approve -var="state_bucket=${bucket}"
     name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
@@ -38,6 +39,7 @@ cluster-plan: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
+    {{ justfile_directory() }}/bench/orchestration-image-check.sh {{ bootstrap_dir }}
     terraform -chdir={{ eks_dir }} plan -var="state_bucket=${bucket}"
 
 # Needs `gh` authenticated and the bootstrap stack applied (`just bootstrap`).
