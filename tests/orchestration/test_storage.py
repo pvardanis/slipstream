@@ -58,9 +58,28 @@ def test_result_storage_trims_surrounding_whitespace() -> None:
 
 
 def test_check_cache_key_storage_passes_on_writable_storage(tmp_path: Path) -> None:
-    check_cache_key_storage(
-        LocalFileSystem(basepath=str(tmp_path / "cache-keys")), bucket=_BUCKET
-    )
+    root = tmp_path / "cache-keys"
+
+    check_cache_key_storage(LocalFileSystem(basepath=str(root)), bucket=_BUCKET)
+
+    assert (root / "preflight-probe").is_file()
+
+
+class _WriteOnlyStorage:
+    """Cache-key storage whose writes land but whose reads are denied."""
+
+    def write_path(self, path: str, content: bytes, **_: object) -> str:
+        return path
+
+    def read_path(self, path: str, **_: object) -> bytes:
+        raise PermissionError(f"read denied on {path}")
+
+
+def test_check_cache_key_storage_fails_when_the_probe_cannot_be_read_back() -> None:
+    # A write-only grant stores cache records Prefect can never read, so every cell
+    # would look pending; the read-back catches it.
+    with pytest.raises(StorageError, match=f"s3://{_BUCKET}/prefect/cache-keys"):
+        check_cache_key_storage(_WriteOnlyStorage(), bucket=_BUCKET)
 
 
 def test_check_cache_key_storage_names_the_bucket_and_prefix_on_failure(
