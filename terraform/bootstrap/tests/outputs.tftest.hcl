@@ -1,24 +1,20 @@
 # Plan-level tests for the bootstrap outputs `just gh-vars` reads to set the
 # sweep-dispatch repo variables. They run offline (mocked aws provider) and assert the
-# cluster name and Prefect namespace come from bootstrap, so the variables can be set
-# before any cluster exists.
+# default cluster name and Prefect namespace match the eks stack's (var.cluster_name and
+# local.prefect_namespace), so the variables can be set before any cluster exists and
+# point at the cluster and namespace eks creates.
 mock_provider "aws" {}
 mock_provider "random" {}
 
 run "sweep_dispatch_target_outputs" {
   command = plan
 
-  variables {
-    cluster_name      = "bench-cluster"
-    prefect_namespace = "orchestration"
-  }
-
   assert {
-    condition     = output.cluster_name == "bench-cluster"
-    error_message = "The cluster_name output must carry the cluster_name variable."
+    condition     = output.cluster_name == "slipstream"
+    error_message = "The cluster_name output must default to slipstream, the eks stack's cluster_name default."
   }
   assert {
-    condition     = output.prefect_namespace == "orchestration"
-    error_message = "The prefect_namespace output must carry the prefect_namespace variable."
+    condition     = output.prefect_namespace == "prefect"
+    error_message = "The prefect_namespace output must default to prefect, the namespace the eks stack runs the Prefect server in."
   }
 }

@@ -170,3 +170,22 @@ run "sweep_dispatch_rejects_a_different_bootstrap_namespace" {
 
   expect_failures = [kubernetes_role_v1.sweep_dispatch]
 }
+
+# A bootstrap applied before it published the cluster name and namespace has neither
+# output; both preconditions fail with their actionable message rather than an
+# unsupported-attribute error.
+run "sweep_dispatch_rejects_a_bootstrap_without_target_outputs" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+      }
+    }
+  }
+
+  expect_failures = [aws_eks_access_entry.sweep_dispatch, kubernetes_role_v1.sweep_dispatch]
+}
