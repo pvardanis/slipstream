@@ -1,7 +1,7 @@
 # Operations
 
 Runbooks for the live rig. All but cloud verify assume the stack is up
-(`just enable_prefect_worker=true stack-up`) and end with `just stack-down`.
+(`just stack-up`) and end with `just stack-down`.
 
 ## Knob sweep
 

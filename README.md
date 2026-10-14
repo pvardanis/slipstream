@@ -119,8 +119,9 @@ will not find the resources.
 
 ### New environment or fork
 
-Once per AWS account / repository. The image workflows need the repo variables, which
-need a cluster, and the worker needs the published image, hence the order:
+Once per AWS account / repository. The image workflows need the repo variables, and
+`just cluster-up` deploys the Prefect worker from the published orchestration image,
+hence the order:
 
 1. In a fork or renamed repo, set `github_oidc_sub_prefix` in `terraform/bootstrap` to
    the repo's OIDC subject prefix, otherwise every workflow fails with
@@ -129,19 +130,18 @@ need a cluster, and the worker needs the published image, hence the order:
    gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
    ```
 2. `just bootstrap` — remote-state bucket, ECR repositories, GitHub OIDC roles.
-3. `just cluster-up`, then `just gh-vars` — sets the eight repo variables the workflows
-   read from the bootstrap and eks outputs.
+3. `just gh-vars` — sets the eight repo variables the workflows read from the
+   bootstrap outputs.
 4. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
-5. `just enable_prefect_worker=true cluster-up` — adds the Prefect worker and the
-   sweep-dispatch access.
+   ECR keeps them across `just stack-down`, so this is once per environment.
 
 ## Quickstart
 
 ```sh
-just enable_prefect_worker=true stack-up   # cluster + Prefect + GPU pool + vLLM + bench endpoint
+just stack-up             # cluster + Prefect + GPU pool + vLLM + bench endpoint
 # trigger a knob sweep: Actions → sweep-dispatch → Run workflow (on main)
-just bench-results-sync                    # pull results into bench/results/ — before stack-down
-just stack-down                            # tear down, then zero-leak sweep (spend → 0)
+just bench-results-sync   # pull results into bench/results/ — before stack-down
+just stack-down           # tear down, then zero-leak sweep (spend → 0)
 ```
 
 The bench endpoint is public and every node bills while up: **run `just stack-down`
