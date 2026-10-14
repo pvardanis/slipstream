@@ -27,6 +27,11 @@ The build spec is [`docs/spec.md`](docs/spec.md); decisions are recorded in
 ## Architecture
 
 ```mermaid
+---
+config:
+  elk:
+    nodePlacementAlignment: LEFTUP
+---
 flowchart TB
     op([Operator])
 

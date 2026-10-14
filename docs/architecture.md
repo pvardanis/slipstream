@@ -7,6 +7,11 @@ the GPU replica. The target architecture (routing, autoscaling, P/D split) is in
 ## CI/CD
 
 ```mermaid
+---
+config:
+  elk:
+    nodePlacementAlignment: LEFTUP
+---
 flowchart LR
     pr[Pull request] --> ci
     main[Push to main] --> ci & bimg & oimg
@@ -59,6 +64,11 @@ flowchart LR
 ## Benchmark data path
 
 ```mermaid
+---
+config:
+  elk:
+    nodePlacementAlignment: LEFTUP
+---
 flowchart TB
     subgraph eks[EKS]
         ekslogo@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 32, h: 32, constraint: "on" }
