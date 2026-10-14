@@ -39,8 +39,9 @@ flowchart TB
     subgraph aws[AWS]
         ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
         subgraph eks[EKS]
+            ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
             vllm[vLLM on g5<br/>Karpenter]
-            ps[Prefect server]
+            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/k8s/pod.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
             pw[Prefect worker]
         end
         alb@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/alb.svg", label: "mTLS ALB", pos: "b", w: 48, h: 48, constraint: "on" }

@@ -25,7 +25,8 @@ flowchart LR
         drole@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/iam-role.svg", label: "sweep-dispatch role", pos: "b", w: 48, h: 48, constraint: "on" }
         ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
         subgraph eks[EKS]
-            ps[Prefect server]
+            ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
+            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/k8s/pod.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
         end
     end
 
@@ -58,7 +59,9 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph eks[EKS]
-        ps[Prefect server<br/>SQLite on EBS]
+        ekscp@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "EKS", pos: "b", w: 48, h: 48, constraint: "on" }
+        ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/k8s/pod.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
+        ebs@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ebs-gp3-volume.svg", label: "EBS gp3 volume", pos: "b", w: 48, h: 48, constraint: "on" }
         pw[Prefect worker<br/>Pod Identity: S3 + SSM]
         vllm[vLLM replica<br/>g5.xlarge via Karpenter]
     end
@@ -69,12 +72,13 @@ flowchart TB
         s3@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/s3-bucket.svg", label: "results bucket", pos: "b", w: 48, h: 48, constraint: "on" }
     end
 
+    ps -- SQLite --> ebs
     ps -- flow run --> pw
-    pw -- "Tier 1: kubectl redeploy<br/>per engine point" --> vllm
+    pw -- "Tier 1:<br/>kubectl redeploy<br/>per engine point" --> vllm
     pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
     host -- result JSON<br/>sweeps/run-id/ --> s3
-    pw --> s3
+    pw -- charts --> s3
     pw -- ceiling tables<br/>as run artifacts --> ps
 ```
 
