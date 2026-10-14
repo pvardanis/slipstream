@@ -74,17 +74,21 @@ def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
     index never collide. Prefect binds a task's storage from a persisted block
     document, so each block is registered (idempotently, overwriting a prior
     definition) before the task binds it — this must run where the Prefect API is
-    reachable, i.e. within the flow the sweep drives.
+    reachable, i.e. within the flow the sweep drives. The cache-key storage is then
+    probed (:func:`~slipstream_bench.orchestration.storage.check_cache_key_storage`),
+    so a bad bucket or grant aborts the flow before its first GPU redeploy.
 
     :param bucket: the sweep results bucket (``RESULTS_BUCKET``).
     :param retries: opt-in retries for a flaky cell.
     :return: the configured task, its state on S3.
-    :raise StorageError: when ``bucket`` is blank.
+    :raise StorageError: when ``bucket`` is blank, or the cache-key storage fails its
+        write/read probe.
     """
     result = storage.result_storage(bucket)
     cache_keys = storage.cache_key_storage(bucket)
     result.save(_RESULT_BLOCK, overwrite=True)
     cache_keys.save(_CACHE_KEY_BLOCK, overwrite=True)
+    storage.check_cache_key_storage(cache_keys, bucket=bucket)
     return build_cell_task(
         result_storage=result, key_storage=cache_keys, retries=retries
     )

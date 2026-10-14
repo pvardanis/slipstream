@@ -12,6 +12,7 @@ import json
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 from prefect import flow
@@ -281,15 +282,31 @@ def test_a_degenerate_cell_is_re_attempted(tmp_path: Path) -> None:
     assert calls == [1, 1]  # nothing was cached, so each run re-attempted the cell
 
 
-def test_cell_task_for_a_bucket_wires_s3_result_storage() -> None:
+def test_cell_task_for_a_bucket_wires_s3_result_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from prefect_aws import S3Bucket
 
+    from slipstream_bench.orchestration import storage
     from slipstream_bench.orchestration.tasks.cell import cell_task
+
+    # The preflight would probe the real bucket over the network; record what it is
+    # handed instead, so the wiring is asserted offline.
+    probed: list[tuple[Any, str]] = []
+    monkeypatch.setattr(
+        storage,
+        "check_cache_key_storage",
+        lambda block, *, bucket: probed.append((block, bucket)),
+    )
 
     task = cell_task("slipstream-bench-results")
 
     assert isinstance(task.result_storage, S3Bucket)
     assert task.result_storage.bucket_folder == "prefect/results"
+    [(block, bucket)] = probed
+    assert isinstance(block, S3Bucket)
+    assert block.bucket_folder == "prefect/cache-keys"
+    assert bucket == "slipstream-bench-results"
 
 
 def test_the_task_run_name_reads_the_point_slug_and_cell_name(tmp_path: Path) -> None:
