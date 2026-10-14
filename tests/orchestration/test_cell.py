@@ -8,6 +8,7 @@ nothing to cache). The pure :func:`run_cell` core is tested without Prefect; the
 caching and re-attempt behaviour is exercised under Prefect's test harness.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable, Iterator, Mapping
@@ -307,6 +308,41 @@ def test_cell_task_for_a_bucket_wires_s3_result_storage(
     assert isinstance(block, S3Bucket)
     assert block.bucket_folder == "prefect/cache-keys"
     assert bucket == "slipstream-bench-results"
+
+
+def test_cell_task_registers_its_storage_blocks_from_inside_an_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from prefect.blocks.core import Block
+    from prefect.filesystems import LocalFileSystem
+
+    from slipstream_bench.orchestration import storage
+    from slipstream_bench.orchestration.tasks import cell as cell_module
+
+    # Prefect's ``save`` returns an un-awaited coroutine in an async context; the
+    # blocks must still be registered, or the task binds storage the API never stored.
+    results, cache_keys = tmp_path / "results", tmp_path / "cache-keys"
+    monkeypatch.setattr(
+        storage, "result_storage", lambda _b: LocalFileSystem(basepath=str(results))
+    )
+    monkeypatch.setattr(
+        storage,
+        "cache_key_storage",
+        lambda _b: LocalFileSystem(basepath=str(cache_keys)),
+    )
+
+    async def build() -> None:
+        cell_module.cell_task("slipstream-bench-results")
+
+    asyncio.run(build())
+
+    for name, root in [
+        (cell_module._RESULT_BLOCK, results),
+        (cell_module._CACHE_KEY_BLOCK, cache_keys),
+    ]:
+        block = Block.load(f"local-file-system/{name}")
+        assert isinstance(block, LocalFileSystem)
+        assert block.basepath == str(root)
 
 
 def test_the_task_run_name_reads_the_point_slug_and_cell_name(tmp_path: Path) -> None:

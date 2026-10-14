@@ -86,8 +86,12 @@ def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
     """
     result = storage.result_storage(bucket)
     cache_keys = storage.cache_key_storage(bucket)
-    result.save(_RESULT_BLOCK, overwrite=True)
-    cache_keys.save(_CACHE_KEY_BLOCK, overwrite=True)
+    # ``save`` is async-dispatched: in an async context (an async flow or task, or a
+    # running event loop) it returns a coroutine that never runs, so ``_sync=True``
+    # forces the registration. The dispatch wrapper's signature does not declare the
+    # flag, hence the ignore.
+    result.save(_RESULT_BLOCK, overwrite=True, _sync=True)  # ty: ignore[unknown-argument]
+    cache_keys.save(_CACHE_KEY_BLOCK, overwrite=True, _sync=True)  # ty: ignore[unknown-argument]
     storage.check_cache_key_storage(cache_keys, bucket=bucket)
     return build_cell_task(
         result_storage=result, key_storage=cache_keys, retries=retries
