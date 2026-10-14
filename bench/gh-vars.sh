@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Set the GitHub repository variables the image and sweep-dispatch workflows read,
-# from the bootstrap and eks stacks' outputs. Every output is read and checked before
-# any variable is set, so a failed, empty or malformed one aborts with nothing set; a
-# gh failure mid-update stops there and says to rerun, which is idempotent.
-# Usage: gh-vars.sh <bootstrap-dir> <eks-dir>
+# from the bootstrap stack's outputs, so they can be set before any cluster exists.
+# Every output is read and checked before any variable is set, so a failed, empty or
+# malformed one aborts with nothing set; a gh failure mid-update stops there and says
+# to rerun, which is idempotent.
+# Usage: gh-vars.sh <bootstrap-dir>
 set -euo pipefail
 
 bootstrap_dir="$1"
-eks_dir="$2"
 
 # errexit does not reach inside a command substitution, so a failed read is checked
 # explicitly rather than letting whatever terraform printed through as the value. The
@@ -24,15 +24,6 @@ read_output() {
     return 1
   fi
   printf '%s' "${value}"
-}
-
-# The eks outputs exist only while a cluster is up and terraform/eks is initialised
-# here; `just cluster-up` does both.
-read_eks_output() {
-  if ! read_output "${eks_dir}" "$1"; then
-    echo "if no cluster is up or ${eks_dir} is not initialised here, run \`just cluster-up\` first" >&2
-    return 1
-  fi
 }
 
 # The workflows take the ECR repository name, not its <registry>/<name> URL.
@@ -65,8 +56,8 @@ orch_push_role="$(read_output "${bootstrap_dir}" orchestration_image_push_role_a
 orch_repo_url="$(read_output "${bootstrap_dir}" orchestration_image_repo_url)"
 orch_repo="$(get_repo_name "${orch_repo_url}" orchestration_image_repo_url)"
 dispatch_role="$(read_output "${bootstrap_dir}" sweep_dispatch_role_arn)"
-cluster_name="$(read_eks_output cluster_name)"
-prefect_namespace="$(read_eks_output prefect_namespace)"
+cluster_name="$(read_output "${bootstrap_dir}" cluster_name)"
+prefect_namespace="$(read_output "${bootstrap_dir}" prefect_namespace)"
 
 set_variable AWS_REGION "${region}"
 set_variable AWS_BENCH_IMAGE_PUSH_ROLE_ARN "${bench_push_role}"

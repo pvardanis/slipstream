@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unit test for bench/gh-vars.sh: terraform and gh are stubbed on PATH so the
-# test asserts the repo variables the script sets from the stack outputs, never
+# test asserts the repo variables the script sets from the bootstrap outputs, never
 # a real terraform read or GitHub write. It checks that all eight variables are
 # set with their output values (the ECR repository names stripped of their
 # registry host); that a failed, empty or malformed output, or an unauthenticated
@@ -14,8 +14,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 # Stub terraform: answer `-chdir=<dir> output -raw <name>` from a fixed table,
-# rejecting any other call shape. EKS_EXIT makes every eks read fail (no cluster
-# up); EMPTY_OUTPUT names one output that resolves to exit-0 empty stdout;
+# rejecting any other call shape. EMPTY_OUTPUT names one output that resolves to exit-0 empty stdout;
 # FAIL_OUTPUT names one whose read fails after printing junk to stdout;
 # BAD_REPO_URL makes the bench repository URL lose its registry host.
 mkdir -p "${tmp}/bin"
@@ -23,10 +22,6 @@ cat >"${tmp}/bin/terraform" <<'EOF'
 #!/usr/bin/env bash
 [[ "$#" == 4 && "$2" == output && "$3" == -raw ]] || { echo "unexpected call: $*" >&2; exit 2; }
 dir="${1#-chdir=}" name="$4"
-if [[ "${dir}" == eks && "${EKS_EXIT:-0}" != 0 ]]; then
-  echo "No outputs found" >&2
-  exit 1
-fi
 [[ "${name}" == "${EMPTY_OUTPUT:-}" ]] && exit 0
 if [[ "${name}" == "${FAIL_OUTPUT:-}" ]]; then
   echo junk
@@ -41,8 +36,8 @@ case "${dir}/${name}" in
   bootstrap/orchestration_image_push_role_arn) echo arn:orch-push ;;
   bootstrap/orchestration_image_repo_url) echo 123.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orch ;;
   bootstrap/sweep_dispatch_role_arn) echo arn:dispatch ;;
-  eks/cluster_name) echo slipstream ;;
-  eks/prefect_namespace) echo prefect ;;
+  bootstrap/cluster_name) echo slipstream ;;
+  bootstrap/prefect_namespace) echo prefect ;;
   *) echo "unexpected output ${dir}/${name}" >&2; exit 1 ;;
 esac
 EOF
@@ -59,7 +54,7 @@ chmod +x "${tmp}/bin/terraform" "${tmp}/bin/gh"
 fail=0
 run() {
   : >"${tmp}/gh-calls"
-  PATH="${tmp}/bin:${PATH}" "${script}" bootstrap eks 2>"${tmp}/stderr"
+  PATH="${tmp}/bin:${PATH}" "${script}" bootstrap 2>"${tmp}/stderr"
 }
 check() {
   local label="$1" want="$2"
@@ -107,14 +102,12 @@ else
   fail=1
 fi
 
-# No cluster up: the eks reads fail, and the script names the fix.
-EKS_EXIT=1 check_aborted "eks state missing" "just cluster-up"
 # An output that resolves to nothing aborts rather than setting an empty variable.
 EMPTY_OUTPUT=sweep_dispatch_role_arn check_aborted "empty bootstrap output" "sweep_dispatch_role_arn is empty"
-EMPTY_OUTPUT=prefect_namespace check_aborted "empty eks output" "prefect_namespace is empty"
+EMPTY_OUTPUT=prefect_namespace check_aborted "empty namespace output" "prefect_namespace is empty"
 # A failed read never passes its stdout through as a value, and says it failed.
 FAIL_OUTPUT=region check_aborted "failed bootstrap read" "cannot read bootstrap output region"
-FAIL_OUTPUT=cluster_name check_aborted "failed eks read" "cannot read eks output cluster_name"
+FAIL_OUTPUT=cluster_name check_aborted "failed cluster name read" "cannot read bootstrap output cluster_name"
 # A repository URL without a registry host would set the URL itself as the name.
 BAD_REPO_URL=1 check_aborted "repo url without host" "bench_image_repo_url is not <registry>/<name>"
 # An unauthenticated gh stops the script before the first variable.

@@ -64,3 +64,9 @@ variable "cluster_name" {
   type        = string
   default     = "slipstream"
 }
+
+variable "prefect_namespace" {
+  description = "Namespace the Prefect server runs in, which the sweep-dispatch workflow port-forwards into. Must match the eks stack's prefect_namespace local (prefect)."
+  type        = string
+  default     = "prefect"
+}
