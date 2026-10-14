@@ -48,16 +48,16 @@ flowchart LR
   `terraform/bootstrap`; no workflow reads a secret. All three roles trust only `main`
   of this repo (`github_oidc_sub_prefix`).
 - **Image publishing is content-addressed.** Each image workflow computes the image's
-  content tag, skips the build if ECR already has it, and otherwise pushes
-  `<slug>-<sha>` plus the floating `<slug>-main`, which only `main` CI publishes
+  content tag, skips the build if ECR already has it, and otherwise pushes the content
+  tag plus a floating pointer (`<slug>-main` for the bench client, `main` for the
+  orchestration image), which only `main` CI publishes
   (`just bench-image` pushes a content tag from a workstation). Pull requests get a
   no-push build in `ci.yml` ([ADR-0008](adr/0008-ci-built-bench-image-and-model-definition.md)).
 - **Sweep dispatch is least-privilege.** The role can describe the cluster and bench
   host and list buckets. An EKS access entry maps it to a Kubernetes group that can only
-  read and port-forward within the Prefect namespace (`terraform/eks`, gated by
-  `enable_prefect_worker`).
-- **Repo variables** (`just gh-vars`): `AWS_REGION`, `ECR_REPOSITORY`,
-  `AWS_BENCH_IMAGE_PUSH_ROLE_ARN`, `ORCHESTRATION_ECR_REPOSITORY`,
+  read and port-forward within the Prefect namespace (`terraform/eks`).
+- **Repo variables** (`just gh-vars`, from the bootstrap outputs): `AWS_REGION`,
+  `ECR_REPOSITORY`, `AWS_BENCH_IMAGE_PUSH_ROLE_ARN`, `ORCHESTRATION_ECR_REPOSITORY`,
   `AWS_ORCHESTRATION_IMAGE_PUSH_ROLE_ARN`, `AWS_SWEEP_DISPATCH_ROLE_ARN`,
   `EKS_CLUSTER_NAME`, `PREFECT_NAMESPACE`.
 
