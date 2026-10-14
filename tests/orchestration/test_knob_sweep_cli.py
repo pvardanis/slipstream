@@ -21,11 +21,13 @@ from typing import Any, cast
 import pytest
 import yaml
 from prefect import Task, flow
+from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 from typer.testing import CliRunner
 
 from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration import cli as cli_module
+from slipstream_bench.orchestration import storage as storage_module
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
@@ -37,6 +39,8 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     build_knob_sweep_collaborators,
     knob_sweep_flow,
 )
+from slipstream_bench.orchestration.storage import StorageError
+from slipstream_bench.orchestration.tasks.cell import cell_task
 from tests.orchestration.cell_object_fakes import ServingCellS3
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
@@ -655,6 +659,88 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     with get_client(sync_client=True) as client:
         run = client.read_flow_run(captured["parent_id"])
     assert "run=run1" in run.tags
+
+
+def _sweep_on_local_cache_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cache_key_root: Path,
+    deployed: list[str],
+) -> None:
+    """Run the real flow with its cell storage on local disk, recording each redeploy.
+
+    The real ``cell_task`` registers both storage blocks and runs the preflight, with the
+    two S3 builders swapped for local filesystems so ``cache_key_root`` decides whether
+    the probe can land. Every point is pending, so a sweep that gets past the preflight
+    redeploys each point; each redeploy appends its slug to ``deployed`` rather than run.
+    """
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "cell_task", cell_task)
+    monkeypatch.setattr(
+        storage_module,
+        "result_storage",
+        lambda _bucket: LocalFileSystem(basepath=str(tmp_path / "results")),
+    )
+    monkeypatch.setattr(
+        storage_module,
+        "cache_key_storage",
+        lambda _bucket: LocalFileSystem(basepath=str(cache_key_root)),
+    )
+    monkeypatch.setattr(
+        knob_sweep_module,
+        "deploy_gpu_point",
+        lambda point, **_k: deployed.append(point.slug()),
+    )
+    monkeypatch.setattr(knob_sweep_module, "scrape_ceiling", lambda *_a, **_k: 12.5)
+    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: False)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+
+    knob_sweep_flow(
+        run_id="run1",
+        instance_id="i-1",
+        region="us-east-1",
+        bucket="bench-bucket",
+        image_ref="repo:tag",
+        model_yaml=model_yaml,
+        sweep_grid=grid_yaml,
+        vllm_manifest=manifest,
+    )
+
+
+def test_knob_sweep_proceeds_to_redeploy_on_writable_cache_key_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    deployed: list[str] = []
+
+    _sweep_on_local_cache_storage(
+        tmp_path,
+        monkeypatch,
+        cache_key_root=tmp_path / "cache-keys",
+        deployed=deployed,
+    )
+
+    assert deployed == [_POINT.slug()]
+
+
+def test_knob_sweep_aborts_before_any_redeploy_on_unwritable_cache_key_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    # Prefect's cache existence check reads any storage error as "not cached", so a bad
+    # bucket would look pending and pay a ~20-minute redeploy; the preflight aborts first.
+    # A regular file where the storage root should be stands in for a missing bucket or
+    # a denied IAM grant: the probe write cannot land.
+    blocked_root = tmp_path / "not-a-dir"
+    blocked_root.write_text("", encoding="utf-8")
+    deployed: list[str] = []
+
+    with pytest.raises(StorageError, match="s3://bench-bucket/prefect/cache-keys"):
+        _sweep_on_local_cache_storage(
+            tmp_path, monkeypatch, cache_key_root=blocked_root, deployed=deployed
+        )
+
+    assert deployed == []
 
 
 def test_register_knob_sweep_registers_a_module_path_deployment(
