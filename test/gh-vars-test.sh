@@ -14,9 +14,9 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
 # Stub terraform: answer `-chdir=<dir> output -raw <name>` from a fixed table,
-# rejecting any other call shape. EMPTY_OUTPUT names one output that resolves to exit-0 empty stdout;
-# FAIL_OUTPUT names one whose read fails after printing junk to stdout;
-# BAD_REPO_URL makes the bench repository URL lose its registry host.
+# rejecting any other call shape. EMPTY_OUTPUT names one output that resolves to
+# exit-0 empty stdout; FAIL_OUTPUT names one whose read fails after printing junk to
+# stdout; BAD_REPO_URL makes the bench repository URL lose its registry host.
 mkdir -p "${tmp}/bin"
 cat >"${tmp}/bin/terraform" <<'EOF'
 #!/usr/bin/env bash

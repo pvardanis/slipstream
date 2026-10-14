@@ -4,8 +4,9 @@
 # `just cluster-down`; the worker reads its URL here and resolves the current content-sha
 # tag from ECR to pin the Deployment to an immutable ref.
 
-# The bootstrap stack's outputs, for the orchestration image repository URL and the
-# sweep-dispatch role ARN.
+# The bootstrap stack's outputs: the orchestration image repository URL, the
+# sweep-dispatch role ARN, and the cluster name and Prefect namespace the sweep-dispatch
+# preconditions check.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"
   config = {

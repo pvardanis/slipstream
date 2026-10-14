@@ -20,7 +20,7 @@ image-tag-test:
 build-image-test:
     bash test/build-image-test.sh
 
-# Assert gh-vars.sh sets every workflow repo variable from the stack outputs and aborts before any set on a missing one (terraform and gh stubbed).
+# Assert gh-vars.sh sets every workflow repo variable from the bootstrap outputs and aborts before any set on a missing one (terraform and gh stubbed).
 [group('test')]
 gh-vars-test:
     bash test/gh-vars-test.sh
