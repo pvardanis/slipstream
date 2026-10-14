@@ -35,6 +35,10 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
+  # The worker layer plans with the stack; its image resolves to one content-sha tag.
+  mock_data "aws_ecr_image" {
+    defaults = { image_tags = ["main", "orchestrator-abc123"] }
+  }
 }
 
 # The Karpenter chart is pulled through a second, us-east-1-pinned aws provider
@@ -45,6 +49,22 @@ mock_provider "aws" {
   alias = "virginia"
 }
 mock_provider "helm" {}
+
+# The worker layer plans with the stack and reads the bootstrap remote state; stub it
+# instead of reaching for real S3.
+override_data {
+  target = data.terraform_remote_state.bootstrap
+  values = {
+    outputs = {
+      orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+    }
+  }
+}
+
+variables {
+  state_bucket = "slipstream-tfstate-abc123"
+}
 
 run "karpenter_install_shape" {
   command = plan

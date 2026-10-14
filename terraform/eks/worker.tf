@@ -12,11 +12,6 @@
 # to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys).
 
 locals {
-  # The worker layer's on/off switch: false until the orchestration image ships in its
-  # own build stack, leaving the whole layer uncreated so `just cluster-up` stands the
-  # cluster up before that image exists. Enabling it is what brings the worker up.
-  worker_enabled = var.enable_prefect_worker
-
   worker_service_account = "prefect-worker"
 
   # vllm-gpu runs in the slipstream namespace (k8s/vllm-gpu.yaml); the worker's RBAC is
@@ -31,14 +26,12 @@ locals {
   # re-apply re-resolves to a new immutable ref (a real rollout) and a cached image on a
   # node is always the right one under IfNotPresent. repository_name is the path after the
   # registry host, which is what the ECR data source looks the image up by.
-  orchestration_repo_url  = local.worker_enabled ? data.terraform_remote_state.bootstrap[0].outputs.orchestration_image_repo_url : ""
-  orchestration_repo_name = local.worker_enabled ? trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/") : ""
-  # The worker_enabled guard mirrors the repository above: disabled, the ECR data source is
-  # uncreated and the tag is "". Enabled, the data source's postcondition guarantees exactly
-  # one non-main tag, so the list comprehension's [0] resolves it — and an empty list (a
-  # loosened postcondition or drifted filter) fails the plan loudly instead of pinning "".
-  worker_image_repository = local.worker_enabled ? local.orchestration_repo_url : ""
-  worker_image_tag        = local.worker_enabled ? [for t in data.aws_ecr_image.orchestration[0].image_tags : t if t != "main"][0] : ""
+  orchestration_repo_url  = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
+  orchestration_repo_name = trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/")
+  # The ECR data source's postcondition guarantees exactly one non-main tag, so the list
+  # comprehension's [0] resolves it — and an empty list (a loosened postcondition or
+  # drifted filter) fails the plan loudly instead of pinning "".
+  worker_image_tag = [for t in data.aws_ecr_image.orchestration.image_tags : t if t != "main"][0]
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. A process worker (subprocess, not a per-run Job) matches the serial
@@ -48,7 +41,7 @@ locals {
   prefect_worker_helm_values = {
     worker = {
       image = {
-        repository = local.worker_image_repository
+        repository = local.orchestration_repo_url
         prefectTag = local.worker_image_tag
         # The tag is an immutable content-sha, so IfNotPresent is safe: the ref uniquely
         # identifies content, so a cached image on a node is always the right one.
@@ -82,8 +75,7 @@ data "aws_caller_identity" "current" {}
 # source) so the plan test can read the statements back — the mock provider blanks that
 # data source to empty JSON.
 resource "aws_iam_role" "prefect_worker" {
-  count = local.worker_enabled ? 1 : 0
-  name  = "${var.cluster_name}-prefect-worker"
+  name = "${var.cluster_name}-prefect-worker"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -102,9 +94,8 @@ resource "aws_iam_role" "prefect_worker" {
 # bucket suffix and instance id are non-deterministic anyway, so both are scoped by
 # ARN prefix / tag condition, not exact ARN.
 resource "aws_iam_role_policy" "prefect_worker" {
-  count = local.worker_enabled ? 1 : 0
-  name  = "${var.cluster_name}-prefect-worker"
-  role  = aws_iam_role.prefect_worker[0].id
+  name = "${var.cluster_name}-prefect-worker"
+  role = aws_iam_role.prefect_worker.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -177,11 +168,10 @@ resource "aws_iam_role_policy" "prefect_worker" {
 # the role. A standalone resource, so — unlike the EBS CSI association, a module.eks
 # input — the plan test can assert its namespace/SA wiring.
 resource "aws_eks_pod_identity_association" "prefect_worker" {
-  count           = local.worker_enabled ? 1 : 0
   cluster_name    = module.eks.cluster_name
   namespace       = local.prefect_namespace
   service_account = local.worker_service_account
-  role_arn        = aws_iam_role.prefect_worker[0].arn
+  role_arn        = aws_iam_role.prefect_worker.arn
   tags            = local.tags
 }
 
@@ -192,7 +182,6 @@ resource "aws_eks_pod_identity_association" "prefect_worker" {
 # (last-applied-configuration) on it; ignore_changes there keeps the two owners from
 # fighting over the metadata on every plan.
 resource "kubernetes_namespace_v1" "slipstream" {
-  count = local.worker_enabled ? 1 : 0
   metadata {
     name = local.vllm_namespace
   }
@@ -206,7 +195,6 @@ resource "kubernetes_namespace_v1" "slipstream" {
 # nothing wider. Namespaced (not a ClusterRole), so the grant can never reach beyond
 # the slipstream namespace.
 resource "kubernetes_role_v1" "vllm_gpu_manage" {
-  count = local.worker_enabled ? 1 : 0
   metadata {
     name      = "vllm-gpu-manage"
     namespace = local.vllm_namespace
@@ -243,7 +231,6 @@ resource "kubernetes_role_v1" "vllm_gpu_manage" {
 }
 
 resource "kubernetes_role_binding_v1" "vllm_gpu_manage" {
-  count = local.worker_enabled ? 1 : 0
   metadata {
     name      = "prefect-worker-vllm-gpu-manage"
     namespace = local.vllm_namespace
@@ -252,7 +239,7 @@ resource "kubernetes_role_binding_v1" "vllm_gpu_manage" {
   role_ref {
     api_group = "rbac.authorization.k8s.io"
     kind      = "Role"
-    name      = kubernetes_role_v1.vllm_gpu_manage[0].metadata[0].name
+    name      = kubernetes_role_v1.vllm_gpu_manage.metadata[0].name
   }
 
   # Cross-namespace subject: the worker's SA lives in prefect, the grant applies in
@@ -265,7 +252,6 @@ resource "kubernetes_role_binding_v1" "vllm_gpu_manage" {
 }
 
 resource "helm_release" "prefect_worker" {
-  count            = local.worker_enabled ? 1 : 0
   namespace        = local.prefect_namespace
   create_namespace = false
   name             = "prefect-worker"

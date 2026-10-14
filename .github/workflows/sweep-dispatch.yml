@@ -267,7 +267,7 @@ jobs:
             exit 1
           }
           if ! git diff --quiet "${worker_commit}" HEAD -- "${grid_repo_path}"; then
-            echo "::warning::the worker runs ${grid_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just enable_prefect_worker=true cluster-up) to sweep main's grid"
+            echo "::warning::the worker runs ${grid_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) to sweep main's grid"
           fi
           {
             echo "## Sweep grid"

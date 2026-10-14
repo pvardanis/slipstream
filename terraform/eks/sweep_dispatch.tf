@@ -4,17 +4,15 @@
 # over `kubectl port-forward svc/prefect-server` (no public endpoint, ADR-0015). An EKS
 # access entry maps that role to a Kubernetes group, and a namespaced Role grants the group
 # only what the port-forward needs in the prefect namespace — no AWS-managed access policy,
-# no cluster-wide grant. Gated with the worker layer: without a worker there is no sweep to
-# trigger.
+# no cluster-wide grant.
 
 locals {
   sweep_dispatch_group = "sweep-dispatch"
 }
 
 resource "aws_eks_access_entry" "sweep_dispatch" {
-  count         = local.worker_enabled ? 1 : 0
   cluster_name  = module.eks.cluster_name
-  principal_arn = data.terraform_remote_state.bootstrap[0].outputs.sweep_dispatch_role_arn
+  principal_arn = data.terraform_remote_state.bootstrap.outputs.sweep_dispatch_role_arn
   type          = "STANDARD"
 
   # The group is the entry's only Kubernetes identity; the RoleBinding below is what gives
@@ -32,7 +30,6 @@ resource "aws_eks_access_entry" "sweep_dispatch" {
 # the subresource carries both verbs. Namespaced (not a ClusterRole), so the grant
 # cannot reach beyond prefect.
 resource "kubernetes_role_v1" "sweep_dispatch" {
-  count = local.worker_enabled ? 1 : 0
   metadata {
     name      = "sweep-dispatch"
     namespace = local.prefect_namespace
@@ -54,7 +51,6 @@ resource "kubernetes_role_v1" "sweep_dispatch" {
 }
 
 resource "kubernetes_role_binding_v1" "sweep_dispatch" {
-  count = local.worker_enabled ? 1 : 0
   metadata {
     name      = "sweep-dispatch"
     namespace = local.prefect_namespace
@@ -63,7 +59,7 @@ resource "kubernetes_role_binding_v1" "sweep_dispatch" {
   role_ref {
     api_group = "rbac.authorization.k8s.io"
     kind      = "Role"
-    name      = kubernetes_role_v1.sweep_dispatch[0].metadata[0].name
+    name      = kubernetes_role_v1.sweep_dispatch.metadata[0].name
   }
 
   subject {

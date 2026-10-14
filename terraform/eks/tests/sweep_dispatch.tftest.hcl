@@ -39,114 +39,93 @@ mock_provider "aws" {
 mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
-run "sweep_dispatch_access_shape" {
-  command = plan
-
-  variables {
-    enable_prefect_worker = true
-    state_bucket          = "slipstream-tfstate-abc123"
-  }
-
-  override_data {
-    target = data.terraform_remote_state.bootstrap[0]
-    values = {
-      outputs = {
-        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
-      }
+# Plan against mocked bootstrap remote state instead of reaching for real S3. The
+# orchestration ECR repository URL is the worker image's repository; the content-sha
+# tag is resolved from ECR (mock_data aws_ecr_image above).
+override_data {
+  target = data.terraform_remote_state.bootstrap
+  values = {
+    outputs = {
+      orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
     }
   }
+}
+
+variables {
+  state_bucket = "slipstream-tfstate-abc123"
+}
+
+run "sweep_dispatch_access_shape" {
+  command = plan
 
   # --- Access entry: the bootstrap role, mapped to a group, no AWS-managed policy ---
 
   # The principal is the role the sweep-dispatch workflow assumes, read from the bootstrap
   # output rather than restated here.
   assert {
-    condition     = aws_eks_access_entry.sweep_dispatch[0].principal_arn == "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+    condition     = aws_eks_access_entry.sweep_dispatch.principal_arn == "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
     error_message = "The access entry must map the bootstrap sweep_dispatch_role_arn output."
   }
   assert {
-    condition     = aws_eks_access_entry.sweep_dispatch[0].type == "STANDARD"
+    condition     = aws_eks_access_entry.sweep_dispatch.type == "STANDARD"
     error_message = "The access entry must be a STANDARD entry."
   }
   # The entry's only Kubernetes identity is the one group the RoleBinding below grants.
   assert {
-    condition     = length(aws_eks_access_entry.sweep_dispatch[0].kubernetes_groups) == 1 && contains(aws_eks_access_entry.sweep_dispatch[0].kubernetes_groups, "sweep-dispatch")
+    condition     = length(aws_eks_access_entry.sweep_dispatch.kubernetes_groups) == 1 && contains(aws_eks_access_entry.sweep_dispatch.kubernetes_groups, "sweep-dispatch")
     error_message = "The access entry must map the role to the sweep-dispatch group and no other."
   }
 
   # --- RBAC: port-forward to the Prefect server, nothing wider ---
 
   assert {
-    condition     = kubernetes_role_v1.sweep_dispatch[0].metadata[0].namespace == "prefect"
+    condition     = kubernetes_role_v1.sweep_dispatch.metadata[0].namespace == "prefect"
     error_message = "The sweep-dispatch Role must live in the prefect namespace, where the server runs."
   }
   # `kubectl port-forward svc/prefect-server` reads the Service to resolve its backing pod,
   # reads that pod, then opens the forward on the pods/portforward subresource.
   assert {
-    condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if contains(r.resources, "services") && contains(r.resources, "pods") && contains(r.verbs, "get") && contains(r.verbs, "list")]) == 1
+    condition     = length([for r in kubernetes_role_v1.sweep_dispatch.rule : r if contains(r.resources, "services") && contains(r.resources, "pods") && contains(r.verbs, "get") && contains(r.verbs, "list")]) == 1
     error_message = "The Role must allow get/list on services and pods so port-forward can resolve the server pod."
   }
   # The forward is authorized as `get` when kubectl opens it over WebSockets and as
   # `create` over SPDY (and on the WebSocket upgrade where the cluster also checks
   # create), so both verbs are needed and no others.
   assert {
-    condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if length(r.resources) == 1 && contains(r.resources, "pods/portforward") && length(r.verbs) == 2 && contains(r.verbs, "get") && contains(r.verbs, "create")]) == 1
+    condition     = length([for r in kubernetes_role_v1.sweep_dispatch.rule : r if length(r.resources) == 1 && contains(r.resources, "pods/portforward") && length(r.verbs) == 2 && contains(r.verbs, "get") && contains(r.verbs, "create")]) == 1
     error_message = "The Role must allow get and create on pods/portforward, and nothing else on it."
   }
   # Every verb outside the portforward rule is a read, so the group can open the forward
   # and nothing else: no writes, deletes, exec, or wildcards.
   assert {
-    condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if !(length(r.resources) == 1 && contains(r.resources, "pods/portforward")) && length(setsubtract(r.verbs, ["get", "list"])) > 0]) == 0
+    condition     = length([for r in kubernetes_role_v1.sweep_dispatch.rule : r if !(length(r.resources) == 1 && contains(r.resources, "pods/portforward")) && length(setsubtract(r.verbs, ["get", "list"])) > 0]) == 0
     error_message = "Apart from pods/portforward, the Role must grant only get/list."
   }
   assert {
-    condition     = length([for r in kubernetes_role_v1.sweep_dispatch[0].rule : r if contains(r.verbs, "*") || contains(r.resources, "*")]) == 0
+    condition     = length([for r in kubernetes_role_v1.sweep_dispatch.rule : r if contains(r.verbs, "*") || contains(r.resources, "*")]) == 0
     error_message = "The sweep-dispatch Role must not use wildcard verbs or resources."
   }
   # Every rule is on the core API group, so "services" and "pods" mean the core kinds and
   # no wildcard group widens them.
   assert {
-    condition     = alltrue([for r in kubernetes_role_v1.sweep_dispatch[0].rule : length(r.api_groups) == 1 && contains(r.api_groups, "")])
+    condition     = alltrue([for r in kubernetes_role_v1.sweep_dispatch.rule : length(r.api_groups) == 1 && contains(r.api_groups, "")])
     error_message = "Every sweep-dispatch Role rule must be on the core API group only."
   }
 
   # The RoleBinding grants that Role to the access entry's group, in the same namespace.
   assert {
-    condition     = kubernetes_role_binding_v1.sweep_dispatch[0].metadata[0].namespace == "prefect"
+    condition     = kubernetes_role_binding_v1.sweep_dispatch.metadata[0].namespace == "prefect"
     error_message = "The sweep-dispatch RoleBinding must live in the prefect namespace."
   }
   assert {
-    condition     = length(kubernetes_role_binding_v1.sweep_dispatch[0].subject) == 1 && kubernetes_role_binding_v1.sweep_dispatch[0].subject[0].kind == "Group" && kubernetes_role_binding_v1.sweep_dispatch[0].subject[0].name == "sweep-dispatch"
+    condition     = length(kubernetes_role_binding_v1.sweep_dispatch.subject) == 1 && kubernetes_role_binding_v1.sweep_dispatch.subject[0].kind == "Group" && kubernetes_role_binding_v1.sweep_dispatch.subject[0].name == "sweep-dispatch"
     error_message = "The RoleBinding must bind only the sweep-dispatch group the access entry maps."
   }
   # A namespaced Role, never a ClusterRole, so the binding cannot reach past the
   # prefect namespace's grant.
   assert {
-    condition     = kubernetes_role_binding_v1.sweep_dispatch[0].role_ref[0].kind == "Role" && kubernetes_role_binding_v1.sweep_dispatch[0].role_ref[0].name == kubernetes_role_v1.sweep_dispatch[0].metadata[0].name
+    condition     = kubernetes_role_binding_v1.sweep_dispatch.role_ref[0].kind == "Role" && kubernetes_role_binding_v1.sweep_dispatch.role_ref[0].name == kubernetes_role_v1.sweep_dispatch.metadata[0].name
     error_message = "The RoleBinding must reference the namespaced sweep-dispatch Role."
-  }
-}
-
-# With the worker disabled there is no sweep to trigger, so the access is absent too.
-run "sweep_dispatch_absent_when_disabled" {
-  command = plan
-
-  variables {
-    enable_prefect_worker = false
-    state_bucket          = "slipstream-tfstate-abc123"
-  }
-
-  assert {
-    condition     = length(aws_eks_access_entry.sweep_dispatch) == 0
-    error_message = "A disabled worker must leave the sweep-dispatch access entry uncreated."
-  }
-  assert {
-    condition     = length(kubernetes_role_v1.sweep_dispatch) == 0
-    error_message = "A disabled worker must leave the sweep-dispatch Role uncreated."
-  }
-  assert {
-    condition     = length(kubernetes_role_binding_v1.sweep_dispatch) == 0
-    error_message = "A disabled worker must leave the sweep-dispatch RoleBinding uncreated."
   }
 }

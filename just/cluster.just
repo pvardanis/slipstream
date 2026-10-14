@@ -18,14 +18,11 @@ cluster-up: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    # enable_prefect_worker (default false) gates the worker layer: false stands the
-    # cluster up before the orchestration image exists; true deploys the worker and
-    # requires the image published — the eks stack reads the bootstrap orchestration ECR
-    # repo URL (via the remote state in state_bucket) and resolves the image's content-sha
-    # tag, failing loudly if :main is absent or its manifest carries no single content tag.
-    terraform -chdir={{ eks_dir }} apply -auto-approve \
-      -var="enable_prefect_worker={{ enable_prefect_worker }}" \
-      -var="state_bucket=${bucket}"
+    # The worker layer requires the orchestration image published: the eks stack reads the
+    # bootstrap orchestration ECR repo URL (via the remote state in state_bucket) and
+    # resolves the image's content-sha tag, failing loudly if :main is absent or its
+    # manifest carries no single content tag.
+    terraform -chdir={{ eks_dir }} apply -auto-approve -var="state_bucket=${bucket}"
     name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     aws eks update-kubeconfig --name "${name}" --region "${region}"
@@ -41,10 +38,7 @@ cluster-plan: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    # Mirror cluster-up's worker gate so the plan reflects what an apply would do.
-    terraform -chdir={{ eks_dir }} plan \
-      -var="enable_prefect_worker={{ enable_prefect_worker }}" \
-      -var="state_bucket=${bucket}"
+    terraform -chdir={{ eks_dir }} plan -var="state_bucket=${bucket}"
 
 # Needs `gh` authenticated and the bootstrap stack applied (`just bootstrap`).
 # Set the GitHub repo variables the CI workflows read from the bootstrap outputs.
@@ -109,7 +103,7 @@ cluster-down: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ eks_dir }} destroy -auto-approve
+    terraform -chdir={{ eks_dir }} destroy -auto-approve -var="state_bucket=${bucket}"
 
 # Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new
