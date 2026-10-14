@@ -20,7 +20,7 @@ _RESULT_STORAGE_PREFIX = "prefect/results"
 _CACHE_KEY_STORAGE_PREFIX = "prefect/cache-keys"
 
 # The object the preflight writes and reads back under the cache-key prefix, and its body.
-_PREFLIGHT_PROBE = "preflight-probe"
+_PREFLIGHT_PROBE_KEY = "preflight-probe"
 _PREFLIGHT_CONTENT = b"slipstream cache-key storage preflight"
 
 
@@ -78,9 +78,9 @@ def check_cache_key_storage(cache_keys: Any, *, bucket: str) -> None:
         "on that prefix"
     )
     try:
-        cache_keys.write_path(_PREFLIGHT_PROBE, _PREFLIGHT_CONTENT)
-        cache_keys.read_path(_PREFLIGHT_PROBE)
-    except Exception as exc:
+        cache_keys.write_path(_PREFLIGHT_PROBE_KEY, _PREFLIGHT_CONTENT)
+        cache_keys.read_path(_PREFLIGHT_PROBE_KEY)
+    except Exception as exc:  # any S3 or filesystem failure means the cache is unusable
         raise StorageError(
             f"cache-key storage at {location} failed its write/read probe "
             f"({type(exc).__name__}: {exc}); {fix}"
