@@ -11,7 +11,7 @@ whether the sweep redeploys the point and which of its cells run or come from ca
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import pytest
@@ -112,15 +112,19 @@ class _FakeSsm:
         return {"Status": "Success", "StandardErrorContent": ""}
 
 
+# How the broken cell misbehaves: its fetch fails outright, or it serves a result the
+# validity gate rejects.
+_BreakMode = Literal["raise", "degenerate"]
+
+
 class _CellS3:
     """Serve every cell a valid result, except one that misbehaves on its first fetch.
 
-    ``broken`` names the cell basename to break; ``mode`` is ``"raise"`` for a fetch
-    that fails outright (a failed cell) or ``"degenerate"`` for one that serves a result
-    the validity gate rejects.
+    ``broken`` names the cell basename to break (none when empty); ``mode`` is how it
+    breaks.
     """
 
-    def __init__(self, broken: str = "", mode: str = "") -> None:
+    def __init__(self, broken: str = "", mode: _BreakMode = "raise") -> None:
         self._broken = broken
         self._mode = mode
         self._served: set[str] = set()
@@ -190,9 +194,9 @@ class _Sweep:
 def _isolated_task(tmp_path: Path) -> Task[..., str]:
     results = LocalFileSystem(basepath=str(tmp_path / "results"))
     results.save(f"results-{uuid4().hex}", overwrite=True)
-    return build_cell_task(
-        result_storage=results, key_storage=str(tmp_path / "cache-keys")
-    )
+    keys = LocalFileSystem(basepath=str(tmp_path / "cache-keys"))
+    keys.save(f"cache-keys-{uuid4().hex}", overwrite=True)
+    return build_cell_task(result_storage=results, key_storage=keys)
 
 
 def test_a_fresh_point_is_pending_and_redeploys(tmp_path: Path) -> None:

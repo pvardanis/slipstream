@@ -163,8 +163,8 @@ class KnobSweepInputs:
 
         Frozen, so validating on construction makes the value valid for its whole life.
         The keying and addressing fields must be non-empty, so a misconfigured sweep
-        fails here, before its first ~20-minute GPU redeploy, rather than at the S3 probe
-        or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
+        fails here, before its first ~20-minute GPU redeploy, rather than at the first
+        cache lookup or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
         cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
         command that reads them.
         """
@@ -396,8 +396,9 @@ def build_knob_sweep_collaborators(
     Deployment; the scrape reads its predicted ceiling and raises loud on an empty one
     (ADR-0015), logging the value it read (the grid fixes the ladder, so the ceiling is
     recorded, not threaded — ADR-0009); the point sweep runs the point's Tier-2 cells
-    under a per-point results subdir and the sweep's nested run id; the pending gate is
-    the negation of the redeploy-skip probe, so a fully-valid point skips its redeploy.
+    under a per-point results subdir and the sweep's nested run id; the pending gate
+    reads the cell task's cache, so a point whose every cell holds a cache record skips
+    its redeploy.
 
     :param inputs: the per-run inputs every point of the sweep shares.
     :param kubectl: the transport the redeploy and ceiling scrape are issued through.

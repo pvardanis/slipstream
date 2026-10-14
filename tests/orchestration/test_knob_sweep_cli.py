@@ -4,10 +4,11 @@ Exercises ``build_knob_sweep_collaborators`` — the factory that binds the inje
 callables the parent flow sequences — against a fake kubectl and a faked point sweep and
 redeploy-skip gate: no cluster, no AWS. Asserts the deploy applies the point's Deployment
 and waits its rollout, the scrape logs the predicted ceiling and raises loud on an empty
-one, and each point sweep runs under its own results subdir and the sweep's nested run id
-(the gate itself is covered against real cache storage in ``test_redeploy_skip_gate``). The ``knob-sweep`` command runs
-the real ``knob_sweep_flow`` against an ephemeral Prefect server with the transports and
-the sequencing driver faked, so the command->flow->driver wiring is covered without a
+one, and each point sweep runs under its own results subdir and the sweep's nested run
+id (the gate itself is covered against real cache storage in
+``test_redeploy_skip_gate``). The ``knob-sweep`` command runs the real
+``knob_sweep_flow`` against an ephemeral Prefect server with the transports and the
+sequencing driver faked, so the command->flow->driver wiring is covered without a
 cluster; ``register-knob-sweep`` is driven with ``deploy`` faked, asserting the deployment
 is registered as a module-path entrypoint on the process pool with no image build.
 """
@@ -261,7 +262,7 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
 def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
     # An empty keying field would address cells under a broken key; rejecting it on
     # construction fails the sweep before its first ~20-minute GPU redeploy, not at the
-    # S3 probe or silently.
+    # first cache lookup or silently.
     kwargs: dict[str, Any] = {
         "grid": _grid(),
         "grid_path": Path("sweep-grid.yaml"),
@@ -328,6 +329,8 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captures["s3"] = s3
         return s3
 
+    # Every cell reads as cached, so a real driver skips each point's redeploy and scrape.
+    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
     monkeypatch.setattr(knob_sweep_module, "build_ssm_client", _fake_ssm)
     monkeypatch.setattr(knob_sweep_module, "build_s3_client", _fake_s3)
@@ -497,10 +500,10 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     model_yaml, _grid_yaml, manifest = _write_inputs(tmp_path)
     grid_yaml = tmp_path / "sweep-grid.yaml"
     grid_yaml.write_text(_MULTI_GRID, encoding="utf-8")
+    # The stubbed transports cache every cell, so each point skips its redeploy and
+    # scrape and the real driver runs only the point sweeps — isolating the lineage
+    # assertion from the fake kubectl's empty scrape.
     _stub_transports(monkeypatch)
-    # A complete point skips its redeploy and scrape, so the real driver runs only the
-    # point sweeps — isolating the lineage assertion from the fake kubectl's empty scrape.
-    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     seen: list[tuple[str | None, Any]] = []
 
     def _recording_point_sweep(**kwargs: Any) -> list[str]:
@@ -541,7 +544,6 @@ def test_knob_sweep_flow_logs_run_start_render_published_and_final_summary(
     # three go through get_run_logger, so they are asserted under the harness.
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
-    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
 
     with caplog.at_level(logging.INFO):
@@ -573,7 +575,6 @@ def test_knob_sweep_flow_logs_when_the_orchestration_image_ref_is_unset(
     # carry the ref but doesn't leaves a trace rather than silently reading "unknown".
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
-    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
     monkeypatch.delenv("ORCH_IMAGE_REF", raising=False)
 
@@ -603,7 +604,6 @@ def test_knob_sweep_flow_does_not_log_the_fallback_when_the_image_ref_is_set(
     # only when the ref is genuinely missing, not on every run.
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
-    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
     monkeypatch.setenv("ORCH_IMAGE_REF", "registry/repo:sha256-abc")
 
@@ -630,7 +630,6 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     # group under, so the UI filters the whole sweep — parent and points — as one run.
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
-    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     captured: dict[str, Any] = {}
 
     def _recording_point_sweep(**_kwargs: Any) -> list[str]:
