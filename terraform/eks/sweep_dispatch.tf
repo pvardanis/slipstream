@@ -27,7 +27,7 @@ resource "aws_eks_access_entry" "sweep_dispatch" {
   lifecycle {
     precondition {
       condition     = try(data.terraform_remote_state.bootstrap.outputs.cluster_name, null) == var.cluster_name
-      error_message = "The bootstrap cluster_name output must equal this stack's cluster_name (${var.cluster_name}), or the sweep-dispatch workflow targets another cluster. Set both to the same value and re-run `just bootstrap` then `just gh-vars`."
+      error_message = "The bootstrap cluster_name output (${try(data.terraform_remote_state.bootstrap.outputs.cluster_name, "absent")}) must equal this stack's cluster_name (${var.cluster_name}), or the sweep-dispatch workflow targets another cluster. Set both to the same value and re-run `just bootstrap` then `just gh-vars`."
     }
   }
 }
@@ -61,7 +61,7 @@ resource "kubernetes_role_v1" "sweep_dispatch" {
   lifecycle {
     precondition {
       condition     = try(data.terraform_remote_state.bootstrap.outputs.prefect_namespace, null) == local.prefect_namespace
-      error_message = "The bootstrap prefect_namespace output must equal the namespace the Prefect server runs in (${local.prefect_namespace}), or the sweep-dispatch workflow port-forwards into nothing. Set it in terraform/bootstrap and re-run `just bootstrap` then `just gh-vars`."
+      error_message = "The bootstrap prefect_namespace output (${try(data.terraform_remote_state.bootstrap.outputs.prefect_namespace, "absent")}) must equal the namespace the Prefect server runs in (${local.prefect_namespace}), or the sweep-dispatch workflow port-forwards into nothing. Set it in terraform/bootstrap and re-run `just bootstrap` then `just gh-vars`."
     }
   }
 

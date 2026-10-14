@@ -358,3 +358,16 @@ run "worker_rejects_multiple_content_tags" {
 
   expect_failures = [data.aws_ecr_image.orchestration]
 }
+
+# The bootstrap remote state is read from state_bucket, so an empty bucket name (a failed
+# bootstrap output lookup) fails the plan at the variable rather than reading state from
+# a bucket named "".
+run "worker_requires_a_state_bucket" {
+  command = plan
+
+  variables {
+    state_bucket = ""
+  }
+
+  expect_failures = [var.state_bucket]
+}
