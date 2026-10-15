@@ -47,8 +47,19 @@ def render_cell_config(cell: CellConfig) -> str:
     :param cell: the cell to render.
     :return: the YAML text to base64 and ship as ``bench-sweep.sh``'s ``CELL_CONFIG_B64``.
     """
-    knobs = cell.model_dump(exclude=set(RESERVED_KEYS))
-    return yaml.safe_dump(knobs, sort_keys=True)
+    return yaml.safe_dump(get_cell_knobs(cell), sort_keys=True)
+
+
+def get_cell_knobs(cell: CellConfig) -> dict[str, Any]:
+    """Read the knobs a cell ships to the host: its config minus the CLI-injected keys.
+
+    The parameters :func:`render_cell_config` renders, and the cell parameters its config
+    digest folds in, so the digest covers exactly what the host runs.
+
+    :param cell: the cell whose knobs are read.
+    :return: the cell's knobs, keyed by field name.
+    """
+    return cell.model_dump(exclude=set(RESERVED_KEYS))
 
 
 def get_cell_s3_key(run_id: str, cell: CellConfig) -> str:

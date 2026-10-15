@@ -37,10 +37,10 @@ from prefect.runtime import flow_run
 from slipstream_bench.contract import (
     EnginePoint,
     SweepGrid,
+    get_cell_basename,
     list_engine_points,
     load_grid,
 )
-from slipstream_bench.orchestration.cell_objects import iter_point_cell_objects
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
@@ -52,9 +52,11 @@ from slipstream_bench.orchestration.config_artifact import (
     ImageRefs,
     publish_config_artifact,
 )
-from slipstream_bench.orchestration.digest import DigestInputs
+from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
+    get_cell_digest,
+    list_point_cells,
     run_point_sweep,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
@@ -141,16 +143,17 @@ class KnobSweepInputs:
     """The per-run inputs every engine point of one knob sweep shares (ADR-0015).
 
     The grid and manifest the points are enumerated and redeployed from, the shared run
-    the points nest under, and the deep config digest and addressing every point sweep
-    keys its cells by. A point's own values — its slug, its nested run id — are derived
-    per point from these; nothing here varies point to point.
+    the points nest under, the run-wide model and vLLM image every cell's config digest
+    folds in, and the addressing every point sweep runs its cells with. A point's own
+    values — its slug, its nested run id, its cells' digests — are derived per point from
+    these; nothing here varies point to point.
     """
 
     grid: SweepGrid
     grid_path: Path
     manifest_path: Path
     run: str
-    digest: str
+    serving: ServingConfig
     instance_id: str
     image_ref: str
     bucket: str
@@ -168,7 +171,7 @@ class KnobSweepInputs:
         cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
         command that reads them.
         """
-        for name in ("run", "digest", "instance_id", "image_ref", "bucket", "model"):
+        for name in ("run", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
 
@@ -224,17 +227,12 @@ def knob_sweep_flow(
     grid = load_grid(sweep_grid)
     points = list_engine_points(grid)
     logger.info("knob sweep run=%s starting: %d engine points", run_id, len(points))
-    digest_inputs = DigestInputs(
-        model_yaml=model_yaml,
-        sweep_grid=sweep_grid,
-        vllm_manifest=vllm_manifest,
-    )
     inputs = KnobSweepInputs(
         grid=grid,
         grid_path=sweep_grid,
-        manifest_path=digest_inputs.vllm_manifest,
+        manifest_path=vllm_manifest,
         run=run_id,
-        digest=digest_inputs.digest(),
+        serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
@@ -243,7 +241,7 @@ def knob_sweep_flow(
         sweep_args_b64=sweep_args_b64,
     )
     # Surface the run's configuration on its Prefect run page: the version anchors (the
-    # bench-client and orchestration image content-sha tags, the deep digest), the two
+    # bench-client and orchestration image content-sha tags), the two
     # verbatim config bodies (model.yaml, sweep-grid.yaml), the manifest's serving image ref,
     # and the vLLM container args verbatim, so an operator inspects exactly what the run
     # executed without the files leaving the image. The orchestration image bakes its own ref
@@ -261,7 +259,9 @@ def knob_sweep_flow(
             bench=image_ref,
             orch=orch_ref,
         ),
-        digest_inputs=digest_inputs,
+        model_yaml=model_yaml,
+        sweep_grid=sweep_grid,
+        vllm_manifest=vllm_manifest,
         publish=create_markdown_artifact,
     )
     s3_client = build_s3_client(region)
@@ -478,22 +478,19 @@ def _point_has_pending_cells(
     """Report whether a point still has cells to run — any cell without a cache record.
 
     Each cell is checked against the cell task's own cache, keyed by the same run id,
-    digest, point slug, and cell name the point sweep calls the task with, so a point is
-    skipped only when every one of its cells will be served from cache. The first
-    uncached cell is logged, naming why the point redeploys.
+    config digest, point slug, and cell name the point sweep calls the task with — both
+    derive them from the one point context — so a point is skipped only when every one of
+    its cells will be served from cache. The first uncached cell is logged, naming why the
+    point redeploys.
     """
-    for _key, cell_name in iter_point_cell_objects(
-        point,
-        grid=inputs.grid,
-        run_prefix=inputs.run,
-        model=inputs.model,
-        commercial=inputs.commercial,
-    ):
+    context = _build_point_context(inputs, point)
+    for cell in list_point_cells(inputs.grid, context):
+        cell_name = get_cell_basename(cell)
         if not is_cell_cached(
             task,
-            run_id=_get_point_run_id(inputs, point),
-            digest=inputs.digest,
-            point_slug=point.slug(),
+            run_id=context.run_id,
+            digest=get_cell_digest(inputs.grid, context, cell),
+            point_slug=context.point_slug,
             cell_name=cell_name,
         ):
             _LOGGER.info(
@@ -508,7 +505,7 @@ def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepCo
     return SweepContext(
         run_id=_get_point_run_id(inputs, point),
         point_slug=point.slug(),
-        digest=inputs.digest,
+        serving=inputs.serving,
         instance_id=inputs.instance_id,
         image_ref=inputs.image_ref,
         bucket=inputs.bucket,

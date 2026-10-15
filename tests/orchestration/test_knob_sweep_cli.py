@@ -30,6 +30,7 @@ from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration import storage as storage_module
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
+from slipstream_bench.orchestration.digest import ServingConfig
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
@@ -155,7 +156,7 @@ def _inputs(manifest_dir: Path) -> KnobSweepInputs:
         grid_path=Path("sweep-grid.yaml"),
         manifest_path=manifest_path,
         run="run1",
-        digest="deadbeef",
+        serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
         instance_id="i-1",
         image_ref="repo:tag",
         bucket="bench-bucket",
@@ -261,7 +262,7 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return model_yaml, grid_yaml, manifest
 
 
-@pytest.mark.parametrize("field", ["run", "digest", "bucket", "model"])
+@pytest.mark.parametrize("field", ["run", "image_ref", "bucket", "model"])
 def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
     # An empty keying field would address cells under a broken key; rejecting it on
     # construction fails the sweep before its first ~20-minute GPU redeploy, not at the
@@ -271,7 +272,7 @@ def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
         "grid_path": Path("sweep-grid.yaml"),
         "manifest_path": Path("vllm-gpu.yaml"),
         "run": "run1",
-        "digest": "deadbeef",
+        "serving": ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
         "instance_id": "i-1",
         "image_ref": "repo:tag",
         "bucket": "bench-bucket",

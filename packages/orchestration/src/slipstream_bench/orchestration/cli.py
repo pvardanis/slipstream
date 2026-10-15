@@ -9,8 +9,8 @@ ladder, skipping a point whose cells already hold valid measurements. ``point-sw
 ``register-knob-sweep`` registers ``knob-sweep`` as a Prefect deployment on the process
 work pool, the entrypoint the EKS worker runs unattended.
 
-The two sweep commands read the point context, fold the deep config digest, and wire the
-S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
+The two sweep commands read the point context and the run-wide config digest inputs, and
+wire the S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
 console script (not on the Prefect-free ``slipstream-bench`` app) because its whole job
 needs Prefect and boto3, present only in the orchestration extra.
 """
@@ -24,7 +24,7 @@ from prefect.deployments.runner import EntrypointType
 from prefect.exceptions import ObjectNotFound
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
-from slipstream_bench.orchestration.digest import DigestInputs
+from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
@@ -87,8 +87,8 @@ def point_sweep(
 ) -> None:
     """Run one engine point's Tier-2 cells resumably, printing each cell's S3 pointer.
 
-    Registers the S3 result and cache-key storage blocks, computes the point's digest,
-    and drives the flow. An interrupted run re-invoked with the same inputs skips the
+    Registers the S3 result and cache-key storage blocks, reads the run-wide config digest
+    inputs, and drives the flow. An interrupted run re-invoked with the same inputs skips the
     cells that already hold a valid measurement and re-attempts the rest.
     """
     context = build_sweep_context(
@@ -98,11 +98,7 @@ def point_sweep(
         image_ref=image_ref,
         bucket=bucket,
         model=read_model_id(model_yaml),
-        digest_inputs=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=sweep_grid,
-            vllm_manifest=vllm_manifest,
-        ),
+        serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )
@@ -284,15 +280,16 @@ def build_sweep_context(
     image_ref: str,
     bucket: str,
     model: str,
-    digest_inputs: DigestInputs,
+    serving: ServingConfig,
     commercial: bool = False,
     sweep_args_b64: str = "",
 ) -> SweepContext:
-    """Assemble the point's context, folding the deep config digest from its inputs.
+    """Assemble the point's context, carrying the run-wide config digest inputs.
 
-    The digest is ``sha256(model.yaml + sweep-grid.yaml + vLLM image ref)`` (ADR-0012):
-    the raw bytes of the two files and the serving image ref read from the vLLM
-    manifest, so a model, grid, or image change invalidates the point's cached cells.
+    Each cell's config digest folds the serving config (``model.yaml``'s bytes and the vLLM
+    image ref) in with the point's knobs, the cell's parameters, the bench-client image,
+    and the dry-run flag (:func:`~slipstream_bench.orchestration.flows.point_sweep.get_cell_digest`),
+    so a change to any of them invalidates the cells it affects.
 
     :param run_id: the point-nested bucket prefix (``<run>/<point-slug>``).
     :param point_slug: the engine point's cache-key part.
@@ -300,7 +297,7 @@ def build_sweep_context(
     :param image_ref: the bench-client image the cells run.
     :param bucket: the results bucket.
     :param model: the served model id.
-    :param digest_inputs: the three files the deep config digest is folded from.
+    :param serving: the model bytes and vLLM image ref every cell's digest folds in.
     :param commercial: whether this is the commercial arm.
     :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
     :return: the fully-populated :class:`SweepContext`.
@@ -308,7 +305,7 @@ def build_sweep_context(
     return SweepContext(
         run_id=run_id,
         point_slug=point_slug,
-        digest=digest_inputs.digest(),
+        serving=serving,
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,

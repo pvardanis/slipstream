@@ -1,8 +1,8 @@
-"""The orchestration CLI: assemble a point's SweepContext (digest and all) from files.
+"""The orchestration CLI: assemble a point's SweepContext from files.
 
-ADR-0012: the deep config digest is ``sha256(model.yaml + sweep-grid.yaml + vLLM image
-ref)``. ``build_sweep_context`` reads those three and folds them into the context the
-flow runs against, so the CLI's context matches a direct :func:`config_digest`. The
+Each cell's config digest folds in ``model.yaml``'s bytes and the vLLM image ref read from
+the manifest; ``build_sweep_context`` carries that serving config in the context the flow
+runs against, so the CLI's context matches a direct :func:`read_serving_config`. The
 ``point-sweep`` command's body is driven with the AWS/Prefect boundary faked, so the
 context it hands the flow and the pointers it echoes are covered without a live run.
 """
@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import app, build_sweep_context
-from slipstream_bench.orchestration.digest import DigestInputs, config_digest
+from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.point_sweep import SweepContext
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
@@ -53,8 +53,9 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return model_yaml, grid_yaml, manifest
 
 
-def test_build_sweep_context_folds_the_deep_digest(tmp_path: Path) -> None:
-    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+def test_build_sweep_context_carries_the_serving_config(tmp_path: Path) -> None:
+    model_yaml, _grid_yaml, manifest = _write_inputs(tmp_path)
+    serving = read_serving_config(model_yaml=model_yaml, vllm_manifest=manifest)
 
     context = build_sweep_context(
         run_id="run1/mns64",
@@ -63,18 +64,10 @@ def test_build_sweep_context_folds_the_deep_digest(tmp_path: Path) -> None:
         image_ref="repo:tag",
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
-        digest_inputs=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=grid_yaml,
-            vllm_manifest=manifest,
-        ),
+        serving=serving,
     )
 
-    assert context.digest == config_digest(
-        model_yaml=_MODEL_YAML,
-        sweep_grid_yaml=_GRID_YAML,
-        image_ref="vllm/vllm-openai:v0.6.0",
-    )
+    assert context.serving == serving
     assert context.run_id == "run1/mns64"
     assert context.point_slug == "mns64"
     assert context.bucket == "bench-bucket"
@@ -134,10 +127,8 @@ def test_point_sweep_echoes_each_cell_pointer(
     assert "pshare50_burst1.0_mc64.json" in result.output
     context = cast(SweepContext, captured["context"])
     assert context.model == "Qwen/Qwen2.5-0.5B-Instruct"
-    assert context.digest == config_digest(
-        model_yaml=_MODEL_YAML,
-        sweep_grid_yaml=_GRID_YAML,
-        image_ref="vllm/vllm-openai:v0.6.0",
+    assert context.serving == ServingConfig(
+        model_yaml=_MODEL_YAML, vllm_image_ref="vllm/vllm-openai:v0.6.0"
     )
 
 

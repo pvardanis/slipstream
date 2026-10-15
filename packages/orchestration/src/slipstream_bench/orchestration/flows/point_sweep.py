@@ -20,7 +20,7 @@ it up (cheap, idempotent) even though every cached cell skips its SSM side effec
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -28,6 +28,9 @@ from typing import Any
 from prefect import Task, flow, tags
 
 from slipstream_bench.contract import (
+    CellConfig,
+    EnginePoint,
+    SweepGrid,
     build_point_sweep_config,
     get_cell_basename,
     load_grid,
@@ -35,10 +38,18 @@ from slipstream_bench.contract import (
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
     build_cell_execution,
+    get_cell_knobs,
     get_cell_result_uri,
 )
+from slipstream_bench.orchestration.digest import (
+    ServingConfig,
+    config_digest,
+    read_dry_run,
+)
+from slipstream_bench.orchestration.grid import get_engine_args
 from slipstream_bench.orchestration.ssm import run_command
 from slipstream_bench.orchestration.task_labels import get_cell_run_tags
+from slipstream_bench.orchestration.validity import DEFAULT_MAX_ERROR_RATE
 
 # The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
 # per flow, before any cell, so the whole point's ladder shares one proxy.
@@ -63,13 +74,13 @@ class SweepContext:
 
     ``run_id`` is the point-nested bucket prefix (``<run>/<point-slug>``) the cell JSON
     lands under, matching ``bench-sweep.sh``'s ``s3://<bucket>/sweeps/<run_id>/`` copy;
-    ``point_slug`` is the engine point's cache-key part; ``digest`` is the deep config
-    digest shared by every cell in the run (ADR-0012).
+    ``point_slug`` is the engine point's cache-key part; ``serving`` is the run-wide model
+    and vLLM image each cell's config digest folds in (:func:`get_cell_digest`).
     """
 
     run_id: str
     point_slug: str
-    digest: str
+    serving: ServingConfig
     instance_id: str
     image_ref: str
     bucket: str
@@ -90,7 +101,6 @@ class SweepContext:
         for name in (
             "run_id",
             "point_slug",
-            "digest",
             "instance_id",
             "image_ref",
             "bucket",
@@ -132,8 +142,10 @@ def run_point_sweep(
     """Run one engine point's Tier-2 cells as resumable tasks, returning their pointers.
 
     :param grid_path: the ``sweep-grid.yaml`` the point's cells are derived from — the
-        single source of the grid axes and load knobs, and the file the digest is over.
-    :param context: the per-run context (run id, point slug, digest, host, bucket).
+        single source of the grid axes, load knobs, and engine args each cell's digest
+        folds in.
+    :param context: the per-run context (run id, point slug, serving config, host,
+        bucket).
     :param ssm_client: the boto3 SSM client (or stand-in) commands are sent through.
     :param s3_client: the boto3 S3 client (or stand-in) results are downloaded with.
     :param task: the cell task (``cell_task`` in production, a tmp-storage task in
@@ -191,15 +203,7 @@ def _drive_point_sweep(
         proxy_kwargs["sleep"] = sleep
     run_command(ssm_client, **proxy_kwargs)
 
-    sweep_config = build_point_sweep_config(
-        load_grid(grid_path),
-        context.point_slug,
-        base_url=_PLACEHOLDER_BASE_URL,
-        model=context.model,
-        out_dir=_PLACEHOLDER_OUT_DIR,
-        commercial=context.commercial,
-    )
-
+    grid = load_grid(grid_path)
     execution_context = CellExecutionContext(
         ssm_client=ssm_client,
         s3_client=s3_client,
@@ -219,7 +223,7 @@ def _drive_point_sweep(
     # download target is an ephemeral dir (writable /tmp), torn down when the point ends.
     pointers: list[str] = []
     with TemporaryDirectory() as scratch:
-        for cell in sweep_config.cells():
+        for cell in list_point_cells(grid, context):
             name = get_cell_basename(cell)
             dest = Path(scratch) / name
             execute = build_cell_execution(cell, context=execution_context, dest=dest)
@@ -229,7 +233,7 @@ def _drive_point_sweep(
             pointers.append(
                 labeled(
                     run_id=context.run_id,
-                    digest=context.digest,
+                    digest=get_cell_digest(grid, context, cell),
                     point_slug=context.point_slug,
                     cell_name=name,
                     execute_func=execute,
@@ -240,3 +244,52 @@ def _drive_point_sweep(
                 )
             )
     return pointers
+
+
+def list_point_cells(grid: SweepGrid, context: SweepContext) -> list[CellConfig]:
+    """Enumerate one engine point's cells from the grid, their single source.
+
+    The point sweep runs these and the redeploy-skip gate checks them, so both address the
+    same cells.
+
+    :param grid: the validated knob-sweep grid.
+    :param context: the point's context (its slug, served model, and commercial arm).
+    :return: the point's cells, in the grid's cell order.
+    :raise SweepGridError: when the point's knobs are not an arm this grid sweeps.
+    """
+    sweep_config = build_point_sweep_config(
+        grid,
+        context.point_slug,
+        base_url=_PLACEHOLDER_BASE_URL,
+        model=context.model,
+        out_dir=_PLACEHOLDER_OUT_DIR,
+        commercial=context.commercial,
+    )
+    return list(sweep_config.cells())
+
+
+def get_cell_digest(grid: SweepGrid, context: SweepContext, cell: CellConfig) -> str:
+    """Compute one cell's config digest, the cache-key part naming its config identity.
+
+    The point sweep keys each cell task by this digest and the redeploy-skip gate looks the
+    cell up by it, so the two agree on which cells hold a record. It folds in this point's
+    engine args (as the redeploy renders them) and the cell's shipped knobs — not the whole
+    grid file — plus the run-wide model, vLLM and bench-client images, the dry-run flag, and
+    the validity threshold the cell's result is gated on.
+
+    :param grid: the validated knob-sweep grid the point's engine args are resolved from.
+    :param context: the point's context.
+    :param cell: one of the point's cells (from :func:`list_point_cells`).
+    :return: the cell's 64-char hex config digest.
+    :raise DigestError: when the context's extra load-cell flags are not valid base64.
+    """
+    point = EnginePoint.from_dirname(context.point_slug)
+    return config_digest(
+        model_yaml=context.serving.model_yaml,
+        point_knobs=asdict(get_engine_args(grid, point)),
+        cell_params=get_cell_knobs(cell),
+        vllm_image_ref=context.serving.vllm_image_ref,
+        bench_image_ref=context.image_ref,
+        dry_run=read_dry_run(context.sweep_args_b64),
+        max_error_rate=DEFAULT_MAX_ERROR_RATE,
+    )
