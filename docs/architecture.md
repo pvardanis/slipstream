@@ -103,10 +103,13 @@ flowchart TB
   ladder against that point to find the highest rung that holds goodput at the SLO
   ([ADR-0009](adr/0009-knob-sweep-rig-and-ceiling-method.md)). All values come from
   [`bench/sweep-grid.yaml`](../bench/sweep-grid.yaml).
-- **Resumable.** Each cell is a Prefect task keyed by its config digest (not the run
-  id), with results and cache keys on S3, so a rerun skips any cell whose config already
-  holds a valid measurement
-  ([ADR-0012](adr/0012-sweep-resumability-and-orchestrator-choice.md)).
+- **Resumable within a run.** Each cell is a Prefect task keyed by its run id, config
+  digest, engine point, and cell, with results and cache keys on S3. The cache record
+  decides whether a cell is complete: rerunning the same run id skips any cell whose
+  config is unchanged, and a new run id measures every cell fresh. The redeploy-skip gate
+  reads the same records, so a point redeploys only when one of its cells will run
+  ([ADR-0012](adr/0012-sweep-resumability-and-orchestrator-choice.md),
+  [ADR-0022](adr/0022-run-id-scoped-resume-on-prefects-cache.md)).
 
 ## Terraform stacks
 

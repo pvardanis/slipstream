@@ -2,7 +2,7 @@
 
 # ADR-0015: The knob sweep runs unattended — Cloud server, EKS worker, one parent flow
 
-- Status: Accepted
+- Status: Accepted (redeploy-skip gate superseded in part by [ADR-0022](0022-run-id-scoped-resume-on-prefects-cache.md))
 - Date: 2026-09-29
 
 ## Context
@@ -89,6 +89,11 @@ domain boundary (one GPU deployment, one proxy, one measured ceiling) and the su
 it legible in the UI and gives the redeploy-skip gate a natural home.
 
 ### A resume skips a point's redeploy when its cells are already done
+
+> Superseded in part by [ADR-0022](0022-run-id-scoped-resume-on-prefects-cache.md): the gate
+> looks up each cell's Prefect cache record with the cell task's own key, not `is_cell_valid`
+> against the cell JSON. Skipping the redeploy and scrape of a point with no pending cells
+> stands.
 
 The parent gates `deploy_gpu` and `scrape_ceiling` on **whether the point has any pending
 cells** — reusing `is_cell_valid` (`orchestration/validity.py`) against S3, the predicate
