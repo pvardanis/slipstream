@@ -491,7 +491,7 @@ def _point_has_pending_cells(
     ):
         if not is_cell_cached(
             task,
-            run_id=inputs.run,
+            run_id=_get_point_run_id(inputs, point),
             digest=inputs.digest,
             point_slug=point.slug(),
             cell_name=cell_name,
@@ -506,7 +506,7 @@ def _point_has_pending_cells(
 def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepContext:
     """Derive one engine point's sweep context, nesting it under the shared run."""
     return SweepContext(
-        run_id=f"{inputs.run}/{point.slug()}",
+        run_id=_get_point_run_id(inputs, point),
         point_slug=point.slug(),
         digest=inputs.digest,
         instance_id=inputs.instance_id,
@@ -516,6 +516,15 @@ def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepCo
         commercial=inputs.commercial,
         sweep_args_b64=inputs.sweep_args_b64,
     )
+
+
+def _get_point_run_id(inputs: KnobSweepInputs, point: EnginePoint) -> str:
+    """Nest one engine point under the shared run: ``<run>/<point-slug>``.
+
+    The point's bucket prefix and its cells' cache-key run id, so the point sweep and the
+    redeploy-skip gate address the same cells.
+    """
+    return f"{inputs.run}/{point.slug()}"
 
 
 def _tag_run_with_group(run_id: str) -> None:

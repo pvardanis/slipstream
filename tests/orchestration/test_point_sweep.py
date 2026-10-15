@@ -141,9 +141,9 @@ def _isolated_task(tmp_path: Path):
     )
 
 
-def _context(run: str = "run1") -> SweepContext:
+def _context(run_id: str = "run1/mns64_kvfp8_pcon") -> SweepContext:
     return SweepContext(
-        run_id=f"{run}/mns64_kvfp8_pcon",
+        run_id=run_id,
         point_slug="mns64_kvfp8_pcon",
         digest="digest-abc",
         instance_id="i-1",
@@ -160,11 +160,15 @@ def _grid(tmp_path: Path) -> Path:
 
 
 def _drive(
-    tmp_path: Path, ssm: _FakeSsm, task, s3=None, run: str = "run1"
+    tmp_path: Path,
+    ssm: _FakeSsm,
+    task,
+    s3=None,
+    run_id: str = "run1/mns64_kvfp8_pcon",
 ) -> list[str]:
     return run_point_sweep(
         grid_path=_grid(tmp_path),
-        context=_context(run),
+        context=_context(run_id),
         ssm_client=ssm,
         s3_client=s3 or _FakeS3(),
         task=task,
@@ -248,13 +252,31 @@ def test_a_new_run_id_re_executes_every_cell_under_its_own_prefix(
     tmp_path: Path,
 ) -> None:
     task = _isolated_task(tmp_path)
-    _drive(tmp_path, _FakeSsm(), task, run="run1")
+    _drive(tmp_path, _FakeSsm(), task, run_id="run1/mns64_kvfp8_pcon")
 
     second_ssm = _FakeSsm()
-    second = _drive(tmp_path, second_ssm, task, run="run2")
+    second = _drive(tmp_path, second_ssm, task, run_id="run2/mns64_kvfp8_pcon")
 
     assert second_ssm.cell_runs() == 4  # no cell is served from run1's cache
     assert all(p.startswith("s3://bench-bucket/sweeps/run2/") for p in second)
+
+
+def test_run_ids_sharing_a_parent_re_execute_under_their_own_prefix(
+    tmp_path: Path,
+) -> None:
+    # A single-point run id need only nest the slug, so two can share their leading
+    # segment yet write cells under different prefixes: neither may reuse the other's.
+    task = _isolated_task(tmp_path)
+    _drive(tmp_path, _FakeSsm(), task, run_id="run1/a-mns64_kvfp8_pcon")
+
+    second_ssm = _FakeSsm()
+    second = _drive(tmp_path, second_ssm, task, run_id="run1/b-mns64_kvfp8_pcon")
+
+    assert second_ssm.cell_runs() == 4
+    assert all(
+        p.startswith("s3://bench-bucket/sweeps/run1/b-mns64_kvfp8_pcon/")
+        for p in second
+    )
 
 
 def test_a_failed_cell_re_runs_while_valid_cells_stay_cached(tmp_path: Path) -> None:
