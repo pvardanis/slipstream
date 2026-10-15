@@ -1,10 +1,10 @@
 """The cache key is ``run-id:digest:point-slug:cell-name`` — the address of a cell.
 
-A Prefect ``cache_key_fn`` returns ``run-id:digest:point-slug:cell-name``; on a hit the
-task enters ``Cached`` and does not run. The run id scopes reuse to one run (a new run
-id re-measures, the same one resumes), the digest carries config identity, the point
-slug the engine coordinates, and the cell name the client-load rung, so the four
-together address exactly one measurement. The pure builder is tested without Prefect;
+ADR-0012: a Prefect ``cache_key_fn`` returns ``run-id:digest:point-slug:cell-name``;
+on a hit the task enters ``Cached`` and does not run. The run id scopes reuse to one
+run (a new run id re-measures, the same one resumes), the digest carries config
+identity, the point slug the engine coordinates, and the cell name the client-load
+rung, so the four together address exactly one measurement. The pure builder is tested without Prefect;
 ``get_cell_cache_key`` reads the same four off a task's call parameters.
 """
 
