@@ -19,6 +19,7 @@ from prefect import Task
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
+from slipstream_bench.orchestration.digest import ServingConfig
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -145,7 +146,7 @@ def _context(run_id: str = "run1/mns64_kvfp8_pcon") -> SweepContext:
     return SweepContext(
         run_id=run_id,
         point_slug="mns64_kvfp8_pcon",
-        digest="digest-abc",
+        serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
         instance_id="i-1",
         image_ref="repo:tag",
         bucket="bench-bucket",

@@ -23,6 +23,7 @@ from prefect.testing.utilities import prefect_test_harness
 
 from slipstream_bench.contract import EnginePoint, SweepGrid, list_engine_points
 from slipstream_bench.orchestration.cell_run import CellResultError
+from slipstream_bench.orchestration.digest import ServingConfig
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
     SweepOutcome,
@@ -152,7 +153,7 @@ class _Sweep:
         tmp_path: Path,
         task: Task[..., str],
         *,
-        digest: str,
+        vllm_image: str = "vllm/vllm-openai:v0.6.0",
         grid: str = _GRID,
         run: str = "run1",
     ) -> None:
@@ -165,7 +166,7 @@ class _Sweep:
             grid_path=grid_path,
             manifest_path=manifest_path,
             run=run,
-            digest=digest,
+            serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref=vllm_image),
             instance_id="i-1",
             image_ref="repo:tag",
             bucket="bench-bucket",
@@ -190,13 +191,18 @@ class _Sweep:
         *_rest, has_pending_cells = self._collaborators(_CellS3())
         return has_pending_cells(point or self.point)
 
-    def run(self, s3: _CellS3 | None = None) -> SweepOutcome:
-        """Drive the sweep, recording each redeploy; the ceiling scrape is a no-op."""
+    def run(
+        self, s3: _CellS3 | None = None, *, every_point: bool = False
+    ) -> SweepOutcome:
+        """Drive the sweep, recording each redeploy; the ceiling scrape is a no-op.
+
+        Only the first point is swept unless ``every_point`` is set.
+        """
         _deploy, _scrape, point_sweep_fn, has_pending_cells = self._collaborators(
             s3 or _CellS3()
         )
         return drive_knob_sweep(
-            points=[self.point],
+            points=[self.point, *self.other_points] if every_point else [self.point],
             deploy_fn=self.deployed.append,
             scrape_fn=lambda _point: None,
             point_sweep_fn=point_sweep_fn,
@@ -213,7 +219,7 @@ def _isolated_task(tmp_path: Path) -> Task[..., str]:
 
 
 def test_a_fresh_point_is_pending_and_redeploys(tmp_path: Path) -> None:
-    sweep = _Sweep(tmp_path, _isolated_task(tmp_path), digest="digest-a")
+    sweep = _Sweep(tmp_path, _isolated_task(tmp_path))
 
     assert sweep.is_pending() is True
     sweep.run()
@@ -226,9 +232,9 @@ def test_a_completed_point_is_skipped_and_every_cell_is_cached(
     tmp_path: Path,
 ) -> None:
     task = _isolated_task(tmp_path)
-    _Sweep(tmp_path, task, digest="digest-a").run()
+    _Sweep(tmp_path, task).run()
 
-    resume = _Sweep(tmp_path, task, digest="digest-a")
+    resume = _Sweep(tmp_path, task)
     assert resume.is_pending() is False
     outcome = resume.run()
 
@@ -237,13 +243,13 @@ def test_a_completed_point_is_skipped_and_every_cell_is_cached(
     assert outcome.cells_resumed == 2
 
 
-def test_a_digest_change_redeploys_the_point_and_re_runs_its_cells(
+def test_a_vllm_image_change_redeploys_the_point_and_re_runs_its_cells(
     tmp_path: Path,
 ) -> None:
     task = _isolated_task(tmp_path)
-    _Sweep(tmp_path, task, digest="digest-a").run()
+    _Sweep(tmp_path, task).run()
 
-    changed = _Sweep(tmp_path, task, digest="digest-b")
+    changed = _Sweep(tmp_path, task, vllm_image="vllm/vllm-openai:v0.7.0")
     assert changed.is_pending() is True
     changed.run()
 
@@ -258,9 +264,9 @@ def test_a_failed_cell_leaves_its_point_pending_and_only_it_re_runs(
 ) -> None:
     task = _isolated_task(tmp_path)
     with pytest.raises(CellResultError, match=_LAST_CELL):
-        _Sweep(tmp_path, task, digest="digest-a").run(_CellS3(_LAST_CELL, "raise"))
+        _Sweep(tmp_path, task).run(_CellS3(_LAST_CELL, "raise"))
 
-    resume = _Sweep(tmp_path, task, digest="digest-a")
+    resume = _Sweep(tmp_path, task)
     with caplog.at_level(logging.INFO, logger=_GATE_LOGGER):
         assert resume.is_pending() is True
     assert f"cell {_LAST_CELL} has no cache record" in caplog.text
@@ -275,9 +281,9 @@ def test_a_degenerate_cell_is_not_cached_and_its_point_stays_pending(
 ) -> None:
     task = _isolated_task(tmp_path)
     with pytest.raises(InvalidCellError):
-        _Sweep(tmp_path, task, digest="digest-a").run(_CellS3(_LAST_CELL, "degenerate"))
+        _Sweep(tmp_path, task).run(_CellS3(_LAST_CELL, "degenerate"))
 
-    resume = _Sweep(tmp_path, task, digest="digest-a")
+    resume = _Sweep(tmp_path, task)
     assert resume.is_pending() is True
     resume.run()
 
@@ -291,7 +297,7 @@ def test_a_completed_point_leaves_another_point_with_the_same_cells_pending(
     # Two engine points (mns64, mns128) sharing the same two cell names: only the slug
     # tells their cache records apart.
     grid = _GRID.replace("max_num_seqs: [64]", "max_num_seqs: [64, 128]")
-    sweep = _Sweep(tmp_path, _isolated_task(tmp_path), digest="digest-a", grid=grid)
+    sweep = _Sweep(tmp_path, _isolated_task(tmp_path), grid=grid)
     sweep.run()  # runs the first point only
     (other,) = sweep.other_points
 
@@ -301,11 +307,11 @@ def test_a_completed_point_leaves_another_point_with_the_same_cells_pending(
 
 def test_a_refreshing_task_leaves_a_completed_point_pending(tmp_path: Path) -> None:
     task = _isolated_task(tmp_path)
-    _Sweep(tmp_path, task, digest="digest-a").run()
+    _Sweep(tmp_path, task).run()
 
     # A refreshing task overwrites its cache records instead of reading them, so every
     # cell re-runs: the gate must redeploy the point rather than skip it.
-    refresh = _Sweep(tmp_path, task.with_options(refresh_cache=True), digest="digest-a")
+    refresh = _Sweep(tmp_path, task.with_options(refresh_cache=True))
     assert refresh.is_pending() is True
     refresh.run()
 
@@ -317,9 +323,9 @@ def test_a_new_run_id_re_measures_every_cell_under_its_own_prefix(
     tmp_path: Path,
 ) -> None:
     task = _isolated_task(tmp_path)
-    _Sweep(tmp_path, task, digest="digest-a", run="run1").run()
+    _Sweep(tmp_path, task, run="run1").run()
 
-    fresh = _Sweep(tmp_path, task, digest="digest-a", run="run2")
+    fresh = _Sweep(tmp_path, task, run="run2")
     assert fresh.is_pending() is True
     outcome = fresh.run()
 
@@ -337,12 +343,40 @@ def test_a_new_run_id_re_measures_every_cell_under_its_own_prefix(
 
 def test_the_same_run_id_and_config_re_executes_nothing(tmp_path: Path) -> None:
     task = _isolated_task(tmp_path)
-    first = _Sweep(tmp_path, task, digest="digest-a", run="run1").run()
+    first = _Sweep(tmp_path, task, run="run1").run()
 
-    resume = _Sweep(tmp_path, task, digest="digest-a", run="run1")
+    resume = _Sweep(tmp_path, task, run="run1")
     assert resume.is_pending() is False
     outcome = resume.run()
 
     assert resume.deployed == []
     assert resume.ssm.cell_runs == 0
     assert outcome.pointers == first.pointers
+
+
+def test_one_points_knob_change_redeploys_and_re_runs_only_that_point(
+    tmp_path: Path,
+) -> None:
+    # Two engine points: caching on (two cells) and caching off (one cell).
+    grid = _GRID.replace(
+        "      prefix_share: [10, 50]\n",
+        "      prefix_share: [10, 50]\n"
+        '    "off":\n'
+        "      flag: --no-enable-prefix-caching\n"
+        "      prefix_share: [0]\n",
+    )
+    task = _isolated_task(tmp_path)
+    _Sweep(tmp_path, task, grid=grid).run(every_point=True)
+
+    # Only the caching-on point's engine args change.
+    edited = grid.replace(
+        "flag: --enable-prefix-caching", "flag: --enable-prefix-caching --x"
+    )
+    changed = _Sweep(tmp_path, task, grid=edited)
+    (off_point,) = changed.other_points
+    assert changed.is_pending() is True
+    assert changed.is_pending(off_point) is False
+    changed.run(every_point=True)
+
+    assert changed.deployed == [changed.point]
+    assert changed.ssm.cell_runs == 2  # the caching-on point's two cells, none of off's

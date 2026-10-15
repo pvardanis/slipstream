@@ -1,17 +1,24 @@
-"""The deep config digest that defines when a cached cell has gone stale.
+"""The config digest that defines when a cached cell has gone stale.
 
-ADR-0012: two runs with the same engine-point slug but a different model or grid are
-otherwise indistinguishable, so resume is keyed on a
-``sha256(model.yaml + sweep-grid.yaml + vLLM image ref)``. ``model.yaml`` pins the
-model identity and the grid pins the swept knobs, but neither pins the vLLM serving
-image — that lives in ``k8s/vllm-gpu.yaml`` by convention — so the image ref is folded
-in explicitly: a vLLM bump changes the numbers and must invalidate the cache. The raw
-bytes of each file are hashed (not a parsed, normalised form): a whitespace-only edit
-then re-runs a cell rather than reusing it, which fails safe — a spurious re-measure
-wastes a GPU-minute, a spurious reuse silently serves a stale number.
+A cell's digest covers exactly the inputs that change its numbers: the model definition,
+this engine point's knobs and the cell's parameters, the vLLM serving image ref, the
+bench-client image ref, the dry-run flag, and the validity threshold. The point's knobs and
+the cell's parameters are hashed as canonical (sorted-key) JSON, not as the raw grid file,
+so adding another engine point or editing a grid comment invalidates nothing, while a change
+to one point's knobs invalidates only that point. ``model.yaml`` stays hashed as raw bytes:
+a whitespace-only edit then re-runs a cell rather than reusing it, which fails safe — a
+spurious re-measure wastes a GPU-minute, a spurious reuse silently serves a stale number.
+The vLLM image ref is not in ``model.yaml`` — it lives in ``k8s/vllm-gpu.yaml`` by
+convention — so it is read from that manifest: a vLLM bump changes the numbers and must
+invalidate the cache. Credential-only sweep arguments (the ``--api-key-env`` name) change
+no number and are never hashed.
 """
 
+import base64
+import binascii
 import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,58 +28,121 @@ import yaml
 # sidecar's image must never be read as the vLLM ref folded into the digest.
 _VLLM_CONTAINER = "vllm"
 
+# The load-cell flags that turn a dry run on and off; the last one given wins.
+_DRY_RUN_FLAGS = {"--dry-run": True, "--no-dry-run": False}
+
 
 class DigestError(Exception):
-    """A config input the deep digest cannot be computed over."""
+    """A config input the config digest cannot be computed over."""
 
 
 @dataclass(frozen=True)
-class DigestInputs:
-    """The three files the deep config digest is computed over (ADR-0012).
+class ServingConfig:
+    """The run-wide digest inputs read from files: the model and the vLLM serving image.
 
-    They travel together — a digest is only ever taken over all three — so they are
-    bundled rather than threaded as separate parameters.
-
-    :param model_yaml: ``model.yaml`` (model identity).
-    :param sweep_grid: ``sweep-grid.yaml`` (swept knobs).
-    :param vllm_manifest: ``k8s/vllm-gpu.yaml``, holding the serving image ref.
-    """
-
-    model_yaml: Path
-    sweep_grid: Path
-    vllm_manifest: Path
-
-    def digest(self) -> str:
-        """Fold the three inputs into the point's deep config digest.
-
-        :return: the 64-char hex sha256 over the model bytes, grid bytes, and the
-            serving image ref read from the vLLM manifest.
-        :raise DigestError: when the vLLM manifest cannot yield a serving image ref.
-        """
-        return config_digest(
-            model_yaml=self.model_yaml.read_bytes(),
-            sweep_grid_yaml=self.sweep_grid.read_bytes(),
-            image_ref=read_image_ref(self.vllm_manifest),
-        )
-
-
-def config_digest(*, model_yaml: bytes, sweep_grid_yaml: bytes, image_ref: str) -> str:
-    """Hash the model, grid, and serving-image inputs into one stale-cache key.
-
-    Each input is length-framed before hashing so a byte shifted across the
-    model/grid boundary cannot forge a different split into the same digest.
+    Read once per run and carried with it, so every cell's digest folds the same bytes.
 
     :param model_yaml: the raw bytes of ``model.yaml`` (model identity).
-    :param sweep_grid_yaml: the raw bytes of ``sweep-grid.yaml`` (swept knobs).
-    :param image_ref: the vLLM serving image ref from ``k8s/vllm-gpu.yaml``.
-    :return: the 64-char hex sha256 over the three framed inputs.
+    :param vllm_image_ref: the vLLM serving image ref from ``k8s/vllm-gpu.yaml``.
     """
+
+    model_yaml: bytes
+    vllm_image_ref: str
+
+    def __post_init__(self) -> None:
+        """Reject an empty model or a blank image ref, which would key every cell alike.
+
+        Frozen, so validating on construction makes the value valid for its whole life.
+        """
+        if not self.model_yaml:
+            raise ValueError("ServingConfig.model_yaml must be non-empty")
+        if not self.vllm_image_ref.strip():
+            raise ValueError("ServingConfig.vllm_image_ref must be a non-empty string")
+
+
+def read_serving_config(*, model_yaml: Path, vllm_manifest: Path) -> ServingConfig:
+    """Read the model bytes and the vLLM serving image ref a run's digests fold in.
+
+    :param model_yaml: ``model.yaml`` (model identity).
+    :param vllm_manifest: ``k8s/vllm-gpu.yaml``, holding the serving image ref.
+    :return: the run's serving config.
+    :raise DigestError: when the vLLM manifest cannot yield a serving image ref.
+    """
+    return ServingConfig(
+        model_yaml=model_yaml.read_bytes(),
+        vllm_image_ref=read_image_ref(vllm_manifest),
+    )
+
+
+def config_digest(
+    *,
+    model_yaml: bytes,
+    point_knobs: Mapping[str, object],
+    cell_params: Mapping[str, object],
+    vllm_image_ref: str,
+    bench_image_ref: str,
+    dry_run: bool,
+    max_error_rate: float,
+) -> str:
+    """Hash every input that changes a cell's numbers into one stale-cache key.
+
+    Each input is length-framed before hashing so a byte shifted across the boundary of
+    two adjacent inputs cannot forge a different split into the same digest.
+
+    :param model_yaml: the raw bytes of ``model.yaml`` (model identity).
+    :param point_knobs: this engine point's knobs, hashed as canonical JSON.
+    :param cell_params: the cell's parameters, hashed as canonical JSON.
+    :param vllm_image_ref: the vLLM serving image ref from ``k8s/vllm-gpu.yaml``.
+    :param bench_image_ref: the bench-client image ref the cell runs.
+    :param dry_run: whether the cell runs as a dry run.
+    :param max_error_rate: the validity threshold the cell's result is gated on.
+    :return: the 64-char hex sha256 over the framed inputs.
+    """
+    parts = (
+        model_yaml,
+        _canonical_json(point_knobs),
+        _canonical_json(cell_params),
+        vllm_image_ref.encode("utf-8"),
+        bench_image_ref.encode("utf-8"),
+        _canonical_json(dry_run),
+        _canonical_json(max_error_rate),
+    )
     hasher = hashlib.sha256()
-    for part in (model_yaml, sweep_grid_yaml, image_ref.encode("utf-8")):
+    for part in parts:
         hasher.update(str(len(part)).encode("ascii"))
         hasher.update(b":")
         hasher.update(part)
     return hasher.hexdigest()
+
+
+def read_dry_run(sweep_args_b64: str) -> bool:
+    """Read whether the extra load-cell flags make a cell a dry run.
+
+    The flags reach the host base64-encoded and are word-split there
+    (``bench-sweep.sh``), so they are split the same way here. Only the dry-run flags are
+    read: the rest, such as the ``--api-key-env`` credential name, change no number.
+
+    :param sweep_args_b64: the extra ``load-cell`` flags, base64-encoded (empty for none).
+    :return: True when the last dry-run flag given is ``--dry-run``.
+    :raise DigestError: when the flags are not valid base64.
+    """
+    try:
+        decoded = base64.b64decode(sweep_args_b64, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as error:
+        raise DigestError(
+            f"sweep args {sweep_args_b64!r} are not valid base64: {error}"
+        ) from error
+    dry_run = False
+    for token in decoded.split():
+        dry_run = _DRY_RUN_FLAGS.get(token, dry_run)
+    return dry_run
+
+
+def _canonical_json(value: object) -> bytes:
+    """Encode a value as canonical JSON: sorted keys, compact, NaN rejected."""
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
 
 
 def read_image_ref(manifest: Path, *, container: str = _VLLM_CONTAINER) -> str:
