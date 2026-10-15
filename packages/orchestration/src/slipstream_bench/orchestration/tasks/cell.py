@@ -152,7 +152,8 @@ def is_cell_cached(
 
     :param task: the cell task (from :func:`cell_task` or :func:`build_cell_task`)
         whose cache is consulted.
-    :param run_id: the sweep run the cell is measured in, a cache-key part.
+    :param run_id: the run's bucket prefix the cell's pointer lies under
+        (``<run>/<point-slug>``), a cache-key part.
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, a cache-key part.
     :param cell_name: the client-load cell name, a cache-key part.
@@ -298,7 +299,8 @@ def _bench_cell(
     value can shape the cache key only by arriving as one — the key is built from the
     four before the body runs, then a hit skips the body entirely (ADR-0012:90-94).
 
-    :param run_id: the sweep run the cell is measured in, a cache-key part.
+    :param run_id: the run's bucket prefix the cell's pointer lies under
+        (``<run>/<point-slug>``), a cache-key part.
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, a cache-key part.
     :param cell_name: the client-load cell name, a cache-key part.

@@ -228,7 +228,7 @@ def _drive_point_sweep(
             )
             pointers.append(
                 labeled(
-                    run_id=context.run_group,
+                    run_id=context.run_id,
                     digest=context.digest,
                     point_slug=context.point_slug,
                     cell_name=name,
