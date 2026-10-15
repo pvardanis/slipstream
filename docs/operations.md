@@ -29,9 +29,17 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-swe
   --param instance_id="$(terraform -chdir=terraform/bench-endpoint output -raw bench_host_instance_id)"
 ```
 
-A point that fails to deploy, or whose ladder reports failures, is recorded and the
-sweep continues, exiting non-zero at the end. A rerun skips any cell whose config
-already holds a valid measurement.
+A failed redeploy, ceiling scrape, or cell fails the run. **To resume**, run again with
+the same `run_id` (a Retry in the Prefect UI reuses it): cells with a cache record under
+that run are reused, and a point whose every cell is cached skips its redeploy. A cell whose
+config changed since (model, vLLM or bench-client image, the point's knobs, the cell's
+knobs, the load-cell flags) is re-measured. **A new `run_id` re-measures every cell**,
+which is how to take a fresh sample; nothing in the bucket is deleted by hand
+([ADR-0022](adr/0022-run-id-scoped-resume-on-prefects-cache.md)). A commercial and a
+default run share cache entries under one `run_id`, so give them different ids.
+
+The run aborts before its first redeploy if it cannot write and read back the results
+bucket's `prefect/cache-keys` prefix; the error names the bucket.
 
 **Results** land in the results bucket under `sweeps/<run-id>/`, which `stack-down`
 deletes. Pull them first, then build the artifacts locally:
@@ -50,6 +58,9 @@ Against whatever engine point is currently deployed, over the bench endpoint:
 just bench mns16_kvfp8_pcon   # the deployed engine point's client-load ladder (its grid slug)
 just prefix-cache 90 1.0      # cold/warm prefix-cache hit-rate for one cell
 ```
+
+`just bench` mints and prints a fresh run id, so each call re-measures the ladder. To
+resume a failed one, pass that id back: `BENCH_RUN_ID=<run-id> just bench <point-slug>`.
 
 ## Benchmarking an unmerged branch
 

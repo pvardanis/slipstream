@@ -36,7 +36,7 @@ bench-image: _bootstrap-init
     {{ build_image_tool }} "${repo}:${sha_tag}"
     docker push "${repo}:${sha_tag}"
 
-# Run one engine point's Tier-2 client-load ladder — the cells bench/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by the deep config digest, so a re-run skips cells that already hold a valid measurement (ADR-0012). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
+# Run one engine point's Tier-2 client-load ladder — the cells bench/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by its run id and config digest, so a re-run under the same BENCH_RUN_ID skips cells that already hold a cache record (ADR-0022). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
 bench point_slug *args:
     #!/usr/bin/env bash

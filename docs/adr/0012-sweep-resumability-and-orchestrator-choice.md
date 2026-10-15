@@ -2,7 +2,7 @@
 
 # ADR-0012: Sweep resumability and the orchestrator choice
 
-- Status: Accepted
+- Status: Accepted (resume and caching sections superseded in part by [ADR-0022](0022-run-id-scoped-resume-on-prefects-cache.md))
 - Date: 2026-09-23
 
 ## Context
@@ -42,6 +42,10 @@ Prefect v3 docs (caching concepts, self-hosted docker-compose / Helm).
 ## Decision
 
 ### Resume is per-cell, keyed on a deep config digest, gated on a valid result
+
+> Superseded in part by [ADR-0022](0022-run-id-scoped-resume-on-prefects-cache.md): the
+> cache record, not the cell JSON, decides completion; the key adds the run id; and the
+> digest covers this point's inputs rather than the whole grid file.
 
 The unit of resume is the **cell** (engine point × client-load coordinates), matching where
 failures actually land: a point deploys fine, then a rung errors mid-ladder. A cell is
@@ -100,6 +104,10 @@ extra dependency **only** on the strength of retries + observability, both indep
 absent those two, `doit` or DIY would win.
 
 ### The per-cell JSON in S3 is the single source of truth
+
+> Superseded in part by [ADR-0022](0022-run-id-scoped-resume-on-prefects-cache.md): the
+> cache record is authoritative for completion and the cell JSON is measurement data only.
+> The storage split and the no-enclosing-`transaction()` rule below stand.
 
 There is exactly one copy of a measurement: the per-cell JSON the bench task writes to S3.
 Prefect does not hold a competing copy. Its `key_storage` is configured **separately** from
