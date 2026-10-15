@@ -18,13 +18,13 @@ _KEY_PARTS = ("run_id", "digest", "point_slug", "cell_name")
 
 
 class CacheKeyError(Exception):
-    """A cache key that cannot address a cell — a blank component."""
+    """A cache key that cannot address a cell — a blank or ``:``-holding part."""
 
 
 def build_cache_key(
     *, run_id: str, digest: str, point_slug: str, cell_name: str
 ) -> str:
-    """Join the four parts into a cell's cache key, rejecting a blank component.
+    """Join the four parts into a cell's cache key, rejecting a bad part.
 
     :param run_id: the run's bucket prefix the cell's pointer lies under (a new one
         re-measures).
@@ -32,7 +32,7 @@ def build_cache_key(
     :param point_slug: the engine-knob point slug, e.g. ``mns64_kvfp8_pcon``.
     :param cell_name: the client-load cell name, e.g. ``pshare50_mc64``.
     :return: ``run-id:digest:point-slug:cell-name``.
-    :raise CacheKeyError: when any part is blank — a key with an empty component
+    :raise CacheKeyError: when any part is blank or holds the ``:`` separator — either
         would collide cells that must resume independently.
     """
     _require("run_id", run_id)
@@ -69,6 +69,11 @@ def get_cell_cache_key(_context: object, parameters: Mapping[str, Any]) -> str:
 
 
 def _require(name: str, value: str) -> None:
-    """Reject a blank cache-key component."""
+    """Reject a blank cache-key component, or one holding the ``:`` separator."""
     if not isinstance(value, str) or not value.strip():
         raise CacheKeyError(f"cache key {name} is blank: cannot address a cell")
+    if ":" in value:
+        raise CacheKeyError(
+            f"cache key {name} {value!r} holds ':', the key separator: "
+            "cannot address a cell unambiguously"
+        )

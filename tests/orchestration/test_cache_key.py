@@ -4,8 +4,8 @@ ADR-0012: a Prefect ``cache_key_fn`` returns ``run-id:digest:point-slug:cell-nam
 on a hit the task enters ``Cached`` and does not run. The run id scopes reuse to one
 run (a new run id re-measures, the same one resumes), the digest carries config
 identity, the point slug the engine coordinates, and the cell name the client-load
-rung, so the four together address exactly one measurement. The pure builder is tested without Prefect;
-``get_cell_cache_key`` reads the same four off a task's call parameters.
+rung, so the four together address exactly one measurement. The pure builder is tested
+without Prefect; ``get_cell_cache_key`` reads the same four off a task's call parameters.
 """
 
 import pytest
@@ -58,3 +58,11 @@ def test_get_cell_cache_key_rejects_an_absent_call_parameter(absent: str) -> Non
 
     with pytest.raises(CacheKeyError, match=absent):
         get_cell_cache_key(None, parameters)
+
+
+@pytest.mark.parametrize("part", list(_PARTS))
+def test_a_part_holding_the_separator_is_rejected(part: str) -> None:
+    parts = {**_PARTS, part: "a:b"}
+
+    with pytest.raises(CacheKeyError, match=part):
+        build_cache_key(**parts)
