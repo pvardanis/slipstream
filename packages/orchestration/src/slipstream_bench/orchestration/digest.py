@@ -2,7 +2,7 @@
 
 A cell's digest covers exactly the inputs that change its numbers: the model definition,
 this engine point's knobs and the cell's parameters, the vLLM serving image ref, the
-bench-client image ref, the dry-run flag, and the validity threshold. The point's knobs and
+bench-client image ref, the extra load-cell flags, and the validity threshold. The point's knobs and
 the cell's parameters are hashed as canonical (sorted-key) JSON, not as the raw grid file,
 so adding another engine point or editing a grid comment invalidates nothing, while a change
 to one point's knobs invalidates only that point. ``model.yaml`` stays hashed as raw bytes:
@@ -10,15 +10,16 @@ a whitespace-only edit then re-runs a cell rather than reusing it, which fails s
 spurious re-measure wastes a GPU-minute, a spurious reuse silently serves a stale number.
 The vLLM image ref is not in ``model.yaml`` — it lives in ``k8s/vllm-gpu.yaml`` by
 convention — so it is read from that manifest: a vLLM bump changes the numbers and must
-invalidate the cache. Credential-only sweep arguments (the ``--api-key-env`` name) change
-no number and are never hashed.
+invalidate the cache. The extra load-cell flags (``--dry-run``, and any flag the host
+appends after its own, which overrides them) are hashed as given, bar the credential-only
+``--api-key-env`` name, which changes no number.
 """
 
 import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,8 +29,9 @@ import yaml
 # sidecar's image must never be read as the vLLM ref folded into the digest.
 _VLLM_CONTAINER = "vllm"
 
-# The load-cell flags that turn a dry run on and off; the last one given wins.
-_DRY_RUN_FLAGS = {"--dry-run": True, "--no-dry-run": False}
+# The load-cell flag naming the env var that holds the API key: a credential, so it and
+# its value change no number and are left out of the digest.
+_CREDENTIAL_FLAG = "--api-key-env"
 
 
 class DigestError(Exception):
@@ -81,7 +83,7 @@ def config_digest(
     cell_params: Mapping[str, object],
     vllm_image_ref: str,
     bench_image_ref: str,
-    dry_run: bool,
+    sweep_flags: Sequence[str],
     max_error_rate: float,
 ) -> str:
     """Hash every input that changes a cell's numbers into one stale-cache key.
@@ -94,7 +96,8 @@ def config_digest(
     :param cell_params: the cell's parameters, hashed as canonical JSON.
     :param vllm_image_ref: the vLLM serving image ref from ``k8s/vllm-gpu.yaml``.
     :param bench_image_ref: the bench-client image ref the cell runs.
-    :param dry_run: whether the cell runs as a dry run.
+    :param sweep_flags: the extra load-cell flags the cell runs with, bar the credential
+        name (:func:`read_sweep_flags`).
     :param max_error_rate: the validity threshold the cell's result is gated on.
     :return: the 64-char hex sha256 over the framed inputs.
     """
@@ -104,7 +107,7 @@ def config_digest(
         _canonical_json(cell_params),
         vllm_image_ref.encode("utf-8"),
         bench_image_ref.encode("utf-8"),
-        _canonical_json(dry_run),
+        _canonical_json(list(sweep_flags)),
         _canonical_json(max_error_rate),
     )
     hasher = hashlib.sha256()
@@ -115,16 +118,18 @@ def config_digest(
     return hasher.hexdigest()
 
 
-def read_dry_run(sweep_args_b64: str) -> bool:
-    """Read whether the extra load-cell flags make a cell a dry run.
+def read_sweep_flags(sweep_args_b64: str) -> tuple[str, ...]:
+    """Read the extra load-cell flags a cell runs with, bar the credential name.
 
-    The flags reach the host base64-encoded and are word-split there
-    (``bench-sweep.sh``), so they are split the same way here. Only the dry-run flags are
-    read: the rest, such as the ``--api-key-env`` credential name, change no number.
+    The flags reach the host base64-encoded and are word-split there (``bench-sweep.sh``),
+    which appends them after its own flags, so any of them — ``--dry-run``, or a repeat of
+    a host flag, which overrides it — can change a cell's numbers and is kept. Only the
+    ``--api-key-env`` credential name and its value are dropped.
 
     :param sweep_args_b64: the extra ``load-cell`` flags, base64-encoded (empty for none).
-    :return: True when the last dry-run flag given is ``--dry-run``.
-    :raise DigestError: when the flags are not valid base64.
+    :return: the flags in the order given, the credential name removed.
+    :raise DigestError: when the flags are not valid base64, or hold a line break the host
+        would drop everything after.
     """
     try:
         decoded = base64.b64decode(sweep_args_b64, validate=True).decode("utf-8")
@@ -132,10 +137,19 @@ def read_dry_run(sweep_args_b64: str) -> bool:
         raise DigestError(
             f"sweep args {sweep_args_b64!r} are not valid base64: {error}"
         ) from error
-    dry_run = False
-    for token in decoded.split():
-        dry_run = _DRY_RUN_FLAGS.get(token, dry_run)
-    return dry_run
+    if "\n" in decoded.rstrip("\n"):
+        raise DigestError(
+            f"sweep args {decoded!r} hold a line break; the host reads only the first "
+            "line, so pass every flag on one line"
+        )
+    flags: list[str] = []
+    tokens = iter(decoded.split())
+    for token in tokens:
+        if token == _CREDENTIAL_FLAG:
+            next(tokens, None)
+        elif not token.startswith(f"{_CREDENTIAL_FLAG}="):
+            flags.append(token)
+    return tuple(flags)
 
 
 def _canonical_json(value: object) -> bytes:

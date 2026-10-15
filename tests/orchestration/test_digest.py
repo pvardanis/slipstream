@@ -2,9 +2,10 @@
 
 A cell's digest is a length-framed sha256 over the model definition, this engine point's
 knobs and the cell's parameters as canonical JSON, the vLLM serving image ref, the
-bench-client image ref, the dry-run flag, and the validity threshold. It must move when
-any of those moves, stay put when only another point or a grid comment changes, and two
-different splittings of the same bytes must not collide into one key. The vLLM image ref
+bench-client image ref, the extra load-cell flags bar the credential name, and the
+validity threshold. It must move when any of those moves, stay put when only another
+point or a grid comment changes, and two different splittings of the same bytes must not
+collide into one key. The vLLM image ref
 lives in ``k8s/vllm-gpu.yaml``, not ``model.yaml``, so it is read from that manifest.
 """
 
@@ -20,9 +21,9 @@ from slipstream_bench.orchestration.digest import (
     DigestError,
     ServingConfig,
     config_digest,
-    read_dry_run,
     read_image_ref,
     read_serving_config,
+    read_sweep_flags,
     read_vllm_args,
 )
 from slipstream_bench.orchestration.flows.point_sweep import (
@@ -45,7 +46,7 @@ _INPUTS: dict[str, Any] = {
     "cell_params": _CELL,
     "vllm_image_ref": _IMAGE,
     "bench_image_ref": "bench:abc123",
-    "dry_run": False,
+    "sweep_flags": (),
     "max_error_rate": 0.05,
 }
 
@@ -76,7 +77,7 @@ def test_digest_is_deterministic() -> None:
         ("cell_params", {**_CELL, "seed": 1}),
         ("vllm_image_ref", "vllm/vllm-openai:v0.30.0"),
         ("bench_image_ref", "bench:def456"),
-        ("dry_run", True),
+        ("sweep_flags", ("--dry-run",)),
         ("max_error_rate", 0.01),
     ],
 )
@@ -105,23 +106,35 @@ def _encode_args(args: str) -> str:
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
-        ("", False),
-        ("--dry-run", True),
-        ("--api-key-env OPENAI_KEY --dry-run", True),
-        ("--api-key-env OPENAI_KEY", False),
-        ("--dry-run --no-dry-run", False),
-        ("--no-dry-run --dry-run", True),
+        ("", ()),
+        ("--dry-run", ("--dry-run",)),
+        ("--api-key-env OPENAI_KEY --dry-run", ("--dry-run",)),
+        ("--dry-run --api-key-env=OPENAI_KEY", ("--dry-run",)),
+        ("--api-key-env OPENAI_KEY", ()),
+        (
+            "--tokenizer  /models/other\t--dry-run",
+            ("--tokenizer", "/models/other", "--dry-run"),
+        ),
     ],
 )
-def test_read_dry_run_reads_the_last_dry_run_flag(args: str, expected: bool) -> None:
+def test_read_sweep_flags_keeps_every_flag_but_the_credential_name(
+    args: str, expected: tuple[str, ...]
+) -> None:
     sweep_args_b64 = _encode_args(args) if args else ""
 
-    assert read_dry_run(sweep_args_b64) is expected
+    assert read_sweep_flags(sweep_args_b64) == expected
 
 
-def test_read_dry_run_rejects_args_that_are_not_base64() -> None:
+def test_read_sweep_flags_rejects_args_that_are_not_base64() -> None:
     with pytest.raises(DigestError, match="base64"):
-        read_dry_run("not base64!")
+        read_sweep_flags("not base64!")
+
+
+def test_read_sweep_flags_rejects_a_line_break_the_host_would_drop_after() -> None:
+    # The host reads only the first line of the flags, so a second line would be hashed
+    # here but never run there.
+    with pytest.raises(DigestError, match="line break"):
+        read_sweep_flags(_encode_args("--no-dry-run\n--dry-run"))
 
 
 def test_read_serving_config_reads_the_model_bytes_and_vllm_image(
@@ -255,6 +268,7 @@ def test_a_cell_parameter_moves_the_cell_digest() -> None:
         {"serving": ServingConfig(model_yaml=_MODEL, vllm_image_ref="vllm:v0.30.0")},
         {"serving": ServingConfig(model_yaml=_MODEL + b"#", vllm_image_ref=_IMAGE)},
         {"sweep_args_b64": _encode_args("--dry-run")},
+        {"sweep_args_b64": _encode_args("--tokenizer /models/other")},
     ],
 )
 def test_a_run_wide_input_moves_every_cell_digest(overrides: dict[str, Any]) -> None:

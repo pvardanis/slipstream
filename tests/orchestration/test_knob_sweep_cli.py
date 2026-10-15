@@ -15,6 +15,7 @@ is registered as a module-path entrypoint on the process pool with no image buil
 import logging
 import re
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,7 +31,7 @@ from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration import storage as storage_module
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
-from slipstream_bench.orchestration.digest import ServingConfig
+from slipstream_bench.orchestration.digest import DigestError, ServingConfig
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
@@ -282,6 +283,15 @@ def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
 
     with pytest.raises(ValueError, match=field):
         KnobSweepInputs(**kwargs)
+
+
+def test_unreadable_sweep_args_are_rejected_before_the_redeploy(
+    tmp_path: Path,
+) -> None:
+    # Every cell's digest folds the sweep flags in, so flags the digest cannot read fail
+    # the sweep on construction, before the first GPU redeploy.
+    with pytest.raises(DigestError, match="base64"):
+        replace(_inputs(tmp_path), sweep_args_b64="not base64!")
 
 
 def test_knob_sweep_command_is_registered() -> None:
