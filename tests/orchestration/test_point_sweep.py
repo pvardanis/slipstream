@@ -2,10 +2,11 @@
 
 ADR-0012 §Amendment: the flow drives one engine point's Tier-2 cells. It starts the
 loopback proxy once, enumerates the point's cells, and runs each as a cell task keyed
-``digest:point-slug:cell-name`` so a re-run skips the cells that already hold a valid
-measurement. This exercises that against faked SSM/S3 clients and a tmp-dir-backed
-cell task: a first run executes every cell, a second run — same digest — hits the
-cache and re-executes none, while the proxy still comes up once per invocation.
+``run-id:digest:point-slug:cell-name`` so a re-run skips the cells that already hold
+a valid measurement. This exercises that against faked SSM/S3 clients and a
+tmp-dir-backed cell task: a first run executes every cell, a second run — same run id
+and digest — hits the cache and re-executes none, a second run under a new run id
+re-executes every cell, and the proxy comes up once per invocation.
 """
 
 import json
@@ -140,9 +141,9 @@ def _isolated_task(tmp_path: Path):
     )
 
 
-def _context() -> SweepContext:
+def _context(run: str = "run1") -> SweepContext:
     return SweepContext(
-        run_id="run1/mns64_kvfp8_pcon",
+        run_id=f"{run}/mns64_kvfp8_pcon",
         point_slug="mns64_kvfp8_pcon",
         digest="digest-abc",
         instance_id="i-1",
@@ -158,10 +159,12 @@ def _grid(tmp_path: Path) -> Path:
     return path
 
 
-def _drive(tmp_path: Path, ssm: _FakeSsm, task, s3=None) -> list[str]:
+def _drive(
+    tmp_path: Path, ssm: _FakeSsm, task, s3=None, run: str = "run1"
+) -> list[str]:
     return run_point_sweep(
         grid_path=_grid(tmp_path),
-        context=_context(),
+        context=_context(run),
         ssm_client=ssm,
         s3_client=s3 or _FakeS3(),
         task=task,
@@ -239,6 +242,19 @@ def test_second_run_resumes_and_re_executes_no_cell(tmp_path: Path) -> None:
     assert first == second
     assert second_ssm.proxy_ups() == 1  # the proxy still comes up once per flow
     assert second_ssm.cell_runs() == 0  # every cell hit the cache
+
+
+def test_a_new_run_id_re_executes_every_cell_under_its_own_prefix(
+    tmp_path: Path,
+) -> None:
+    task = _isolated_task(tmp_path)
+    _drive(tmp_path, _FakeSsm(), task, run="run1")
+
+    second_ssm = _FakeSsm()
+    second = _drive(tmp_path, second_ssm, task, run="run2")
+
+    assert second_ssm.cell_runs() == 4  # no cell is served from run1's cache
+    assert all(p.startswith("s3://bench-bucket/sweeps/run2/") for p in second)
 
 
 def test_a_failed_cell_re_runs_while_valid_cells_stay_cached(tmp_path: Path) -> None:

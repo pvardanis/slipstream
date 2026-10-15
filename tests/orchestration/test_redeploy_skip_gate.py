@@ -148,7 +148,13 @@ class _Sweep:
     """One knob sweep's production gate and point sweep, over a shared cell task."""
 
     def __init__(
-        self, tmp_path: Path, task: Task[..., str], *, digest: str, grid: str = _GRID
+        self,
+        tmp_path: Path,
+        task: Task[..., str],
+        *,
+        digest: str,
+        grid: str = _GRID,
+        run: str = "run1",
     ) -> None:
         grid_path = tmp_path / "sweep-grid.yaml"
         grid_path.write_text(grid, encoding="utf-8")
@@ -158,7 +164,7 @@ class _Sweep:
             grid=SweepGrid.model_validate(yaml.safe_load(grid)),
             grid_path=grid_path,
             manifest_path=manifest_path,
-            run="run1",
+            run=run,
             digest=digest,
             instance_id="i-1",
             image_ref="repo:tag",
@@ -305,3 +311,38 @@ def test_a_refreshing_task_leaves_a_completed_point_pending(tmp_path: Path) -> N
 
     assert refresh.deployed == [refresh.point]
     assert refresh.ssm.cell_runs == 2
+
+
+def test_a_new_run_id_re_measures_every_cell_under_its_own_prefix(
+    tmp_path: Path,
+) -> None:
+    task = _isolated_task(tmp_path)
+    _Sweep(tmp_path, task, digest="digest-a", run="run1").run()
+
+    fresh = _Sweep(tmp_path, task, digest="digest-a", run="run2")
+    assert fresh.is_pending() is True
+    outcome = fresh.run()
+
+    # A re-dispatch with a fresh run id shares nothing with the previous run's cache:
+    # the point redeploys, every cell re-measures, and no pointer leads into run1.
+    assert fresh.deployed == [fresh.point]
+    assert fresh.ssm.cell_runs == 2
+    assert outcome.cells_resumed == 0
+    assert len(outcome.pointers) == 2
+    assert all(
+        pointer.startswith("s3://bench-bucket/sweeps/run2/")
+        for pointer in outcome.pointers
+    )
+
+
+def test_the_same_run_id_and_config_re_executes_nothing(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+    first = _Sweep(tmp_path, task, digest="digest-a", run="run1").run()
+
+    resume = _Sweep(tmp_path, task, digest="digest-a", run="run1")
+    assert resume.is_pending() is False
+    outcome = resume.run()
+
+    assert resume.deployed == []
+    assert resume.ssm.cell_runs == 0
+    assert outcome.pointers == first.pointers
