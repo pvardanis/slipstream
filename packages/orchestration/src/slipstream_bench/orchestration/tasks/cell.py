@@ -107,9 +107,9 @@ def build_cell_task(
 ) -> Task[..., str]:
     """Build the Prefect task wrapping one bench cell, keyed for per-cell resume.
 
-    The cache policy is the cell's
-    ``run-id:digest:point-slug:cell-name`` key; ``key_storage`` points the cache index and
-    ``result_storage`` the persisted pointer at durable storage. Both are required —
+    The cache policy is the cell's ``run-id:digest:point-slug:cell-name`` key;
+    ``key_storage`` points the cache index and ``result_storage`` the persisted pointer
+    at durable storage. Both are required —
     left to Prefect's local defaults, resume would silently degrade to the machine the
     task last ran on, the exact cross-machine failure ADR-0012 storage exists to
     prevent. Tests pass a tmp ``LocalFileSystem``; production passes S3 blocks.
