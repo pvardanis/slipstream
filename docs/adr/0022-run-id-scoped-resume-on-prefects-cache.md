@@ -106,9 +106,10 @@ policy's key storage — whether a record exists. A point is pending if any cell
 task set to refresh its cache reports every cell pending.
 
 So the gate and the task cannot disagree: a point is skipped only when every one of its
-cells will be served from cache. A failed cell leaves its point pending, so the next resume
-redeploys that point and re-runs only the failed cell. The per-point "run" vs "resumed"
-summary follows the gate's decision.
+cells will be served from cache. A failed cell fails the run and leaves its point pending,
+so the next resume redeploys that point and re-runs every cell without a cache record: the
+failed cell, the point's cells after it, and every later point. The per-point "run" vs
+"resumed" summary follows the gate's decision.
 
 ### A preflight probes the cache-key storage before any redeploy
 
