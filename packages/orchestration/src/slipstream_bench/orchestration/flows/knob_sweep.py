@@ -52,7 +52,11 @@ from slipstream_bench.orchestration.config_artifact import (
     ImageRefs,
     publish_config_artifact,
 )
-from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
+from slipstream_bench.orchestration.digest import (
+    ServingConfig,
+    read_serving_config,
+    read_sweep_flags,
+)
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     get_cell_digest,
@@ -169,11 +173,15 @@ class KnobSweepInputs:
         fails here, before its first ~20-minute GPU redeploy, rather than at the first
         cache lookup or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
         cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
-        command that reads them.
+        command that reads them. The extra load-cell flags must be readable, since every
+        cell's digest folds them in.
+
+        :raise DigestError: when the extra load-cell flags cannot be read.
         """
         for name in ("run", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
+        read_sweep_flags(self.sweep_args_b64)
 
 
 @flow(name="knob-sweep")

@@ -54,7 +54,7 @@ def get_cell_knobs(cell: CellConfig) -> dict[str, Any]:
     """Read the knobs a cell ships to the host: its config minus the CLI-injected keys.
 
     The parameters :func:`render_cell_config` renders, and the cell parameters its config
-    digest folds in, so the digest covers exactly what the host runs.
+    digest folds in, so the digest covers the same knobs the cell config ships.
 
     :param cell: the cell whose knobs are read.
     :return: the cell's knobs, keyed by field name.

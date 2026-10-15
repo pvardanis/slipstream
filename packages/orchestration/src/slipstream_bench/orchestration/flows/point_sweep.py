@@ -44,7 +44,7 @@ from slipstream_bench.orchestration.cell_run import (
 from slipstream_bench.orchestration.digest import (
     ServingConfig,
     config_digest,
-    read_dry_run,
+    read_sweep_flags,
 )
 from slipstream_bench.orchestration.grid import get_engine_args
 from slipstream_bench.orchestration.ssm import run_command
@@ -95,8 +95,11 @@ class SweepContext:
 
         Frozen, so validating on construction makes the instance valid for its whole
         life: the identifiers that key the cache and address S3 must be non-empty,
-        ``run_id`` must nest ``point_slug`` (the cells land under it), and both
-        timeouts must be positive so the SSM poll loop has a deadline to trip.
+        ``run_id`` must nest ``point_slug`` (the cells land under it), both timeouts
+        must be positive so the SSM poll loop has a deadline to trip, and the extra
+        load-cell flags must be readable, since every cell's digest folds them in.
+
+        :raise DigestError: when the extra load-cell flags cannot be read.
         """
         for name in (
             "run_id",
@@ -116,6 +119,7 @@ class SweepContext:
         for name in ("proxy_timeout_s", "cell_timeout_s"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"SweepContext.{name} must be positive")
+        read_sweep_flags(self.sweep_args_b64)
 
     @property
     def run_group(self) -> str:
@@ -274,14 +278,13 @@ def get_cell_digest(grid: SweepGrid, context: SweepContext, cell: CellConfig) ->
     The point sweep keys each cell task by this digest and the redeploy-skip gate looks the
     cell up by it, so the two agree on which cells hold a record. It folds in this point's
     engine args (as the redeploy renders them) and the cell's shipped knobs — not the whole
-    grid file — plus the run-wide model, vLLM and bench-client images, the dry-run flag, and
-    the validity threshold the cell's result is gated on.
+    grid file — plus the run-wide model, vLLM and bench-client images, the extra load-cell
+    flags, and the validity threshold the cell's result is gated on.
 
     :param grid: the validated knob-sweep grid the point's engine args are resolved from.
     :param context: the point's context.
     :param cell: one of the point's cells (from :func:`list_point_cells`).
     :return: the cell's 64-char hex config digest.
-    :raise DigestError: when the context's extra load-cell flags are not valid base64.
     """
     point = EnginePoint.from_dirname(context.point_slug)
     return config_digest(
@@ -290,6 +293,6 @@ def get_cell_digest(grid: SweepGrid, context: SweepContext, cell: CellConfig) ->
         cell_params=get_cell_knobs(cell),
         vllm_image_ref=context.serving.vllm_image_ref,
         bench_image_ref=context.image_ref,
-        dry_run=read_dry_run(context.sweep_args_b64),
+        sweep_flags=read_sweep_flags(context.sweep_args_b64),
         max_error_rate=DEFAULT_MAX_ERROR_RATE,
     )

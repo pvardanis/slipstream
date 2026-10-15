@@ -11,6 +11,7 @@ re-executes every cell, and the proxy comes up once per invocation.
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,7 +20,7 @@ from prefect import Task
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
-from slipstream_bench.orchestration.digest import ServingConfig
+from slipstream_bench.orchestration.digest import DigestError, ServingConfig
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -152,6 +153,13 @@ def _context(run_id: str = "run1/mns64_kvfp8_pcon") -> SweepContext:
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
     )
+
+
+def test_unreadable_sweep_args_are_rejected_before_the_proxy_comes_up() -> None:
+    # Every cell's digest folds the sweep flags in, so flags the digest cannot read fail
+    # on construction, before any SSM command reaches the bench host.
+    with pytest.raises(DigestError, match="base64"):
+        replace(_context(), sweep_args_b64="not base64!")
 
 
 def _grid(tmp_path: Path) -> Path:
