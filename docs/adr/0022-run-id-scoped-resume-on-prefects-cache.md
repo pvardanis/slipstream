@@ -115,10 +115,10 @@ failed cell, the point's cells after it, and every later point. The per-point "r
 
 Prefect's existence check reads any storage error as "no record". A misconfigured bucket or
 a denied grant would therefore make every cell look pending and trigger a ~20-minute
-redeploy for nothing. Right after the cell task registers its storage blocks, at flow
-start, it writes a fixed probe object to the cache-key storage and reads it back. Any failure
-aborts the run with an error naming `s3://<bucket>/prefect/cache-keys`, before the first
-redeploy. Both entry points build the cell task the same way, so both run the preflight.
+redeploy for nothing. Right after the cell task registers its storage blocks, before any
+cell runs, it writes a fixed probe object to the cache-key storage and reads it back. Any
+failure aborts the run with an error naming `s3://<bucket>/prefect/cache-keys`, before the
+first redeploy. Both entry points build the cell task the same way, so both run the preflight.
 
 ### Re-measuring means a new run id, never hand-deleting objects
 
