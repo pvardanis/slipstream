@@ -1,10 +1,10 @@
 """The address of a cell: ``run-id:digest:point-slug:cell-name``.
 
-Prefect skips a cell when a ``cache_key_fn`` returns a key it has already seen — the
-key is ``run-id:digest:point-slug:cell-name``, so the run (a new run id re-measures,
-the same one resumes), config identity (the deep digest), engine coordinates (the point
-slug), and the client-load rung (the cell name) together address exactly one
-measurement. The pure :func:`build_cache_key` holds the one format;
+ADR-0012: Prefect skips a cell when a ``cache_key_fn`` returns a key it has already
+seen — the key is ``run-id:digest:point-slug:cell-name``, so the run (a new run id
+re-measures, the same one resumes), config identity (the deep digest), engine
+coordinates (the point slug), and the client-load rung (the cell name) together address
+exactly one measurement. The pure :func:`build_cache_key` holds the one format;
 :func:`get_cell_cache_key` is the Prefect-shaped adapter that reads the four parts off a
 task's call parameters, kept import-light so no Prefect type leaks in.
 """
@@ -26,7 +26,8 @@ def build_cache_key(
 ) -> str:
     """Join the four parts into a cell's cache key, rejecting a blank component.
 
-    :param run_id: the sweep run the cell is measured in (a new one re-measures).
+    :param run_id: the run's bucket prefix the cell's pointer lies under (a new one
+        re-measures).
     :param digest: the deep config digest (config identity).
     :param point_slug: the engine-knob point slug, e.g. ``mns64_kvfp8_pcon``.
     :param cell_name: the client-load cell name, e.g. ``pshare50_mc64``.
