@@ -2,7 +2,7 @@
 
 ADR-0012: the bench task wraps a single cell, returns the cell's S3 pointer, and
 raises on an invalid result so a failure is never cached. Keyed
-``digest:point-slug:cell-name``, a re-run skips a valid cell (Prefect enters
+``run-id:digest:point-slug:cell-name``, a re-run skips a valid cell (Prefect enters
 ``Cached`` and does not re-execute) and re-attempts a degenerate one (the raise left
 nothing to cache). The pure :func:`run_cell` core is tested without Prefect; the
 caching and re-attempt behaviour is exercised under Prefect's test harness.
@@ -244,6 +244,7 @@ def test_a_valid_cell_is_cached_and_not_re_executed(tmp_path: Path) -> None:
     @flow
     def drive() -> str:
         return task(
+            run_id="run1",
             digest="d1",
             point_slug="mns64_kvfp8_pcon",
             cell_name="pshare50_mc64",
@@ -268,6 +269,7 @@ def test_a_degenerate_cell_is_re_attempted(tmp_path: Path) -> None:
     @flow
     def drive() -> str:
         return task(
+            run_id="run1",
             digest="d2",
             point_slug="mns64_kvfp8_pcon",
             cell_name="pshare90_mc256",
@@ -369,6 +371,7 @@ def test_the_task_run_name_renders_from_the_call_parameters(tmp_path: Path) -> N
     @flow
     def drive() -> str:
         return task(
+            run_id="run1",
             digest="d1",
             point_slug="mns64_kvfp8_pcon",
             cell_name="pshare50_burst1.0_mc64",

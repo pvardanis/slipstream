@@ -5,9 +5,10 @@ the orchestration layer, the container executes the single cell it is handed. Th
 runs the cell, gates the result through :func:`validate_cell`, publishes the cell's
 pointer and four headline metrics as a markdown artifact onto its own run, and returns
 the cell's S3 pointer; an invalid result raises out of the task so Prefect never caches
-a failure and the next run re-attempts it. It is keyed ``digest:point-slug:cell-name``
-via :func:`get_cell_cache_key`, with ``result_storage`` and cache ``key_storage``
-pointed at S3 so resume survives a server or laptop death.
+a failure and the next run re-attempts it. It is keyed
+``run-id:digest:point-slug:cell-name`` via :func:`get_cell_cache_key`, with
+``result_storage`` and cache ``key_storage`` pointed at S3 so resume survives a server
+or laptop death.
 
 The per-cell artifact is published from inside the task body, so it lands on the
 sub-task's own Artifacts tab (``create_markdown_artifact`` binds the artifact to the
@@ -107,7 +108,7 @@ def build_cell_task(
     """Build the Prefect task wrapping one bench cell, keyed for per-cell resume.
 
     The cache policy is the cell's
-    ``digest:point-slug:cell-name`` key; ``key_storage`` points the cache index and
+    ``run-id:digest:point-slug:cell-name`` key; ``key_storage`` points the cache index and
     ``result_storage`` the persisted pointer at durable storage. Both are required —
     left to Prefect's local defaults, resume would silently degrade to the machine the
     task last ran on, the exact cross-machine failure ADR-0012 storage exists to
@@ -117,8 +118,9 @@ def build_cell_task(
     :param key_storage: the block Prefect stores cache records into.
     :param retries: opt-in retries for a flaky cell (ADR-0012: retries are per
         invocation).
-    :return: the configured ``@task`` — call it with ``digest``, ``point_slug``,
-        ``cell_name``, ``execute_func``, ``result_path``, and ``result_uri``.
+    :return: the configured ``@task`` — call it with ``run_id``, ``digest``,
+        ``point_slug``, ``cell_name``, ``execute_func``, ``result_path``, and
+        ``result_uri``.
     """
     policy = CachePolicy.from_cache_key_fn(get_cell_cache_key).configure(
         key_storage=key_storage
@@ -134,12 +136,12 @@ def build_cell_task(
 
 
 def is_cell_cached(
-    task: Task[..., str], *, digest: str, point_slug: str, cell_name: str
+    task: Task[..., str], *, run_id: str, digest: str, point_slug: str, cell_name: str
 ) -> bool:
     """Report whether a cell holds a cache record, i.e. whether ``task`` would skip it.
 
     The redeploy-skip gate's per-cell check (ADR-0015). The key is built by
-    :func:`get_cell_cache_key` from the same three call parameters the task is invoked
+    :func:`get_cell_cache_key` from the same four call parameters the task is invoked
     with, and the lookup goes through the result store Prefect derives from ``task``
     itself — its result storage and its cache policy's key storage — so the gate and the
     task read the one cache record and cannot disagree. A task that refreshes its cache
@@ -150,6 +152,7 @@ def is_cell_cached(
 
     :param task: the cell task (from :func:`cell_task` or :func:`build_cell_task`)
         whose cache is consulted.
+    :param run_id: the sweep run the cell is measured in, a cache-key part.
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, a cache-key part.
     :param cell_name: the client-load cell name, a cache-key part.
@@ -165,7 +168,13 @@ def is_cell_cached(
     if refresh:
         return False
     key = get_cell_cache_key(
-        None, {"digest": digest, "point_slug": point_slug, "cell_name": cell_name}
+        None,
+        {
+            "run_id": run_id,
+            "digest": digest,
+            "point_slug": point_slug,
+            "cell_name": cell_name,
+        },
     )
     # ``update_for_task`` is async-dispatched: ``_sync=True`` forces the sync
     # implementation, as Prefect's task engine calls it, so the result is the store
@@ -273,6 +282,7 @@ def _cell_artifact_markdown(cell: LoadCell, result_uri: str) -> str:
 
 def _bench_cell(
     *,
+    run_id: str,
     digest: str,
     point_slug: str,
     cell_name: str,
@@ -282,12 +292,13 @@ def _bench_cell(
 ) -> str:
     """Run one cell and return its pointer — the function Prefect wraps as a task.
 
-    ``digest``, ``point_slug``, and ``cell_name`` are unread by this body: they address
-    the cell, they do not steer its run. They are declared as parameters because Prefect
-    hands :func:`get_cell_cache_key` only a task's call parameters, so a value can shape
-    the cache key only by arriving as one — the key is built from the three before the
-    body runs, then a hit skips the body entirely (ADR-0012:90-94).
+    ``run_id``, ``digest``, ``point_slug``, and ``cell_name`` are unread by this body:
+    they address the cell, they do not steer its run. They are declared as parameters
+    because Prefect hands :func:`get_cell_cache_key` only a task's call parameters, so a
+    value can shape the cache key only by arriving as one — the key is built from the
+    four before the body runs, then a hit skips the body entirely (ADR-0012:90-94).
 
+    :param run_id: the sweep run the cell is measured in, a cache-key part.
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, a cache-key part.
     :param cell_name: the client-load cell name, a cache-key part.

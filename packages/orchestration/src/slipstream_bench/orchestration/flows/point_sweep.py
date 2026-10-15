@@ -6,8 +6,8 @@ cell is one ``docker run`` on the bench host over SSM. :func:`run_point_sweep` d
 §"Scope boundaries"): it brings the loopback mTLS proxy up once, derives the point's
 cells from ``sweep-grid.yaml`` (the single source of the grid and load knobs), and runs
 each through the cell task keyed
-``digest:point-slug:cell-name`` so an interrupted run re-runs only the cells that do not
-already hold a valid measurement.
+``run-id:digest:point-slug:cell-name`` so an interrupted run re-runs only the cells that
+do not already hold a valid measurement, and a new run id re-measures every cell.
 
 Retry classification (``distributed-ml-patterns.md`` §5): a transient transport fault
 (SSM throttle, network flap, spot reclaim, OOM) is what the cell task's opt-in
@@ -228,6 +228,7 @@ def _drive_point_sweep(
             )
             pointers.append(
                 labeled(
+                    run_id=context.run_group,
                     digest=context.digest,
                     point_slug=context.point_slug,
                     cell_name=name,

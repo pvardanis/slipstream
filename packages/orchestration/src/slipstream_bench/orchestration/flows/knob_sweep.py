@@ -477,10 +477,10 @@ def _point_has_pending_cells(
 ) -> bool:
     """Report whether a point still has cells to run — any cell without a cache record.
 
-    Each cell is checked against the cell task's own cache, keyed by the same digest,
-    point slug, and cell name the point sweep calls the task with, so a point is skipped
-    only when every one of its cells will be served from cache. The first uncached cell
-    is logged, naming why the point redeploys.
+    Each cell is checked against the cell task's own cache, keyed by the same run id,
+    digest, point slug, and cell name the point sweep calls the task with, so a point is
+    skipped only when every one of its cells will be served from cache. The first
+    uncached cell is logged, naming why the point redeploys.
     """
     for _key, cell_name in iter_point_cell_objects(
         point,
@@ -490,7 +490,11 @@ def _point_has_pending_cells(
         commercial=inputs.commercial,
     ):
         if not is_cell_cached(
-            task, digest=inputs.digest, point_slug=point.slug(), cell_name=cell_name
+            task,
+            run_id=inputs.run,
+            digest=inputs.digest,
+            point_slug=point.slug(),
+            cell_name=cell_name,
         ):
             _LOGGER.info(
                 "point %s pending: cell %s has no cache record", point.slug(), cell_name
