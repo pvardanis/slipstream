@@ -8,7 +8,7 @@ description: Test an unmerged orchestration branch or PR stack end to end on the
 
 The worker runs whatever orchestration image `:main` names, and `sweep-dispatch` runs from `main`, so neither exercises a branch. This skill puts the branch's own image on the worker and drives the sweep from the workstation. Work from the top of the branch or stack: one image covers every scenario.
 
-The agent builds, pushes, writes grids and reads S3. **Hand every `kubectl` command to the user** to run with `!`: the agent's `kubectl exec` is blocked. The user watches each run in the Prefect UI and confirms it before the next one starts.
+The agent runs every command: build, push, the worker swap, registration, grid copies, triggers, S3 reads. When the harness denies one, hand that command to the user to run with `!` and carry on from its output. The user watches each run in the Prefect UI and confirms it before the next one starts.
 
 ## Preconditions
 
@@ -31,7 +31,7 @@ docker push "${repo}:${tag}"
 
 Run the build in the background; it is slow under emulation. Done when `docker push` prints the digest.
 
-## Step 2 — Swap the worker onto it (user)
+## Step 2 — Swap the worker onto it
 
 Record the current image first, so Step 6 can restore it:
 
@@ -43,9 +43,9 @@ kubectl -n prefect rollout status deploy/prefect-worker
 
 Done when the rollout reports success. Terraform does not see this swap; `just stack-down` discards it.
 
-## Step 3 — Register from the branch (user)
+## Step 3 — Register from the branch
 
-`just prefect-register` from the branch, so the deployment's parameters match the branch's flow. Keep `just prefect-ui` open in another shell. Trigger every run from the workstation; a `sweep-dispatch` run re-registers `main`'s deployment over this one.
+Run `just prefect-register` from the branch, so the deployment's parameters match the branch's flow, and hold `just prefect-ui` open in the background for the API port-forward. Trigger every run from the workstation; a `sweep-dispatch` run re-registers `main`'s deployment over this one.
 
 ## Step 4 — Write the test grids
 
@@ -57,13 +57,13 @@ uv run python -c "from pathlib import Path; from slipstream_bench.contract.grid 
 
 - Keep `load.num_prompts` a multiple of `load.num_prefixes`. The client sends `num_prefixes × floor(num_prompts / num_prefixes)` requests while the validity gate counts `num_prompts` as attempted, so a remainder reads as failed requests and a healthy cell is rejected.
 
-Hand the user the copy, and re-run it after any worker restart: `/tmp` in the pod does not survive one.
+Copy each grid into the pod, and copy again after any worker restart: `/tmp` in the pod does not survive one.
 
 ```bash
 kubectl -n prefect exec -i deploy/prefect-worker -- sh -c 'cat > /tmp/grid-2pt.yaml' < /tmp/qa-<label>/grid-2pt.yaml
 ```
 
-Done when every grid validates locally and the user's copy succeeded.
+Done when every grid validates locally and reads back from the pod.
 
 ## Step 5 — Run the scenarios one at a time
 
@@ -86,5 +86,5 @@ Separate what the scenario tests from what the rig did: a slow engine or a rende
 
 - Post the scenario table with each `run_id` and its observed outcome as a comment on the top PR.
 - Offer an issue for each defect found outside the branch's scope.
-- Restore the worker: `just stack-down`, or (user) `kubectl -n prefect set image deploy/prefect-worker prefect-worker=<image recorded in Step 2>`.
+- Restore the worker: `just stack-down`, or `kubectl -n prefect set image deploy/prefect-worker prefect-worker=<image recorded in Step 2>`.
 - With the user's go-ahead, delete the tag (`aws ecr batch-delete-image --repository-name "${repo#*/}" --image-ids imageTag=<tag>`) and `trash /tmp/qa-<label>`.
