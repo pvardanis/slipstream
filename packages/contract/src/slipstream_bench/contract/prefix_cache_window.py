@@ -24,6 +24,8 @@ _QUERIES_METRIC = "vllm:prefix_cache_queries"
 _HITS_METRIC = "vllm:prefix_cache_hits"
 _EXTERNAL_QUERIES_METRIC = "vllm:external_prefix_cache_queries"
 _EXTERNAL_HITS_METRIC = "vllm:external_prefix_cache_hits"
+_GPU_METRICS = (_QUERIES_METRIC, _HITS_METRIC)
+_EXTERNAL_METRICS = (_EXTERNAL_QUERIES_METRIC, _EXTERNAL_HITS_METRIC)
 
 
 class PrefixCacheError(Exception):
@@ -56,10 +58,8 @@ class PrefixCacheWindow:
         return (self.hits + self.external_hits) / self.queries
 
 
-def _sum_counter(
-    exposition: str, source: str, metric: str, model: str, *, required: bool
-) -> float:
-    """Sum a counter's value across the series carrying the run's model_name.
+def _sum_counters(exposition: str, source: str, model: str) -> dict[str, float]:
+    """Sum each prefix-cache counter across the series carrying the run's model_name.
 
     prometheus_client renders a counter with a _total suffix in the exposition
     (vllm:prefix_cache_queries_total) while vLLM's PromQL name omits it, so match
@@ -68,72 +68,84 @@ def _sum_counter(
 
     :param exposition: the parsed /metrics text.
     :param source: where the snapshot came from, for the error message.
-    :param metric: the counter's PromQL name (no _total suffix).
     :param model: the model_name label value to select.
-    :param required: whether an absent series is an error rather than a zero.
-    :return: the summed counter value across the matching series, or 0.0 for an
-        absent optional series.
-    :raise PrefixCacheError: when no matching series is present for a required
-        counter — prefix caching disabled or the model never emitted — a
-        nothing-to-join error, not a zero.
+    :return: the summed value per counter PromQL name, holding only the counters
+        the snapshot carries.
+    :raise PrefixCacheError: when the snapshot cannot be parsed.
     """
-    names = (metric, f"{metric}_total")
-    total = None
+    totals: dict[str, float] = {}
     try:
         families = text_string_to_metric_families(exposition)
         for family in families:
             for sample in family.samples:
-                if sample.name in names and sample.labels.get("model_name") == model:
-                    total = (total or 0.0) + sample.value
+                name = sample.name.removesuffix("_total")
+                wanted = name in _GPU_METRICS or name in _EXTERNAL_METRICS
+                if wanted and sample.labels.get("model_name") == model:
+                    totals[name] = totals.get(name, 0.0) + sample.value
     except ValueError as error:
         raise PrefixCacheError(
             f"cannot parse metrics snapshot {source}: {error}"
         ) from error
-    # vLLM registers the external counters on every server, at zero without a KV
-    # connector; a snapshot without them (an older server) still carries a GPU hit
-    # rate, so an absent optional series reads as zero rather than failing the window.
-    if total is None and not required:
-        return 0.0
-    if total is None:
-        raise PrefixCacheError(
-            f"metric {metric} not found in {source} for model {model!r} "
-            f"(is prefix caching enabled on the server?)"
-        )
+    return totals
+
+
+def _read_snapshot(exposition: str, source: str, model: str) -> dict[str, float]:
+    """Read one /metrics snapshot's prefix-cache counters for the run's model.
+
+    :param exposition: the /metrics exposition text.
+    :param source: where the snapshot came from, for error messages.
+    :param model: the model_name label value to select.
+    :return: the summed value per counter PromQL name; the external counters are
+        present only when the snapshot carries them.
+    :raise PrefixCacheError: when a GPU counter is absent — prefix caching disabled
+        or the model never emitted — a nothing-to-join error, not a zero; or when a
+        counter is non-finite or the snapshot cannot be parsed.
+    """
+    totals = _sum_counters(exposition, source, model)
+    for metric in _GPU_METRICS:
+        if metric not in totals:
+            raise PrefixCacheError(
+                f"metric {metric} not found in {source} for model {model!r} "
+                f"(is prefix caching enabled on the server?)"
+            )
     # NaN and infinities in the exposition parse to floats and would produce a
     # non-finite (NaN or inf) hit rate the window guards do not reliably catch, so
     # reject a non-finite counter here, before the delta.
-    if not math.isfinite(total):
-        raise PrefixCacheError(
-            f"metric {metric} has a non-finite value in {source} for model {model!r}"
-        )
-    return total
+    for metric, total in totals.items():
+        if not math.isfinite(total):
+            raise PrefixCacheError(
+                f"metric {metric} has a non-finite value in {source} "
+                f"for model {model!r}"
+            )
+    return totals
 
 
-def _get_window_delta(
-    before: str,
-    after: str,
-    sources: tuple[str, str],
-    metric: str,
-    model: str,
-    *,
-    required: bool = True,
-) -> float:
-    """Return a counter's advance over the window, before subtracted from after.
+def _get_window_deltas(
+    before: dict[str, float], after: dict[str, float]
+) -> dict[str, float]:
+    """Return each counter's advance over the window, before subtracted from after.
 
-    :param before: the exposition text captured before the window.
-    :param after: the exposition text captured after the window.
-    :param sources: where the (before, after) snapshots came from, for error messages.
-    :param metric: the counter's PromQL name (no _total suffix).
-    :param model: the model_name label value to select.
-    :param required: whether an absent series is an error rather than a zero.
-    :return: the after-minus-before delta across the matching series.
-    :raise PrefixCacheError: when either snapshot lacks a required metric (see
-        :func:`_sum_counter`).
+    vLLM registers the external counters on every server, at zero without a KV
+    connector; a snapshot pair without them (an older server) still carries a GPU
+    hit rate, so absent external counters read as zero rather than failing the
+    window. External counters in only one of the two snapshots mean the server
+    restarted in between, and the delta would be a lifetime value or negative.
+
+    :param before: the counters read off the snapshot captured before the window.
+    :param after: the counters read off the snapshot captured after the window.
+    :return: the after-minus-before delta per counter PromQL name.
+    :raise PrefixCacheError: when the external counters appear in only one snapshot.
     """
-    before_source, after_source = sources
-    return _sum_counter(
-        after, after_source, metric, model, required=required
-    ) - _sum_counter(before, before_source, metric, model, required=required)
+    for metric in _EXTERNAL_METRICS:
+        if (metric in before) != (metric in after):
+            raise PrefixCacheError(
+                f"metric {metric} is in only one snapshot of the window "
+                f"(server restart mid-run?)"
+            )
+    return {
+        metric: after.get(metric, 0.0) - before.get(metric, 0.0)
+        for metric in _GPU_METRICS + _EXTERNAL_METRICS
+    }
 
 
 def _as_count(value: float) -> int | float:
@@ -145,36 +157,20 @@ def _as_count(value: float) -> int | float:
     return int(value) if float(value).is_integer() else value
 
 
-def get_prefix_cache_window(
-    before: str,
-    after: str,
-    *,
-    model: str,
-    sources: tuple[str, str] = ("before", "after"),
-) -> PrefixCacheWindow:
-    """Read the prefix-cache counters' advance between two /metrics snapshots.
+def _check_window(deltas: dict[str, float], model: str) -> None:
+    """Reject a window whose counter deltas cannot support a hit rate.
 
-    :param before: the /metrics exposition text captured just before the window.
-    :param after: the /metrics exposition text captured just after the window.
-    :param model: the model_name label to select.
-    :param sources: where the (before, after) snapshots came from, for error messages.
-    :return: the window's counter deltas.
-    :raise PrefixCacheError: on an absent/disabled GPU metric, a non-finite,
-        backwards, empty, or hits-exceed-queries counter window (GPU or external), or
-        an unparseable snapshot.
+    :param deltas: the after-minus-before delta per counter PromQL name.
+    :param model: the model_name label the window selected, for error messages.
+    :raise PrefixCacheError: on a backwards, empty, or hits-exceed-queries window,
+        GPU or external.
     """
-    queries = _get_window_delta(before, after, sources, _QUERIES_METRIC, model)
-    hits = _get_window_delta(before, after, sources, _HITS_METRIC, model)
-    external_queries = _get_window_delta(
-        before, after, sources, _EXTERNAL_QUERIES_METRIC, model, required=False
-    )
-    external_hits = _get_window_delta(
-        before, after, sources, _EXTERNAL_HITS_METRIC, model, required=False
-    )
-
+    queries, hits = deltas[_QUERIES_METRIC], deltas[_HITS_METRIC]
+    external_queries = deltas[_EXTERNAL_QUERIES_METRIC]
+    external_hits = deltas[_EXTERNAL_HITS_METRIC]
     # A counter that shrank over the window means the server restarted (or the cache
     # was reset) mid-run; the delta is meaningless and the rate would be a lie.
-    if min(queries, hits, external_queries, external_hits) < 0:
+    if min(deltas.values()) < 0:
         raise PrefixCacheError(
             "prefix cache counters went backwards between snapshots "
             "(server restart mid-run?)"
@@ -202,9 +198,35 @@ def get_prefix_cache_window(
             f"external queries ({_as_count(external_queries)}) over the window for "
             f"model {model!r} (counter reset mid-run or wrong model selected?)"
         )
+
+
+def get_prefix_cache_window(
+    before: str,
+    after: str,
+    *,
+    model: str,
+    sources: tuple[str, str] = ("before", "after"),
+) -> PrefixCacheWindow:
+    """Read the prefix-cache counters' advance between two /metrics snapshots.
+
+    :param before: the /metrics exposition text captured just before the window.
+    :param after: the /metrics exposition text captured just after the window.
+    :param model: the model_name label to select.
+    :param sources: where the (before, after) snapshots came from, for error messages.
+    :return: the window's counter deltas.
+    :raise PrefixCacheError: on an absent/disabled GPU metric, external counters in
+        only one snapshot, a non-finite, backwards, empty, or hits-exceed-queries
+        counter window (GPU or external), or an unparseable snapshot.
+    """
+    before_source, after_source = sources
+    deltas = _get_window_deltas(
+        _read_snapshot(before, before_source, model),
+        _read_snapshot(after, after_source, model),
+    )
+    _check_window(deltas, model)
     return PrefixCacheWindow(
-        queries=_as_count(queries),
-        hits=_as_count(hits),
-        external_queries=_as_count(external_queries),
-        external_hits=_as_count(external_hits),
+        queries=_as_count(deltas[_QUERIES_METRIC]),
+        hits=_as_count(deltas[_HITS_METRIC]),
+        external_queries=_as_count(deltas[_EXTERNAL_QUERIES_METRIC]),
+        external_hits=_as_count(deltas[_EXTERNAL_HITS_METRIC]),
     )

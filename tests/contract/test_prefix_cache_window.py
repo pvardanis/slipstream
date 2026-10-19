@@ -81,3 +81,12 @@ def test_external_hits_exceeding_external_queries_is_rejected() -> None:
 
     with pytest.raises(PrefixCacheError, match="external prefix cache hits"):
         get_prefix_cache_window(before, after, model=MODEL)
+
+
+def test_external_series_in_only_one_snapshot_is_rejected() -> None:
+    """External counters appearing mid-window mean a restart, not lifetime reuse."""
+    before = _exposition(_gpu(1000, 200))
+    after = _exposition(_gpu(1100, 210) | _external(870, 150))
+
+    with pytest.raises(PrefixCacheError, match="only one snapshot"):
+        get_prefix_cache_window(before, after, model=MODEL)

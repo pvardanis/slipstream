@@ -5,8 +5,9 @@ vllm:prefix_cache_queries and vllm:prefix_cache_hits, both counters over the who
 server life, so their bare ratio is polluted by every prior request. A run's true
 rate is the delta over the run window: the caller curls /metrics before and after
 the run into two snapshots and hands them here with the run's client JSON. This
-computes (hits_after - hits_before) / (queries_after - queries_before), guards a
-zero or backwards window (counter restart), and joins the rate onto the client
+reads the contract kernel's prefix-cache window over them — (hits_after -
+hits_before) / (queries_after - queries_before), guarded against a zero or
+backwards window (counter restart) — and joins the rate onto the client
 record with a cold/warm label (ADR-0003) so the two cache regimes are told apart.
 The run's SLO numbers ride on the record too, so a reader can weigh cold against
 warm at the SLO from the record alone, without reopening the client JSON. The
