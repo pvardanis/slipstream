@@ -29,6 +29,12 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-swe
   --param instance_id="$(terraform -chdir=terraform/bench-endpoint output -raw bench_host_instance_id)"
 ```
 
+The flow redeploys `deploy/vllm-gpu` for each engine point, so **do not run
+`just gpu-deploy` while a sweep is in flight**: it resets the knobs to the committed config
+under the running point. After a sweep the replica keeps the last point's knobs; `just
+gpu-deploy` restores the committed config
+([ADR-0015](adr/0015-unattended-sweep-cloud-server-and-parent-flow.md)).
+
 A failed redeploy, ceiling scrape, or cell fails the run. **To resume**, run again with
 the same `run_id` (a Retry in the Prefect UI reuses it): cells with a cache record under
 that run are reused, and a point whose every cell is cached skips its redeploy. A cell whose
