@@ -89,8 +89,9 @@ flowchart TB
     pw -- "Tier 1:<br/>kubectl redeploy<br/>per engine point" --> vllm
     pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
-    host -- result JSON<br/>sweeps/run-id/ --> s3
-    pw -- "charts, Prefect<br/>results + cache keys" --> s3
+    host -- "result JSON<br/>sweeps/run-id/point-slug/" --> s3
+    pw -- "charts<br/>sweeps/run-id/charts/" --> s3
+    pw -- "Prefect results + cache keys<br/>prefect/results/, prefect/cache-keys/" --> s3
     pw -- ceiling tables<br/>as run artifacts --> ps
 ```
 
