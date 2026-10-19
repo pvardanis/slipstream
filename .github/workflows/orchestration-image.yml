@@ -23,12 +23,17 @@ on:
       - k8s/vllm-gpu.yaml
       - .trivyignore
       - .github/workflows/orchestration-image.yml
+  # Rescan main weekly so a new CVE or an expired .trivyignore waiver fails here on
+  # schedule, not on whichever PR next touches an image input. Runs the `scan` job only.
+  schedule:
+    - cron: '0 6 * * 1'
   push:
     branches: [main]
   workflow_dispatch:
 
 # Least privilege at the top: only read. The publish job raises id-token for the OIDC
-# exchange itself, so pull_request runs — which never publish — are never granted a token.
+# exchange itself, so pull_request and schedule runs — which never publish — are never
+# granted a token.
 permissions:
   contents: read
 
@@ -42,8 +47,8 @@ env:
 
 jobs:
   scan:
-    name: build & scan (pull request)
-    if: github.event_name == 'pull_request'
+    name: build & scan (no push)
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -61,15 +66,15 @@ jobs:
       - name: Build the content image
         run: |
           set -euo pipefail
-          # Build for the amd64 worker nodes, tagged locally only — the PR gate never
+          # Build for the amd64 worker nodes, tagged locally only — this job never
           # pushes. The scan below reads this image from the local docker store.
           docker build --platform linux/amd64 \
             -f orchestration/Dockerfile \
             -t orchestration-image:pr-scan \
             .
 
-      # Same gate as the publish job's scan, run pre-merge: fail on fixable high/critical
-      # CVEs so a vulnerable image is caught on the PR, not on the post-merge publish.
+      # Same gate as the publish job's scan: fail on fixable high/critical CVEs so a
+      # vulnerable image is caught on the PR or the weekly rescan, not on the publish.
       - name: Scan the content image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -81,8 +86,8 @@ jobs:
 
   publish:
     name: build, scan & push (content-hash idempotent)
-    # Publish only on push/dispatch; the pull_request event runs the scan job alone.
-    if: github.event_name != 'pull_request'
+    # Publish only on push/dispatch; pull_request and schedule run the scan job alone.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
