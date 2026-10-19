@@ -67,7 +67,7 @@ flowchart TB
     ecr -. image .-> host & pw
     host -- load --> alb --> vllm
     host -- result JSON --> s3
-    pw -- charts --> s3
+    pw -- "charts, Prefect<br/>results + cache keys" --> s3
 ```
 
 The CI/CD pipeline and the benchmark data path are detailed in
