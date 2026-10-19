@@ -1,4 +1,4 @@
-<!-- ADR recording how the knob sweep runs unattended off the laptop: the whole outer loop (Tier-1 GPU redeploys + Tier-2 cells) is promoted into one parent Prefect flow calling per-point subflows; the Prefect server moves from local SQLite to Prefect Cloud (Hobby); the flow runs on a Prefect worker on EKS as a run-to-completion Job; a resume skips a point's GPU redeploy when all its cells already hold a valid measurement; and ArgoCD is ruled out as the sweep runner (kept, if at all, for L2a production serving deploy). Supersedes ADR-0012's "server runs locally" and "flows run from the workstation" sections, firing that ADR's own reopen trigger #3. NOTE: the Cloud-server half is reversed by the 2026-09-29 amendment below — the server is a self-hosted OSS Prefect on EKS that rides the cluster's own duty-cycle; read that amendment for the server location, work pool type, and state backend actually built. -->
+<!-- ADR recording how the knob sweep runs unattended off the laptop: the whole outer loop (Tier-1 GPU redeploys + Tier-2 cells) is promoted into one parent Prefect flow calling per-point subflows; the Prefect server moves from local SQLite to Prefect Cloud (Hobby); the flow runs on a Prefect worker on EKS as a run-to-completion Job; a resume skips a point's GPU redeploy when all its cells already hold a valid measurement; and ArgoCD is ruled out as the sweep runner (kept, if at all, for L2a production serving deploy). Supersedes ADR-0012's "server runs locally" and "flows run from the workstation" sections, firing that ADR's own reopen trigger #3. NOTE: the Cloud-server half is reversed by the 2026-09-29 amendment below — the server is a self-hosted OSS Prefect on EKS that rides the cluster's own duty-cycle; read that amendment for the server location, work pool type, and state backend actually built. AMENDED 2026-10-19: the deferred vllm-gpu ownership item is settled — `just gpu-deploy` creates the Deployment, the flow patches it per point. -->
 
 # ADR-0015: The knob sweep runs unattended — Cloud server, EKS worker, one parent flow
 
@@ -298,3 +298,23 @@ are no longer gated behind a toggle. So `cluster-up` needs the orchestration ima
 first, and `just gh-vars` reads every repo variable from the bootstrap stack's outputs, so the
 workflow variables can be set before any cluster exists. The eks plan fails if the bootstrap
 cluster name or Prefect namespace differs from the cluster it creates.
+
+## Amendment (2026-10-19): `just gpu-deploy` creates `deploy/vllm-gpu`, the flow patches it
+
+This settles the item deferred above. The two paths split by verb, not by time:
+
+- **`just gpu-deploy` creates.** It applies the whole rendered manifest — Namespace, Service,
+  and the Deployment at the committed rig config — once, at `just stack-up`. By hand it is a
+  one-off bench, or restores the committed config after a sweep left the last point's knobs
+  in place.
+- **The flow patches.** For each engine point the worker applies only the Deployment document
+  (`deploy_gpu_point`, `slipstream_bench.orchestration.cluster`). Its RBAC
+  (`terraform/eks/worker.tf`) grants one write, patch on `deploy/vllm-gpu`, beside reads of
+  the rollout and pod logs, so it cannot create or delete the Deployment, Service, or
+  Namespace.
+
+During a sweep the flow is the only writer. Nothing enforces that: a `just gpu-deploy` mid-sweep
+resets the knobs to the committed config, and the in-flight point's cells are recorded against
+the knobs the flow set. A guard would have the recipe ask the Prefect server whether a run is
+in flight; with one operator that check is not built, and the runbook says not to run
+`gpu-deploy` while a sweep is in flight.
