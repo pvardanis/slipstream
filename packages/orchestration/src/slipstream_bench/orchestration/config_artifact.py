@@ -4,7 +4,9 @@ A run's configuration is model.yaml and sweep-grid.yaml verbatim, and k8s/vllm-g
 of which the serving image ref and the vLLM container's args are shown. The args are
 embedded verbatim, swept placeholders and all
 (``${MAX_NUM_SEQS}``/``${KV_CACHE_DTYPE}``/``${PREFIX_CACHING_FLAG}``): the sweep-grid above
-decodes which value each placeholder takes per engine point, and the point slug on the
+decodes which value each swept placeholder takes per engine point (the KV cache offload
+placeholder ``${KV_TRANSFER_CONFIG}`` is no grid knob: the knob sweep always renders it off,
+``None``), and the point slug on the
 Prefect graph names the point a redeploy ran, so the swept deltas are already read off the
 graph — resolving the args into one near-identical block per point would drown that signal.
 The rest of the manifest is boilerplate the digest does not hash, so it is not embedded. The
