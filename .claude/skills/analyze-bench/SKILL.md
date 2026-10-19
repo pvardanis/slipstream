@@ -52,7 +52,7 @@ Expect these five keys. Check they are all present before reading:
 - `knob-sweep-config` — markdown embedding the run's `sweep-grid.yaml`. Read the SLO from its `goodput:` line, e.g. `goodput: ["ttft:1000", "tpot:50"]`. **This is the SLO you report for — never ask the user for one, and never infer one.** If the `goodput:` line is absent or does not parse into ttft/tpot thresholds, stop and report the config artifact is malformed — a report scoped to a guessed SLO is worse than none.
 - `knob-sweep-ceiling-table` — markdown table, one row per `(max_num_seqs, kv_cache_dtype, prefix_caching, prefix_share)`, with columns `ceiling`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`. This is the ranking data.
 - `knob-sweep-goodput-cliff` — markdown; read it to explain where ladders fell.
-- `knob-sweep-ceiling-plot`, `knob-sweep-goodput-cliff-plot` — image artifacts whose `data` field is an S3 `https` URL to a PNG. The chart prefix (`sweeps/*/charts/*`) is public-read by bucket policy, so link these URLs directly — do not download them.
+- `knob-sweep-ceiling-plot`, `knob-sweep-goodput-cliff-plot` — image artifacts whose `data` field is an S3 `https` URL to a PNG. The chart prefix (`sweeps/*/charts/*`) is public-read by bucket policy, so Step 4 downloads them with plain `curl`, no AWS credentials.
 
 If `knob-sweep-config` or `knob-sweep-ceiling-table` is missing, stop and say which — the report cannot be built without them. If only a plot or the cliff is missing, continue but say in the report that it is degraded and which piece is absent.
 
@@ -70,11 +70,15 @@ If a `$/hr` was supplied, also compute `$/1M-tokens = ($/hr) / (output_throughpu
 
 ## Step 4 — Write the report
 
-The report is all text: a trimmed slice of the tables plus plots linked to their public S3 URLs. No binaries are written, so the file is self-contained, survives the Prefect run aging out, and is committed to the repo.
+The report is a trimmed slice of the tables plus the sweep's two plots, copied beside it. The results bucket is deleted on `stack-down` and the Prefect run ages out, so the report directory keeps its own copy of the plots and is committed to the repo.
 
 ```bash
 mkdir -p "reports/<run_id>"
+curl -fsS -m 30 -o "reports/<run_id>/ceiling-by-max-num-seqs.png" "<ceiling-plot-url>"
+curl -fsS -m 30 -o "reports/<run_id>/goodput-by-max-concurrency.png" "<cliff-plot-url>"
 ```
+
+The URLs are the image artifacts' `data` field. Skip the download for a plot whose artifact was missing (Step 2). If a download fails, stop and report it: the bucket may already be gone, and a report pointing at absent images is broken.
 
 Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 
@@ -83,11 +87,11 @@ Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 3. **Ranking** — per `prefix_share` bucket, the top **N = 3** configs by `output_throughput` at the ceiling (N tunable at invocation), with their `ceiling`, `p95_ttft_ms`, `p95_tpot_ms`; add a `$/1M` column only if a price was given. This is the ceiling evidence.
 4. **Tradeoff** — narrate the pick against the runner-up (e.g. "A beats B on throughput but B is within N% and sweeps a simpler knob → pick B"). Always name the runner-up and why it lost.
 5. **Winner ladders** — from the cliff table, the rungs of each bucket's recommended config only — the one ladder whose fall through the 0.95 floor sets the ceiling. Not the full 240-row cliff; link the Prefect run page for the complete tables.
-6. **Plots** — the two plots as plain links to their S3 URI (`[ceiling](<ceiling-plot-url>)`, `[goodput cliff](<cliff-plot-url>)`), not image embeds, with one line each on what they show. The URIs are the image artifacts' `data` field. If an artifact was missing (Step 2), say so instead of linking.
-7. **Caveats** — fixed single GPU (ranking is cost-exact only on this hardware), the SLO is the run's own, `0.95` floor, plots render while the S3 object lives.
+6. **Plots** — the two downloaded plots embedded by relative path (`![Concurrency ceiling by max_num_seqs](ceiling-by-max-num-seqs.png)`, `![Goodput cliff by max_concurrency](goodput-by-max-concurrency.png)`), with one line each on what they show. If an artifact was missing (Step 2), say so instead of embedding.
+7. **Caveats** — fixed single GPU (ranking is cost-exact only on this hardware), the SLO is the run's own, `0.95` floor.
 
-Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up.
+Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up, and each plot it embeds sits beside it.
 
 ## Out of scope
 
-A bespoke winner-highlighted chart is a follow-up: it belongs as a tested plot function in the `report` package, not a throwaway plotting snippet here. This skill links the sweep's own plots only.
+A bespoke winner-highlighted chart is a follow-up: it belongs as a tested plot function in the `report` package, not a throwaway plotting snippet here. This skill embeds the sweep's own plots only.

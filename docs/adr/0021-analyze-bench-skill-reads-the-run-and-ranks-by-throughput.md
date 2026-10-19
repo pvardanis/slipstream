@@ -1,4 +1,4 @@
-<!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). -->
+<!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). AMENDED 2026-10-19: the two plots are downloaded into the report directory and embedded by relative path, since the results bucket and its URLs die on teardown. -->
 
 # ADR-0021: analyze-bench reads the run and ranks by throughput
 
@@ -78,3 +78,16 @@ under — a different SLO means a new sweep, not a re-gate. The cost ranking is 
 while the sweep stays on one fixed GPU; a multi-GPU or mixed-hardware sweep would break
 the `$/hr`-constant assumption and require real per-config cost, at which point the
 ranking moves into tested `report` code.
+
+## Amendment (2026-10-19): the report keeps its own copy of the plots
+
+Linking the plots by their S3 URL leaves them dead after the first teardown: the results
+bucket is created with `force_destroy` and deleted on `bench-endpoint-down`
+(`terraform/bench-endpoint/results.tf`), and the next `stack-up` names a fresh bucket from
+`bucket_prefix`, so no URL outlives the cycle that made it. The report is meant to outlast
+both the bucket and the Prefect run, so the skill now downloads the two PNGs from their
+public URLs into `reports/<run_id>/` beside `RECOMMENDATION.md` and embeds them by relative
+path. The report directory is no longer all text; two committed PNGs are the price of
+plots that still render. The download is a plain `curl` of the two
+public chart objects, not an S3 sync, so the skill still needs no AWS credentials, repo
+code, or report CLI.
