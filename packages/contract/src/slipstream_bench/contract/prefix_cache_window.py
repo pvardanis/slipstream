@@ -4,12 +4,12 @@ vLLM exposes cumulative prefix-cache counters on its Prometheus /metrics endpoin
 vllm:prefix_cache_queries and vllm:prefix_cache_hits, both counters over the whole
 server life, so their bare ratio is polluted by every prior request. A window's true
 rate is the delta between a snapshot taken before it and one taken after:
-(hits_after - hits_before) / (queries_after - queries_before). A KV connector such as
-LMCache adds vllm:external_prefix_cache_queries/hits for the tokens the GPU missed, so
-the window also carries their deltas and a combined rate, (GPU hits + external hits) /
-queries. This guards a zero or backwards window (counter restart) and a
-hits-exceed-queries window, so a caller never reports a rate the counters cannot
-support.
+(hits_after - hits_before) / (queries_after - queries_before). vLLM also exposes
+vllm:external_prefix_cache_queries/hits, which a KV connector such as LMCache advances
+for the tokens the GPU missed, so the window also carries their deltas and a combined
+rate, (GPU hits + external hits) / queries. The window rejects a zero or backwards
+delta (server restart) and hits exceeding queries, so a caller never reports a rate the
+counters cannot support.
 
 The module stays out of the kernel's package surface: its Prometheus parser is a
 dependency only the callers that read /metrics need.
@@ -39,13 +39,57 @@ class PrefixCacheWindow:
     :param queries: prompt tokens the GPU prefix cache was queried for.
     :param hits: of those, tokens found in the GPU prefix cache.
     :param external_queries: tokens the GPU missed and the KV connector was asked for.
-    :param external_hits: of those, tokens the KV connector loaded.
+    :param external_hits: of those, tokens the KV connector matched for loading.
+    :raise PrefixCacheError: when the deltas cannot support a rate — backwards, empty,
+        or hits exceeding the queries they answer, GPU, external, or combined.
     """
 
     queries: int | float
     hits: int | float
     external_queries: int | float
     external_hits: int | float
+
+    def __post_init__(self) -> None:
+        """Reject deltas that cannot support a hit rate."""
+        # A counter that shrank over the window means the server restarted mid-run;
+        # the delta is meaningless and the rate would be a lie.
+        if min(self.queries, self.hits, self.external_queries, self.external_hits) < 0:
+            raise PrefixCacheError(
+                "prefix cache counters went backwards between snapshots "
+                "(server restart mid-run?)"
+            )
+        # No queries in the window is a 0/0 rate: there is no run to measure.
+        if self.queries == 0:
+            raise PrefixCacheError(
+                "no prefix cache queries between the snapshots (nothing to measure)"
+            )
+        # Hits are a subset of queries on a single model, so a hits delta above the
+        # queries delta is impossible for a healthy series: a mid-run counter reset
+        # that touched one series and not the other, or a selector that folded in a
+        # foreign series. Either way the > 1.0 rate would be a lie, so reject it.
+        if self.hits > self.queries:
+            raise PrefixCacheError(
+                f"prefix cache hits ({self.hits}) exceed queries ({self.queries}) "
+                f"over the window (counter reset mid-run or wrong model selected?)"
+            )
+        # The connector is asked only for the tokens the GPU missed and matches at
+        # most those, so external hits above external queries break the same rule.
+        if self.external_hits > self.external_queries:
+            raise PrefixCacheError(
+                f"external prefix cache hits ({self.external_hits}) exceed external "
+                f"queries ({self.external_queries}) over the window (counter reset "
+                f"mid-run or wrong model selected?)"
+            )
+        # GPU and external hits answer disjoint parts of the same queried tokens, so
+        # together they cannot exceed the queries. vLLM counts external queries for a
+        # request that skips the GPU lookup (prompt logprobs, pooling) without counting
+        # its GPU queries, so such traffic in the window lands here too.
+        if self.hits + self.external_hits > self.queries:
+            raise PrefixCacheError(
+                f"combined prefix cache hits ({self.hits} GPU + {self.external_hits} "
+                f"external) exceed queries ({self.queries}) over the window (requests "
+                f"skipping the GPU prefix cache, or wrong model selected?)"
+            )
 
     @property
     def hit_rate(self) -> float:
@@ -97,16 +141,16 @@ def _read_snapshot(exposition: str, source: str, model: str) -> dict[str, float]
     :param model: the model_name label value to select.
     :return: the summed value per counter PromQL name; the external counters are
         present only when the snapshot carries them.
-    :raise PrefixCacheError: when a GPU counter is absent — prefix caching disabled
-        or the model never emitted — a nothing-to-join error, not a zero; or when a
-        counter is non-finite or the snapshot cannot be parsed.
+    :raise PrefixCacheError: when a GPU counter is absent — the model_name selects no
+        series, or the server predates the counter — a nothing-to-join error, not a
+        zero; or when a counter is non-finite or the snapshot cannot be parsed.
     """
     totals = _sum_counters(exposition, source, model)
     for metric in _GPU_METRICS:
         if metric not in totals:
             raise PrefixCacheError(
                 f"metric {metric} not found in {source} for model {model!r} "
-                f"(is prefix caching enabled on the server?)"
+                f"(wrong model selected, or a server without the counter?)"
             )
     # NaN and infinities in the exposition parse to floats and would produce a
     # non-finite (NaN or inf) hit rate the window guards do not reliably catch, so
@@ -128,8 +172,9 @@ def _get_window_deltas(
     vLLM registers the external counters on every server, at zero without a KV
     connector; a snapshot pair without them (an older server) still carries a GPU
     hit rate, so absent external counters read as zero rather than failing the
-    window. External counters in only one of the two snapshots mean the server
-    restarted in between, and the delta would be a lifetime value or negative.
+    window. External counters in only one of the two snapshots mean the server was
+    replaced by a different vLLM version in between, and the delta would be a lifetime
+    value or negative.
 
     :param before: the counters read off the snapshot captured before the window.
     :param after: the counters read off the snapshot captured after the window.
@@ -140,7 +185,7 @@ def _get_window_deltas(
         if (metric in before) != (metric in after):
             raise PrefixCacheError(
                 f"metric {metric} is in only one snapshot of the window "
-                f"(server restart mid-run?)"
+                f"(server replaced mid-run?)"
             )
     return {
         metric: after.get(metric, 0.0) - before.get(metric, 0.0)
@@ -157,49 +202,6 @@ def _as_count(value: float) -> int | float:
     return int(value) if float(value).is_integer() else value
 
 
-def _check_window(deltas: dict[str, float], model: str) -> None:
-    """Reject a window whose counter deltas cannot support a hit rate.
-
-    :param deltas: the after-minus-before delta per counter PromQL name.
-    :param model: the model_name label the window selected, for error messages.
-    :raise PrefixCacheError: on a backwards, empty, or hits-exceed-queries window,
-        GPU or external.
-    """
-    queries, hits = deltas[_QUERIES_METRIC], deltas[_HITS_METRIC]
-    external_queries = deltas[_EXTERNAL_QUERIES_METRIC]
-    external_hits = deltas[_EXTERNAL_HITS_METRIC]
-    # A counter that shrank over the window means the server restarted (or the cache
-    # was reset) mid-run; the delta is meaningless and the rate would be a lie.
-    if min(deltas.values()) < 0:
-        raise PrefixCacheError(
-            "prefix cache counters went backwards between snapshots "
-            "(server restart mid-run?)"
-        )
-    # No queries in the window is a 0/0 rate: there is no run to measure.
-    if queries == 0:
-        raise PrefixCacheError(
-            "no prefix cache queries between the snapshots (nothing to measure)"
-        )
-    # Hits are a subset of queries on a single model, so a hits delta above the
-    # queries delta is impossible for a healthy series: a mid-run counter reset that
-    # touched one series and not the other, or a selector that folded in a foreign
-    # series. Either way the > 1.0 rate would be a lie, so reject it.
-    if hits > queries:
-        raise PrefixCacheError(
-            f"prefix cache hits ({_as_count(hits)}) exceed queries "
-            f"({_as_count(queries)}) over the window for model {model!r} "
-            f"(counter reset mid-run or wrong model selected?)"
-        )
-    # The connector is asked only for the tokens the GPU missed and loads at most
-    # those, so external hits above external queries break the same subset rule.
-    if external_hits > external_queries:
-        raise PrefixCacheError(
-            f"external prefix cache hits ({_as_count(external_hits)}) exceed "
-            f"external queries ({_as_count(external_queries)}) over the window for "
-            f"model {model!r} (counter reset mid-run or wrong model selected?)"
-        )
-
-
 def get_prefix_cache_window(
     before: str,
     after: str,
@@ -214,19 +216,21 @@ def get_prefix_cache_window(
     :param model: the model_name label to select.
     :param sources: where the (before, after) snapshots came from, for error messages.
     :return: the window's counter deltas.
-    :raise PrefixCacheError: on an absent/disabled GPU metric, external counters in
-        only one snapshot, a non-finite, backwards, empty, or hits-exceed-queries
-        counter window (GPU or external), or an unparseable snapshot.
+    :raise PrefixCacheError: on an absent GPU metric, external counters in only one
+        snapshot, a non-finite counter, an unparseable snapshot, or deltas the window
+        rejects (see :class:`PrefixCacheWindow`).
     """
     before_source, after_source = sources
     deltas = _get_window_deltas(
         _read_snapshot(before, before_source, model),
         _read_snapshot(after, after_source, model),
     )
-    _check_window(deltas, model)
-    return PrefixCacheWindow(
-        queries=_as_count(deltas[_QUERIES_METRIC]),
-        hits=_as_count(deltas[_HITS_METRIC]),
-        external_queries=_as_count(deltas[_EXTERNAL_QUERIES_METRIC]),
-        external_hits=_as_count(deltas[_EXTERNAL_HITS_METRIC]),
-    )
+    try:
+        return PrefixCacheWindow(
+            queries=_as_count(deltas[_QUERIES_METRIC]),
+            hits=_as_count(deltas[_HITS_METRIC]),
+            external_queries=_as_count(deltas[_EXTERNAL_QUERIES_METRIC]),
+            external_hits=_as_count(deltas[_EXTERNAL_HITS_METRIC]),
+        )
+    except PrefixCacheError as error:
+        raise PrefixCacheError(f"window for model {model!r}: {error}") from error

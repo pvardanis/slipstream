@@ -159,9 +159,10 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         # surface so a member that never reads /metrics never loads it (ADR-0017).
         # forbidden names the frameworks the subprocess probe blocks; allowed is the
         # closed set the AST guard holds the source to, so a new stray dep (numpy,
-        # requests) fails even though it is on no denylist. The kernel shares the slipstream_bench namespace with the other
-        # members, so that root cannot be forbidden; allowed admitting only its own
-        # slipstream_bench.contract subtree keeps the kernel from reaching a sibling.
+        # requests) fails even though it is on no denylist. The kernel shares the
+        # slipstream_bench namespace with the other members, so that root cannot be
+        # forbidden; allowed admitting only its own slipstream_bench.contract subtree
+        # keeps the kernel from reaching a sibling.
         forbidden=frozenset(
             {
                 "prefect",
