@@ -5,7 +5,12 @@ counters between a before and an after snapshot, so a cell's reuse is read off i
 traffic rather than the server's lifetime ratio.
 """
 
-from slipstream_bench.contract.prefix_cache_window import get_prefix_cache_window
+import pytest
+
+from slipstream_bench.contract.prefix_cache_window import (
+    PrefixCacheError,
+    get_prefix_cache_window,
+)
 
 MODEL = "Qwen/Qwen3-8B-AWQ"
 
@@ -58,3 +63,21 @@ def test_a_snapshot_without_external_series_reads_zero_external_traffic() -> Non
 
     assert (window.external_queries, window.external_hits) == (0, 0)
     assert window.combined_hit_rate == window.hit_rate == 0.1
+
+
+def test_a_backwards_external_counter_is_rejected() -> None:
+    """External hits 150->100: the connector's counters reset mid-window."""
+    before = _exposition(_gpu(1000, 200) | _external(800, 150))
+    after = _exposition(_gpu(1100, 230) | _external(870, 100))
+
+    with pytest.raises(PrefixCacheError, match="backwards"):
+        get_prefix_cache_window(before, after, model=MODEL)
+
+
+def test_external_hits_exceeding_external_queries_is_rejected() -> None:
+    """The connector cannot load more tokens than the GPU missed: 80 of 70 is a lie."""
+    before = _exposition(_gpu(1000, 200) | _external(800, 100))
+    after = _exposition(_gpu(1100, 210) | _external(870, 180))
+
+    with pytest.raises(PrefixCacheError, match="external prefix cache hits"):
+        get_prefix_cache_window(before, after, model=MODEL)
