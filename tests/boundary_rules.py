@@ -109,7 +109,6 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "pydantic",
             "yaml",
             "typer",
-            "prometheus_client",
         },
         probe=(
             "import slipstream_bench.executor.cli as cli\n"
@@ -153,8 +152,11 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
     BoundaryRule(
         package="slipstream_bench.contract",
         # The kernel imports no framework and no other workspace member: it holds pure
-        # data and parse on pydantic/PyYAML/stdlib alone (ADR-0017). forbidden names the
-        # frameworks the subprocess probe blocks; allowed is the closed set the AST guard
+        # data and parse on pydantic/PyYAML/stdlib, plus prometheus_client's exposition
+        # parser for the prefix-cache window — a module kept off the kernel's package
+        # surface so a member that never reads /metrics never loads it (ADR-0017).
+        # forbidden names the frameworks the subprocess probe blocks; allowed is the
+        # closed set the AST guard
         # holds the source to, so a new stray dep (numpy, requests) fails even though it is
         # on no denylist. The kernel shares the slipstream_bench namespace with the other
         # members, so that root cannot be forbidden; allowed admitting only its own
@@ -170,7 +172,7 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             }
         ),
         allowed=frozenset(sys.stdlib_module_names)
-        | {"slipstream_bench", "pydantic", "yaml"},
+        | {"slipstream_bench", "pydantic", "yaml", "prometheus_client"},
         probe=(
             "import slipstream_bench.contract as contract\n"
             "assert contract.CellConfig is not None\n"

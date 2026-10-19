@@ -3615,12 +3615,14 @@ name = "slipstream-bench-contract"
 version = "0.1.0"
 source = { editable = "packages/contract" }
 dependencies = [
+    { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "prometheus-client", specifier = ">=0.26.0" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6" },
 ]
@@ -3630,7 +3632,6 @@ name = "slipstream-bench-executor"
 version = "0.1.0"
 source = { editable = "packages/executor" }
 dependencies = [
-    { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "slipstream-bench-contract" },
@@ -3639,7 +3640,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "prometheus-client", specifier = ">=0.26.0" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "slipstream-bench-contract", editable = "packages/contract" },
