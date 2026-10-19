@@ -30,9 +30,11 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-swe
 ```
 
 The flow redeploys `deploy/vllm-gpu` for each engine point, so **do not run
-`just gpu-deploy` while a sweep is in flight**: it resets the knobs to the committed config
-under the running point. After a sweep the replica keeps the last point's knobs; `just
-gpu-deploy` restores the committed config
+`just gpu-deploy` while a sweep is in flight**: it recreates the replica under the running
+cell, and the point's later cells measure the committed config while being recorded under the
+point's knobs; the flow does not notice. After a sweep the replica keeps the last point's
+knobs; `just gpu-deploy` with `MAX_NUM_SEQS`, `KV_CACHE_DTYPE` and `PREFIX_CACHING_FLAG` unset
+restores the committed config
 ([ADR-0015](adr/0015-unattended-sweep-cloud-server-and-parent-flow.md)).
 
 A failed redeploy, ceiling scrape, or cell fails the run. **To resume**, run again with
