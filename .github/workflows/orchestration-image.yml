@@ -8,9 +8,9 @@
 name: orchestration-image
 
 on:
-  # Build and scan on any PR that touches an image input, so a CVE or broken build is
-  # caught before merge rather than on the post-merge publish run. This trigger runs the
-  # no-cloud `scan` job only.
+  # Build and scan on any PR that touches an image input or a scan waiver
+  # (.trivyignore), so a CVE or broken build is caught before merge rather than on the
+  # post-merge publish run. This trigger runs the no-cloud `scan` job only.
   pull_request:
     paths:
       - packages/**
@@ -21,6 +21,7 @@ on:
       - model.yaml
       - bench/sweep-grid.yaml
       - k8s/vllm-gpu.yaml
+      - .trivyignore
       - .github/workflows/orchestration-image.yml
   push:
     branches: [main]
