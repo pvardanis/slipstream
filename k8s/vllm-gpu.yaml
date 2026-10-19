@@ -118,9 +118,10 @@ spec:
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
             # KV cache offload switch (#34, #325), off by default. On, the image's bundled
-            # LMCache loads through vLLM's V1 KV connector in kv_both role and catches
-            # KV blocks evicted from the GPU pool in a pinned CPU tier (the LMCACHE_*
-            # env below); prefix caching stays on either way. Off renders "None",
+            # LMCache loads through vLLM's V1 KV connector in kv_both role and copies
+            # each prefill's KV into a pinned CPU tier (the LMCACHE_* env below), so a
+            # prefix the GPU pool has evicted reloads from CPU instead of being
+            # recomputed; prefix caching stays on either way. Off renders "None",
             # which vLLM parses as no connector, its default. Rendered from
             # KV_CACHE_OFFLOAD by `_render-gpu-manifest`, and by the worker's render.
             - --kv-transfer-config
