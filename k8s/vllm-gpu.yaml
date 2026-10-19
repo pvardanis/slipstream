@@ -117,7 +117,7 @@ spec:
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
-            # KV cache offload switch (#34), off by default. On, the image's bundled
+            # KV cache offload switch (#34, #325), off by default. On, the image's bundled
             # LMCache loads through vLLM's V1 KV connector in kv_both role and catches
             # KV blocks evicted from the GPU pool in a pinned CPU tier (the LMCACHE_*
             # env below); prefix caching stays on either way. Off renders "None",
@@ -136,8 +136,8 @@ spec:
                   key: api-key
             # LMCache's CPU tier, read only when the KV connector above loads LMCache;
             # with offload off nothing reads them. 4 GiB of pinned host memory in
-            # 256-token chunks, sized so vLLM's 8Gi plus the tier fits the 12Gi
-            # offload memory limit.
+            # 256-token chunks: the default 8Gi memory limit plus the tier makes the
+            # 12Gi offload memory limit.
             - name: LMCACHE_LOCAL_CPU
               value: "True"
             - name: LMCACHE_MAX_LOCAL_CPU_SIZE

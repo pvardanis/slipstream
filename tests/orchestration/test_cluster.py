@@ -8,6 +8,7 @@ then waits the rollout; and that the scrape returns the last ceiling line or rai
 """
 
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,7 @@ def load_grid_from_text(text: str) -> SweepGrid:
     return SweepGrid.model_validate(yaml.safe_load(text))
 
 
-def test_render_substitutes_the_three_swept_knobs() -> None:
+def test_render_substitutes_the_swept_knobs() -> None:
     engine_args = get_engine_args(_grid(), _POINT)
 
     rendered = render_gpu_manifest(
@@ -142,6 +143,29 @@ def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
     assert '"float16"' in rendered
     assert "--no-enable-prefix-caching" in rendered
     assert '"128"' in rendered
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "${MAX_NUM_SEQS}",
+        "${KV_CACHE_DTYPE}",
+        "${PREFIX_CACHING_FLAG}",
+        "${KV_TRANSFER_CONFIG}",
+        "${MEMORY_LIMIT}",
+    ],
+)
+def test_render_rejects_a_manifest_missing_a_placeholder(placeholder: str) -> None:
+    # A misspelled or dropped placeholder would otherwise render silently: the knob
+    # never reaches vLLM, or a literal ${...} crashloops the pod after apply.
+    manifest = _MANIFEST.replace(placeholder, "${MISSPELLED}")
+
+    with pytest.raises(ValueError, match=re.escape(placeholder)):
+        render_gpu_manifest(
+            manifest,
+            engine_args=get_engine_args(_grid(), _POINT),
+            kv_cache_offload=False,
+        )
 
 
 def _vllm_container(rendered: str) -> dict[str, Any]:
@@ -205,18 +229,62 @@ def test_the_committed_manifest_renders_every_placeholder(
     rendered = _render_committed_manifest(kv_cache_offload=kv_cache_offload)
 
     assert "${" not in rendered
-    assert _vllm_container(rendered)["args"]
 
 
-def test_the_committed_manifest_sizes_lmcaches_cpu_tier_inside_the_offload_memory() -> (
+def test_the_committed_manifest_renders_no_connector_with_offload_off() -> None:
+    rendered = _render_committed_manifest(kv_cache_offload=False)
+
+    container = _vllm_container(rendered)
+    assert _kv_transfer_config(container) == "None"
+    assert "LMCacheConnectorV1" not in rendered
+    assert container["resources"]["limits"]["memory"] == "8Gi"
+
+
+def test_the_committed_manifest_renders_the_connector_with_offload_on() -> None:
+    container = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
+
+    assert json.loads(_kv_transfer_config(container)) == {
+        "kv_connector": "LMCacheConnectorV1",
+        "kv_role": "kv_both",
+    }
+    assert container["resources"]["limits"]["memory"] == "12Gi"
+
+
+def _gibibytes(quantity: str) -> float:
+    """A Kubernetes ``<n>Gi`` memory quantity in GiB."""
+    assert quantity.endswith("Gi"), quantity
+    return float(quantity.removesuffix("Gi"))
+
+
+def test_the_committed_manifest_fits_lmcaches_cpu_tier_inside_the_offload_memory() -> (
     None
 ):
-    container = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
-    env = {var["name"]: var.get("value") for var in container["env"]}
+    off = _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    on = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
+
+    env = {var["name"]: var.get("value") for var in on["env"]}
     assert env["LMCACHE_LOCAL_CPU"] == "True"
     assert env["LMCACHE_CHUNK_SIZE"] == "256"
-    assert float(env["LMCACHE_MAX_LOCAL_CPU_SIZE"]) == 4.0
-    assert container["resources"]["limits"]["memory"] == "12Gi"
+    # The pinned tier sits on top of what the engine runs in with offload off.
+    tier = float(env["LMCACHE_MAX_LOCAL_CPU_SIZE"])
+    engine = _gibibytes(off["resources"]["limits"]["memory"])
+    assert tier > 0
+    assert engine + tier <= _gibibytes(on["resources"]["limits"]["memory"])
+
+
+def test_the_recipe_renders_the_same_offload_values_as_the_worker() -> None:
+    # `just _render-gpu-manifest` and render_gpu_manifest each spell the two states
+    # out; an operator's gpu-deploy must match what the worker renders.
+    recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
+        encoding="utf-8"
+    )
+    off = _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    on = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
+
+    assert f"kv_transfer_config={_kv_transfer_config(off)}\n" in recipe
+    assert f"kv_transfer_config='{_kv_transfer_config(on)}'\n" in recipe
+    assert f"memory_limit={off['resources']['limits']['memory']}\n" in recipe
+    assert f"memory_limit={on['resources']['limits']['memory']}\n" in recipe
 
 
 def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:
@@ -289,7 +357,7 @@ def _applied_container(kubectl: _FakeKubectl) -> dict[str, Any]:
     return _vllm_container(applied)
 
 
-def test_deploy_defaults_to_no_kv_cache_offload() -> None:
+def test_deploy_renders_without_kv_cache_offload() -> None:
     kubectl = _FakeKubectl()
 
     deploy_gpu_point(_POINT, grid=_grid(), manifest_text=_MANIFEST, kubectl=kubectl)
@@ -297,22 +365,6 @@ def test_deploy_defaults_to_no_kv_cache_offload() -> None:
     container = _applied_container(kubectl)
     assert _kv_transfer_config(container) == "None"
     assert container["resources"]["limits"]["memory"] == "8Gi"
-
-
-def test_deploy_with_kv_cache_offload_applies_the_lmcache_connector() -> None:
-    kubectl = _FakeKubectl()
-
-    deploy_gpu_point(
-        _POINT,
-        grid=_grid(),
-        manifest_text=_MANIFEST,
-        kubectl=kubectl,
-        kv_cache_offload=True,
-    )
-
-    container = _applied_container(kubectl)
-    assert "LMCacheConnectorV1" in _kv_transfer_config(container)
-    assert container["resources"]["limits"]["memory"] == "12Gi"
 
 
 def test_deploy_raises_when_kubectl_fails() -> None:
