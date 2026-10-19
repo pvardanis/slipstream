@@ -42,7 +42,7 @@ undeploy:
     kubectl delete -f {{ manifests }} --ignore-not-found
 
 # Render the GPU manifest's swept engine knobs from the environment, defaulting to
-# the committed rig config (max-num-seqs 16, FP8 KV, prefix caching on) so a plain
+# the committed rig config (max-num-seqs 64, FP8 KV, prefix caching on) so a plain
 # `just gpu-deploy` deploys the committed rig config. Setting MAX_NUM_SEQS /
 # KV_CACHE_DTYPE / PREFIX_CACHING_FLAG overrides them for a manual per-point deploy
 # (#33, ADR-0009); the unattended knob sweep renders the same knobs in-cluster from the
@@ -54,7 +54,7 @@ _render-gpu-manifest:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v envsubst >/dev/null || { echo "envsubst required (brew install gettext)" >&2; exit 1; }
-    MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}" \
+    MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}" \
     KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}" \
     PREFIX_CACHING_FLAG="${PREFIX_CACHING_FLAG:---enable-prefix-caching}" \
       envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG}' <{{ gpu_manifests }}

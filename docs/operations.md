@@ -66,7 +66,7 @@ uv run slipstream-bench chart --run-dir bench/results/<run-id>             # tab
 Against whatever engine point is currently deployed, over the bench endpoint:
 
 ```sh
-just bench mns16_kvfp8_pcon   # the deployed engine point's client-load ladder (its grid slug)
+just bench mns64_kvfp8_pcon   # the deployed engine point's client-load ladder (its grid slug)
 just prefix-cache 90 1.0      # cold/warm prefix-cache hit-rate for one cell
 ```
 
