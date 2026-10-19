@@ -192,8 +192,9 @@ from that:
   node pool is on-demand only and capped at one GPU: allowing spot cost ~15 min of
   launch thrash in a spot-starved region, where on-demand launches in ~90s
   ([`k8s/gpu-node-pool.yaml`](k8s/gpu-node-pool.yaml)).
-- **No always-on control plane.** Prefect Cloud (~$100/mo) or a standing self-hosted
-  stack would add an idle cost floor. The Prefect server is self-hosted on SQLite inside
+- **No always-on control plane.** Prefect Cloud's Starter tier (~$100/mo, the cheapest
+  that allows an own-compute worker) or a standing self-hosted stack would add an idle
+  cost floor. The Prefect server is self-hosted on SQLite inside
   the cluster and is torn down with it; S3 holds the results and resume state.
 - **A duty cycle, not 24/7.** The GPU budget is ~$100–250/mo, while the cheapest 24 GB
   card run continuously is ~$365/mo, so `just stack-down` returns spend to zero between
@@ -201,12 +202,13 @@ from that:
 - **One sample per cell.** Each cell is measured once; re-sampling is a deliberate new
   `run_id`, never an average taken by default
   ([ADR-0012](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)).
-- **No apply/destroy infra tests per push.** CI runs policy checks and plan-only
-  `terraform test`; the real cloud check runs only on PRs labelled `cloud-check`
-  ([ADR-0002](docs/adr/0002-infrastructure-testing-strategy.md)).
+- **No apply/destroy infra tests per push.** CI runs policy checks and offline
+  `terraform test` against mocked providers; the real-spend check, `just cloud-verify`,
+  runs by hand ([ADR-0002](docs/adr/0002-infrastructure-testing-strategy.md)).
 - **No high availability.** One CPU node, one Karpenter controller, and one Prefect
   server: HA needs a second node, and SQLite on a single-attach EBS volume allows one
-  writer. A dead pod pauses a sweep, which resumes on the same `run_id`.
+  writer. A dead pod fails the in-flight run: Kubernetes restarts the pod, not the run,
+  and running it again with the same `run_id` resumes from the cells already measured.
 - **No standing endpoint, no laptop runs.** The mutual-TLS load balancer and bench host
   exist only for a run, and recorded numbers never come from a laptop, whose Wi-Fi
   jitter would inflate the p95/p99 tail
