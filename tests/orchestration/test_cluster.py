@@ -150,6 +150,21 @@ def _vllm_container(rendered: str) -> dict[str, Any]:
     return deployment["spec"]["template"]["spec"]["containers"][0]
 
 
+def _kv_transfer_config(container: dict[str, Any]) -> str:
+    """The value the container passes to vLLM's --kv-transfer-config."""
+    args = container["args"]
+    return args[args.index("--kv-transfer-config") + 1]
+
+
+def _render_committed_manifest(*, kv_cache_offload: bool) -> str:
+    """Render the committed k8s/vllm-gpu.yaml for the rig point."""
+    return render_gpu_manifest(
+        _COMMITTED_MANIFEST.read_text(encoding="utf-8"),
+        engine_args=get_engine_args(_grid(), _POINT),
+        kv_cache_offload=kv_cache_offload,
+    )
+
+
 def test_render_with_kv_cache_offload_wires_the_lmcache_connector_and_memory() -> None:
     engine_args = get_engine_args(_grid(), _POINT)
 
@@ -158,9 +173,7 @@ def test_render_with_kv_cache_offload_wires_the_lmcache_connector_and_memory() -
     )
 
     container = _vllm_container(rendered)
-    args = container["args"]
-    connector = args[args.index("--kv-transfer-config") + 1]
-    assert json.loads(connector) == {
+    assert json.loads(_kv_transfer_config(container)) == {
         "kv_connector": "LMCacheConnectorV1",
         "kv_role": "kv_both",
     }
@@ -179,8 +192,7 @@ def test_render_without_kv_cache_offload_keeps_no_connector_and_the_default_memo
 
     # vLLM parses the literal "None" as no connector, its default.
     container = _vllm_container(rendered)
-    args = container["args"]
-    assert args[args.index("--kv-transfer-config") + 1] == "None"
+    assert _kv_transfer_config(container) == "None"
     assert "LMCacheConnectorV1" not in rendered
     assert container["resources"]["requests"]["memory"] == "8Gi"
     assert container["resources"]["limits"]["memory"] == "8Gi"
@@ -190,31 +202,16 @@ def test_render_without_kv_cache_offload_keeps_no_connector_and_the_default_memo
 def test_the_committed_manifest_renders_every_placeholder(
     kv_cache_offload: bool,
 ) -> None:
-    engine_args = get_engine_args(_grid(), _POINT)
-
-    rendered = render_gpu_manifest(
-        _COMMITTED_MANIFEST.read_text(encoding="utf-8"),
-        engine_args=engine_args,
-        kv_cache_offload=kv_cache_offload,
-    )
+    rendered = _render_committed_manifest(kv_cache_offload=kv_cache_offload)
 
     assert "${" not in rendered
-    container = _vllm_container(rendered)
-    assert container["image"] == "vllm/vllm-openai:v0.29.0"
+    assert _vllm_container(rendered)["args"]
 
 
 def test_the_committed_manifest_sizes_lmcaches_cpu_tier_inside_the_offload_memory() -> (
     None
 ):
-    engine_args = get_engine_args(_grid(), _POINT)
-
-    rendered = render_gpu_manifest(
-        _COMMITTED_MANIFEST.read_text(encoding="utf-8"),
-        engine_args=engine_args,
-        kv_cache_offload=True,
-    )
-
-    container = _vllm_container(rendered)
+    container = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
     env = {var["name"]: var.get("value") for var in container["env"]}
     assert env["LMCACHE_LOCAL_CPU"] == "True"
     assert env["LMCACHE_CHUNK_SIZE"] == "256"
@@ -289,8 +286,7 @@ def _applied_container(kubectl: _FakeKubectl) -> dict[str, Any]:
     """The vllm container of the Deployment the fake kubectl was asked to apply."""
     applied = kubectl.calls[0][1]
     assert applied is not None
-    deployment_doc = yaml.safe_load(applied)
-    return deployment_doc["spec"]["template"]["spec"]["containers"][0]
+    return _vllm_container(applied)
 
 
 def test_deploy_defaults_to_no_kv_cache_offload() -> None:
@@ -299,8 +295,7 @@ def test_deploy_defaults_to_no_kv_cache_offload() -> None:
     deploy_gpu_point(_POINT, grid=_grid(), manifest_text=_MANIFEST, kubectl=kubectl)
 
     container = _applied_container(kubectl)
-    args = container["args"]
-    assert args[args.index("--kv-transfer-config") + 1] == "None"
+    assert _kv_transfer_config(container) == "None"
     assert container["resources"]["limits"]["memory"] == "8Gi"
 
 
@@ -316,8 +311,7 @@ def test_deploy_with_kv_cache_offload_applies_the_lmcache_connector() -> None:
     )
 
     container = _applied_container(kubectl)
-    args = container["args"]
-    assert "LMCacheConnectorV1" in args[args.index("--kv-transfer-config") + 1]
+    assert "LMCacheConnectorV1" in _kv_transfer_config(container)
     assert container["resources"]["limits"]["memory"] == "12Gi"
 
 

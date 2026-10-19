@@ -135,7 +135,7 @@ spec:
                   name: vllm-api-key
                   key: api-key
             # LMCache's CPU tier, read only when the KV connector above loads LMCache;
-            # with offload off nothing reads them. 4 GB of pinned host memory in
+            # with offload off nothing reads them. 4 GiB of pinned host memory in
             # 256-token chunks, sized so vLLM's 8Gi plus the tier fits the 12Gi
             # offload memory limit.
             - name: LMCACHE_LOCAL_CPU
