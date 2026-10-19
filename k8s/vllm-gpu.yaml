@@ -117,6 +117,14 @@ spec:
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
+            # KV cache offload switch (#34), off by default. On, the image's bundled
+            # LMCache loads through vLLM's V1 KV connector in kv_both role and catches
+            # KV blocks evicted from the GPU pool in a pinned CPU tier (the LMCACHE_*
+            # env below); prefix caching stays on either way. Off renders "None",
+            # which vLLM parses as no connector, its default. Rendered from
+            # KV_CACHE_OFFLOAD by `_render-gpu-manifest`, and by the worker's render.
+            - --kv-transfer-config
+            - '${KV_TRANSFER_CONFIG}'
           env:
             # vLLM enforces this key on its API routes (/v1); /health and /metrics
             # stay open. Same Secret and value the CPU replica uses, so the bench endpoint
@@ -126,6 +134,16 @@ spec:
                 secretKeyRef:
                   name: vllm-api-key
                   key: api-key
+            # LMCache's CPU tier, read only when the KV connector above loads LMCache;
+            # with offload off nothing reads them. 4 GB of pinned host memory in
+            # 256-token chunks, sized so vLLM's 8Gi plus the tier fits the 12Gi
+            # offload memory limit.
+            - name: LMCACHE_LOCAL_CPU
+              value: "True"
+            - name: LMCACHE_MAX_LOCAL_CPU_SIZE
+              value: "4.0"
+            - name: LMCACHE_CHUNK_SIZE
+              value: "256"
           ports:
             - name: http
               containerPort: 8000
@@ -134,10 +152,12 @@ spec:
               # No CPU limit: throttling a slow-cold-starting engine hurts more than
               # it helps. Memory limit equals the request so the pod has a
               # predictable OOM boundary and cannot overcommit the node's host RAM.
+              # 8Gi by default, 12Gi with KV cache offload on to hold LMCache's
+              # pinned CPU tier; rendered by `_render-gpu-manifest`.
               cpu: "2"
-              memory: 8Gi
+              memory: ${MEMORY_LIMIT}
             limits:
-              memory: 8Gi
+              memory: ${MEMORY_LIMIT}
               # The countable GPU resource the NVIDIA device plugin advertises.
               # Requesting it is what pulls the pod onto — and provisions — the g5.
               nvidia.com/gpu: 1
