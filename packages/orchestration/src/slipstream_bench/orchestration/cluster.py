@@ -131,19 +131,31 @@ def render_gpu_manifest(
     :param engine_args: the point's max-num-seqs, kv-cache token, and caching flag.
     :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU tier.
     :return: the manifest with the five placeholders rendered.
+    :raise ValueError: when the manifest lacks one of the five placeholders — a
+        misspelled or dropped placeholder would otherwise render silently, its value
+        never reaching vLLM.
     """
     kv_transfer_config, memory_limit = (
         (_KV_TRANSFER_CONFIG_OFFLOAD, _MEMORY_LIMIT_OFFLOAD)
         if kv_cache_offload
         else (_KV_TRANSFER_CONFIG_NONE, _MEMORY_LIMIT_DEFAULT)
     )
-    return (
-        manifest_text.replace(_MAX_NUM_SEQS_PLACEHOLDER, str(engine_args.max_num_seqs))
-        .replace(_KV_CACHE_DTYPE_PLACEHOLDER, engine_args.kv_engine_token)
-        .replace(_PREFIX_CACHING_PLACEHOLDER, engine_args.prefix_caching_flag)
-        .replace(_KV_TRANSFER_CONFIG_PLACEHOLDER, kv_transfer_config)
-        .replace(_MEMORY_LIMIT_PLACEHOLDER, memory_limit)
-    )
+    values = {
+        _MAX_NUM_SEQS_PLACEHOLDER: str(engine_args.max_num_seqs),
+        _KV_CACHE_DTYPE_PLACEHOLDER: engine_args.kv_engine_token,
+        _PREFIX_CACHING_PLACEHOLDER: engine_args.prefix_caching_flag,
+        _KV_TRANSFER_CONFIG_PLACEHOLDER: kv_transfer_config,
+        _MEMORY_LIMIT_PLACEHOLDER: memory_limit,
+    }
+    rendered = manifest_text
+    for placeholder, value in values.items():
+        if placeholder not in rendered:
+            raise ValueError(
+                f"manifest has no {placeholder} placeholder: cannot render the GPU "
+                f"replica's config into it"
+            )
+        rendered = rendered.replace(placeholder, value)
+    return rendered
 
 
 def extract_deployment_doc(manifest_text: str, *, deployment: str = _DEPLOYMENT) -> str:
@@ -178,14 +190,14 @@ def deploy_gpu_point(
     grid: SweepGrid,
     manifest_text: str,
     kubectl: Kubectl,
-    kv_cache_offload: bool = False,
     namespace: str = _NAMESPACE,
     deployment: str = _DEPLOYMENT,
     rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
 ) -> None:
     """Redeploy the GPU for one engine point's knobs and wait for the rollout (Tier-1).
 
-    Renders the point's swept knobs into the manifest, applies **only** the Deployment
+    Renders the point's swept knobs into the manifest with KV cache offload off (the knob
+    sweep does not sweep offload), applies **only** the Deployment
     document (the get + patch the worker's RBAC allows), then blocks on the rollout so
     the point's ladder never runs against a half-rolled engine. ``kubectl`` raises on a
     non-zero exit, so a failed apply or a stalled rollout aborts the point loudly.
@@ -194,15 +206,13 @@ def deploy_gpu_point(
     :param grid: the validated grid the point's manifest knobs are resolved from.
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
     :param kubectl: the transport the apply and rollout wait are issued through.
-    :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU
-        tier; off by default, so the knob sweep's points run without it.
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment's name.
     :param rollout_timeout_s: the ceiling the rollout wait trips at.
     """
     engine_args = get_engine_args(grid, point)
     rendered = render_gpu_manifest(
-        manifest_text, engine_args=engine_args, kv_cache_offload=kv_cache_offload
+        manifest_text, engine_args=engine_args, kv_cache_offload=False
     )
     deployment_doc = extract_deployment_doc(rendered, deployment=deployment)
     kubectl(["apply", "-n", namespace, "-f", "-"], deployment_doc)

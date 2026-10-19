@@ -47,7 +47,7 @@ undeploy:
 # KV_CACHE_DTYPE / PREFIX_CACHING_FLAG overrides them for a manual per-point deploy
 # (#33, ADR-0009); the unattended knob sweep renders the same knobs in-cluster from the
 # worker (slipstream_bench.orchestration.cluster), not through this recipe.
-# KV_CACHE_OFFLOAD=on turns on LMCache KV cache offload (#34): the LMCache KV connector
+# KV_CACHE_OFFLOAD=on turns on LMCache KV cache offload (#34, #325): the LMCache KV connector
 # and the 12Gi memory limit that holds its pinned CPU tier. It defaults to off, which
 # renders no connector and the 8Gi limit.
 # Only these five placeholders are substituted, so nothing else in the manifest
@@ -71,6 +71,7 @@ _render-gpu-manifest:
         exit 1
         ;;
     esac
+    echo "KV cache offload: ${KV_CACHE_OFFLOAD:-off}" >&2
     # shellcheck disable=SC2016 # envsubst takes the literal ${...} allow-list, unexpanded.
     MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}" \
     KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}" \

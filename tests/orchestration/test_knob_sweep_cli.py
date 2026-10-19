@@ -124,6 +124,11 @@ spec:
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
+            - --kv-transfer-config
+            - '${KV_TRANSFER_CONFIG}'
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
 """
 
 _CEILING_LOG = "Maximum concurrency for 4,096 tokens per request: 12.50x"
