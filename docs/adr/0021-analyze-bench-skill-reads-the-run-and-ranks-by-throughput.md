@@ -90,4 +90,6 @@ public URLs into `reports/<run_id>/` beside `RECOMMENDATION.md` and embeds them 
 path. The report directory is no longer all text; two committed PNGs are the price of
 plots that still render. The download is a plain `curl` of the two
 public chart objects, not an S3 sync, so the skill still needs no AWS credentials, repo
-code, or report CLI.
+code, or report CLI. A plot is kept only when its download completes and is a PNG; a
+plot that cannot be fetched degrades the report the way a missing artifact does, since
+the ranking never depends on it.

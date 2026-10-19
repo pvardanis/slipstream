@@ -72,13 +72,27 @@ If a `$/hr` was supplied, also compute `$/1M-tokens = ($/hr) / (output_throughpu
 
 The report is a trimmed slice of the tables plus the sweep's two plots, copied beside it. The results bucket is deleted on `stack-down` and the Prefect run ages out, so the report directory keeps its own copy of the plots and is committed to the repo.
 
+Fetch each plot to a `.part` file and keep it only if it is a whole PNG, so a timeout, a redirect body, or a dropped connection never leaves a corrupt image where git would commit it:
+
 ```bash
 mkdir -p "reports/<run_id>"
-curl -fsS -m 30 -o "reports/<run_id>/ceiling-by-max-num-seqs.png" "<ceiling-plot-url>"
-curl -fsS -m 30 -o "reports/<run_id>/goodput-by-max-concurrency.png" "<cliff-plot-url>"
+fetch_plot() {  # $1 = plot URL, $2 = file name in reports/<run_id>/
+  out="reports/<run_id>/$2"
+  rm -f "$out"
+  if curl -fsS -m 30 -o "$out.part" "$1" \
+    && [ "$(head -c 8 "$out.part" | xxd -p)" = "89504e470d0a1a0a" ]; then
+    mv "$out.part" "$out"
+  else
+    rm -f "$out.part"
+    echo "plot download failed: $1" >&2
+    return 1
+  fi
+}
+fetch_plot "<ceiling-plot-url>" ceiling-by-max-num-seqs.png
+fetch_plot "<cliff-plot-url>" goodput-by-max-concurrency.png
 ```
 
-The URLs are the image artifacts' `data` field. Skip the download for a plot whose artifact was missing (Step 2). If a download fails, stop and report it: the bucket may already be gone, and a report pointing at absent images is broken.
+The URLs are the image artifacts' `data` field. For a plot whose artifact was missing (Step 2), still remove any copy a previous run left (`rm -f` its file) and skip the fetch. A failed fetch is the same degradation as a missing artifact: the ranking does not depend on the plots, so continue and say in the report which plot is absent and the error `fetch_plot` printed.
 
 Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 
@@ -87,10 +101,10 @@ Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 3. **Ranking** — per `prefix_share` bucket, the top **N = 3** configs by `output_throughput` at the ceiling (N tunable at invocation), with their `ceiling`, `p95_ttft_ms`, `p95_tpot_ms`; add a `$/1M` column only if a price was given. This is the ceiling evidence.
 4. **Tradeoff** — narrate the pick against the runner-up (e.g. "A beats B on throughput but B is within N% and sweeps a simpler knob → pick B"). Always name the runner-up and why it lost.
 5. **Winner ladders** — from the cliff table, the rungs of each bucket's recommended config only — the one ladder whose fall through the 0.95 floor sets the ceiling. Not the full 240-row cliff; link the Prefect run page for the complete tables.
-6. **Plots** — the two downloaded plots embedded by relative path (`![Concurrency ceiling by max_num_seqs](ceiling-by-max-num-seqs.png)`, `![Goodput cliff by max_concurrency](goodput-by-max-concurrency.png)`), with one line each on what they show. If an artifact was missing (Step 2), say so instead of embedding.
+6. **Plots** — the two downloaded plots embedded by relative path (`![Concurrency ceiling by max_num_seqs](ceiling-by-max-num-seqs.png)`, `![Goodput cliff by max_concurrency](goodput-by-max-concurrency.png)`), with one line each on what they show. If a plot's artifact was missing (Step 2) or its fetch failed, say which and why instead of embedding.
 7. **Caveats** — fixed single GPU (ranking is cost-exact only on this hardware), the SLO is the run's own, `0.95` floor.
 
-Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up, and each plot it embeds sits beside it.
+Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up, and `reports/<run_id>/` holds exactly the plots it embeds, with no `.part` file left.
 
 ## Out of scope
 
