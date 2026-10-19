@@ -177,6 +177,41 @@ Planned in [`docs/spec.md`](docs/spec.md) §4, not yet built:
 - **L3** — inference-aware routing
 - **L4** — prefill/decode disaggregation
 
+## Deliberate trade-offs
+
+The rig is one GPU on a duty-cycle budget, and most of what it does not do follows
+from that:
+
+- **One long-lived worker, not a pod per run.** The sweep runs on a single Prefect
+  process worker (one replica, work-pool concurrency 1) that lives as long as the
+  cluster. A Kubernetes Job per flow run buys isolation, per-run resources, and parallel
+  autoscale, none of which help a serial sweep on one static GPU node. A GPU fleet that
+  makes engine points truly parallel is the trigger to switch to a kubernetes pool
+  ([ADR-0015](docs/adr/0015-unattended-sweep-cloud-server-and-parent-flow.md)).
+- **On-demand GPU, not spot.** [`docs/spec.md`](docs/spec.md) plans for spot, but the
+  node pool is on-demand only and capped at one GPU: allowing spot cost ~15 min of
+  launch thrash in a spot-starved region, where on-demand launches in ~90s
+  ([`k8s/gpu-node-pool.yaml`](k8s/gpu-node-pool.yaml)).
+- **No always-on control plane.** Prefect Cloud (~$100/mo) or a standing self-hosted
+  stack would add an idle cost floor. The Prefect server is self-hosted on SQLite inside
+  the cluster and is torn down with it; S3 holds the results and resume state.
+- **A duty cycle, not 24/7.** The GPU budget is ~$100–250/mo, while the cheapest 24 GB
+  card run continuously is ~$365/mo, so `just stack-down` returns spend to zero between
+  sweeps.
+- **One sample per cell.** Each cell is measured once; re-sampling is a deliberate new
+  `run_id`, never an average taken by default
+  ([ADR-0012](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)).
+- **No apply/destroy infra tests per push.** CI runs policy checks and plan-only
+  `terraform test`; the real cloud check runs only on PRs labelled `cloud-check`
+  ([ADR-0002](docs/adr/0002-infrastructure-testing-strategy.md)).
+- **No high availability.** One CPU node, one Karpenter controller, and one Prefect
+  server: HA needs a second node, and SQLite on a single-attach EBS volume allows one
+  writer. A dead pod pauses a sweep, which resumes on the same `run_id`.
+- **No standing endpoint, no laptop runs.** The mutual-TLS load balancer and bench host
+  exist only for a run, and recorded numbers never come from a laptop, whose Wi-Fi
+  jitter would inflate the p95/p99 tail
+  ([ADR-0004](docs/adr/0004-bench-vantage-external-path.md)).
+
 ## Non-goals
 
 No fine-tuning or LLM training, no RAG / vector DBs / embeddings, no agent
