@@ -47,11 +47,25 @@ _CEILING_PATTERN = re.compile(
 )
 
 # The manifest placeholders the knob sweep renders per point (k8s/vllm-gpu.yaml). Only
-# these three are substituted, so nothing else in the manifest (an image tag, a
-# shell-like token) is touched — matching the recipe's envsubst allow-list.
+# these three and the two KV cache offload ones below are substituted, so nothing else
+# in the manifest (an image tag, a shell-like token) is touched — matching the recipe's
+# envsubst allow-list.
 _MAX_NUM_SEQS_PLACEHOLDER = "${MAX_NUM_SEQS}"
 _KV_CACHE_DTYPE_PLACEHOLDER = "${KV_CACHE_DTYPE}"
 _PREFIX_CACHING_PLACEHOLDER = "${PREFIX_CACHING_FLAG}"
+
+# The KV cache offload switch renders two more placeholders, matching the recipe's
+# KV_CACHE_OFFLOAD toggle. On, vLLM loads LMCache through its V1 KV connector and the
+# pod memory grows to hold LMCache's pinned CPU tier (the LMCACHE_* env in the
+# manifest). Off, vLLM parses the connector arg "None" as no connector, its default.
+_KV_TRANSFER_CONFIG_PLACEHOLDER = "${KV_TRANSFER_CONFIG}"
+_MEMORY_LIMIT_PLACEHOLDER = "${MEMORY_LIMIT}"
+_KV_TRANSFER_CONFIG_OFFLOAD = (
+    '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'
+)
+_KV_TRANSFER_CONFIG_NONE = "None"
+_MEMORY_LIMIT_OFFLOAD = "12Gi"
+_MEMORY_LIMIT_DEFAULT = "8Gi"
 
 # The worker's RBAC scopes it to the slipstream namespace's vllm-gpu Deployment.
 _NAMESPACE = "slipstream"
@@ -102,22 +116,33 @@ def build_kubectl(*, binary: str = "kubectl") -> Kubectl:
     return run
 
 
-def render_gpu_manifest(manifest_text: str, *, engine_args: EngineArgs) -> str:
-    """Substitute a point's three swept engine args into the GPU manifest text.
+def render_gpu_manifest(
+    manifest_text: str, *, engine_args: EngineArgs, kv_cache_offload: bool
+) -> str:
+    """Substitute a point's swept engine args and the offload switch into the manifest.
 
     The Python counterpart to the recipe's ``envsubst`` (``just _render-gpu-manifest``):
-    only ``${MAX_NUM_SEQS}``, ``${KV_CACHE_DTYPE}``, and ``${PREFIX_CACHING_FLAG}`` are
-    replaced, so nothing else in the manifest is touched. Rendering in Python keeps the
-    worker image free of a gettext dependency.
+    only ``${MAX_NUM_SEQS}``, ``${KV_CACHE_DTYPE}``, ``${PREFIX_CACHING_FLAG}``,
+    ``${KV_TRANSFER_CONFIG}``, and ``${MEMORY_LIMIT}`` are replaced, so nothing else in
+    the manifest is touched. Rendering in Python keeps the worker image free of a gettext
+    dependency.
 
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
     :param engine_args: the point's max-num-seqs, kv-cache token, and caching flag.
-    :return: the manifest with the three placeholders rendered.
+    :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU tier.
+    :return: the manifest with the five placeholders rendered.
     """
+    kv_transfer_config, memory_limit = (
+        (_KV_TRANSFER_CONFIG_OFFLOAD, _MEMORY_LIMIT_OFFLOAD)
+        if kv_cache_offload
+        else (_KV_TRANSFER_CONFIG_NONE, _MEMORY_LIMIT_DEFAULT)
+    )
     return (
         manifest_text.replace(_MAX_NUM_SEQS_PLACEHOLDER, str(engine_args.max_num_seqs))
         .replace(_KV_CACHE_DTYPE_PLACEHOLDER, engine_args.kv_engine_token)
         .replace(_PREFIX_CACHING_PLACEHOLDER, engine_args.prefix_caching_flag)
+        .replace(_KV_TRANSFER_CONFIG_PLACEHOLDER, kv_transfer_config)
+        .replace(_MEMORY_LIMIT_PLACEHOLDER, memory_limit)
     )
 
 
@@ -153,6 +178,7 @@ def deploy_gpu_point(
     grid: SweepGrid,
     manifest_text: str,
     kubectl: Kubectl,
+    kv_cache_offload: bool = False,
     namespace: str = _NAMESPACE,
     deployment: str = _DEPLOYMENT,
     rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
@@ -168,12 +194,16 @@ def deploy_gpu_point(
     :param grid: the validated grid the point's manifest knobs are resolved from.
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
     :param kubectl: the transport the apply and rollout wait are issued through.
+    :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU
+        tier; off by default, so the knob sweep's points run without it.
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment's name.
     :param rollout_timeout_s: the ceiling the rollout wait trips at.
     """
     engine_args = get_engine_args(grid, point)
-    rendered = render_gpu_manifest(manifest_text, engine_args=engine_args)
+    rendered = render_gpu_manifest(
+        manifest_text, engine_args=engine_args, kv_cache_offload=kv_cache_offload
+    )
     deployment_doc = extract_deployment_doc(rendered, deployment=deployment)
     kubectl(["apply", "-n", namespace, "-f", "-"], deployment_doc)
     kubectl(
