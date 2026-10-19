@@ -30,3 +30,31 @@ def test_hit_rate_is_the_window_delta_not_the_lifetime_ratio() -> None:
 
     assert (window.queries, window.hits) == (100, 10)
     assert window.hit_rate == 0.1
+
+
+def _external(queries: float, hits: float) -> dict[str, float]:
+    return {
+        "vllm:external_prefix_cache_queries": queries,
+        "vllm:external_prefix_cache_hits": hits,
+    }
+
+
+def test_combined_rate_adds_the_external_hits_to_the_gpu_hits() -> None:
+    """GPU 30/100 hit; LMCache serves 50 of the 70 GPU misses: combined 80/100."""
+    before = _exposition(_gpu(1000, 200) | _external(800, 100))
+    after = _exposition(_gpu(1100, 230) | _external(870, 150))
+
+    window = get_prefix_cache_window(before, after, model=MODEL)
+
+    assert (window.external_queries, window.external_hits) == (70, 50)
+    assert window.combined_hit_rate == 0.8
+
+
+def test_a_snapshot_without_external_series_reads_zero_external_traffic() -> None:
+    """A /metrics without the external series has a window of 0 external of 0."""
+    window = get_prefix_cache_window(
+        _exposition(_gpu(1000, 200)), _exposition(_gpu(1100, 210)), model=MODEL
+    )
+
+    assert (window.external_queries, window.external_hits) == (0, 0)
+    assert window.combined_hit_rate == window.hit_rate == 0.1
