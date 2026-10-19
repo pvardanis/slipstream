@@ -30,7 +30,7 @@ def build_cache_key(
         re-measures).
     :param digest: the deep config digest (config identity).
     :param point_slug: the engine-knob point slug, e.g. ``mns64_kvfp8_pcon``.
-    :param cell_name: the client-load cell name, e.g. ``pshare50_mc64``.
+    :param cell_name: the client-load cell name, e.g. ``pshare50_burst1.0_mc64.json``.
     :return: ``run-id:digest:point-slug:cell-name``.
     :raise CacheKeyError: when any part is blank or holds the ``:`` separator — either
         would collide cells that must resume independently.

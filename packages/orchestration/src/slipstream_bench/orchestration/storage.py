@@ -61,9 +61,10 @@ def check_cache_key_storage(cache_keys: Any, *, bucket: str) -> None:
 
     Prefect's cache existence check reads any storage error as "not cached", so a
     missing bucket or a denied grant would make every cell look pending and trigger a
-    ~20-minute GPU redeploy for nothing. Probing at flow start turns that blind spot
-    into an abort before the first redeploy. The probe overwrites one fixed object, so
-    repeated runs leave no litter and cannot collide with a ``digest:slug:cell`` key.
+    ~20-minute GPU redeploy for nothing. Probing before any cell runs turns that blind
+    spot into an abort before the first redeploy. The probe overwrites one fixed object,
+    so repeated runs leave no litter and cannot collide with a
+    ``run-id:digest:point-slug:cell-name`` key.
 
     :param cache_keys: the block Prefect stores cache records into; its
         ``write_path``/``read_path`` are forced synchronous with ``_sync=True``, since
