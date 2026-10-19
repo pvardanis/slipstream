@@ -303,18 +303,23 @@ cluster name or Prefect namespace differs from the cluster it creates.
 
 This settles the item deferred above. The two paths split by verb, not by time:
 
-- **`just gpu-deploy` creates.** It applies the whole rendered manifest — Namespace, Service,
-  and the Deployment at the committed rig config — once, at `just stack-up`. By hand it is a
-  one-off bench, or restores the committed config after a sweep left the last point's knobs
-  in place.
+- **`just gpu-deploy` creates.** It applies the whole rendered manifest, creating the Service
+  and the Deployment at the committed rig config (the Namespace already exists: terraform
+  creates it at `cluster-up` so the worker's Role can land). `just stack-up` and `just
+  cloud-verify` run it. By hand it is a one-off bench, with the knob env vars it reads
+  (`MAX_NUM_SEQS`, `KV_CACHE_DTYPE`, `PREFIX_CACHING_FLAG`) set, or, with them unset, it
+  restores the committed config after a sweep left the last point's knobs in place.
 - **The flow patches.** For each engine point the worker applies only the Deployment document
   (`deploy_gpu_point`, `slipstream_bench.orchestration.cluster`). Its RBAC
   (`terraform/eks/worker.tf`) grants one write, patch on `deploy/vllm-gpu`, beside reads of
   the rollout and pod logs, so it cannot create or delete the Deployment, Service, or
   Namespace.
 
-During a sweep the flow is the only writer. Nothing enforces that: a `just gpu-deploy` mid-sweep
-resets the knobs to the committed config, and the in-flight point's cells are recorded against
-the knobs the flow set. A guard would have the recipe ask the Prefect server whether a run is
-in flight; with one operator that check is not built, and the runbook says not to run
-`gpu-deploy` while a sweep is in flight.
+During a sweep the flow is the only writer. Nothing enforces that. A `just gpu-deploy` mid-sweep
+whose knobs differ from the running point's recreates the replica (the Deployment's strategy is
+`Recreate`), so the server is down under the running cell for the whole reload; the point's
+later cells then measure the committed config while being recorded under the point's knobs,
+and the flow, which reads the ceiling once per point right after its own rollout, does not
+notice. A guard would have the recipe ask the Prefect server whether a run is in flight; with
+one operator that check is not built, and the runbook says not to run `gpu-deploy` while a
+sweep is in flight.
