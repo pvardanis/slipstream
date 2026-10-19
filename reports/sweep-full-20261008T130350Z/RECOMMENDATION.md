@@ -115,14 +115,18 @@ The cliff rungs for each bucket's pick — the ladder whose fall through the 0.9
 
 ## Plots
 
-Linked to the public S3 URIs (from the run's Prefect image artifacts), not embedded.
+Copied from the run's Prefect image artifacts.
 
-- [Concurrency ceiling by max_num_seqs](https://slipstream-bench-endpoint-results-b9dd63990b80a78fe468e97eef.s3.eu-west-1.amazonaws.com/sweeps/sweep-full-20261008T130350Z/charts/ceiling-by-max-num-seqs.png) — sustained `--max-concurrency` holding goodput ≥ 0.95 per engine point; which configs hold the most load.
-- [Goodput cliff by max_concurrency](https://slipstream-bench-endpoint-results-b9dd63990b80a78fe468e97eef.s3.eu-west-1.amazonaws.com/sweeps/sweep-full-20261008T130350Z/charts/goodput-by-max-concurrency.png) — where each ladder fell through the 0.95 floor, and which gate (TTFT vs TPOT) bit at the edge.
+![Concurrency ceiling by max_num_seqs](ceiling-by-max-num-seqs.png)
+
+Sustained `--max-concurrency` holding goodput ≥ 0.95 per engine point; which configs hold the most load.
+
+![Goodput cliff by max_concurrency](goodput-by-max-concurrency.png)
+
+Where each ladder fell through the 0.95 floor, and which gate (TTFT vs TPOT) bit at the edge.
 
 ## Caveats
 
 - **Fixed single GPU.** Throughput-ranking equals cost-ranking only while every config shares one GPU type at one `$/hr`. A multi-GPU or mixed-hardware sweep breaks this and needs real per-config cost.
 - **SLO is the run's own** (TTFT ≤ 1000, TPOT ≤ 50, floor 0.95). A different SLO means a new sweep.
 - **No price supplied**, so no absolute `$/1M-tokens`. Pass a `$/hr` to get it; it would not change the ordering.
-- **Plots** are linked to the public `sweeps/*/charts/*` S3 prefix; they render while the object lives.
