@@ -15,8 +15,15 @@
 # a broken TLS chain, and the impact is CPU exhaustion of the worker pod. Its fixes
 # (x/net 0.60.0, Go 1.26.9 / 1.27.2) are in no kubectl release yet either.
 #
-# Drop each line once upstream kubectl rebuilds on the patched Go. The exp date forces
-# the scan to fail again and this file to be revisited rather than rot silently.
+# CVE-2026-56851 (golang.org/x/text, fixed in 0.41.0) is a panic in the precis Nickname
+# profile. v1.36.5 ships x/text v0.39.0 but does not link golang.org/x/text/secure/precis:
+# the binary's function-name table holds x/text packages (language, cases, encoding,
+# runes, unicode/norm, secure/bidirule, ...) but no secure/precis symbol, so the flagged
+# code is not in the image. v1.36.5 is still the latest patch on the EKS-pinned minor.
+#
+# Drop each line once upstream kubectl rebuilds on the patched Go or x/text. The exp date
+# forces the scan to fail again and this file to be revisited rather than rot silently.
 CVE-2026-78667 exp:2026-11-08
 CVE-2026-97031 exp:2026-11-08
 CVE-2026-78669 exp:2026-11-08
+CVE-2026-56851 exp:2026-11-08
