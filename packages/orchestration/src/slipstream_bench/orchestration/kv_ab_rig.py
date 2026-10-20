@@ -1,10 +1,12 @@
-"""The kv-cache-extension-ab rig's capacities, read off the vLLM manifest that sets them.
+"""The kv-cache-extension-ab rig's capacities, and the guards sizing the workload to them.
 
 The A/B compares a GPU-only prefix cache with one LMCache extends into a pinned CPU tier,
 so its workload is sized against two capacities of the rig: the CPU tier and the context
 window. Both are configured in ``k8s/vllm-gpu.yaml`` — the tier by the vLLM container's
 ``LMCACHE_MAX_LOCAL_CPU_SIZE`` env, the window by its ``--max-model-len`` arg — so they are
 read from there, their single source: a rig change is a manifest edit, not a flow edit.
+The guards refuse a workload the rig cannot run or cannot measure offload on, before the
+cells it would waste.
 """
 
 import math
@@ -13,6 +15,7 @@ from itertools import pairwise
 from pathlib import Path
 
 from slipstream_bench.orchestration.digest import read_vllm_args, read_vllm_env
+from slipstream_bench.orchestration.kv_ab_config import KvAbConfig
 
 # The KV bytes one token occupies for the served Qwen3-8B with the fp8 KV cache: 36 layers
 # x 8 KV heads x 128 head dim x 2 (K and V) x 1 byte. It sizes the CPU tier in tokens.
@@ -28,6 +31,10 @@ _MAX_MODEL_LEN_FLAG = "--max-model-len"
 
 class KvAbRigError(Exception):
     """A vLLM manifest that cannot yield the rig's CPU tier size or max-model-len."""
+
+
+class WorkingSetError(Exception):
+    """A workload the rig cannot run, or cannot measure KV cache offload on."""
 
 
 @dataclass(frozen=True)
@@ -90,3 +97,52 @@ def _read_cpu_tier_bytes(manifest: Path) -> int:
             f"(got {value!r})"
         )
     return int(gib * _BYTES_PER_GIB)
+
+
+def check_fits_context(config: KvAbConfig, rig: KvAbRig) -> None:
+    """Refuse a workload whose requests overrun the rig's context window.
+
+    Checked before any redeploy: every request spans the prompt plus its output, and
+    vLLM rejects one past max-model-len, so every cell would fail the same way.
+
+    :param config: the A/B workload.
+    :param rig: the rig capacities read off the manifest.
+    :raise WorkingSetError: when prompt plus output exceeds max-model-len.
+    """
+    request_len = config.load.total_len + config.load.output_len
+    if request_len > rig.max_model_len:
+        raise WorkingSetError(
+            f"a request spans {request_len} tokens ({config.load.total_len} prompt + "
+            f"{config.load.output_len} output), past the rig's max-model-len "
+            f"{rig.max_model_len}: lower load.total_len or load.output_len"
+        )
+
+
+def check_working_set(
+    config: KvAbConfig, rig: KvAbRig, *, gpu_pool_tokens: int
+) -> None:
+    """Refuse a working set the A/B cannot measure offload on.
+
+    The working set must overflow the GPU KV pool, or the GPU prefix cache alone serves
+    every prefix and the CPU tier has nothing to add; and it must fit the CPU tier, or the
+    tier evicts what it would serve and both arms measure recompute. The GPU pool is
+    scraped after each redeploy, since vLLM sizes it by profiling memory at startup.
+
+    :param config: the A/B workload.
+    :param rig: the rig capacities read off the manifest.
+    :param gpu_pool_tokens: the GPU KV pool size the deployed engine reported.
+    :raise WorkingSetError: when the working set fits the GPU pool or overflows the tier.
+    """
+    working_set = config.working_set_tokens
+    if working_set <= gpu_pool_tokens:
+        raise WorkingSetError(
+            f"the {working_set}-token working set fits the {gpu_pool_tokens}-token "
+            f"GPU KV pool, so offload has nothing to serve: raise load.num_prefixes "
+            f"or prefix_share"
+        )
+    if working_set > rig.cpu_tier_tokens:
+        raise WorkingSetError(
+            f"the {working_set}-token working set overflows the "
+            f"{rig.cpu_tier_tokens}-token CPU tier, so the tier evicts what it would "
+            f"serve: raise {_TIER_SIZE_ENV} in the manifest or shrink the working set"
+        )

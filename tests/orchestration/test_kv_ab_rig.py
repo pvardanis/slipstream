@@ -11,7 +11,15 @@ from pathlib import Path
 import pytest
 import yaml
 
-from slipstream_bench.orchestration.kv_ab_rig import KvAbRigError, read_kv_ab_rig
+from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
+from slipstream_bench.orchestration.kv_ab_rig import (
+    KvAbRig,
+    KvAbRigError,
+    WorkingSetError,
+    check_fits_context,
+    check_working_set,
+    read_kv_ab_rig,
+)
 
 _COMMITTED_MANIFEST = Path(__file__).parents[2] / "k8s" / "vllm-gpu.yaml"
 
@@ -74,3 +82,46 @@ def test_a_fractional_tier_size_is_read_as_gib(tmp_path: Path) -> None:
     )
 
     assert read_kv_ab_rig(manifest).cpu_tier_bytes == 536_870_912
+
+
+_CONFIG = load_kv_ab_config(
+    _COMMITTED_MANIFEST.parents[1] / "bench" / "kv-cache-extension-ab.yaml"
+)
+# 16 GiB holds 233,016 fp8 tokens: room for the committed 205,824-token working set.
+_ROOMY_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=16 * 1024**3)
+_G5_XLARGE_POOL = 185_696
+
+
+def test_a_working_set_past_the_gpu_pool_and_within_the_tier_passes() -> None:
+    """205,824 tokens overflow the 185,696-token pool and fit 233,016 in the tier."""
+    check_working_set(_CONFIG, _ROOMY_RIG, gpu_pool_tokens=_G5_XLARGE_POOL)
+
+
+@pytest.mark.parametrize("gpu_pool_tokens", [205_824, 300_000])
+def test_a_working_set_the_gpu_pool_holds_is_refused(gpu_pool_tokens: int) -> None:
+    """A pool that holds every prefix never evicts, so offload has nothing to serve."""
+    with pytest.raises(WorkingSetError, match="GPU KV pool"):
+        check_working_set(_CONFIG, _ROOMY_RIG, gpu_pool_tokens=gpu_pool_tokens)
+
+
+def test_a_working_set_past_the_cpu_tier_is_refused() -> None:
+    """The 4 GiB tier holds 58,254 tokens, a fraction of the 205,824-token set."""
+    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3)
+
+    with pytest.raises(WorkingSetError, match="CPU tier"):
+        check_working_set(_CONFIG, rig, gpu_pool_tokens=_G5_XLARGE_POOL)
+
+
+def test_a_working_set_that_exactly_fills_the_tier_passes() -> None:
+    """205,824 tokens x 73,728 bytes is a tier the working set fills to the token."""
+    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=205_824 * 73_728)
+
+    check_working_set(_CONFIG, rig, gpu_pool_tokens=_G5_XLARGE_POOL)
+
+
+def test_a_request_past_max_model_len_is_refused() -> None:
+    """3584 prompt plus 128 output tokens is 3712, past a 3700-token window."""
+    rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=16 * 1024**3)
+
+    with pytest.raises(WorkingSetError, match="max-model-len"):
+        check_fits_context(_CONFIG, rig)
