@@ -11,8 +11,9 @@ The worker reads the engine's /metrics over the cluster network around each rung
 (:func:`fetch_metrics`) and writes each rung's record to S3 (:func:`write_kv_ab_record`).
 """
 
+import http.client
 import json
-import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -112,12 +113,20 @@ def fetch_metrics(url: str, *, timeout_s: float = 10.0) -> str:
         ``http://vllm-gpu.slipstream.svc:8000/metrics``.
     :param timeout_s: the ceiling on the request.
     :return: the exposition text.
-    :raise MetricsError: when the request fails or the engine answers with an error.
+    :raise MetricsError: when the URL is not http(s), the request or the body read
+        fails, or the engine answers with an error.
     """
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise MetricsError(
+            f"the engine's metrics URL {url} is not http or https: pass the vLLM "
+            f"Service's /metrics URL"
+        )
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as response:
             return response.read().decode("utf-8")
-    except (urllib.error.URLError, TimeoutError) as error:
+    # OSError covers the connection, the HTTP error status (URLError), and the timeout;
+    # HTTPException and UnicodeDecodeError cover a body cut short or not text.
+    except (OSError, http.client.HTTPException, UnicodeDecodeError) as error:
         raise MetricsError(
             f"could not read the engine's metrics at {url}: {error}: is the vLLM "
             f"Service up and reachable from the worker?"

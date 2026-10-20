@@ -78,7 +78,7 @@ from slipstream_bench.orchestration.validity import validate_cell
 _LOGGER = logging.getLogger(__name__)
 
 # The GPU engine's /metrics, read by the in-cluster worker through the vLLM Service.
-_ENGINE_METRICS_URL = "http://vllm-gpu.slipstream.svc:8000/metrics"
+ENGINE_METRICS_URL = "http://vllm-gpu.slipstream.svc:8000/metrics"
 
 # The arms in the order each repetition runs them.
 _ARMS: tuple[Arm, ...] = ("off", "on")
@@ -204,11 +204,14 @@ class KvAbInputs:
     def __post_init__(self) -> None:
         """Reject inputs that would address the A/B's cells with an empty key.
 
-        :raise ValueError: when an addressing field is blank.
+        :raise ValueError: when an addressing field is blank or a timeout not positive.
         """
         for name in ("run", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KvAbInputs.{name} must be a non-empty string")
+        for name in ("proxy_timeout_s", "cell_timeout_s"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"KvAbInputs.{name} must be positive")
 
 
 @flow(name="kv-cache-extension-ab")
@@ -222,15 +225,15 @@ def kv_ab_flow(
     model_yaml: Path,
     kv_ab_config: Path,
     vllm_manifest: Path,
-    metrics_url: str = _ENGINE_METRICS_URL,
+    metrics_url: str = ENGINE_METRICS_URL,
     retries: int = 0,
 ) -> list[str]:
     """Run the KV cache offload A/B as one Prefect flow and return its record pointers.
 
     The composition root the deployment registers: it reads the workload, the rig, and
     the run-wide digest inputs, binds the driver's collaborators to the live transports,
-    and drives the interleaved arm runs. Re-invoked with the same run id, it resumes every
-    run whose rungs are all cached. The parameters are all serializable; the three paths
+    and drives the interleaved arm runs. Re-invoked with the same run id, it serves a run
+    whose rungs are all cached from cache and redoes any other run whole. The parameters are all serializable; the three paths
     name in-image files read on the worker. The run is tagged ``run=<run-id>``.
 
     :param run_id: the A/B's run id, which its cells and records nest under.
@@ -351,8 +354,9 @@ def build_kv_ab_collaborators(
 
     The redeploy renders the A/B's engine args and the run's offload switch into the
     manifest; the pool scrape reads the engine's startup log. The warmup brings the bench
-    proxy up and runs one cell at the warmup concurrency under ``<run id>/warmup``,
-    gated but neither cached nor recorded. Each rung runs through the kv-ab cell task,
+    proxy up and runs one cell at the warmup concurrency under the bench-host run id
+    ``kv-ab/<run>/<arm>-r<n>/warmup``, gated but neither cached nor recorded (its raw
+    result still lands under ``sweeps/``). Each rung runs through the kv-ab cell task,
     keyed by the run's ``kv-ab/<run>/<arm>-r<n>`` run id and ``<arm>-r<n>`` slug, and the
     pending gate reads that task's cache for every rung of the run.
 
@@ -378,12 +382,13 @@ def build_kv_ab_collaborators(
 
 @dataclass(frozen=True)
 class _Rung:
-    """One rung of one arm run, addressed: its cell, run id, cell name, and digest."""
+    """One rung of one arm run, addressed: its cell and its cache key's four parts."""
 
     cell: CellConfig
     run_id: str
-    cell_name: str
     digest: str
+    point_slug: str
+    cell_name: str
 
 
 def _prepare_run(
@@ -459,7 +464,7 @@ def _run_rung(
         return task.with_options(refresh_cache=refresh)(
             run_id=rung.run_id,
             digest=rung.digest,
-            point_slug=arm_run.slug(),
+            point_slug=rung.point_slug,
             cell_name=rung.cell_name,
             execute_func=build_cell_execution(rung.cell, context=context, dest=dest),
             read_metrics=read_metrics,
@@ -486,7 +491,7 @@ def _run_has_pending_cells(
             task,
             run_id=rung.run_id,
             digest=rung.digest,
-            point_slug=arm_run.slug(),
+            point_slug=rung.point_slug,
             cell_name=rung.cell_name,
         ):
             _LOGGER.info(
@@ -504,10 +509,11 @@ def _get_rung(inputs: KvAbInputs, arm_run: ArmRun, concurrency: int) -> _Rung:
     return _Rung(
         cell=cell,
         run_id=get_kv_ab_run_id(inputs.run, arm_run.slug()),
-        cell_name=get_cell_basename(cell),
         digest=get_kv_ab_cell_digest(
             inputs.config, cell, serving=inputs.serving, image_ref=inputs.image_ref
         ),
+        point_slug=arm_run.slug(),
+        cell_name=get_cell_basename(cell),
     )
 
 
