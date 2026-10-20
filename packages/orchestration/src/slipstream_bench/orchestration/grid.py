@@ -3,7 +3,9 @@
 The grid model and its loaders are the contract kernel
 (:mod:`slipstream_bench.contract.grid`); this resolves a single Tier-1 point's engine
 args — the ``max-num-seqs``, ``--kv-cache-dtype`` token, and prefix-caching flag the
-worker renders into the GPU manifest before a redeploy (ADR-0015).
+worker renders into the GPU manifest before a redeploy (ADR-0015), with the GPU KV pool
+left uncapped. :class:`EngineArgs` and the dtype's label->token mapping are shared with
+the KV cache extension A/B, which caps the pool.
 """
 
 from dataclasses import dataclass
@@ -60,7 +62,7 @@ def get_engine_args(grid: SweepGrid, point: EnginePoint) -> EngineArgs:
         max_num_seqs=point.max_num_seqs,
         kv_engine_token=get_kv_engine_token(kv_label),
         prefix_caching_flag=arm.flag,
-        # The sweep charts what the engine sizes from gpu-memory-utilization, uncapped.
+        # The sweep measures the pool gpu-memory-utilization leaves, so it sets no cap.
         kv_cache_memory_bytes=None,
     )
 
