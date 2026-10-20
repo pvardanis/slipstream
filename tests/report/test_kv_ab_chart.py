@@ -6,8 +6,8 @@ median and range across the runs, and each arm run's ceiling.
 
 from slipstream_bench.report.kv_ab_aggregation import (
     KvAbCeiling,
-    KvAbRungSpread,
-    Spread,
+    KvAbRungSummary,
+    MetricSpread,
 )
 from slipstream_bench.report.kv_ab_chart import (
     kv_ab_ceilings_to_markdown,
@@ -15,12 +15,12 @@ from slipstream_bench.report.kv_ab_chart import (
 )
 
 
-def _spread(median: float, low: float, high: float) -> Spread:
+def _spread(median: float, low: float, high: float) -> MetricSpread:
     return {"median": median, "min": low, "max": high}
 
 
 def test_each_spread_renders_as_its_median_and_range() -> None:
-    spread: KvAbRungSpread = {
+    spread: KvAbRungSummary = {
         "arm": "on",
         "max_concurrency": 4,
         "runs": 3,

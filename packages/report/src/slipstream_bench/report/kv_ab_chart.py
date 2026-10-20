@@ -12,8 +12,8 @@ from collections import defaultdict
 from slipstream_bench.report.chart import to_markdown_table
 from slipstream_bench.report.kv_ab_aggregation import (
     KvAbCeiling,
-    KvAbRungSpread,
-    Spread,
+    KvAbRungSummary,
+    MetricSpread,
 )
 
 # The spread table's columns: the arm's rung, its run count, then each metric's spread.
@@ -40,7 +40,7 @@ _RATE = "{:.1f}"
 _NO_CEILING = "none"
 
 
-def kv_ab_spreads_to_markdown(spreads: list[KvAbRungSpread]) -> str:
+def kv_ab_spreads_to_markdown(spreads: list[KvAbRungSummary]) -> str:
     """Render the rung spreads as a Markdown table, each metric as ``median [min–max]``.
 
     :param spreads: the spreads
@@ -77,7 +77,7 @@ def kv_ab_ceilings_to_markdown(ceilings: list[KvAbCeiling]) -> str:
     return to_markdown_table(columns, body)
 
 
-def _spread_cells(spread: KvAbRungSpread) -> list[str]:
+def _spread_cells(spread: KvAbRungSummary) -> list[str]:
     """Print one arm's rung as its spread table row."""
     return [
         spread["arm"],
@@ -92,7 +92,7 @@ def _spread_cells(spread: KvAbRungSpread) -> list[str]:
     ]
 
 
-def _format_spread(spread: Spread, fmt: str) -> str:
+def _format_spread(spread: MetricSpread, fmt: str) -> str:
     """Print a spread as its median with its range bracketed."""
     median, low, high = (fmt.format(spread[key]) for key in ("median", "min", "max"))
     return f"{median} [{low}–{high}]"
