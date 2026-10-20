@@ -2,9 +2,9 @@
 # run. Each run redeploys the GPU with the arm's offload switch, runs one unrecorded
 # warmup cell at warmup_concurrency, then the max_concurrency ladder. The working set —
 # num_prefixes distinct prefixes of prefix_share of total_len, floored to whole 16-token
-# KV blocks — must exceed the GPU KV pool and fit the CPU tier, or the run is refused
-# before any cell; the tier size and max-model-len are read off k8s/vllm-gpu.yaml. The
-# orchestration worker reads this file through load_kv_ab_config.
+# KV blocks — must fit the CPU tier, or the A/B is refused before its first redeploy, and
+# must exceed the GPU KV pool, or it is refused once the engine reports the pool, before
+# any cell; the tier size and max-model-len are read off k8s/vllm-gpu.yaml.
 engine:
   max_num_seqs: 64
   kv_cache_dtype: fp8
@@ -12,7 +12,8 @@ engine:
 runs_per_arm: 3
 # 3584 prompt tokens at 90% floor to a 3216-token prefix: 64 prefixes make a
 # 205,824-token working set, past the g5.xlarge's 185,696-token GPU pool, which needs a CPU
-# tier of at least 14.14 GiB (205,824 x 73,728 bytes) in LMCACHE_MAX_LOCAL_CPU_SIZE.
+# tier of at least 14.13 GiB (205,824 x 73,728 bytes) in LMCACHE_MAX_LOCAL_CPU_SIZE. The
+# manifest's 4.0 GiB tier holds 58,254 tokens, so it refuses this workload.
 prefix_share: 90
 max_concurrency: [8, 16, 32, 64]
 warmup_concurrency: 4

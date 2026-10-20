@@ -2,7 +2,7 @@
 
 The driver interleaves the arms' runs (off, on, off, on, ...), and each pending run
 redeploys the GPU with its arm's offload switch, scrapes the GPU KV pool, guards the
-working set against it, warms both tiers with one unrecorded cell, then runs the
+working set against it, warms the arm's cache tiers with one unrecorded cell, then runs the
 concurrency ladder. The fakes record each call, so the order is asserted as a script.
 """
 
@@ -15,6 +15,7 @@ from slipstream_bench.contract.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.flows.kv_ab import (
     ArmRun,
     KvAbCollaborators,
+    KvAbOutcome,
     drive_kv_ab,
 )
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
@@ -29,9 +30,9 @@ _G5_XLARGE_POOL = 185_696
 
 @dataclass
 class _FakeCluster:
-    """Records every collaborator call; reports a pool size and a set of cached runs."""
+    """Records every collaborator call; reports pool sizes in turn, and the cached runs."""
 
-    gpu_pool_tokens: int = _G5_XLARGE_POOL
+    gpu_pool_tokens: list[int] = field(default_factory=lambda: [_G5_XLARGE_POOL] * 6)
     cached_runs: frozenset[str] = frozenset()
     calls: list[str] = field(default_factory=list)
 
@@ -50,7 +51,7 @@ class _FakeCluster:
 
     def _scrape_gpu_pool(self) -> int:
         self.calls.append("scrape")
-        return self.gpu_pool_tokens
+        return self.gpu_pool_tokens.pop(0)
 
     def _warm_up(self, arm_run: ArmRun) -> None:
         self.calls.append(f"warmup {arm_run.slug()}")
@@ -115,7 +116,7 @@ def test_a_working_set_past_the_cpu_tier_is_refused_before_any_redeploy() -> Non
 
 def test_a_working_set_the_gpu_pool_holds_is_refused_before_any_cell() -> None:
     """The pool is known only once the engine starts, so the first run stops there."""
-    cluster = _FakeCluster(gpu_pool_tokens=300_000)
+    cluster = _FakeCluster(gpu_pool_tokens=[300_000])
 
     with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
         drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
@@ -151,3 +152,32 @@ def test_the_outcome_carries_every_cell_pointer_in_run_order() -> None:
         "s3://bucket/kv-ab/run/off-r1/c16.json",
     )
     assert outcome.pointers[-1] == "s3://bucket/kv-ab/run/on-r3/c64.json"
+
+
+def test_a_later_run_whose_pool_holds_the_working_set_stops_before_its_cells() -> None:
+    """Each redeploy re-sizes the pool, so on-r1 is guarded on its own startup's size."""
+    cluster = _FakeCluster(gpu_pool_tokens=[_G5_XLARGE_POOL, 300_000])
+
+    with pytest.raises(KvAbWorkloadError, match="300000-token GPU KV pool"):
+        drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
+
+    assert cluster.calls == [
+        *_run_script("off-r1", "no-offload"),
+        "deploy on-r1 offload",
+        "scrape",
+    ]
+
+
+def test_an_arm_run_before_the_first_repetition_is_rejected() -> None:
+    """Runs count from 1, as their ``<arm>-r<run>`` results subdirs do."""
+    with pytest.raises(ValueError, match="run 0"):
+        ArmRun(arm="off", run=0)
+
+
+@pytest.mark.parametrize(("runs_run", "runs_resumed"), [(-1, 1), (1, -1)])
+def test_an_outcome_with_a_negative_run_count_is_rejected(
+    runs_run: int, runs_resumed: int
+) -> None:
+    """A run count is a tally of runs; below zero it misreports the A/B."""
+    with pytest.raises(ValueError, match="non-negative"):
+        KvAbOutcome(pointers=(), runs_run=runs_run, runs_resumed=runs_resumed)
