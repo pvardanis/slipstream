@@ -37,7 +37,7 @@ def load_yaml_model(
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as cause:
-        raise error(f"{path} is not valid YAML: {cause}") from cause
+        raise error(f"{label} {path} is not valid YAML: {cause}") from cause
     # safe_load returns None for an empty or comment-only file without raising;
     # name that here so the sweep aborts on a clear message, not an opaque
     # "input should be a mapping" from validating None.
