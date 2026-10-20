@@ -101,18 +101,19 @@ spec:
             - --tensor-parallel-size
             - "1"
             # Held fixed across every sweep arm: the KV budget is profiled against
-            # gpu-memory-utilization at startup, so the concurrency number must move
-            # with the knob under test, not with the token budget or the VRAM
-            # fraction (ADR-0009). Starting values, not a tuned result.
+            # gpu-memory-utilization at startup, unless --kv-cache-memory-bytes below
+            # caps it, so the concurrency number must move with the knob under test,
+            # not with the token budget or the VRAM fraction (ADR-0009). Starting
+            # values, not a tuned result.
             - --max-model-len
             - "4096"
             - --gpu-memory-utilization
             - "0.90"
             # GPU KV pool cap in bytes, uncapped by default. The KV cache extension A/B
             # (#326) caps the pool so its working set overflows the GPU and offload has
-            # evicted prefixes to reload; set, vLLM sizes the pool from it and ignores
-            # gpu-memory-utilization for the KV cache. Uncapped renders "None", which
-            # vLLM parses as no cap. Rendered from KV_CACHE_MEMORY_BYTES by
+            # evicted prefixes to reload. When set, vLLM sizes the pool from it and
+            # ignores gpu-memory-utilization for the KV cache. Uncapped renders "None",
+            # which vLLM parses as no cap. Rendered from KV_CACHE_MEMORY_BYTES by
             # `_render-gpu-manifest`, and by the worker's render.
             - --kv-cache-memory-bytes
             - "${KV_CACHE_MEMORY_BYTES}"

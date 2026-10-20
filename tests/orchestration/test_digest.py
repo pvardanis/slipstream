@@ -38,6 +38,7 @@ _POINT = {
     "max_num_seqs": 64,
     "kv_engine_token": "fp8",
     "prefix_caching_flag": "--enable-prefix-caching",
+    "kv_cache_memory_bytes": None,
 }
 _CELL = {"prefix_share": 10, "burstiness": 1.0, "max_concurrency": 64, "seed": 0}
 _INPUTS: dict[str, Any] = {

@@ -346,6 +346,21 @@ def test_the_committed_manifest_caps_the_pool_at_the_kv_ab_workload_s_bytes(
     assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "1207959552"
 
 
+def test_the_recipe_substitutes_every_placeholder_in_the_committed_manifest() -> None:
+    # envsubst leaves a placeholder off its allow-list as a literal ${...}, which parses
+    # as YAML and then crashloops the pod a plain `just gpu-deploy` rolls out.
+    recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
+        encoding="utf-8"
+    )
+    allow_list = re.search(r"envsubst '([^']*)'", recipe)
+    placeholders = set(
+        re.findall(r"\$\{[A-Z_]+\}", _COMMITTED_MANIFEST.read_text(encoding="utf-8"))
+    )
+
+    assert allow_list is not None
+    assert placeholders == set(allow_list.group(1).split())
+
+
 def test_the_recipe_leaves_the_gpu_kv_pool_uncapped_as_the_sweep_does() -> None:
     # A plain `just gpu-deploy` must size the pool as a sweep point's redeploy does.
     recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
@@ -355,7 +370,7 @@ def test_the_recipe_leaves_the_gpu_kv_pool_uncapped_as_the_sweep_does() -> None:
         _vllm_container(_render_committed_manifest(kv_cache_offload=False))
     )
 
-    assert f'KV_CACHE_MEMORY_BYTES="${{KV_CACHE_MEMORY_BYTES:-{uncapped}}}"' in recipe
+    assert f'kv_cache_memory_bytes="${{KV_CACHE_MEMORY_BYTES:-{uncapped}}}"' in recipe
 
 
 def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:
