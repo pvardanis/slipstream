@@ -2,10 +2,10 @@
 
 Exercises deploy_gpu, deploy_gpu_point, scrape_ceiling, and scrape_gpu_kv_pool against
 a fake kubectl that records the argv and stdin issued, and render/extract as pure
-functions — no cluster. Asserts the
-redeploy applies only the Deployment document (the worker's RBAC grants get/patch on
-deploy/vllm-gpu, not the manifest's Namespace or Service), renders the point's knobs,
-then waits the rollout; and that each scrape returns the last matching line or raises.
+functions — no cluster. Asserts the redeploy applies only the Deployment document (the
+worker's RBAC grants get/patch on deploy/vllm-gpu, not the manifest's Namespace or
+Service), renders the point's knobs, then waits the rollout; and that each scrape returns
+the last matching line or raises.
 """
 
 import json
@@ -442,6 +442,13 @@ def test_scrape_gpu_kv_pool_raises_when_the_log_carries_no_pool_size() -> None:
     kubectl = _FakeKubectl(logs="INFO startup\nINFO serving, no pool line\n")
 
     with pytest.raises(KvPoolScrapeError, match="deployment/vllm-gpu"):
+        scrape_gpu_kv_pool(kubectl=kubectl)
+
+
+def test_scrape_gpu_kv_pool_raises_on_an_empty_pool() -> None:
+    kubectl = _FakeKubectl(logs="INFO GPU KV cache size: 0 tokens, Maximum ...\n")
+
+    with pytest.raises(KvPoolScrapeError, match="empty"):
         scrape_gpu_kv_pool(kubectl=kubectl)
 
 
