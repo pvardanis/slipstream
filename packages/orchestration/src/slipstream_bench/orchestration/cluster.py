@@ -1,4 +1,4 @@
-"""The parent knob sweep's two in-cluster collaborators: GPU redeploy and ceiling scrape.
+"""The in-cluster collaborators: GPU redeploy, ceiling scrape, and GPU KV pool scrape.
 
 ADR-0015: the parent flow redeploys the GPU per engine point (Tier-1) then scrapes the
 concurrency ceiling from vLLM's startup log before running the point's Tier-2 ladder.
@@ -14,6 +14,10 @@ scrape are exercised against a fake that records the argv and stdin issued — n
 The scrape returns the ceiling text it read (the composition root records it) but raises
 :class:`CeilingScrapeError` when the engine reported none, so a point's ladder never runs
 against a garbage ceiling — the one failure an unattended sweep cannot tolerate.
+
+The KV cache extension A/B redeploys the same Deployment per arm with the offload switch
+flipped, and scrapes the GPU KV pool size from the same startup log to size its working
+set; that scrape raises :class:`KvPoolScrapeError` when the engine reported none.
 """
 
 from __future__ import annotations
@@ -26,6 +30,14 @@ import yaml
 
 from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration.grid import EngineArgs, get_engine_args
+
+
+class KvPoolScrapeError(Exception):
+    """No GPU KV cache pool size could be scraped from the redeployed engine's log.
+
+    The KV cache extension A/B sizes its working set against the GPU pool, so a scrape
+    that finds none raises rather than returning a default the guard would trust.
+    """
 
 
 class CeilingScrapeError(Exception):
@@ -45,6 +57,11 @@ class CeilingScrapeError(Exception):
 _CEILING_PATTERN = re.compile(
     r"Maximum concurrency for [\d,]+ tokens per request: [\d.]+x"
 )
+
+# vLLM logs its KV cache capacity in tokens once at startup, on the same line as the
+# ceiling, e.g. "GPU KV cache size: 185,696 tokens, Maximum concurrency for ...". The
+# count is the pool the engine profiled, max-model-len times the concurrency estimate.
+_KV_POOL_PATTERN = re.compile(r"GPU KV cache size: ([\d,]+) tokens")
 
 # The manifest placeholders the knob sweep renders per point (k8s/vllm-gpu.yaml). Only
 # these three and the two KV cache offload ones below are substituted, so nothing else
@@ -285,7 +302,7 @@ def scrape_ceiling(
         none, so the point fails loudly instead of measuring its ladder against a garbage
         ceiling (ADR-0015).
     """
-    logs = kubectl(["logs", "-n", namespace, f"deployment/{deployment}"], None)
+    logs = _read_engine_log(kubectl, namespace=namespace, deployment=deployment)
     matches = _CEILING_PATTERN.findall(logs)
     if not matches:
         raise CeilingScrapeError(
@@ -294,3 +311,40 @@ def scrape_ceiling(
             f"not run against a garbage ceiling (ADR-0015)"
         )
     return matches[-1]
+
+
+def scrape_gpu_kv_pool(
+    *,
+    kubectl: Kubectl,
+    namespace: str = _NAMESPACE,
+    deployment: str = _DEPLOYMENT,
+) -> int:
+    """Read the redeployed engine's GPU KV cache pool size, in tokens, from its log.
+
+    :param kubectl: the transport the log read is issued through.
+    :param namespace: the namespace the Deployment lives in.
+    :param deployment: the Deployment whose pod log is read.
+    :return: the GPU KV cache pool size in tokens.
+    :raise KvPoolScrapeError: when the log carries no pool size line, so the A/B's
+        working-set guard never sizes against a guessed pool.
+    """
+    logs = _read_engine_log(kubectl, namespace=namespace, deployment=deployment)
+    matches = _KV_POOL_PATTERN.findall(logs)
+    if not matches:
+        raise KvPoolScrapeError(
+            f"no GPU KV cache size in the vLLM startup log of "
+            f"deployment/{deployment} in {namespace}: the working set cannot be "
+            f"sized against the GPU pool"
+        )
+    return int(matches[-1].replace(",", ""))
+
+
+def _read_engine_log(kubectl: Kubectl, *, namespace: str, deployment: str) -> str:
+    """Read the Deployment's pod log: one replica, so the pod just rolled out.
+
+    :param kubectl: the transport the log read is issued through.
+    :param namespace: the namespace the Deployment lives in.
+    :param deployment: the Deployment whose pod log is read.
+    :return: the log text.
+    """
+    return kubectl(["logs", "-n", namespace, f"deployment/{deployment}"], None)
