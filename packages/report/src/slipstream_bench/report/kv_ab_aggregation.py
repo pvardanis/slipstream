@@ -15,14 +15,11 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict, cast, get_args
 
 from slipstream_bench.contract import LoadCell, SweepAggregationError, to_numeric_metric
-from slipstream_bench.contract.kv_ab_record import Arm
+from slipstream_bench.contract.kv_ab_record import LABELS_KEY, Arm
 from slipstream_bench.report.aggregation import get_ceiling
-
-# The key the A/B's labels sit under, beside the raw result's own keys.
-_LABELS_KEY = "kv_ab"
 
 
 @dataclass(frozen=True)
@@ -48,22 +45,30 @@ class KvAbRung:
         :param source: where the record was read from, for the error message.
         :return: the rung's arm, run, load cell, and two hit rates.
         :raise SweepAggregationError: when the record lacks its ``kv_ab`` labels or
-            carries a bad arm, run, or hit rate, or its raw result does not parse as
-            a load cell.
+            carries a bad arm, run, or hit rate, a combined hit rate below its GPU hit
+            rate, or its raw result does not parse as a load cell.
         """
-        labels = record.get(_LABELS_KEY)
+        labels = record.get(LABELS_KEY)
         if not isinstance(labels, dict):
             raise SweepAggregationError(
-                f"result {source} has no {_LABELS_KEY} labels: it is not a kv-ab "
+                f"result {source} has no {LABELS_KEY} labels: it is not a kv-ab "
                 f"rung record"
             )
         labels = cast(dict[str, object], labels)
+        gpu_hit_rate = _read_rate(labels, source, "hit_rate")
+        combined_hit_rate = _read_rate(labels, source, "combined_hit_rate")
+        # The combined rate counts the GPU hits plus the CPU tier's, so it never reads lower.
+        if combined_hit_rate < gpu_hit_rate:
+            raise SweepAggregationError(
+                f"result {source} has combined_hit_rate {combined_hit_rate} below its "
+                f"hit_rate {gpu_hit_rate}"
+            )
         return cls(
             arm=_read_arm(labels, source),
             run=_read_run(labels, source),
             cell=LoadCell.from_record(record, source),
-            gpu_hit_rate=_read_rate(labels, source, "hit_rate"),
-            combined_hit_rate=_read_rate(labels, source, "combined_hit_rate"),
+            gpu_hit_rate=gpu_hit_rate,
+            combined_hit_rate=combined_hit_rate,
         )
 
 
@@ -102,9 +107,10 @@ def summarize_kv_ab_rungs(rungs: list[KvAbRung]) -> list[KvAbRungSpread]:
 
     :param rungs: every rung of the A/B's arm runs, in any order.
     :return: one spread per arm and rung, off before on, then by rung.
-    :raise SweepAggregationError: when an arm run's rung is recorded twice.
+    :raise SweepAggregationError: when the rungs ran more than one prefix share, or an
+        arm run's rung is recorded twice.
     """
-    _reject_duplicate_rungs(rungs)
+    _check_rungs(rungs)
     groups: dict[tuple[Arm, int], list[KvAbRung]] = defaultdict(list)
     for rung in rungs:
         groups[(rung.arm, rung.cell.max_concurrency)].append(rung)
@@ -119,9 +125,10 @@ def get_kv_ab_ceilings(rungs: list[KvAbRung]) -> list[KvAbCeiling]:
 
     :param rungs: every rung of the A/B's arm runs, in any order.
     :return: one ceiling per arm run, off before on, then by run.
-    :raise SweepAggregationError: when an arm run's rung is recorded twice.
+    :raise SweepAggregationError: when the rungs ran more than one prefix share, or an
+        arm run's rung is recorded twice.
     """
-    _reject_duplicate_rungs(rungs)
+    _check_rungs(rungs)
     ladders: dict[tuple[Arm, int], list[LoadCell]] = defaultdict(list)
     for rung in rungs:
         ladders[(rung.arm, rung.run)].append(rung.cell)
@@ -133,8 +140,18 @@ def get_kv_ab_ceilings(rungs: list[KvAbRung]) -> list[KvAbCeiling]:
     return ceilings
 
 
-def _reject_duplicate_rungs(rungs: list[KvAbRung]) -> None:
-    """Refuse an arm run's rung recorded twice, which would count as an extra run."""
+def _check_rungs(rungs: list[KvAbRung]) -> None:
+    """Refuse rungs of more than one workload, or an arm run's rung recorded twice.
+
+    Either would fold into an arm's spread and ceiling unremarked: rungs of two prefix
+    shares as one workload, a rung recorded twice as an extra run.
+    """
+    shares = sorted({rung.cell.prefix_share for rung in rungs})
+    if len(shares) > 1:
+        raise SweepAggregationError(
+            f"kv-ab rungs ran prefix shares {', '.join(map(str, shares))}: an A/B folds "
+            f"one workload"
+        )
     seen: set[tuple[Arm, int, int]] = set()
     for rung in rungs:
         key = (rung.arm, rung.run, rung.cell.max_concurrency)
@@ -175,8 +192,11 @@ def _get_rung_spread(
 def _read_arm(labels: dict[str, object], source: Path) -> Arm:
     """Read a rung's arm, refusing anything but off or on."""
     arm = labels.get("arm")
-    if arm not in ("off", "on"):
-        raise SweepAggregationError(f"result {source} has arm {arm!r}, not off or on")
+    arms = get_args(Arm)
+    if arm not in arms:
+        raise SweepAggregationError(
+            f"result {source} has arm {arm!r}, not {' or '.join(arms)}"
+        )
     return cast(Arm, arm)
 
 

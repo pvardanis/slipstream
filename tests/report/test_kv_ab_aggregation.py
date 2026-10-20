@@ -44,7 +44,9 @@ def test_a_record_without_its_labels_is_refused() -> None:
         ("run", True, "run True, not a 1-based repetition"),
         ("run", "2", "run '2', not a 1-based repetition"),
         ("hit_rate", None, "missing or non-numeric metric hit_rate"),
+        ("hit_rate", 1.2, "hit_rate 1.2 above 1"),
         ("combined_hit_rate", 1.2, "combined_hit_rate 1.2 above 1"),
+        ("hit_rate", 0.9, "combined_hit_rate 0.85 below its hit_rate 0.9"),
     ],
 )
 def test_a_record_with_a_bad_label_is_refused(
@@ -114,4 +116,17 @@ def test_an_arm_runs_rung_recorded_twice_is_refused(
     rungs = [build_rung("on", 1, 4), build_rung("on", 1, 4)]
 
     with pytest.raises(SweepAggregationError, match="on arm run 1 .* 4 rung twice"):
+        fold(rungs)
+
+
+@pytest.mark.parametrize("fold", [summarize_kv_ab_rungs, get_kv_ab_ceilings])
+def test_rungs_of_more_than_one_prefix_share_are_refused(
+    fold: Callable[[list[KvAbRung]], object],
+) -> None:
+    # Rungs of two workloads would fold into one arm's spread and ceiling unremarked.
+    record = build_record(arm="on", run=1, max_concurrency=2)
+    record["prefix_share"] = 50
+    rungs = [build_rung("on", 1, 1), KvAbRung.from_record(record, SOURCE)]
+
+    with pytest.raises(SweepAggregationError, match="prefix shares 50, 90"):
         fold(rungs)

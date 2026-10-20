@@ -3,8 +3,7 @@
 ``report.chart`` holds the pure Markdown/JSON table renderers; the matplotlib/seaborn
 plotters live in ``report.plotters``. A caller that only renders tables must not drag in
 matplotlib, so this loads ``report.chart`` and the kv-ab tables' ``report.kv_ab_chart`` in a
-clean interpreter and asserts the plotting
-stack stayed out of ``sys.modules`` (ADR-0017). The import runs in a subprocess because an
+clean interpreter and asserts the plotting stack stayed out of ``sys.modules`` (ADR-0017). The import runs in a subprocess because an
 in-process check would see matplotlib already imported by the plotter tests.
 """
 

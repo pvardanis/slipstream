@@ -9,6 +9,8 @@ ceiling is read at.
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from matplotlib.collections import PathCollection
+from matplotlib.colors import to_hex
 
 from slipstream_bench.report.kv_ab_aggregation import KvAbRung
 from slipstream_bench.report.kv_ab_plotters import _plot_kv_ab, plot_kv_ab_png
@@ -71,12 +73,47 @@ def test_each_runs_dot_is_nudged_alike_at_every_rung_of_the_log_axis() -> None:
     figure = _plot_kv_ab(rungs)
     try:
         dots = np.concatenate(
-            [np.asarray(c.get_offsets())[:, 0] for c in figure.axes[0].collections[1:]]
+            [
+                np.asarray(c.get_offsets())[:, 0]
+                for c in figure.axes[0].collections
+                if isinstance(c, PathCollection)
+            ]
         )
         for cap in (1, 2, 64):
             nudges = np.log2(dots[np.isclose(dots, cap, rtol=0.1)]) - np.log2(cap)
             assert len(nudges) == 3
             assert np.all(np.abs(nudges) <= 0.08)
             assert np.ptp(nudges) > 0.02
+    finally:
+        plt.close(figure)
+
+
+def test_each_arms_line_runs_through_its_runs_median_not_their_mean() -> None:
+    # One skewed run per arm pulls the mean well off the median: off 600/610/900 has
+    # median 610 (mean 703.3), on 300/310/500 has median 310 (mean 370).
+    ttfts = {"off": (600.0, 610.0, 900.0), "on": (300.0, 310.0, 500.0)}
+    rungs = [
+        build_rung(arm, run, 1, p95_ttft_ms=ttft)
+        for arm, runs in ttfts.items()
+        for run, ttft in enumerate(runs, start=1)
+    ]
+    figure = _plot_kv_ab(rungs)
+    try:
+        lines = {
+            to_hex(line.get_color()): float(np.asarray(line.get_ydata())[0])
+            for line in figure.axes[1].get_lines()
+            if len(np.asarray(line.get_ydata()))  # skip the legend's empty handles
+        }
+        assert lines == {"#7f7f7f": 610.0, "#1f77b4": 310.0}
+    finally:
+        plt.close(figure)
+
+
+def test_the_title_names_each_arms_run_count() -> None:
+    rungs = [build_rung("off", run, 1) for run in (1, 2, 3)]
+    rungs += [build_rung("on", run, 1) for run in (1, 2)]
+    figure = _plot_kv_ab(rungs)
+    try:
+        assert "median of off 3, on 2 runs" in figure.get_suptitle()
     finally:
         plt.close(figure)
