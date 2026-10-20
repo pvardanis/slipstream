@@ -295,7 +295,8 @@ def upload_plot(
     world-readable charts prefix the image artifact points at by public URL (ADR-0018 Amendment).
     ``ContentType`` is ``image/png`` so a browser renders it inline rather than downloading it.
 
-    :param run_prefix: the knob sweep's shared run id the charts nest under.
+    :param run_prefix: the run id the charts nest under: the knob sweep's shared run id, or
+        an A/B's ``kv-ab/<run>``.
     :param bucket: the results bucket the plot is uploaded to.
     :param s3_client: the boto3 S3 client (or stand-in) the PNG is put with.
     :param name: the plot's object name within the run's charts prefix.

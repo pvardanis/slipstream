@@ -68,8 +68,8 @@ _SPREADS_MARKDOWN = (
 )
 _CEILINGS_MARKDOWN = (
     "## kv-ab ceilings\n\n"
-    "The highest offered `--max-concurrency` each arm run held within the goodput SLO; "
-    "an arm's median is blank when any of its runs held none."
+    "The highest offered `--max-concurrency` at which each arm run's goodput fraction "
+    "met the 95% floor; an arm's median is blank when any of its runs met it at no rung."
 )
 _PLOT_HEADING = "## kv-ab — plot"
 _PLOT_BLURB = (
@@ -123,14 +123,20 @@ def read_kv_ab_record(pointer: str, *, s3_client: Any) -> dict[str, object]:
     :param s3_client: the boto3 S3 client (or stand-in) the record is read with.
     :return: the parsed record.
     :raise ValueError: when the pointer is not an ``s3://`` pointer.
-    :raise SweepAggregationError: when the object is not a JSON object.
+    :raise SweepAggregationError: when the object is not valid JSON or not a JSON
+        object.
     :raise ClientError: on any S3 read failure, an absent object among them.
     """
     parts = urllib.parse.urlsplit(pointer)
     if parts.scheme != "s3" or not parts.netloc or not parts.path.strip("/"):
         raise ValueError(f"record pointer {pointer} is not an s3:// pointer")
     body = s3_client.get_object(Bucket=parts.netloc, Key=parts.path.lstrip("/"))
-    record = json.loads(body["Body"].read())
+    try:
+        record = json.loads(body["Body"].read())
+    except json.JSONDecodeError as error:
+        raise SweepAggregationError(
+            f"record {pointer} is not valid JSON: {error}"
+        ) from error
     if not isinstance(record, dict):
         raise SweepAggregationError(f"record {pointer} is not a JSON object")
     return record

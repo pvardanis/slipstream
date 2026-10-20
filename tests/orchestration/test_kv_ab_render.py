@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from prefect.cache_policies import NO_CACHE
 
+from slipstream_bench.contract import SweepAggregationError
 from slipstream_bench.orchestration.tasks.kv_ab_render import (
     drive_kv_ab_render,
     read_kv_ab_record,
@@ -44,9 +45,18 @@ _RECORDS = {
 
 
 class _Render:
-    """The render's faked collaborators and the log of what each was handed."""
+    """The render's faked collaborators and the log of what each was handed.
 
-    def __init__(self) -> None:
+    Records are served from ``records``; the chart upload raises ``store_error`` when set.
+    """
+
+    def __init__(
+        self,
+        records: dict[str, dict[str, Any]] = _RECORDS,
+        store_error: Exception | None = None,
+    ) -> None:
+        self._records = records
+        self._store_error = store_error
         self.events: list[str] = []
         self.tables: dict[str, str] = {}
         self.stored: dict[str, bytes] = {}
@@ -54,13 +64,15 @@ class _Render:
 
     def read_record(self, pointer: str) -> dict[str, Any]:
         self.events.append(f"read {pointer}")
-        return _RECORDS[pointer]
+        return self._records[pointer]
 
     def publish(self, *, key: str, markdown: str) -> None:
         self.events.append(f"table {key}")
         self.tables[key] = markdown
 
     def store(self, *, name: str, data: bytes) -> str:
+        if self._store_error:
+            raise self._store_error
         self.events.append(f"store {name}")
         self.stored[name] = data
         return f"sweeps/kv-ab/ab1/charts/{name}"
@@ -199,3 +211,51 @@ def test_the_task_uploads_the_chart_under_the_runs_public_charts_prefix() -> Non
     (image,) = images
     assert image["image_url"] == f"https://bench.s3.us-east-1.amazonaws.com/{key}"
     assert image["key"] == "kv-ab-plot"
+
+
+def test_a_record_that_is_not_a_kv_ab_rung_fails_before_publishing_anything() -> None:
+    pointer = "s3://bench/kv-ab/ab1/on-r1/pshare90_burst1.0_mc1.json"
+    unlabelled = {k: v for k, v in _RECORDS[pointer].items() if k != "kv_ab"}
+    render = _Render(records={pointer: unlabelled})
+
+    with pytest.raises(SweepAggregationError, match="bench/kv-ab/ab1/on-r1/.*kv_ab"):
+        render.drive([pointer])
+
+    assert render.events == [f"read {pointer}"]
+
+
+def test_a_failed_chart_upload_leaves_both_tables_published() -> None:
+    render = _Render(store_error=OSError("upload failed"))
+
+    with pytest.raises(OSError, match="upload failed"):
+        render.drive(list(_RECORDS))
+
+    assert list(render.tables) == ["kv-ab-rung-spreads", "kv-ab-ceilings"]
+    assert render.plots == []
+
+
+def test_the_spread_table_prints_each_arms_rung() -> None:
+    render = _Render()
+
+    render.drive(list(_RECORDS))
+
+    # One run per arm, so each spread's range collapses onto its median.
+    assert (
+        "| off | 1 | 1 | 0.95 [0.95–0.95] | 760 [760–760] | 34 [34–34] "
+        "| 131.0 [131.0–131.0] | 0.30 [0.30–0.30] | 0.85 [0.85–0.85] |"
+    ) in render.tables["kv-ab-rung-spreads"]
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [(b"{not json", "is not valid JSON"), (b"[]", "is not a JSON object")],
+)
+def test_a_record_object_that_is_not_a_json_object_names_its_pointer(
+    body: bytes, message: str
+) -> None:
+    s3 = _RecordS3({("bench", "kv-ab/ab1/on-r2/c.json"): body})
+
+    with pytest.raises(
+        SweepAggregationError, match=f"s3://bench/kv-ab/ab1/on-r2/c.json {message}"
+    ):
+        read_kv_ab_record("s3://bench/kv-ab/ab1/on-r2/c.json", s3_client=s3)

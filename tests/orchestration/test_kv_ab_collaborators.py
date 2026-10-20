@@ -137,7 +137,7 @@ class _Ssm:
 
 
 class _S3:
-    """Serve each cell a valid result, or a failed one under a key holding a marker.
+    """Serve each cell a valid result at its rung, or a failed one under a marked key.
 
     Records each object written, and serves each record written back.
     """
@@ -150,6 +150,10 @@ class _S3:
     def download_file(self, _bucket: str, key: str, dest: str) -> None:
         failed = any(marker in key for marker in self._failing)
         result = _FAILED_RESULT if failed else _VALID_RESULT
+        # Each rung's result reports the concurrency its cell basename names.
+        rung = re.search(r"_mc(\d+)\.json$", key)
+        assert rung, key
+        result = {**result, "max_concurrency": int(rung[1])}
         Path(dest).write_text(json.dumps(result), encoding="utf-8")
 
     def put_object(
