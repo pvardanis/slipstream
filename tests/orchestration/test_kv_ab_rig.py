@@ -1,9 +1,10 @@
-"""Tests for the kv-cache-extension-ab rig: its capacities and the working-set guard.
+"""Tests for the kv-cache-extension-ab rig: its capacities and the workload guards.
 
 The rig's CPU tier size and max-model-len are read off the vLLM manifest that configures
-them, its single source; the guard holds the workload's working set above the GPU KV pool
-and within the CPU tier, so the A/B measures offload rather than a cache that never fills
-or a tier that cannot hold the workload.
+them, its single source; the guards hold each request within max-model-len and the
+workload's working set above the GPU KV pool and within the CPU tier, so the A/B
+measures offload rather than a cache that never fills or a tier that cannot hold the
+workload.
 """
 
 from pathlib import Path
@@ -143,3 +144,68 @@ def test_a_vllm_env_that_is_not_a_list_is_rejected(tmp_path: Path, env: object) 
 
     with pytest.raises(DigestError, match="env is not a list"):
         read_kv_ab_rig(manifest)
+
+
+def test_the_last_max_model_len_flag_wins_as_in_vllm(tmp_path: Path) -> None:
+    """vLLM's argparse keeps a repeated flag's last value, so the reader does too."""
+    args = ["--max-model-len", "2048", "--max-model-len", "4096"]
+    manifest = _write_manifest(tmp_path, args=args, env=_ENV)
+
+    assert read_kv_ab_rig(manifest).max_model_len == 4096
+
+
+def test_a_non_ascii_digit_max_model_len_is_rejected(tmp_path: Path) -> None:
+    """A superscript digit passes str.isdigit but is no window int() can read."""
+    manifest = _write_manifest(tmp_path, args=["--max-model-len", "²"], env=_ENV)
+
+    with pytest.raises(KvAbRigError, match="--max-model-len"):
+        read_kv_ab_rig(manifest)
+
+
+def test_a_tier_size_that_is_not_a_number_is_named_as_such(tmp_path: Path) -> None:
+    """An unparseable size is told apart from an absent or non-positive one."""
+    env = {"LMCACHE_MAX_LOCAL_CPU_SIZE": "4GiB"}
+    manifest = _write_manifest(tmp_path, args=_ARGS, env=env)
+
+    with pytest.raises(KvAbRigError, match="'4GiB' is not a number of GiB"):
+        read_kv_ab_rig(manifest)
+
+
+def test_a_tier_size_sourced_through_value_from_is_rejected(tmp_path: Path) -> None:
+    """A valueFrom entry has no size in the manifest, so the error asks for a literal."""
+    manifest = _write_manifest(tmp_path, args=_ARGS, env={})
+    document = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    document["spec"]["template"]["spec"]["containers"][0]["env"] = [
+        {
+            "name": "LMCACHE_MAX_LOCAL_CPU_SIZE",
+            "valueFrom": {"configMapKeyRef": {"name": "lmcache", "key": "size"}},
+        }
+    ]
+    manifest.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(KvAbRigError, match="literal value"):
+        read_kv_ab_rig(manifest)
+
+
+def test_a_request_exactly_filling_max_model_len_fits_the_rig() -> None:
+    """3584 prompt plus 128 output tokens is 3712, the whole of a 3712-token window."""
+    check_fits_rig(_CONFIG, KvAbRig(max_model_len=3712, cpu_tier_bytes=16 * 1024**3))
+
+
+def test_the_committed_manifest_tier_is_refused_for_the_committed_workload() -> None:
+    """The g5.xlarge manifest's 4 GiB tier holds 58,254 of the 205,824 tokens."""
+    rig = read_kv_ab_rig(_COMMITTED_MANIFEST)
+
+    with pytest.raises(KvAbWorkloadError, match="58254-token CPU tier"):
+        check_fits_rig(_CONFIG, rig)
+
+
+@pytest.mark.parametrize(
+    ("max_model_len", "cpu_tier_bytes"), [(0, 1024**3), (4096, 0), (4096, -1)]
+)
+def test_a_rig_without_positive_capacities_is_rejected(
+    max_model_len: int, cpu_tier_bytes: int
+) -> None:
+    """A zero window or an empty tier is no rig to size a workload against."""
+    with pytest.raises(ValueError, match="positive"):
+        KvAbRig(max_model_len=max_model_len, cpu_tier_bytes=cpu_tier_bytes)
