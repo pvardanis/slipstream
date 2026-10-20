@@ -1,6 +1,7 @@
 # Transient port-forward to the in-cluster Prefect server, shared by the lifecycle
-# recipes (`just prefect-up`, `just prefect-down`, `just prefect-register`) and the
-# sweep-dispatch workflow. Sourced into the caller's shell; defines:
+# recipes (`just prefect-up`, `just prefect-down`, `just prefect-register-sweep`,
+# `just prefect-register-kv-ab`) and the sweep-dispatch workflow. Sourced into the
+# caller's shell; defines:
 #
 #   prefect_namespace <eks_dir>   prints the server namespace from the eks stack output
 #   prefect_api_portforward <namespace> <port>
