@@ -72,6 +72,31 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Point sweep** — one engine point's measurement: the client-load ladder run against a
   single running replica (one GPU deployment), producing that point's concurrency ceiling.
   The knob sweep is the parent over every point sweep.
+- **Ladder** — the ascending client concurrencies a measurement steps through against one
+  running replica, one cell per step.
+- **Rung** — one step of a ladder: a single cell at one offered concurrency.
+
+## KV cache A/B
+
+- **KV cache offload** — the engine copying KV cache blocks out of GPU memory into a
+  CPU-memory tier (LMCache), so a prefix evicted from the GPU can be loaded back instead of
+  recomputed.
+- **Chunk** — the unit the CPU tier stores and reuses KV cache in: a fixed run of tokens,
+  a whole number of the engine's blocks. A prefix reuses only its whole chunks.
+- **Working set** — the distinct prefix tokens a workload keeps reusing. Offload can only
+  help once the working set is larger than the GPU KV pool.
+- **Arm** — one side of the A/B: KV cache offload **off** or **on**. Everything else — engine
+  knobs, workload, ladder — is held the same across both.
+- **Run** — one repetition of an arm: a fresh redeploy, one unrecorded warmup cell, then
+  the full ladder. Each arm gets the same number of runs, numbered from 1.
+- **Arm run** — a run named by its arm and number, `<arm>-r<n>` (e.g. `on-r2`). The A/B
+  interleaves its arm runs off, on, off, on, and nests them all under one run id.
+- **Prefix-cache window** — the advance of the engine's prefix-cache counters over one
+  rung, read as the difference between a snapshot before and after it. Its GPU hit rate
+  counts tokens the GPU prefix cache served; its combined hit rate adds the tokens the CPU
+  tier served.
+- **Spread** — how far one rung's metric varies across an arm's runs, reported as the median
+  and the range (too few runs for a confidence interval).
 
 ## Observability
 
