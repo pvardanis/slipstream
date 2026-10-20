@@ -110,8 +110,9 @@ run "worker_layer_shape" {
   # S3: on the bench-endpoint results bucket. The bucket's name carries a random suffix
   # and lives in a stack this one cannot reference without a dependency cycle, so it is
   # scoped by ARN prefix, not an exact ARN. The host writes the sweep result objects the
-  # worker reads back; the worker itself writes only Prefect's own resume state (the
-  # persisted task result and cache-key records) under the prefect/ prefixes.
+  # worker reads back; the worker itself writes only under its own prefixes: Prefect's resume
+  # state under prefect/, the render task's charts under sweeps/<run>/charts/, and the
+  # kv-ab flow's labelled rung records under kv-ab/.
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ResultsBucketObjects" && contains(s.Action, "s3:GetObject") && s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*"]) == 1
     error_message = "The policy must allow s3:GetObject on the results bucket objects, scoped by ARN prefix."
@@ -137,11 +138,18 @@ run "worker_layer_shape" {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ChartObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/sweeps/*/charts/*")]) == 1
     error_message = "The policy must allow s3:PutObject on the sweeps/<run>/charts/ prefix for the render task's plot uploads."
   }
+  # The kv-cache-extension-ab flow writes each rung's labelled record under
+  # kv-ab/<run>/<arm>-r<n>/ at the bucket root (#326), so the worker needs PutObject on the
+  # kv-ab/ prefix: a separate statement scoped to exactly it.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbRecordObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-ab/*")]) == 1
+    error_message = "The policy must allow s3:PutObject on the kv-ab/ prefix for the kv-ab flow's rung records."
+  }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
   # written as a bare string or appended to a statement's resource list.
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if contains(s.Action, "s3:PutObject") && length([for r in try(tolist(s.Resource), [s.Resource]) : r if r == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*"]) > 0]) == 0
-    error_message = "s3:PutObject must be scoped to the Prefect prefixes, never the bucket-wide objects the host owns."
+    error_message = "s3:PutObject must be scoped to the worker's own prefixes, never the bucket-wide objects the host owns."
   }
   # No wildcard or destructive S3 grant slips past the scoped PutObject above (s3:*,
   # s3:DeleteObject, or a bare * would all grant write on the results the host owns).
