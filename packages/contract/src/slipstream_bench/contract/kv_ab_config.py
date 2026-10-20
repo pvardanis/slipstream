@@ -1,11 +1,12 @@
 """The kv-cache-extension-ab workload config: what both arms of the A/B run.
 
-bench/kv-cache-extension-ab.yaml holds the workload the KV cache offload A/B measures
-under each arm: the engine knobs held fixed across both arms, the prefix share, the
-concurrency ladder, the warmup rung, the runs per arm, and the client-load knobs the knob
-sweep's cells share (``LoadKnobs``). It is validated on load, so a malformed workload fails
-before the first GPU redeploy. The rig's capacities — the CPU tier and max-model-len — are
-not here: the orchestration worker reads them off the vLLM manifest that configures them.
+bench/kv-cache-extension-ab-agent.yaml and bench/kv-cache-extension-ab-chat.yaml each hold
+a workload the KV cache offload A/B measures under each arm: the engine knobs held fixed
+across both arms, the prefix share, the concurrency ladder, the warmup rung, the runs per
+arm, and the client-load knobs the knob sweep's cells share (``LoadKnobs``). It is
+validated on load, so a malformed workload fails before the first GPU redeploy. The rig's
+capacities — the CPU tier, its chunk size, and max-model-len — are not here: the
+orchestration worker reads them off the vLLM manifest that configures them.
 """
 
 from pathlib import Path
@@ -46,6 +47,9 @@ class KvAbEngine(BaseModel):
     # fp8 only: the guard sizes the CPU tier at fp8's bytes per token, so another dtype
     # would let a working set the tier cannot hold pass it.
     kv_cache_dtype: Literal["fp8"]
+    # The GPU KV pool size, which vLLM's --kv-cache-memory-bytes sets in place of the share
+    # gpu-memory-utilization leaves after weights and activations.
+    kv_cache_memory_bytes: PositiveInt
 
 
 class KvAbConfig(BaseModel):
@@ -122,7 +126,7 @@ class KvAbConfig(BaseModel):
 def load_kv_ab_config(path: Path) -> KvAbConfig:
     """Read and validate the kv-cache-extension-ab config at ``path``.
 
-    :param path: the config YAML, e.g. bench/kv-cache-extension-ab.yaml.
+    :param path: the config YAML, e.g. bench/kv-cache-extension-ab-agent.yaml.
     :return: the validated config.
     :raise KvAbConfigError: when the file is missing, unreadable, empty, not valid YAML,
         or fails validation.

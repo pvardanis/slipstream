@@ -1,10 +1,11 @@
 """Tests for the kv-cache-extension-ab rig: its capacities and the workload guards.
 
-The rig's CPU tier size and max-model-len are read off the vLLM manifest that configures
-them, its single source; the guards hold each request within max-model-len and the
-workload's working set above the GPU KV pool and within the CPU tier, so the A/B
-measures offload rather than a cache that never fills or a tier that cannot hold the
-workload.
+The rig's CPU tier size, its chunk size, and max-model-len are read off the vLLM manifest
+that configures them, their single source. The guards hold each request within
+max-model-len, each prefix to whole LMCache chunks, the prompts' chunks within the CPU
+tier, and the working set above a GPU KV pool that still holds the top rung's requests,
+so the A/B measures offload rather than a cache that never fills, a tier that cannot hold
+the workload, or preemption.
 """
 
 from pathlib import Path
@@ -12,14 +13,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from slipstream_bench.contract.kv_ab_config import load_kv_ab_config
+from slipstream_bench.contract.kv_ab_config import KvAbConfig, load_kv_ab_config
 from slipstream_bench.orchestration.digest import DigestError
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     KvAbRigError,
     KvAbWorkloadError,
     check_fits_rig,
-    check_overflows_gpu_pool,
+    check_gpu_pool,
     read_kv_ab_rig,
 )
 
@@ -32,6 +33,7 @@ def test_the_committed_manifest_yields_the_rig_capacities() -> None:
 
     assert rig.max_model_len == 4096
     assert rig.cpu_tier_tokens == 58_254
+    assert rig.chunk_tokens == 256
 
 
 def _write_manifest(tmp_path: Path, *, args: list[str], env: dict[str, str]) -> Path:
@@ -49,7 +51,7 @@ def _write_manifest(tmp_path: Path, *, args: list[str], env: dict[str, str]) -> 
 
 
 _ARGS = ["--max-model-len", "4096"]
-_ENV = {"LMCACHE_MAX_LOCAL_CPU_SIZE": "4.0"}
+_ENV = {"LMCACHE_MAX_LOCAL_CPU_SIZE": "4.0", "LMCACHE_CHUNK_SIZE": "256"}
 
 
 @pytest.mark.parametrize(
@@ -70,7 +72,9 @@ def test_a_manifest_without_a_positive_tier_size_is_rejected(
     tmp_path: Path, size: str | None
 ) -> None:
     """An absent, unparseable, empty, or non-finite tier size cannot size the tier."""
-    env = {} if size is None else {"LMCACHE_MAX_LOCAL_CPU_SIZE": size}
+    env = {"LMCACHE_CHUNK_SIZE": "256"}
+    if size is not None:
+        env["LMCACHE_MAX_LOCAL_CPU_SIZE"] = size
     manifest = _write_manifest(tmp_path, args=_ARGS, env=env)
 
     with pytest.raises(KvAbRigError, match="LMCACHE_MAX_LOCAL_CPU_SIZE"):
@@ -79,59 +83,147 @@ def test_a_manifest_without_a_positive_tier_size_is_rejected(
 
 def test_a_fractional_tier_size_is_read_as_gib(tmp_path: Path) -> None:
     """LMCache reserves int(size * 1024**3) bytes: 0.5 is 536,870,912 bytes."""
-    manifest = _write_manifest(
-        tmp_path, args=_ARGS, env={"LMCACHE_MAX_LOCAL_CPU_SIZE": "0.5"}
-    )
+    env = {**_ENV, "LMCACHE_MAX_LOCAL_CPU_SIZE": "0.5"}
+    manifest = _write_manifest(tmp_path, args=_ARGS, env=env)
 
     assert read_kv_ab_rig(manifest).cpu_tier_bytes == 536_870_912
 
 
-_CONFIG = load_kv_ab_config(
-    _COMMITTED_MANIFEST.parents[1] / "bench" / "kv-cache-extension-ab.yaml"
-)
-# 16 GiB holds 233,016 fp8 tokens: room for the committed 205,824-token working set.
-_ROOMY_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=16 * 1024**3)
-_G5_XLARGE_POOL = 185_696
+@pytest.mark.parametrize("size", [None, "", "0", "256.0", "²"])
+def test_a_manifest_without_a_positive_chunk_size_is_rejected(
+    tmp_path: Path, size: str | None
+) -> None:
+    """An absent, empty, zero, or non-integer chunk size cannot align a prefix."""
+    env = {"LMCACHE_MAX_LOCAL_CPU_SIZE": "4.0"}
+    if size is not None:
+        env["LMCACHE_CHUNK_SIZE"] = size
+    manifest = _write_manifest(tmp_path, args=_ARGS, env=env)
+
+    with pytest.raises(KvAbRigError, match="LMCACHE_CHUNK_SIZE"):
+        read_kv_ab_rig(manifest)
 
 
-def test_a_workload_within_the_window_and_the_tier_fits_the_rig() -> None:
-    """3712-token requests fit 4096; 205,824 working-set tokens fit 233,016 in the tier."""
-    check_fits_rig(_CONFIG, _ROOMY_RIG)
+_BENCH = _COMMITTED_MANIFEST.parents[1] / "bench"
+_AGENT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab-agent.yaml")
+_CHAT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab-chat.yaml")
+_KV_BYTES_PER_TOKEN = 73_728
+# The committed manifest's rig: a 4096-token window, a 4.0 GiB tier, 256-token chunks.
+_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
+
+
+def _with_load(config: KvAbConfig, **load: object) -> KvAbConfig:
+    """Copy the config with some of its load knobs replaced."""
+    return config.model_copy(update={"load": config.load.model_copy(update=load)})
+
+
+def _with_pool(config: KvAbConfig, tokens: int) -> KvAbConfig:
+    """Copy the config with a GPU KV pool of ``tokens`` fp8 tokens."""
+    engine = config.engine.model_copy(
+        update={"kv_cache_memory_bytes": tokens * _KV_BYTES_PER_TOKEN}
+    )
+    return config.model_copy(update={"engine": engine})
+
+
+@pytest.mark.parametrize("config", [_AGENT, _CHAT], ids=["agent", "chat"])
+def test_the_committed_workloads_fit_the_committed_manifest(config: KvAbConfig) -> None:
+    """Both workloads were sized against the g5.xlarge manifest's window, tier, and chunk."""
+    check_fits_rig(config, read_kv_ab_rig(_COMMITTED_MANIFEST))
 
 
 def test_a_request_past_max_model_len_is_refused() -> None:
     """3584 prompt plus 128 output tokens is 3712, past a 3700-token window."""
-    rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=16 * 1024**3)
+    rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
 
     with pytest.raises(KvAbWorkloadError, match="max-model-len"):
-        check_fits_rig(_CONFIG, rig)
+        check_fits_rig(_AGENT, rig)
 
 
-def test_a_working_set_past_the_cpu_tier_is_refused() -> None:
-    """The 4 GiB tier holds 58,254 tokens, a fraction of the 205,824-token set."""
-    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3)
+def test_a_request_exactly_filling_max_model_len_fits_the_rig() -> None:
+    """3584 prompt plus 128 output tokens is 3712, the whole of a 3712-token window."""
+    rig = KvAbRig(max_model_len=3712, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
 
-    with pytest.raises(KvAbWorkloadError, match="CPU tier"):
-        check_fits_rig(_CONFIG, rig)
-
-
-def test_a_working_set_that_exactly_fills_the_tier_fits_the_rig() -> None:
-    """205,824 tokens x 73,728 bytes is a tier the working set fills to the token."""
-    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=205_824 * 73_728)
-
-    check_fits_rig(_CONFIG, rig)
+    check_fits_rig(_AGENT, rig)
 
 
-def test_a_working_set_past_the_gpu_pool_passes() -> None:
-    """205,824 tokens overflow the g5.xlarge's 185,696-token pool."""
-    check_overflows_gpu_pool(_CONFIG, gpu_pool_tokens=_G5_XLARGE_POOL)
+def test_a_prefix_off_the_lmcache_chunk_grid_is_refused() -> None:
+    """A 3216-token prefix ends 144 tokens into its 13th chunk, which no prompt reuses."""
+    config = _with_load(_AGENT, align_blocks=16)
+
+    with pytest.raises(KvAbWorkloadError, match="256-token LMCache chunk"):
+        check_fits_rig(config, _RIG)
 
 
-@pytest.mark.parametrize("gpu_pool_tokens", [205_824, 300_000])
-def test_a_working_set_the_gpu_pool_holds_is_refused(gpu_pool_tokens: int) -> None:
+def test_prompts_that_exactly_fill_the_cpu_tier_fit_the_rig() -> None:
+    """8 prefixes' prompts of 3584 tokens, 14 whole chunks each, fill 28,672 tokens."""
+    rig = KvAbRig(
+        max_model_len=4096,
+        cpu_tier_bytes=28_672 * _KV_BYTES_PER_TOKEN,
+        chunk_tokens=256,
+    )
+
+    check_fits_rig(_AGENT, rig)
+
+
+def test_prompts_past_the_cpu_tier_are_refused() -> None:
+    """The unique tails share the tier with the prefixes, so one token short refuses."""
+    rig = KvAbRig(
+        max_model_len=4096,
+        cpu_tier_bytes=28_671 * _KV_BYTES_PER_TOKEN,
+        chunk_tokens=256,
+    )
+
+    with pytest.raises(KvAbWorkloadError, match="28672 tokens of prompt chunks"):
+        check_fits_rig(_AGENT, rig)
+
+
+def test_a_partial_last_chunk_counts_whole_against_the_cpu_tier() -> None:
+    """3600 tokens span 15 chunks: 8 prompts hold 30,720 tokens of tier, not 28,800."""
+    config = _with_load(_AGENT, total_len=3600)
+    rig = KvAbRig(
+        max_model_len=4096,
+        cpu_tier_bytes=30_719 * _KV_BYTES_PER_TOKEN,
+        chunk_tokens=256,
+    )
+
+    with pytest.raises(KvAbWorkloadError, match="30720 tokens of prompt chunks"):
+        check_fits_rig(config, rig)
+
+
+def test_a_configured_pool_that_holds_the_working_set_is_refused_before_deploy() -> (
+    None
+):
+    """A 24,576-token pool holds all 8 agent prefixes, so nothing would be evicted."""
+    with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
+        check_fits_rig(_with_pool(_AGENT, 24_576), _RIG)
+
+
+def test_a_configured_pool_below_the_top_rung_is_refused_before_deploy() -> None:
+    """4 requests of 3712 tokens need 14,848 tokens; 14,847 would preempt one."""
+    with pytest.raises(KvAbWorkloadError, match="top rung"):
+        check_fits_rig(_with_pool(_AGENT, 14_847), _RIG)
+
+
+@pytest.mark.parametrize("gpu_pool_tokens", [14_848, 16_384, 24_575])
+def test_a_scraped_pool_between_the_top_rung_and_the_working_set_passes(
+    gpu_pool_tokens: int,
+) -> None:
+    """The pool holds 4 x 3712 tokens and is overflowed by the 24,576-token set."""
+    check_gpu_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
+
+
+@pytest.mark.parametrize("gpu_pool_tokens", [24_576, 185_696])
+def test_a_scraped_pool_that_holds_the_working_set_is_refused(
+    gpu_pool_tokens: int,
+) -> None:
     """A pool that holds every prefix never evicts, so offload has nothing to serve."""
     with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
-        check_overflows_gpu_pool(_CONFIG, gpu_pool_tokens=gpu_pool_tokens)
+        check_gpu_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
+
+
+def test_a_scraped_pool_below_the_top_rung_is_refused() -> None:
+    """The engine sized the pool below 4 x 3712 tokens, so the top rung would preempt."""
+    with pytest.raises(KvAbWorkloadError, match="top rung"):
+        check_gpu_pool(_AGENT, gpu_pool_tokens=14_847)
 
 
 @pytest.mark.parametrize("env", ["LMCACHE_MAX_LOCAL_CPU_SIZE=4.0", {"a": "b"}])
@@ -179,7 +271,8 @@ def test_a_tier_size_sourced_through_value_from_is_rejected(tmp_path: Path) -> N
         {
             "name": "LMCACHE_MAX_LOCAL_CPU_SIZE",
             "valueFrom": {"configMapKeyRef": {"name": "lmcache", "key": "size"}},
-        }
+        },
+        {"name": "LMCACHE_CHUNK_SIZE", "value": "256"},
     ]
     manifest.write_text(yaml.safe_dump(document), encoding="utf-8")
 
@@ -187,25 +280,17 @@ def test_a_tier_size_sourced_through_value_from_is_rejected(tmp_path: Path) -> N
         read_kv_ab_rig(manifest)
 
 
-def test_a_request_exactly_filling_max_model_len_fits_the_rig() -> None:
-    """3584 prompt plus 128 output tokens is 3712, the whole of a 3712-token window."""
-    check_fits_rig(_CONFIG, KvAbRig(max_model_len=3712, cpu_tier_bytes=16 * 1024**3))
-
-
-def test_the_committed_manifest_tier_is_refused_for_the_committed_workload() -> None:
-    """The g5.xlarge manifest's 4 GiB tier holds 58,254 of the 205,824 tokens."""
-    rig = read_kv_ab_rig(_COMMITTED_MANIFEST)
-
-    with pytest.raises(KvAbWorkloadError, match="58254-token CPU tier"):
-        check_fits_rig(_CONFIG, rig)
-
-
 @pytest.mark.parametrize(
-    ("max_model_len", "cpu_tier_bytes"), [(0, 1024**3), (4096, 0), (4096, -1)]
+    ("max_model_len", "cpu_tier_bytes", "chunk_tokens"),
+    [(0, 1024**3, 256), (4096, 0, 256), (4096, -1, 256), (4096, 1024**3, 0)],
 )
 def test_a_rig_without_positive_capacities_is_rejected(
-    max_model_len: int, cpu_tier_bytes: int
+    max_model_len: int, cpu_tier_bytes: int, chunk_tokens: int
 ) -> None:
-    """A zero window or an empty tier is no rig to size a workload against."""
+    """A zero window, an empty tier, or a zero chunk is no rig to size a workload against."""
     with pytest.raises(ValueError, match="positive"):
-        KvAbRig(max_model_len=max_model_len, cpu_tier_bytes=cpu_tier_bytes)
+        KvAbRig(
+            max_model_len=max_model_len,
+            cpu_tier_bytes=cpu_tier_bytes,
+            chunk_tokens=chunk_tokens,
+        )
