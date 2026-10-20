@@ -36,6 +36,8 @@ from slipstream_bench.contract import (
     load_grid,
 )
 from slipstream_bench.orchestration.cell_run import (
+    PLACEHOLDER_BASE_URL,
+    PLACEHOLDER_OUT_DIR,
     CellExecutionContext,
     build_cell_execution,
     get_cell_knobs,
@@ -54,18 +56,6 @@ from slipstream_bench.orchestration.validity import DEFAULT_MAX_ERROR_RATE
 # The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
 # per flow, before any cell, so the whole point's ladder shares one proxy.
 _PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
-
-# Placeholder base_url: bench-sweep.sh supplies the real --base-url (the loopback
-# proxy) as a flag, and render_cell_config strips it, so the value enumerated here is
-# never sent — it only satisfies the non-empty CellConfig field.
-_PLACEHOLDER_BASE_URL = "http://127.0.0.1:0"
-
-# Placeholder out_dir: bench-sweep.sh runs the cell with its own --out-dir /out (the
-# container path it bind-mounts from the host result dir), and render_cell_config strips
-# out_dir, so the value enumerated here is never sent — it only satisfies the non-empty
-# CellConfig field. The worker's own per-point download dir is the ephemeral
-# TemporaryDirectory below, not this.
-_PLACEHOLDER_OUT_DIR = "/out"
 
 
 @dataclass(frozen=True)
@@ -264,9 +254,9 @@ def list_point_cells(grid: SweepGrid, context: SweepContext) -> list[CellConfig]
     sweep_config = build_point_sweep_config(
         grid,
         context.point_slug,
-        base_url=_PLACEHOLDER_BASE_URL,
+        base_url=PLACEHOLDER_BASE_URL,
         model=context.model,
-        out_dir=_PLACEHOLDER_OUT_DIR,
+        out_dir=PLACEHOLDER_OUT_DIR,
         commercial=context.commercial,
     )
     return list(sweep_config.cells())

@@ -30,6 +30,17 @@ from slipstream_bench.orchestration.tasks.cell import CellExecution
 # host). It reads the cell env this module prefixes and runs one docker cell.
 _BENCH_CELL_SCRIPT = "/usr/local/bin/bench-sweep.sh"
 
+# Placeholder base_url: bench-sweep.sh supplies the real --base-url (the loopback
+# proxy) as a flag, and render_cell_config strips it, so the value enumerated here is
+# never sent — it only satisfies the non-empty CellConfig field.
+PLACEHOLDER_BASE_URL = "http://127.0.0.1:0"
+
+# Placeholder out_dir: bench-sweep.sh runs the cell with its own --out-dir /out (the
+# container path it bind-mounts from the host result dir), and render_cell_config strips
+# out_dir, so the value enumerated here is never sent — it only satisfies the non-empty
+# CellConfig field. The worker downloads each result to its own scratch dir, not this.
+PLACEHOLDER_OUT_DIR = "/out"
+
 
 class CellResultError(Exception):
     """A cell that ran over SSM but whose result object could not be downloaded."""
