@@ -50,7 +50,10 @@ undeploy:
 # KV_CACHE_OFFLOAD=on turns on LMCache KV cache offload (#34, #325): the LMCache KV connector
 # and the 12Gi memory limit that holds its pinned CPU tier. It defaults to off, which
 # renders no connector and the 8Gi limit.
-# Only these five placeholders are substituted, so nothing else in the manifest
+# KV_CACHE_MEMORY_BYTES caps the GPU KV pool at that many bytes, as the KV cache
+# extension A/B (#326) runs it. It defaults to None, which vLLM parses as no cap, so
+# gpu-memory-utilization sizes the pool.
+# Only these six placeholders are substituted, so nothing else in the manifest
 # (an image tag, a shell-like token) is touched. Prints to stdout — pipe to
 # `kubectl apply -f -` (or `kubectl diff -f -` to preview before applying).
 _render-gpu-manifest:
@@ -76,9 +79,10 @@ _render-gpu-manifest:
     MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}" \
     KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}" \
     PREFIX_CACHING_FLAG="${PREFIX_CACHING_FLAG:---enable-prefix-caching}" \
+    KV_CACHE_MEMORY_BYTES="${KV_CACHE_MEMORY_BYTES:-None}" \
     KV_TRANSFER_CONFIG="${kv_transfer_config}" \
     MEMORY_LIMIT="${memory_limit}" \
-      envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG} ${KV_TRANSFER_CONFIG} ${MEMORY_LIMIT}' <{{ gpu_manifests }}
+      envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG} ${KV_CACHE_MEMORY_BYTES} ${KV_TRANSFER_CONFIG} ${MEMORY_LIMIT}' <{{ gpu_manifests }}
 
 # Deploy the GPU vLLM replica and wait for it to serve. Karpenter provisions the
 # g5 on demand once the pod requests a GPU, so the wait covers node bring-up, the
@@ -86,8 +90,9 @@ _render-gpu-manifest:
 # vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses. The
 # manifest is rendered (see `_render-gpu-manifest`) so the swept engine knobs
 # default to the committed rig unless the MAX_NUM_SEQS / KV_CACHE_DTYPE /
-# PREFIX_CACHING_FLAG env vars override them, and KV cache offload stays off unless
-# KV_CACHE_OFFLOAD=on.
+# PREFIX_CACHING_FLAG env vars override them, KV cache offload stays off unless
+# KV_CACHE_OFFLOAD=on, and the GPU KV pool stays uncapped unless KV_CACHE_MEMORY_BYTES
+# is set.
 [group('serve')]
 gpu-deploy: _ensure-api-key
     #!/usr/bin/env bash

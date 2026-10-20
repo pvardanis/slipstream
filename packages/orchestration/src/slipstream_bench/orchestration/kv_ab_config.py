@@ -7,6 +7,8 @@ arm, and the client-load knobs the knob sweep's cells share (``LoadKnobs``). Eac
 validated on load, so a malformed workload fails before the first GPU redeploy. The rig's
 capacities — the CPU tier, its chunk size, and max-model-len — are not here:
 ``kv_ab_rig`` reads them off the vLLM manifest that configures them.
+:func:`get_kv_ab_engine_args` turns the engine knobs into the args each arm's redeploy
+renders into that manifest.
 """
 
 from pathlib import Path
@@ -23,11 +25,15 @@ from slipstream_bench.contract.config import LoadKnobs, SweepError
 from slipstream_bench.contract.fields import PositiveInt, UniquePositiveInts
 from slipstream_bench.contract.naming import split_lengths
 from slipstream_bench.contract.yaml_model import load_yaml_model
+from slipstream_bench.orchestration.grid import EngineArgs, get_kv_engine_token
 
 # vLLM's KV block size: the manifest sets no --block-size, so the engine runs its default.
 # Only full blocks are prefix-cached, so a prefix that is not a whole number of blocks
 # leaves a recomputed tail that understates the reuse the arms compare.
 _VLLM_BLOCK_TOKENS = 16
+
+# Prefix caching is on in both arms, so the A/B measures the CPU tier over the GPU cache.
+_PREFIX_CACHING_ON = "--enable-prefix-caching"
 
 
 class KvAbConfigError(Exception):
@@ -141,6 +147,21 @@ class KvAbConfig(BaseModel):
         # split_lengths lets a share that floors to 0 tokens through as an empty prefix.
         if prefix_len == 0:
             raise empty_prefix
+
+
+def get_kv_ab_engine_args(engine: KvAbEngine) -> EngineArgs:
+    """Resolve the vLLM args both arms are redeployed with.
+
+    :param engine: the A/B's engine knobs.
+    :return: the knobs' engine args, with prefix caching on and the GPU KV pool capped
+        at the configured bytes.
+    """
+    return EngineArgs(
+        max_num_seqs=engine.max_num_seqs,
+        kv_engine_token=get_kv_engine_token(engine.kv_cache_dtype),
+        prefix_caching_flag=_PREFIX_CACHING_ON,
+        kv_cache_memory_bytes=engine.kv_cache_memory_bytes,
+    )
 
 
 def load_kv_ab_config(path: Path) -> KvAbConfig:

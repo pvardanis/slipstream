@@ -66,12 +66,17 @@ _CEILING_PATTERN = re.compile(
 _KV_POOL_PATTERN = re.compile(r"GPU KV cache size: (\d[\d,]*) tokens")
 
 # The manifest placeholders the knob sweep renders per point (k8s/vllm-gpu.yaml). Only
-# these three and the two KV cache offload ones below are substituted, so nothing else
-# in the manifest (an image tag, a shell-like token) is touched — matching the recipe's
-# envsubst allow-list.
+# these three, the GPU KV pool cap, and the two KV cache offload ones below are
+# substituted, so nothing else in the manifest (an image tag, a shell-like token) is
+# touched — matching the recipe's envsubst allow-list.
 _MAX_NUM_SEQS_PLACEHOLDER = "${MAX_NUM_SEQS}"
 _KV_CACHE_DTYPE_PLACEHOLDER = "${KV_CACHE_DTYPE}"
 _PREFIX_CACHING_PLACEHOLDER = "${PREFIX_CACHING_FLAG}"
+
+# The GPU KV pool cap. Uncapped renders "None", which vLLM parses as no
+# --kv-cache-memory-bytes, so gpu-memory-utilization sizes the pool.
+_KV_CACHE_MEMORY_BYTES_PLACEHOLDER = "${KV_CACHE_MEMORY_BYTES}"
+_KV_CACHE_MEMORY_BYTES_UNCAPPED = "None"
 
 # The KV cache offload switch renders two more placeholders, matching the recipe's
 # KV_CACHE_OFFLOAD toggle. On, vLLM loads LMCache through its V1 KV connector and the
@@ -138,19 +143,19 @@ def build_kubectl(*, binary: str = "kubectl") -> Kubectl:
 def render_gpu_manifest(
     manifest_text: str, *, engine_args: EngineArgs, kv_cache_offload: bool
 ) -> str:
-    """Substitute a point's swept engine args and the offload switch into the manifest.
+    """Substitute the engine args and the offload switch into the manifest.
 
     The Python counterpart to the recipe's ``envsubst`` (``just _render-gpu-manifest``):
     only ``${MAX_NUM_SEQS}``, ``${KV_CACHE_DTYPE}``, ``${PREFIX_CACHING_FLAG}``,
-    ``${KV_TRANSFER_CONFIG}``, and ``${MEMORY_LIMIT}`` are replaced, so nothing else in
-    the manifest is touched. Rendering in Python keeps the worker image free of a gettext
-    dependency.
+    ``${KV_CACHE_MEMORY_BYTES}``, ``${KV_TRANSFER_CONFIG}``, and ``${MEMORY_LIMIT}`` are
+    replaced, so nothing else in the manifest is touched. Rendering in Python keeps the
+    worker image free of a gettext dependency.
 
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
-    :param engine_args: the point's max-num-seqs, kv-cache token, and caching flag.
+    :param engine_args: the max-num-seqs, kv-cache token, caching flag, and pool cap.
     :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU tier.
-    :return: the manifest with the five placeholders rendered.
-    :raise ValueError: when the manifest lacks one of the five placeholders — a
+    :return: the manifest with the six placeholders rendered.
+    :raise ValueError: when the manifest lacks one of the six placeholders — a
         misspelled or dropped placeholder would otherwise render silently, its value
         never reaching vLLM.
     """
@@ -163,6 +168,11 @@ def render_gpu_manifest(
         _MAX_NUM_SEQS_PLACEHOLDER: str(engine_args.max_num_seqs),
         _KV_CACHE_DTYPE_PLACEHOLDER: engine_args.kv_engine_token,
         _PREFIX_CACHING_PLACEHOLDER: engine_args.prefix_caching_flag,
+        _KV_CACHE_MEMORY_BYTES_PLACEHOLDER: (
+            _KV_CACHE_MEMORY_BYTES_UNCAPPED
+            if engine_args.kv_cache_memory_bytes is None
+            else str(engine_args.kv_cache_memory_bytes)
+        ),
         _KV_TRANSFER_CONFIG_PLACEHOLDER: kv_transfer_config,
         _MEMORY_LIMIT_PLACEHOLDER: memory_limit,
     }

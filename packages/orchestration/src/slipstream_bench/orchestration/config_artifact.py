@@ -5,10 +5,11 @@ of which the serving image ref and the vLLM container's args are shown. The args
 embedded verbatim, swept placeholders and all
 (``${MAX_NUM_SEQS}``/``${KV_CACHE_DTYPE}``/``${PREFIX_CACHING_FLAG}``): the sweep-grid above
 decodes which value each swept placeholder takes per engine point (the KV cache offload
-placeholder ``${KV_TRANSFER_CONFIG}`` is no grid knob: the knob sweep always renders it
-off, ``None``), and the point slug on the Prefect graph names the point a redeploy ran, so
-the swept deltas are already read off the graph — resolving the args into one
-near-identical block per point would drown that signal. The rest of the manifest is
+placeholder ``${KV_TRANSFER_CONFIG}`` and the GPU KV pool cap ``${KV_CACHE_MEMORY_BYTES}``
+are no grid knobs: the knob sweep always renders both off, ``None``), and the point slug
+on the Prefect graph names the point a redeploy ran, so the swept deltas are already read
+off the graph — resolving the args into one near-identical block per point would drown
+that signal. The rest of the manifest is
 boilerplate the digest does not hash, so it is not embedded. The run is already
 versioned — the bench-client and orchestration image content-sha tags tie it to their
 builds — but neither is human-inspectable. :func:`render_config_artifact` folds the

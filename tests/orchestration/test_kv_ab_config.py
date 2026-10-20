@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from slipstream_bench.orchestration.grid import EngineArgs
 from slipstream_bench.orchestration.kv_ab_config import (
     KvAbConfigError,
+    get_kv_ab_engine_args,
     load_kv_ab_config,
 )
 
@@ -135,3 +137,17 @@ def test_a_non_positive_kv_cache_memory_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(KvAbConfigError, match="kv_cache_memory_bytes"):
         load_kv_ab_config(path)
+
+
+def test_the_engine_args_carry_the_knobs_with_prefix_caching_on_and_the_pool_capped() -> (
+    None
+):
+    """Both arms deploy the config's knobs, the GPU prefix cache, and the capped pool."""
+    config = load_kv_ab_config(_COMMITTED_CONFIG)
+
+    assert get_kv_ab_engine_args(config.engine) == EngineArgs(
+        max_num_seqs=64,
+        kv_engine_token="fp8",
+        prefix_caching_flag="--enable-prefix-caching",
+        kv_cache_memory_bytes=1_207_959_552,
+    )
