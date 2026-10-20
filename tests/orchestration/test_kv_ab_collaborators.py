@@ -38,7 +38,7 @@ from slipstream_bench.orchestration.validity import InvalidCellError
 _REPO = Path(__file__).parents[2]
 # One run per arm keeps the script short: off-r1, then on-r1.
 _CONFIG = load_kv_ab_config(
-    _REPO / "bench" / "kv-cache-extension-ab-agent.yaml"
+    _REPO / "bench" / "kv-cache-extension-ab.agent.yaml"
 ).model_copy(update={"runs_per_arm": 1})
 _RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
 _MODEL = "Qwen/Qwen3-8B-AWQ"
@@ -348,7 +348,7 @@ def test_the_flow_drives_its_workload_and_returns_the_record_pointers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workload = tmp_path / "kv-ab.yaml"
-    agent = (_REPO / "bench" / "kv-cache-extension-ab-agent.yaml").read_text(
+    agent = (_REPO / "bench" / "kv-cache-extension-ab.agent.yaml").read_text(
         encoding="utf-8"
     )
     workload.write_text(agent.replace("runs_per_arm: 3", "runs_per_arm: 1"))

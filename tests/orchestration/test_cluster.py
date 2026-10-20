@@ -333,7 +333,7 @@ def test_the_committed_manifest_caps_the_pool_at_the_kv_ab_workload_s_bytes(
     config = load_kv_ab_config(
         _COMMITTED_MANIFEST.parents[1]
         / "bench"
-        / f"kv-cache-extension-ab-{workload}.yaml"
+        / f"kv-cache-extension-ab.{workload}.yaml"
     )
 
     rendered = render_gpu_manifest(

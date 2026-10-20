@@ -30,7 +30,7 @@ from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
 
 _CONFIG = load_kv_ab_config(
-    Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab-agent.yaml"
+    Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab.agent.yaml"
 )
 _MODEL = "Qwen/Qwen3-8B-AWQ"
 _SERVING = ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v0.29.0")

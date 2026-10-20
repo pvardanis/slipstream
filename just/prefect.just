@@ -117,7 +117,7 @@ prefect-storage-down:
 # creates the pool; run it after `prefect-up`. The cluster-stable inputs become the
 # deployments' default parameters: region and results bucket are read from terraform,
 # the bench-client image from `_bench-image-ref`; run_id and instance_id are supplied per
-# run at trigger, and an A/B's workload config with them.
+# run at trigger.
 [group('prefect')]
 prefect-register:
     #!/usr/bin/env bash
@@ -150,18 +150,21 @@ prefect-register:
       --image-ref "${image}" \
       --work-pool {{ prefect_work_pool }}
 
-# Trigger the kv-cache-extension-ab deployment for one workload (`agent` or `chat`), as
-# run `run_id` against the bench host. The worker reads the workload's config from the
-# image at /app/bench/, so the local copy is checked only to fail fast on a typo. Its
-# records land under kv-ab/<run_id>/ in the results bucket. Run after `prefect-register`.
+# Trigger the kv-cache-extension-ab deployment against the bench host. The worker runs
+# the workload in the image's bench/kv-cache-extension-ab.yaml; to run a parked one
+# (e.g. kv-cache-extension-ab.chat.yaml), copy it over that file and rebuild the image
+# first. An empty run_id is a fresh UTC-timestamp run, as the CI sweep trigger names
+# one; passing a run's id back resumes it. Records land under kv-ab/<run_id>/ in the
+# results bucket. Run after `prefect-register`.
 [group('prefect')]
-kv-ab run_id workload="agent":
+kv-ab run_id="":
     #!/usr/bin/env bash
     set -euo pipefail
     run_id={{ quote(run_id) }}
-    config={{ quote("bench/kv-cache-extension-ab-" + workload + ".yaml") }}
-    [[ -n "${run_id}" ]] || { echo "run_id is empty" >&2; exit 1; }
-    [[ -f "${config}" ]] || { echo "no kv-ab workload config at ${config}" >&2; exit 1; }
+    if [[ -z "${run_id}" ]]; then
+      run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
+    echo "==> kv-ab run ${run_id} (resume: just kv-ab ${run_id})" >&2
     # Bare assignment so a failed output lookup aborts; the non-empty check catches the
     # exit-0-empty-stdout case (see `prefect-register`).
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
@@ -171,8 +174,7 @@ kv-ab run_id workload="agent":
     prefect_api_portforward "${namespace}" {{ prefect_port }}
     uv run prefect deployment run kv-cache-extension-ab/kv-cache-extension-ab \
       --param run_id="${run_id}" \
-      --param instance_id="${instance}" \
-      --param kv_ab_config="/app/${config}"
+      --param instance_id="${instance}"
 
 # Port-forward the Prefect UI/API to localhost and hold it open (Ctrl-C to stop).
 # No public endpoint — this is the only way in (ADR-0015 amendment). Visit

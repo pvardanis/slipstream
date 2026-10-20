@@ -1,8 +1,10 @@
 """The kv-cache-extension-ab workload config: what both arms of the A/B run.
 
-bench/kv-cache-extension-ab-agent.yaml and bench/kv-cache-extension-ab-chat.yaml each hold
-a workload the KV cache offload A/B measures under each arm: the engine knobs held fixed
-across both arms, the prefix share, the concurrency ladder, the warmup rung, the runs per
+bench/kv-cache-extension-ab.yaml holds the workload the KV cache offload A/B measures
+under each arm, the one config the orchestration image bakes and the deployment runs;
+other workloads, such as kv-cache-extension-ab.agent.yaml and .chat.yaml, are parked
+beside it and copied over it to run. A workload is the engine knobs held fixed across
+both arms, the prefix share, the concurrency ladder, the warmup rung, the runs per
 arm, and the client-load knobs the knob sweep's cells share (``LoadKnobs``). Each is
 validated on load, so a malformed workload fails before the first GPU redeploy. The rig's
 capacities — the CPU tier, its chunk size, and max-model-len — are not here:
@@ -167,7 +169,7 @@ def get_kv_ab_engine_args(engine: KvAbEngine) -> EngineArgs:
 def load_kv_ab_config(path: Path) -> KvAbConfig:
     """Read and validate the kv-cache-extension-ab config at ``path``.
 
-    :param path: the config YAML, e.g. bench/kv-cache-extension-ab-agent.yaml.
+    :param path: the config YAML, e.g. bench/kv-cache-extension-ab.yaml.
     :return: the validated config.
     :raise KvAbConfigError: when the file is missing, unreadable, empty, not valid YAML,
         or fails validation.

@@ -18,7 +18,7 @@ from slipstream_bench.orchestration.kv_ab_config import (
 )
 
 _BENCH = Path(__file__).parents[2] / "bench"
-_COMMITTED_CONFIG = _BENCH / "kv-cache-extension-ab-agent.yaml"
+_COMMITTED_CONFIG = _BENCH / "kv-cache-extension-ab.agent.yaml"
 
 
 @pytest.mark.parametrize(
@@ -29,7 +29,7 @@ def test_the_committed_configs_load_with_chunk_aligned_working_sets(
     name: str, prefix_len: int, working_set: int
 ) -> None:
     """3584 tokens at 90% floor to 3072 on 256-token chunks; at 50%, 1792 already is."""
-    config = load_kv_ab_config(_BENCH / f"kv-cache-extension-ab-{name}.yaml")
+    config = load_kv_ab_config(_BENCH / f"kv-cache-extension-ab.{name}.yaml")
 
     assert config.prefix_len == prefix_len
     assert config.working_set_tokens == working_set
