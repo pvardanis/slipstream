@@ -3,9 +3,9 @@
 # Each run redeploys the GPU with the arm's offload switch, runs one unrecorded warmup
 # cell at warmup_concurrency, then the max_concurrency ladder. The working set —
 # num_prefixes distinct prefixes of prefix_share of total_len, floored to whole
-# align_blocks — must exceed the GPU KV pool, and the prompts' chunks must fit the CPU
-# tier, or the A/B is refused; the tier size, its chunk size, and max-model-len are read
-# off k8s/vllm-gpu.yaml.
+# align_blocks — must exceed the GPU KV pool while the pool holds the top rung's requests,
+# and the prompts' chunks must fit the CPU tier, or the A/B is refused; the tier size, its
+# chunk size, and max-model-len are read off k8s/vllm-gpu.yaml.
 engine:
   # The knob sweep's best engine config. The ladder below never reaches it.
   max_num_seqs: 64

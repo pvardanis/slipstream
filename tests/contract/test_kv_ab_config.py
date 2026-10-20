@@ -31,6 +31,8 @@ def test_the_committed_configs_load_with_chunk_aligned_working_sets(
 
     assert config.prefix_len == prefix_len
     assert config.working_set_tokens == working_set
+    # 3584 prompt plus 128 output tokens: what one request holds in the GPU KV pool.
+    assert config.request_tokens == 3712
     # 16,384 tokens of fp8 KV at 73,728 bytes each: a 1.125 GiB GPU KV pool.
     assert config.engine.kv_cache_memory_bytes == 1_207_959_552
 

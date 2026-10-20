@@ -119,7 +119,7 @@ def test_a_working_set_the_gpu_pool_holds_is_refused_before_any_cell() -> None:
     """The pool is known only once the engine starts, so the first run stops there."""
     cluster = _FakeCluster(gpu_pool_tokens=[300_000])
 
-    with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
+    with pytest.raises(KvAbWorkloadError, match="working set fits"):
         drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
 
     assert cluster.calls == ["deploy off-r1 no-offload", "scrape"]
@@ -159,7 +159,7 @@ def test_a_later_run_whose_pool_holds_the_working_set_stops_before_its_cells() -
     """Each redeploy re-sizes the pool, so on-r1 is guarded on its own startup's size."""
     cluster = _FakeCluster(gpu_pool_tokens=[_CONFIGURED_POOL, 300_000])
 
-    with pytest.raises(KvAbWorkloadError, match="300000-token GPU KV pool"):
+    with pytest.raises(KvAbWorkloadError, match="fits the 300000-token GPU KV pool"):
         drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
 
     assert cluster.calls == [

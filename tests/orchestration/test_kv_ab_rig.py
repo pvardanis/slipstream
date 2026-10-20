@@ -193,7 +193,7 @@ def test_a_configured_pool_that_holds_the_working_set_is_refused_before_deploy()
     None
 ):
     """A 24,576-token pool holds all 8 agent prefixes, so nothing would be evicted."""
-    with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
+    with pytest.raises(KvAbWorkloadError, match="24576-token working set fits"):
         check_fits_rig(_with_pool(_AGENT, 24_576), _RIG)
 
 
@@ -216,7 +216,7 @@ def test_a_scraped_pool_that_holds_the_working_set_is_refused(
     gpu_pool_tokens: int,
 ) -> None:
     """A pool that holds every prefix never evicts, so offload has nothing to serve."""
-    with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
+    with pytest.raises(KvAbWorkloadError, match="24576-token working set fits"):
         check_gpu_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
 
 
@@ -224,6 +224,24 @@ def test_a_scraped_pool_below_the_top_rung_is_refused() -> None:
     """The engine sized the pool below 4 x 3712 tokens, so the top rung would preempt."""
     with pytest.raises(KvAbWorkloadError, match="top rung"):
         check_gpu_pool(_AGENT, gpu_pool_tokens=14_847)
+
+
+def test_a_configured_pool_a_byte_short_of_the_top_rung_is_refused() -> None:
+    """One byte under 14,848 tokens of KV floors to 14,847 whole tokens: a preempt."""
+    engine = _AGENT.engine.model_copy(
+        update={"kv_cache_memory_bytes": 14_848 * _KV_BYTES_PER_TOKEN - 1}
+    )
+
+    with pytest.raises(KvAbWorkloadError, match="top rung"):
+        check_fits_rig(_AGENT.model_copy(update={"engine": engine}), _RIG)
+
+
+def test_the_top_rung_is_the_ladder_s_highest_whatever_its_order() -> None:
+    """A [4, 1, 2] ladder still runs 4 requests of 3712 tokens at once."""
+    config = _AGENT.model_copy(update={"max_concurrency": [4, 1, 2]})
+
+    with pytest.raises(KvAbWorkloadError, match="top rung's 4 requests"):
+        check_gpu_pool(config, gpu_pool_tokens=14_847)
 
 
 @pytest.mark.parametrize("env", ["LMCACHE_MAX_LOCAL_CPU_SIZE=4.0", {"a": "b"}])
