@@ -6,9 +6,10 @@ alike. Each run redeploys the GPU with its arm's offload switch, which clears th
 cache tiers; scrapes the GPU KV pool the engine sized at startup and refuses a working set
 the pool holds; warms the arm's cache tiers with one unrecorded cell; then runs the
 concurrency ladder. A workload the manifest's capacities or its own configured pool
-already rule out is refused before the first redeploy. Its collaborators are injected as callables, so the whole path
-is testable against fakes with no cluster, GPU, or Prefect server. A run whose cells are
-all cached skips its redeploy; any other run is redone whole.
+already rule out is refused before the first redeploy. Its collaborators are injected as
+callables, so the whole path is testable against fakes with no cluster, GPU, or Prefect
+server. A run whose cells are all cached skips its redeploy; any other run is redone
+whole.
 """
 
 from collections.abc import Callable
