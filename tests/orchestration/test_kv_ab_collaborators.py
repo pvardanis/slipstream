@@ -139,13 +139,17 @@ class _Ssm:
 class _S3:
     """Serve each cell a valid result at its rung, or a failed one under a marked key.
 
-    Records each object written, and serves each record written back.
+    Records each object written, and serves each record written back; the chart upload
+    raises ``chart_error`` when set.
     """
 
-    def __init__(self, failing: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, failing: tuple[str, ...] = (), chart_error: Exception | None = None
+    ) -> None:
         self.puts: dict[str, dict[str, Any]] = {}
         self.charts: dict[str, bytes] = {}
         self._failing = failing
+        self._chart_error = chart_error
 
     def download_file(self, _bucket: str, key: str, dest: str) -> None:
         failed = any(marker in key for marker in self._failing)
@@ -161,6 +165,8 @@ class _S3:
     ) -> None:
         assert Bucket == "bench"
         if ContentType == "image/png":
+            if self._chart_error:
+                raise self._chart_error
             self.charts[Key] = Body
             return
         assert ContentType == "application/json"
@@ -378,9 +384,11 @@ def test_redeploying_the_same_arm_run_rolls_a_fresh_engine(tmp_path: Path) -> No
     assert first != again
 
 
-def test_the_flow_drives_its_workload_renders_it_and_returns_the_record_pointers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _drive_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, s3: _S3
+) -> tuple[list[str], list[str]]:
+    """Drive the flow over a one-run-per-arm workload, returning its pointers and the
+    metrics URLs it scraped."""
     workload = tmp_path / "kv-ab.yaml"
     agent = (_REPO / "bench" / "kv-cache-extension-ab.agent.yaml").read_text(
         encoding="utf-8"
@@ -397,7 +405,6 @@ def test_the_flow_drives_its_workload_renders_it_and_returns_the_record_pointers
 
     monkeypatch.setattr(kv_ab_module, "build_kubectl", lambda: kubectl)
     monkeypatch.setattr(kv_ab_module, "build_ssm_client", lambda _region: _Ssm())
-    s3 = _S3()
     monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: s3)
     monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
     monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
@@ -413,12 +420,37 @@ def test_the_flow_drives_its_workload_renders_it_and_returns_the_record_pointers
         vllm_manifest=_REPO / "k8s" / "vllm-gpu.yaml",
         metrics_url="http://engine:8000/metrics",
     )
+    return pointers, metrics_urls
 
-    assert pointers == [
-        f"s3://bench/kv-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.json"
-        for run in ("off-r1", "on-r1")
-        for cap in (1, 2, 4)
-    ]
+
+# The six rungs' record keys a one-run-per-arm A/B writes over the agent workload's ladder.
+_RECORD_KEYS = [
+    f"kv-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.json"
+    for run in ("off-r1", "on-r1")
+    for cap in (1, 2, 4)
+]
+
+
+def test_the_flow_drives_its_workload_renders_it_and_returns_the_record_pointers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = _S3()
+
+    pointers, metrics_urls = _drive_flow(tmp_path, monkeypatch, s3)
+
+    assert pointers == [f"s3://bench/{key}" for key in _RECORD_KEYS]
     assert set(metrics_urls) == {"http://engine:8000/metrics"}
     # The terminal render folds the records and uploads the chart under the run's charts.
     assert list(s3.charts) == ["sweeps/kv-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
+
+
+def test_a_failed_render_fails_the_flow_with_every_record_already_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = _S3(chart_error=OSError("chart upload failed"))
+
+    with pytest.raises(OSError, match="chart upload failed"):
+        _drive_flow(tmp_path, monkeypatch, s3)
+
+    # The records are in S3, so a re-run resumes every run and re-renders.
+    assert sorted(s3.puts) == sorted(_RECORD_KEYS)
