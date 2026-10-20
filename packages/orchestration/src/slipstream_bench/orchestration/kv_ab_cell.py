@@ -5,8 +5,9 @@ the rung's concurrency. ``bench-sweep.sh`` copies every raw cell result to
 ``sweeps/<RUN_ID>/``, so a run's cells run under the run id ``kv-ab/<run>/<arm>-r<n>``:
 their raw results land under ``sweeps/kv-ab/``, apart from any knob sweep's, and the
 labelled record the worker writes lands at the same path under ``kv-ab/``. The digest
-folds in the engine args both arms deploy and the cell's knobs, so a cached rung is
-re-measured when either changes; the arm and run are cache-key parts of their own.
+folds in the engine args both arms deploy, the rig's capacities, and the cell's knobs,
+so a cached rung is re-measured when any changes; the arm and run are cache-key parts
+of their own.
 The worker reads the engine's /metrics over the cluster network around each rung
 (:func:`fetch_metrics`) and writes each rung's record to S3 (:func:`write_kv_ab_record`).
 """
@@ -30,6 +31,7 @@ from slipstream_bench.orchestration.kv_ab_config import (
     KvAbConfig,
     get_kv_ab_engine_args,
 )
+from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
 from slipstream_bench.orchestration.validity import DEFAULT_MAX_ERROR_RATE
 
 # Poisson arrivals, the knob sweep's pinned burstiness. The workload's request rate is
@@ -85,7 +87,12 @@ def get_kv_ab_record_key(run: str, arm_run_slug: str, cell: CellConfig) -> str:
 
 
 def get_kv_ab_cell_digest(
-    config: KvAbConfig, cell: CellConfig, *, serving: ServingConfig, image_ref: str
+    config: KvAbConfig,
+    cell: CellConfig,
+    *,
+    serving: ServingConfig,
+    image_ref: str,
+    rig: KvAbRig,
 ) -> str:
     """Compute a rung's config digest, the cache-key part naming its config identity.
 
@@ -93,11 +100,15 @@ def get_kv_ab_cell_digest(
     :param cell: the rung's cell.
     :param serving: the run-wide model and vLLM serving image.
     :param image_ref: the bench-client image the cell runs.
+    :param rig: the rig capacities, the CPU tier among them, the on arm offloads to.
     :return: the cell's 64-char hex config digest.
     """
     return config_digest(
         model_yaml=serving.model_yaml,
-        point_knobs=asdict(get_kv_ab_engine_args(config.engine)),
+        point_knobs={
+            **asdict(get_kv_ab_engine_args(config.engine)),
+            "rig": asdict(rig),
+        },
         cell_params=get_cell_knobs(cell),
         vllm_image_ref=serving.vllm_image_ref,
         bench_image_ref=image_ref,
