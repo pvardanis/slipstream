@@ -45,7 +45,7 @@ Done when the rollout reports success. Terraform does not see this swap; `just s
 
 ## Step 3 — Register from the branch
 
-Run `just prefect-register` from the branch, so the deployment's parameters match the branch's flow, and hold `just prefect-ui` open in the background for the API port-forward. Trigger every run from the workstation; a `sweep-dispatch` run re-registers `main`'s deployment over this one.
+Run `just prefect-register-sweep` from the branch (`just prefect-register-kv-ab` for the KV cache A/B), so the deployment's parameters match the branch's flow, and hold `just prefect-ui` open in the background for the API port-forward. Trigger every run from the workstation; a `sweep-dispatch` run re-registers `main`'s deployment over this one.
 
 ## Step 4 — Write the test grids
 
