@@ -1,10 +1,11 @@
-"""The knob sweep's in-cluster collaborators: GPU redeploy and ceiling scrape.
+"""The in-cluster collaborators: GPU redeploy, ceiling scrape, and GPU KV pool scrape.
 
-Exercises deploy_gpu_point and scrape_ceiling against a fake kubectl that records the
-argv and stdin issued, and render/extract as pure functions — no cluster. Asserts the
+Exercises deploy_gpu, deploy_gpu_point, scrape_ceiling, and scrape_gpu_kv_pool against
+a fake kubectl that records the argv and stdin issued, and render/extract as pure
+functions — no cluster. Asserts the
 redeploy applies only the Deployment document (the worker's RBAC grants get/patch on
 deploy/vllm-gpu, not the manifest's Namespace or Service), renders the point's knobs,
-then waits the rollout; and that the scrape returns the last ceiling line or raises.
+then waits the rollout; and that each scrape returns the last matching line or raises.
 """
 
 import json
@@ -20,12 +21,14 @@ from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration.cluster import (
     CeilingScrapeError,
     KubectlError,
+    KvPoolScrapeError,
     build_kubectl,
     deploy_gpu,
     deploy_gpu_point,
     extract_deployment_doc,
     render_gpu_manifest,
     scrape_ceiling,
+    scrape_gpu_kv_pool,
 )
 from slipstream_bench.orchestration.grid import get_engine_args
 
@@ -419,6 +422,27 @@ def test_scrape_raises_when_the_log_carries_no_ceiling() -> None:
 
     with pytest.raises(CeilingScrapeError, match=_POINT.slug()):
         scrape_ceiling(_POINT, kubectl=kubectl)
+
+
+_KV_POOL_LOG = """\
+INFO startup begins
+INFO GPU KV cache size: 185,696 tokens, Maximum concurrency for 4,096 tokens per request: 45.34x
+INFO serving
+"""
+
+
+def test_scrape_gpu_kv_pool_reads_the_token_count_off_the_startup_log() -> None:
+    kubectl = _FakeKubectl(logs=_KV_POOL_LOG)
+
+    assert scrape_gpu_kv_pool(kubectl=kubectl) == 185_696
+    assert kubectl.calls[0][0] == ["logs", "-n", "slipstream", "deployment/vllm-gpu"]
+
+
+def test_scrape_gpu_kv_pool_raises_when_the_log_carries_no_pool_size() -> None:
+    kubectl = _FakeKubectl(logs="INFO startup\nINFO serving, no pool line\n")
+
+    with pytest.raises(KvPoolScrapeError, match="deployment/vllm-gpu"):
+        scrape_gpu_kv_pool(kubectl=kubectl)
 
 
 def test_build_kubectl_returns_stdout_and_passes_stdin() -> None:
