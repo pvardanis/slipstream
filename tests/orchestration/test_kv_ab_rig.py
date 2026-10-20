@@ -12,12 +12,13 @@ import pytest
 import yaml
 
 from slipstream_bench.contract.kv_ab_config import load_kv_ab_config
+from slipstream_bench.orchestration.digest import DigestError
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     KvAbRigError,
-    WorkingSetError,
-    check_fits_context,
-    check_working_set,
+    KvAbWorkloadError,
+    check_fits_rig,
+    check_overflows_gpu_pool,
     read_kv_ab_rig,
 )
 
@@ -92,36 +93,53 @@ _ROOMY_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=16 * 1024**3)
 _G5_XLARGE_POOL = 185_696
 
 
-def test_a_working_set_past_the_gpu_pool_and_within_the_tier_passes() -> None:
-    """205,824 tokens overflow the 185,696-token pool and fit 233,016 in the tier."""
-    check_working_set(_CONFIG, _ROOMY_RIG, gpu_pool_tokens=_G5_XLARGE_POOL)
-
-
-@pytest.mark.parametrize("gpu_pool_tokens", [205_824, 300_000])
-def test_a_working_set_the_gpu_pool_holds_is_refused(gpu_pool_tokens: int) -> None:
-    """A pool that holds every prefix never evicts, so offload has nothing to serve."""
-    with pytest.raises(WorkingSetError, match="GPU KV pool"):
-        check_working_set(_CONFIG, _ROOMY_RIG, gpu_pool_tokens=gpu_pool_tokens)
-
-
-def test_a_working_set_past_the_cpu_tier_is_refused() -> None:
-    """The 4 GiB tier holds 58,254 tokens, a fraction of the 205,824-token set."""
-    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3)
-
-    with pytest.raises(WorkingSetError, match="CPU tier"):
-        check_working_set(_CONFIG, rig, gpu_pool_tokens=_G5_XLARGE_POOL)
-
-
-def test_a_working_set_that_exactly_fills_the_tier_passes() -> None:
-    """205,824 tokens x 73,728 bytes is a tier the working set fills to the token."""
-    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=205_824 * 73_728)
-
-    check_working_set(_CONFIG, rig, gpu_pool_tokens=_G5_XLARGE_POOL)
+def test_a_workload_within_the_window_and_the_tier_fits_the_rig() -> None:
+    """3712-token requests fit 4096; 205,824 working-set tokens fit 233,016 in the tier."""
+    check_fits_rig(_CONFIG, _ROOMY_RIG)
 
 
 def test_a_request_past_max_model_len_is_refused() -> None:
     """3584 prompt plus 128 output tokens is 3712, past a 3700-token window."""
     rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=16 * 1024**3)
 
-    with pytest.raises(WorkingSetError, match="max-model-len"):
-        check_fits_context(_CONFIG, rig)
+    with pytest.raises(KvAbWorkloadError, match="max-model-len"):
+        check_fits_rig(_CONFIG, rig)
+
+
+def test_a_working_set_past_the_cpu_tier_is_refused() -> None:
+    """The 4 GiB tier holds 58,254 tokens, a fraction of the 205,824-token set."""
+    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3)
+
+    with pytest.raises(KvAbWorkloadError, match="CPU tier"):
+        check_fits_rig(_CONFIG, rig)
+
+
+def test_a_working_set_that_exactly_fills_the_tier_fits_the_rig() -> None:
+    """205,824 tokens x 73,728 bytes is a tier the working set fills to the token."""
+    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=205_824 * 73_728)
+
+    check_fits_rig(_CONFIG, rig)
+
+
+def test_a_working_set_past_the_gpu_pool_passes() -> None:
+    """205,824 tokens overflow the g5.xlarge's 185,696-token pool."""
+    check_overflows_gpu_pool(_CONFIG, gpu_pool_tokens=_G5_XLARGE_POOL)
+
+
+@pytest.mark.parametrize("gpu_pool_tokens", [205_824, 300_000])
+def test_a_working_set_the_gpu_pool_holds_is_refused(gpu_pool_tokens: int) -> None:
+    """A pool that holds every prefix never evicts, so offload has nothing to serve."""
+    with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
+        check_overflows_gpu_pool(_CONFIG, gpu_pool_tokens=gpu_pool_tokens)
+
+
+@pytest.mark.parametrize("env", ["LMCACHE_MAX_LOCAL_CPU_SIZE=4.0", {"a": "b"}])
+def test_a_vllm_env_that_is_not_a_list_is_rejected(tmp_path: Path, env: object) -> None:
+    """A malformed env block is named, not read as a container without a tier."""
+    manifest = _write_manifest(tmp_path, args=_ARGS, env={})
+    document = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    document["spec"]["template"]["spec"]["containers"][0]["env"] = env
+    manifest.write_text(yaml.safe_dump(document), encoding="utf-8")
+
+    with pytest.raises(DigestError, match="env is not a list"):
+        read_kv_ab_rig(manifest)

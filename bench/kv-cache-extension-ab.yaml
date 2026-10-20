@@ -11,7 +11,8 @@ engine:
 
 runs_per_arm: 3
 # 3584 prompt tokens at 90% floor to a 3216-token prefix: 64 prefixes make a
-# 205,824-token working set, past the g5.xlarge's 185,696-token GPU pool.
+# 205,824-token working set, past the g5.xlarge's 185,696-token GPU pool, which needs a CPU
+# tier of at least 14.14 GiB (205,824 x 73,728 bytes) in LMCACHE_MAX_LOCAL_CPU_SIZE.
 prefix_share: 90
 max_concurrency: [8, 16, 32, 64]
 warmup_concurrency: 4
