@@ -66,7 +66,10 @@ def get_kv_ab_cell(config: KvAbConfig, concurrency: int, *, model: str) -> CellC
 
 
 def get_kv_ab_run_prefix(run: str) -> str:
-    """Name the prefix an A/B's arm runs and charts nest under: ``kv-ab/<run>``.
+    """Name the run-id prefix an A/B's arm runs nest under: ``kv-ab/<run>``.
+
+    The labelled records land under this prefix at the bucket root, and the bench host's
+    raw results and the run's chart under ``sweeps/`` plus it.
 
     :param run: the A/B's run id.
     :return: the prefix, without a trailing slash.
