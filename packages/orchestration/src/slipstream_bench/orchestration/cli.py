@@ -1,13 +1,14 @@
-"""The orchestration entrypoint: drive the knob sweep, or one point's Tier-2 sweep.
+"""The orchestration entrypoint: drive the knob sweep or one point's Tier-2 sweep, register flows.
 
-Three commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
+Four commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
 sweep as one parent flow: it enumerates the grid's engine points and, per point,
 redeploys the GPU (Tier-1), scrapes the concurrency ceiling, and runs the point's Tier-2
 ladder, skipping a point whose cells already hold valid measurements. ``point-sweep``
 (ADR-0012 §Amendment) drives a single engine point's resumable Tier-2 ladder — the unit
 ``knob-sweep`` runs per point, kept its own command for driving one point by hand.
 ``register-knob-sweep`` registers ``knob-sweep`` as a Prefect deployment on the process
-work pool, the entrypoint the EKS worker runs unattended.
+work pool, the entrypoint the EKS worker runs unattended; ``register-kv-ab`` registers the
+KV cache offload A/B (#326) the same way.
 
 The two sweep commands read the point context and the run-wide config digest inputs, and
 wire the S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
@@ -26,6 +27,7 @@ from prefect.exceptions import ObjectNotFound
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
+from slipstream_bench.orchestration.flows.kv_ab import kv_ab_flow
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -240,17 +242,9 @@ def register_knob_sweep(
     :param commercial: run the commercial arm (needs a tokenizer).
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
     """
-    for name, value in (
-        ("region", region),
-        ("bucket", bucket),
-        ("image-ref", image_ref),
-        ("work-pool", work_pool),
-    ):
-        if not value.strip():
-            raise typer.BadParameter(
-                "must be a non-empty string", param_hint=f"--{name}"
-            )
-    _require_work_pool(work_pool)
+    _require_cluster_inputs(
+        region=region, bucket=bucket, image_ref=image_ref, work_pool=work_pool
+    )
     deployment_id = knob_sweep_flow.deploy(
         name="knob-sweep",
         work_pool_name=work_pool,
@@ -270,6 +264,73 @@ def register_knob_sweep(
         },
     )
     typer.echo(f"registered knob-sweep deployment {deployment_id}")
+
+
+@app.command("register-kv-ab")
+def register_kv_ab(
+    *,
+    region: Annotated[str, typer.Option(help="AWS region of the host and bucket.")],
+    bucket: Annotated[str, typer.Option(help="Results bucket (RESULTS_BUCKET).")],
+    image_ref: Annotated[str, typer.Option(help="Bench-client image reference.")],
+    work_pool: Annotated[
+        str, typer.Option(help="Process work pool the sweep worker polls.")
+    ] = "sweep-pool",
+    model_yaml: Annotated[
+        Path, typer.Option(help="In-image path to model.yaml, read on the worker.")
+    ] = Path("/app/model.yaml"),
+    kv_ab_config: Annotated[
+        Path,
+        typer.Option(help="In-image path to the A/B workload, read on the worker."),
+    ] = Path("/app/bench/kv-cache-extension-ab-agent.yaml"),
+    vllm_manifest: Annotated[
+        Path,
+        typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
+    ] = Path("/app/k8s/vllm-gpu.yaml"),
+    metrics_url: Annotated[
+        str, typer.Option(help="The GPU engine's /metrics URL, read from the worker.")
+    ] = "http://vllm-gpu.slipstream.svc:8000/metrics",
+    retries: Annotated[
+        int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
+    ] = 0,
+) -> None:
+    """Register the kv-cache-extension-ab deployment on the process work pool (#326).
+
+    Creates the deployment ``just kv-ab`` triggers with the run id, the bench host, and
+    the workload config. Registered as ``register-knob-sweep`` registers the knob sweep:
+    a module-path entrypoint, no image build, the cluster-stable inputs as default
+    parameters, each checked non-empty and the work pool checked present first.
+
+    :param region: AWS region of the host and bucket.
+    :param bucket: results bucket (RESULTS_BUCKET).
+    :param image_ref: bench-client image reference the cells run.
+    :param work_pool: process work pool the sweep worker polls.
+    :param model_yaml: in-image path to model.yaml, read on the worker at run time.
+    :param kv_ab_config: in-image path to the default A/B workload.
+    :param vllm_manifest: in-image path to k8s/vllm-gpu.yaml, read on the worker.
+    :param metrics_url: the GPU engine's /metrics URL, read from the worker.
+    :param retries: opt-in cell retries for a transient transport fault.
+    """
+    _require_cluster_inputs(
+        region=region, bucket=bucket, image_ref=image_ref, work_pool=work_pool
+    )
+    deployment_id = kv_ab_flow.deploy(
+        name="kv-cache-extension-ab",
+        work_pool_name=work_pool,
+        entrypoint_type=EntrypointType.MODULE_PATH,
+        build=False,
+        push=False,
+        parameters={
+            "region": region,
+            "bucket": bucket,
+            "image_ref": image_ref,
+            "model_yaml": str(model_yaml),
+            "kv_ab_config": str(kv_ab_config),
+            "vllm_manifest": str(vllm_manifest),
+            "metrics_url": metrics_url,
+            "retries": retries,
+        },
+    )
+    typer.echo(f"registered kv-cache-extension-ab deployment {deployment_id}")
 
 
 def build_sweep_context(
@@ -313,6 +374,26 @@ def build_sweep_context(
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )
+
+
+def _require_cluster_inputs(
+    *, region: str, bucket: str, image_ref: str, work_pool: str
+) -> None:
+    """Reject an empty cluster-stable input, then check the work pool is present.
+
+    :raise typer.BadParameter: when an input is blank or the work pool is absent.
+    """
+    for name, value in (
+        ("region", region),
+        ("bucket", bucket),
+        ("image-ref", image_ref),
+        ("work-pool", work_pool),
+    ):
+        if not value.strip():
+            raise typer.BadParameter(
+                "must be a non-empty string", param_hint=f"--{name}"
+            )
+    _require_work_pool(work_pool)
 
 
 def _require_work_pool(work_pool: str) -> None:

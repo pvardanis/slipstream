@@ -1,9 +1,10 @@
-"""The kv-ab driver over its production collaborators, with the transports faked.
+"""The kv-ab driver and flow over their production collaborators, with the transports faked.
 
 :func:`build_kv_ab_collaborators` binds the redeploy, the GPU KV pool scrape, the warmup,
 the ladder rungs, and the pending-run gate to kubectl, SSM, S3, and the engine's /metrics.
 These tests drive :func:`drive_kv_ab` over them, with real Prefect tasks whose storage is a
-tmp local filesystem, and assert what each arm run deploys, runs, and records.
+tmp local filesystem, and assert what each arm run deploys, runs, and records. The flow is
+run once with its transport builders swapped for the same fakes.
 """
 
 import base64
@@ -20,11 +21,13 @@ from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
 from slipstream_bench.orchestration.digest import ServingConfig
+from slipstream_bench.orchestration.flows import kv_ab as kv_ab_module
 from slipstream_bench.orchestration.flows.kv_ab import (
     KvAbInputs,
     KvAbResult,
     build_kv_ab_collaborators,
     drive_kv_ab,
+    kv_ab_flow,
 )
 from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
@@ -253,3 +256,45 @@ def test_a_completed_ab_resumes_every_run_without_redeploying(tmp_path: Path) ->
     assert result.pointers == first.pointers
     assert resumed.kubectl.applied == []
     assert resumed.ssm.commands == []
+
+
+def test_the_flow_drives_its_workload_and_returns_the_record_pointers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workload = tmp_path / "kv-ab.yaml"
+    agent = (_REPO / "bench" / "kv-cache-extension-ab-agent.yaml").read_text(
+        encoding="utf-8"
+    )
+    workload.write_text(agent.replace("runs_per_arm: 3", "runs_per_arm: 1"))
+    task = _isolated_task(tmp_path)
+    metrics = _Metrics()
+    metrics_urls: list[str] = []
+
+    def _fetch(url: str) -> str:
+        metrics_urls.append(url)
+        return metrics()
+
+    monkeypatch.setattr(kv_ab_module, "build_kubectl", _Kubectl)
+    monkeypatch.setattr(kv_ab_module, "build_ssm_client", lambda _region: _Ssm())
+    monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: _S3())
+    monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
+    monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
+
+    pointers = kv_ab_flow(
+        run_id="ab1",
+        instance_id="i-1",
+        region="us-east-1",
+        bucket="bench",
+        image_ref="bench:sha",
+        model_yaml=_REPO / "model.yaml",
+        kv_ab_config=workload,
+        vllm_manifest=_REPO / "k8s" / "vllm-gpu.yaml",
+        metrics_url="http://engine:8000/metrics",
+    )
+
+    assert pointers == [
+        f"s3://bench/kv-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.json"
+        for run in ("off-r1", "on-r1")
+        for cap in (1, 2, 4)
+    ]
+    assert set(metrics_urls) == {"http://engine:8000/metrics"}

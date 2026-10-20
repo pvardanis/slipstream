@@ -89,6 +89,23 @@ def enable_milestone_logging() -> None:
     logging.getLogger(_PACKAGE_LOGGER).setLevel(logging.INFO)
 
 
+def tag_run_with_group(run_id: str) -> None:
+    """Tag the running flow run ``run=<run-id>``, the group the UI filters a run by.
+
+    The knob sweep's point sweeps tag their own runs through the ``tags`` context manager
+    (:func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep`); a parent
+    run is already created when its flow body runs, so that context manager cannot reach it
+    — its run is updated through the API instead. The update overwrites tags rather than
+    merging, so the current set is read and the run tag added to it. A direct call outside a
+    flow run (no runtime id) is a no-op.
+    """
+    flow_run_id = flow_run.id
+    if flow_run_id is None:
+        return
+    with get_client(sync_client=True) as client:
+        client.update_flow_run(flow_run_id, tags=set(flow_run.tags) | {f"run={run_id}"})
+
+
 # The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
 DeployFn = Callable[[EnginePoint], None]
@@ -231,7 +248,7 @@ def knob_sweep_flow(
     """
     logger = get_run_logger()
     enable_milestone_logging()
-    _tag_run_with_group(run_id)
+    tag_run_with_group(run_id)
     grid = load_grid(sweep_grid)
     points = list_engine_points(grid)
     logger.info("knob sweep run=%s starting: %d engine points", run_id, len(points))
@@ -530,20 +547,3 @@ def _get_point_run_id(inputs: KnobSweepInputs, point: EnginePoint) -> str:
     redeploy-skip gate address the same cells.
     """
     return f"{inputs.run}/{point.slug()}"
-
-
-def _tag_run_with_group(run_id: str) -> None:
-    """Tag the running knob-sweep flow run ``run=<run-id>``, matching its point sweeps.
-
-    The point sweeps tag their own runs through the ``tags`` context manager
-    (:func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep`); the parent
-    run is already created when this flow body runs, so that context manager cannot reach it
-    — its run is updated through the API instead. The update overwrites tags rather than
-    merging, so the current set is read and the run tag added to it. A direct call outside a
-    flow run (no runtime id) is a no-op.
-    """
-    flow_run_id = flow_run.id
-    if flow_run_id is None:
-        return
-    with get_client(sync_client=True) as client:
-        client.update_flow_run(flow_run_id, tags=set(flow_run.tags) | {f"run={run_id}"})
