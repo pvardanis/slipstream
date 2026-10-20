@@ -27,8 +27,8 @@ class EngineArgs:
     prefix-caching flag (``--enable-prefix-caching`` / ``--no-enable-prefix-caching``),
     and the GPU KV pool cap in bytes (``--kv-cache-memory-bytes``), which ``None`` leaves
     to ``--gpu-memory-utilization``. Binding them into one value keeps a caller from
-    threading loose strings it could transpose, and reuses the one label->token mapping
-    the manifest render reads.
+    threading loose values it could transpose, and both builders resolve the dtype
+    through the one label->token mapping (:func:`get_kv_engine_token`).
     """
 
     max_num_seqs: int

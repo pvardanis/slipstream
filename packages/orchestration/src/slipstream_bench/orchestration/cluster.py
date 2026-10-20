@@ -65,16 +65,16 @@ _CEILING_PATTERN = re.compile(
 # token under the blocks times the block size.
 _KV_POOL_PATTERN = re.compile(r"GPU KV cache size: (\d[\d,]*) tokens")
 
-# The manifest placeholders the knob sweep renders per point (k8s/vllm-gpu.yaml). Only
-# these three, the GPU KV pool cap, and the two KV cache offload ones below are
-# substituted, so nothing else in the manifest (an image tag, a shell-like token) is
+# The manifest placeholders a GPU redeploy renders (k8s/vllm-gpu.yaml). Only the knob
+# sweep's three swept ones, the GPU KV pool cap, and the two KV cache offload ones below
+# are substituted, so nothing else in the manifest (an image tag, a shell-like token) is
 # touched — matching the recipe's envsubst allow-list.
 _MAX_NUM_SEQS_PLACEHOLDER = "${MAX_NUM_SEQS}"
 _KV_CACHE_DTYPE_PLACEHOLDER = "${KV_CACHE_DTYPE}"
 _PREFIX_CACHING_PLACEHOLDER = "${PREFIX_CACHING_FLAG}"
 
-# The GPU KV pool cap. Uncapped renders "None", which vLLM parses as no
-# --kv-cache-memory-bytes, so gpu-memory-utilization sizes the pool.
+# The GPU KV pool cap. Uncapped renders "None", which vLLM parses as the flag's unset
+# default, so gpu-memory-utilization sizes the pool.
 _KV_CACHE_MEMORY_BYTES_PLACEHOLDER = "${KV_CACHE_MEMORY_BYTES}"
 _KV_CACHE_MEMORY_BYTES_UNCAPPED = "None"
 
@@ -230,7 +230,8 @@ def deploy_gpu(
     blocks on the rollout so nothing runs against a half-rolled engine. ``kubectl``
     raises on a non-zero exit, so a failed apply or a stalled rollout aborts loudly.
 
-    :param engine_args: the max-num-seqs, --kv-cache-dtype token, and caching flag.
+    :param engine_args: the max-num-seqs, --kv-cache-dtype token, caching flag, and GPU
+        KV pool cap.
     :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU tier.
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
     :param kubectl: the transport the apply and rollout wait are issued through.

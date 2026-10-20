@@ -6,17 +6,17 @@ embedded verbatim, swept placeholders and all
 (``${MAX_NUM_SEQS}``/``${KV_CACHE_DTYPE}``/``${PREFIX_CACHING_FLAG}``): the sweep-grid above
 decodes which value each swept placeholder takes per engine point (the KV cache offload
 placeholder ``${KV_TRANSFER_CONFIG}`` and the GPU KV pool cap ``${KV_CACHE_MEMORY_BYTES}``
-are no grid knobs: the knob sweep always renders both off, ``None``), and the point slug
-on the Prefect graph names the point a redeploy ran, so the swept deltas are already read
-off the graph — resolving the args into one near-identical block per point would drown
-that signal. The rest of the manifest is
-boilerplate the digest does not hash, so it is not embedded. The run is already
-versioned — the bench-client and orchestration image content-sha tags tie it to their
-builds — but neither is human-inspectable. :func:`render_config_artifact` folds the
-version anchors and those config inputs into one markdown body the flow publishes as a
-keyed artifact, so an operator reads the exact configuration a run executed from the
-Prefect UI without the files being copied to S3. The render itself is a pure function;
-the Prefect ``create_markdown_artifact`` call stays in the flow.
+are no grid knobs: the knob sweep always renders both ``None``, offload off and the pool
+uncapped), and the point slug on the Prefect graph names the point a redeploy ran, so the
+swept deltas are already read off the graph — resolving the args into one near-identical
+block per point would drown that signal. The rest of the manifest is boilerplate the
+digest does not hash, so it is not embedded. The run is already versioned — the
+bench-client and orchestration image content-sha tags tie it to their builds — but
+neither is human-inspectable. :func:`render_config_artifact` folds the version anchors
+and those config inputs into one markdown body the flow publishes as a keyed artifact, so
+an operator reads the exact configuration a run executed from the Prefect UI without the
+files being copied to S3. The render itself is a pure function; the Prefect
+``create_markdown_artifact`` call stays in the flow.
 """
 
 from collections.abc import Callable

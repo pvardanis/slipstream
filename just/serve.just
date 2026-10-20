@@ -52,7 +52,7 @@ undeploy:
 # renders no connector and the 8Gi limit.
 # KV_CACHE_MEMORY_BYTES caps the GPU KV pool at that many bytes, as the KV cache
 # extension A/B (#326) runs it. It defaults to None, which vLLM parses as no cap, so
-# gpu-memory-utilization sizes the pool.
+# gpu-memory-utilization sizes the pool; any other value than a positive byte count fails.
 # Only these six placeholders are substituted, so nothing else in the manifest
 # (an image tag, a shell-like token) is touched. Prints to stdout — pipe to
 # `kubectl apply -f -` (or `kubectl diff -f -` to preview before applying).
@@ -75,11 +75,17 @@ _render-gpu-manifest:
         ;;
     esac
     echo "KV cache offload: ${KV_CACHE_OFFLOAD:-off}" >&2
+    kv_cache_memory_bytes="${KV_CACHE_MEMORY_BYTES:-None}"
+    if [[ ! "${kv_cache_memory_bytes}" =~ ^(None|[1-9][0-9]*)$ ]]; then
+      echo "KV_CACHE_MEMORY_BYTES must be a positive byte count or None, got '${kv_cache_memory_bytes}'" >&2
+      exit 1
+    fi
+    echo "GPU KV pool cap: ${kv_cache_memory_bytes}" >&2
     # shellcheck disable=SC2016 # envsubst takes the literal ${...} allow-list, unexpanded.
     MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}" \
     KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}" \
     PREFIX_CACHING_FLAG="${PREFIX_CACHING_FLAG:---enable-prefix-caching}" \
-    KV_CACHE_MEMORY_BYTES="${KV_CACHE_MEMORY_BYTES:-None}" \
+    KV_CACHE_MEMORY_BYTES="${kv_cache_memory_bytes}" \
     KV_TRANSFER_CONFIG="${kv_transfer_config}" \
     MEMORY_LIMIT="${memory_limit}" \
       envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG} ${KV_CACHE_MEMORY_BYTES} ${KV_TRANSFER_CONFIG} ${MEMORY_LIMIT}' <{{ gpu_manifests }}
