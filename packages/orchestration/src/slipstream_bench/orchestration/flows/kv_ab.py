@@ -5,8 +5,8 @@ off, then on, ``runs_per_arm`` times — so a drift over the session lands on bo
 alike. Each run redeploys the GPU with its arm's offload switch, which clears the arm's
 cache tiers; scrapes the GPU KV pool the engine sized at startup and refuses a working set
 the pool holds; warms the arm's cache tiers with one unrecorded cell; then runs the
-concurrency ladder. A workload the manifest's capacities already rule out is refused
-before the first redeploy. Its collaborators are injected as callables, so the whole path
+concurrency ladder. A workload the manifest's capacities or its own configured pool
+already rule out is refused before the first redeploy. Its collaborators are injected as callables, so the whole path
 is testable against fakes with no cluster, GPU, or Prefect server. A run whose cells are
 all cached skips its redeploy; any other run is redone whole.
 """
@@ -19,7 +19,7 @@ from slipstream_bench.contract.kv_ab_config import KvAbConfig
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     check_fits_rig,
-    check_overflows_gpu_pool,
+    check_gpu_pool,
 )
 
 Arm = Literal["off", "on"]
@@ -123,8 +123,8 @@ def drive_kv_ab(
 ) -> KvAbOutcome:
     """Run every arm's runs, interleaved, each a redeploy, warmup, and ladder.
 
-    The context window and the CPU tier, both read off the manifest, are checked before
-    the first redeploy; the GPU pool after each, as the engine sized it at startup. Resume
+    The context window, the CPU tier, and the configured GPU pool are checked before the
+    first redeploy; the GPU pool again after each, as the engine sized it at startup. Resume
     is per whole run: a redeploy clears the arm's cache tiers, so a ladder measured on one
     deploy cannot be finished on another. A run whose every cell is cached skips its
     redeploy and reads its cells from cache; any other run is redeployed and re-measures
@@ -134,8 +134,9 @@ def drive_kv_ab(
     :param rig: the rig capacities read off the manifest.
     :param collaborators: the callables the runs are sequenced through.
     :return: the outcome — the cell pointers and the run/resume split.
-    :raise KvAbWorkloadError: when a request overruns max-model-len, or the working set
-        overflows the CPU tier or fits the GPU pool.
+    :raise KvAbWorkloadError: when a request overruns max-model-len, a prefix is off the
+        chunk grid, the prompts overflow the CPU tier, or the GPU pool holds the working
+        set or not the top rung's requests.
     """
     check_fits_rig(config, rig)
     pointers: list[str] = []
@@ -165,7 +166,7 @@ def _prepare_run(
     """Redeploy for the run's arm, guard the working set, and warm the arm's tiers."""
     collaborators.deploy(arm_run)
     gpu_pool_tokens = collaborators.scrape_gpu_pool()
-    check_overflows_gpu_pool(config, gpu_pool_tokens=gpu_pool_tokens)
+    check_gpu_pool(config, gpu_pool_tokens=gpu_pool_tokens)
     collaborators.warm_up(arm_run)
 
 

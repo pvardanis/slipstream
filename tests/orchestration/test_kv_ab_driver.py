@@ -21,18 +21,19 @@ from slipstream_bench.orchestration.flows.kv_ab import (
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
 
 _CONFIG = load_kv_ab_config(
-    Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab.yaml"
+    Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab-agent.yaml"
 )
-# 16 GiB holds 233,016 fp8 tokens: room for the committed 205,824-token working set.
-_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=16 * 1024**3)
-_G5_XLARGE_POOL = 185_696
+# The committed manifest's rig: a 4096-token window, a 4.0 GiB tier, 256-token chunks.
+_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
+# The pool the agent config's kv_cache_memory_bytes sets: 16,384 fp8 tokens.
+_CONFIGURED_POOL = 16_384
 
 
 @dataclass
 class _FakeCluster:
     """Records every collaborator call; reports pool sizes in turn, and the cached runs."""
 
-    gpu_pool_tokens: list[int] = field(default_factory=lambda: [_G5_XLARGE_POOL] * 6)
+    gpu_pool_tokens: list[int] = field(default_factory=lambda: [_CONFIGURED_POOL] * 6)
     cached_runs: frozenset[str] = frozenset()
     calls: list[str] = field(default_factory=list)
 
@@ -70,7 +71,7 @@ def _run_script(slug: str, offload: str) -> list[str]:
         f"deploy {slug} {offload}",
         "scrape",
         f"warmup {slug}",
-        *(f"cell {slug} c{c} refresh=True" for c in (8, 16, 32, 64)),
+        *(f"cell {slug} c{c} refresh=True" for c in (1, 2, 4)),
     ]
 
 
@@ -95,7 +96,7 @@ def test_the_arms_interleave_and_each_run_redeploys_warms_up_then_climbs_the_lad
 def test_a_request_past_max_model_len_is_refused_before_any_redeploy() -> None:
     """A context overrun fails every cell alike, so no GPU minute is spent on it."""
     cluster = _FakeCluster()
-    rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=16 * 1024**3)
+    rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
 
     with pytest.raises(KvAbWorkloadError, match="max-model-len"):
         drive_kv_ab(_CONFIG, rig, cluster.collaborators())
@@ -103,10 +104,10 @@ def test_a_request_past_max_model_len_is_refused_before_any_redeploy() -> None:
     assert cluster.calls == []
 
 
-def test_a_working_set_past_the_cpu_tier_is_refused_before_any_redeploy() -> None:
+def test_prompts_past_the_cpu_tier_are_refused_before_any_redeploy() -> None:
     """The tier is read off the manifest, so its overflow needs no GPU to find."""
     cluster = _FakeCluster()
-    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3)
+    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=1024**3, chunk_tokens=256)
 
     with pytest.raises(KvAbWorkloadError, match="CPU tier"):
         drive_kv_ab(_CONFIG, rig, cluster.collaborators())
@@ -133,7 +134,7 @@ def test_a_fully_cached_run_skips_its_redeploy_and_reads_its_cells_from_cache() 
     cached = [
         f"cell {slug} c{c} refresh=False"
         for slug in ("off-r1", "on-r1")
-        for c in (8, 16, 32, 64)
+        for c in (1, 2, 4)
     ]
     assert cluster.calls[: len(cached)] == cached
     assert cluster.calls[len(cached)] == "deploy off-r2 no-offload"
@@ -141,22 +142,22 @@ def test_a_fully_cached_run_skips_its_redeploy_and_reads_its_cells_from_cache() 
 
 
 def test_the_outcome_carries_every_cell_pointer_in_run_order() -> None:
-    """Six runs of a four-rung ladder are 24 pointers, off-r1's ladder first."""
+    """Six runs of a three-rung ladder are 18 pointers, off-r1's ladder first."""
     cluster = _FakeCluster()
 
     outcome = drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
 
-    assert len(outcome.pointers) == 24
+    assert len(outcome.pointers) == 18
     assert outcome.pointers[:2] == (
-        "s3://bucket/kv-ab/run/off-r1/c8.json",
-        "s3://bucket/kv-ab/run/off-r1/c16.json",
+        "s3://bucket/kv-ab/run/off-r1/c1.json",
+        "s3://bucket/kv-ab/run/off-r1/c2.json",
     )
-    assert outcome.pointers[-1] == "s3://bucket/kv-ab/run/on-r3/c64.json"
+    assert outcome.pointers[-1] == "s3://bucket/kv-ab/run/on-r3/c4.json"
 
 
 def test_a_later_run_whose_pool_holds_the_working_set_stops_before_its_cells() -> None:
     """Each redeploy re-sizes the pool, so on-r1 is guarded on its own startup's size."""
-    cluster = _FakeCluster(gpu_pool_tokens=[_G5_XLARGE_POOL, 300_000])
+    cluster = _FakeCluster(gpu_pool_tokens=[_CONFIGURED_POOL, 300_000])
 
     with pytest.raises(KvAbWorkloadError, match="300000-token GPU KV pool"):
         drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
