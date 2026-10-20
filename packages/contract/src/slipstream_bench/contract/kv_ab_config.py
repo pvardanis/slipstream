@@ -66,7 +66,7 @@ class KvAbConfig(BaseModel):
         """Hold the prefixes to whole vLLM KV blocks, and to a non-empty prefix.
 
         :raise ValueError: when ``align_blocks`` is not a positive multiple of the
-            block size, or the alignment floors the prefix to nothing.
+            block size, or the share and alignment floor the prefix to nothing.
         """
         align = self.load.align_blocks
         if align <= 0 or align % _VLLM_BLOCK_TOKENS:
@@ -74,11 +74,21 @@ class KvAbConfig(BaseModel):
                 f"load.align_blocks {align} must be a positive multiple of vLLM's "
                 f"{_VLLM_BLOCK_TOKENS}-token KV block, so every prefix is fully cached"
             )
+        empty_prefix = ValueError(
+            f"prefix_share {self.prefix_share}% of load.total_len "
+            f"{self.load.total_len} floors to no whole {align}-token block: raise "
+            f"load.total_len or prefix_share, or lower load.align_blocks"
+        )
         try:
-            split_lengths(self.load.total_len, self.prefix_share, align_blocks=align)
+            prefix_len, _ = split_lengths(
+                self.load.total_len, self.prefix_share, align_blocks=align
+            )
         except SweepError as error:
             # A pydantic validator reports only a ValueError as a validation error.
-            raise ValueError(str(error)) from error
+            raise empty_prefix from error
+        # split_lengths lets a share that floors to 0 tokens through as an empty prefix.
+        if prefix_len == 0:
+            raise empty_prefix
         return self
 
     @model_validator(mode="after")

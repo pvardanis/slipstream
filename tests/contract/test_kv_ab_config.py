@@ -60,7 +60,7 @@ def test_a_prefix_the_alignment_floors_to_nothing_is_rejected(tmp_path: Path) ->
     """90% of 16 tokens is a 14-token prefix, which no whole 16-token block holds."""
     path = _write_config(tmp_path, load__total_len=16)
 
-    with pytest.raises(KvAbConfigError, match="floors prefix 14"):
+    with pytest.raises(KvAbConfigError, match="floors to no whole 16-token block"):
         load_kv_ab_config(path)
 
 
@@ -91,4 +91,28 @@ def test_a_warmup_above_the_lowest_rung_is_rejected(tmp_path: Path) -> None:
     path = _write_config(tmp_path, warmup_concurrency=16)
 
     with pytest.raises(KvAbConfigError, match="warmup_concurrency 16"):
+        load_kv_ab_config(path)
+
+
+def test_a_share_that_floors_to_no_prefix_token_is_rejected(tmp_path: Path) -> None:
+    """5% of 16 tokens floors to an empty prefix before any block alignment."""
+    path = _write_config(tmp_path, prefix_share=5, load__total_len=16)
+
+    with pytest.raises(KvAbConfigError, match="floors to no whole 16-token block"):
+        load_kv_ab_config(path)
+
+
+def test_a_warmup_at_the_lowest_rung_loads(tmp_path: Path) -> None:
+    """A warmup at the ladder's first rung, 8, is still low concurrency."""
+    path = _write_config(tmp_path, warmup_concurrency=8)
+
+    assert load_kv_ab_config(path).warmup_concurrency == 8
+
+
+def test_a_config_that_is_not_yaml_is_named_as_the_kv_ab_config(tmp_path: Path) -> None:
+    """The parse error says which config failed, not only its path."""
+    path = tmp_path / "kv-ab.yaml"
+    path.write_text("engine: [unclosed", encoding="utf-8")
+
+    with pytest.raises(KvAbConfigError, match="kv-ab config .* is not valid YAML"):
         load_kv_ab_config(path)
