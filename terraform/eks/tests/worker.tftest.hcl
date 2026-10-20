@@ -1,7 +1,7 @@
 # Plan-level tests for the Prefect worker layer on the eks stack (#178): the worker's
-# IAM role + least-privilege policy (S3 results bucket read, SSM SendCommand to the
-# bench host), its Pod Identity association, the ServiceAccount RBAC scoped to
-# managing deploy/vllm-gpu, and the prefect-worker Helm release. They run offline —
+# IAM role + least-privilege policy (S3 results bucket read and prefix-scoped writes, SSM
+# SendCommand to the bench host), its Pod Identity association, the ServiceAccount RBAC
+# scoped to managing deploy/vllm-gpu, and the prefect-worker Helm release. They run offline —
 # the aws, helm, and kubernetes providers are mocked, and the bootstrap remote state
 # and the orchestration ECR image are stubbed with override_data — so the assertions
 # check the install's shape without standing a cluster up (ADR-0002 tier-1). A worker
@@ -138,12 +138,13 @@ run "worker_layer_shape" {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ChartObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/sweeps/*/charts/*")]) == 1
     error_message = "The policy must allow s3:PutObject on the sweeps/<run>/charts/ prefix for the render task's plot uploads."
   }
-  # The kv-cache-extension-ab flow writes each rung's labelled record under
-  # kv-ab/<run>/<arm>-r<n>/ at the bucket root (#326), so the worker needs PutObject on the
-  # kv-ab/ prefix: a separate statement scoped to exactly it.
+  # The kv-cache-extension-ab flow writes each rung's labelled record under kv-ab/<run>/ at
+  # the bucket root (#326), so the worker needs PutObject on the kv-ab/ prefix: a separate
+  # statement allowing that one action on exactly it, never the host's raw results under
+  # sweeps/.
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbRecordObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-ab/*")]) == 1
-    error_message = "The policy must allow s3:PutObject on the kv-ab/ prefix for the kv-ab flow's rung records."
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbRecordObjects" && s.Effect == "Allow" && length(s.Action) == 1 && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-ab/*")]) == 1
+    error_message = "The policy must allow only s3:PutObject on the kv-ab/ prefix for the kv-ab flow's rung records."
   }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
   # written as a bare string or appended to a statement's resource list.
