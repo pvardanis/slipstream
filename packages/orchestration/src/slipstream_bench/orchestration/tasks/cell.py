@@ -164,9 +164,11 @@ def is_cell_cached(
     :param task: the cell task (from :func:`cell_task` or :func:`build_cell_task`)
         whose cache is consulted.
     :param run_id: the run's bucket prefix the cell's pointer lies under
-        (``<run>/<point-slug>``), a cache-key part.
+        (``<run>/<point-slug>``, or ``kv-ab/<run>/<arm>-r<n>`` for an A/B), a
+        cache-key part.
     :param digest: the deep config digest, a cache-key part.
-    :param point_slug: the engine-knob point slug, a cache-key part.
+    :param point_slug: the engine-knob point slug, or the A/B's arm-run slug, a
+        cache-key part.
     :param cell_name: the client-load cell name, a cache-key part.
     :return: True when a record exists for the cell's key and ``task`` does not refresh
         its cache, so a run serves the cell from cache.

@@ -24,6 +24,7 @@ from prefect.artifacts import create_markdown_artifact
 from slipstream_bench.contract import read_result
 from slipstream_bench.contract.kv_ab_record import Arm, build_kv_ab_record
 from slipstream_bench.contract.prefix_cache_window import get_prefix_cache_window
+from slipstream_bench.orchestration.kv_ab_cell import MetricsError
 from slipstream_bench.orchestration.tasks.cell import (
     ArtifactPublisher,
     CellExecution,
@@ -99,10 +100,18 @@ def run_kv_ab_cell(
     :raise PrefixCacheError: when the snapshots yield no window, e.g. counters that went
         backwards because the engine restarted mid-cell.
     :raise KvAbRecordError: when an off-arm cell's KV connector counters advanced.
+    :raise MetricsError: when /metrics cannot be read; after the cell, the error names
+        the cell that ran, which the next run re-measures.
     """
     before = read_metrics()
     execute_func()
-    after = read_metrics()
+    try:
+        after = read_metrics()
+    except MetricsError as error:
+        raise MetricsError(
+            f"cell {result_path.name} ran but the /metrics read after it failed, so "
+            f"it has no window and no record; the next run re-measures it: {error}"
+        ) from error
     validate_cell(result_path)
     window = get_prefix_cache_window(
         before,
@@ -144,7 +153,8 @@ def _kv_ab_cell(
     """Measure one rung and return its record's pointer — the function Prefect wraps.
 
     ``run_id``, ``digest``, ``point_slug``, and ``cell_name`` are unread: they reach the
-    cache key only as call parameters (see the knob sweep's cell body).
+    cache key only as call parameters (see
+    :func:`slipstream_bench.orchestration.tasks.cell._bench_cell`).
 
     :return: the record's S3 pointer.
     """

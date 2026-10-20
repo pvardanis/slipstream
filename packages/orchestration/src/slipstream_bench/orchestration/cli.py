@@ -27,7 +27,7 @@ from prefect.exceptions import ObjectNotFound
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
-from slipstream_bench.orchestration.flows.kv_ab import kv_ab_flow
+from slipstream_bench.orchestration.flows.kv_ab import ENGINE_METRICS_URL, kv_ab_flow
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -288,7 +288,7 @@ def register_kv_ab(
     ] = Path("/app/k8s/vllm-gpu.yaml"),
     metrics_url: Annotated[
         str, typer.Option(help="The GPU engine's /metrics URL, read from the worker.")
-    ] = "http://vllm-gpu.slipstream.svc:8000/metrics",
+    ] = ENGINE_METRICS_URL,
     retries: Annotated[
         int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
     ] = 0,
@@ -298,7 +298,8 @@ def register_kv_ab(
     Creates the deployment ``just kv-ab`` triggers with the run id, the bench host, and
     the workload config. Registered as ``register-knob-sweep`` registers the knob sweep:
     a module-path entrypoint, no image build, the cluster-stable inputs as default
-    parameters, each checked non-empty and the work pool checked present first.
+    parameters. Region, bucket, and image ref are checked non-empty and the work pool
+    present first.
 
     :param region: AWS region of the host and bucket.
     :param bucket: results bucket (RESULTS_BUCKET).

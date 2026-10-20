@@ -109,14 +109,15 @@ prefect-storage-down:
 
 # Register the knob-sweep and kv-cache-extension-ab deployments on the process work pool,
 # so a sweep is triggered with `prefect deployment run knob-sweep/knob-sweep --param
-# run_id=... --param instance_id=...` (an A/B with `just kv-ab`) and picked up by the in-cluster worker (ADR-0015). The worker runs the
-# baked orchestration image, so the deployment stores a module-path entrypoint resolved by
-# import — no source is fetched and no image is built for the process pool. Registration
-# hits the in-cluster Prefect API over a transient port-forward (reaped on exit), the same
-# way `prefect-up` creates the pool; run it after `prefect-up`. The cluster-stable inputs
-# become the deployment's default parameters: region and results bucket are read from
-# terraform, the bench-client image from `_bench-image-ref`; run_id and instance_id are
-# supplied per run at trigger.
+# run_id=... --param instance_id=...`, an A/B with `just kv-ab`, and either is picked up
+# by the in-cluster worker (ADR-0015). The worker runs the baked orchestration image, so
+# the deployment stores a module-path entrypoint resolved by import — no source is
+# fetched and no image is built for the process pool. Registration hits the in-cluster
+# Prefect API over a transient port-forward (reaped on exit), the same way `prefect-up`
+# creates the pool; run it after `prefect-up`. The cluster-stable inputs become the
+# deployments' default parameters: region and results bucket are read from terraform,
+# the bench-client image from `_bench-image-ref`; run_id and instance_id are supplied per
+# run at trigger, and an A/B's workload config with them.
 [group('prefect')]
 prefect-register:
     #!/usr/bin/env bash

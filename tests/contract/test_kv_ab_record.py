@@ -55,3 +55,15 @@ def test_an_off_arm_cell_whose_connector_answered_is_rejected() -> None:
 
     with pytest.raises(KvAbRecordError, match="off arm"):
         build_kv_ab_record(_RESULT, arm="off", run=1, window=window)
+
+
+def test_an_on_arm_cell_the_connector_never_answered_is_rejected() -> None:
+    # vLLM asks the connector for every admitted request's GPU-missed tokens, and the GPU
+    # never serves a whole prompt, so an on-arm cell with no external queries ran on an
+    # engine without the connector and would credit "on" with the off arm's hit rate.
+    window = PrefixCacheWindow(
+        queries=1000, hits=600, external_queries=0, external_hits=0
+    )
+
+    with pytest.raises(KvAbRecordError, match="on arm"):
+        build_kv_ab_record(_RESULT, arm="on", run=1, window=window)

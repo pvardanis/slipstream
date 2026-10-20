@@ -100,9 +100,21 @@ _EXPOSITION = "# TYPE vllm:prefix_cache_queries counter\n"
 
 
 class _MetricsHandler(BaseHTTPRequestHandler):
-    """Serve the exposition at /metrics and a 500 anywhere else."""
+    """Serve the exposition at /metrics, a broken body at two paths, a 500 elsewhere."""
 
     def do_GET(self) -> None:
+        if self.path == "/truncated":
+            # Promise more bytes than are sent, then close mid-body.
+            self.send_response(200)
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            self.wfile.write(b"vllm:prefix")
+            return
+        if self.path == "/binary":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"\xff\xfe")
+            return
         status, body = (200, _EXPOSITION) if self.path == "/metrics" else (500, "")
         self.send_response(status)
         self.end_headers()
@@ -135,3 +147,19 @@ def test_an_unreachable_engine_fails_the_fetch() -> None:
     # Port 9 (discard) on loopback has no listener, so the connection is refused.
     with pytest.raises(MetricsError, match="127.0.0.1:9"):
         fetch_metrics("http://127.0.0.1:9/metrics", timeout_s=1.0)
+
+
+@pytest.mark.parametrize("path", ["/truncated", "/binary"])
+def test_an_engine_whose_body_cannot_be_read_fails_the_fetch(
+    _engine: str, path: str
+) -> None:
+    with pytest.raises(MetricsError, match=path):
+        fetch_metrics(f"{_engine}{path}")
+
+
+def test_a_metrics_url_that_is_not_http_is_rejected(tmp_path: Path) -> None:
+    exposition = tmp_path / "metrics"
+    exposition.write_text(_EXPOSITION, encoding="utf-8")
+
+    with pytest.raises(MetricsError, match="http"):
+        fetch_metrics(exposition.as_uri())

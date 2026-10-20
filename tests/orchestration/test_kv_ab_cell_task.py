@@ -17,7 +17,9 @@ from prefect import Task, flow
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
+from slipstream_bench.contract.kv_ab_record import Arm, KvAbRecordError
 from slipstream_bench.contract.prefix_cache_window import PrefixCacheError
+from slipstream_bench.orchestration.kv_ab_cell import MetricsError
 from slipstream_bench.orchestration.tasks.kv_ab_cell import (
     build_kv_ab_cell_task,
     run_kv_ab_cell,
@@ -71,17 +73,22 @@ class _Rung:
         self,
         result_path: Path,
         result: Mapping[str, object] = _VALID,
-        snapshots: tuple[str, str] = (_BEFORE, _AFTER),
+        snapshots: tuple[str | Exception, str | Exception] = (_BEFORE, _AFTER),
+        arm: Arm = "on",
     ) -> None:
         self._result_path = result_path
         self._result = result
         self._snapshots = iter(snapshots)
+        self._arm: Arm = arm
         self.calls: list[str] = []
         self.records: list[Mapping[str, Any]] = []
 
     def read_metrics(self) -> str:
         self.calls.append("metrics")
-        return next(self._snapshots)
+        snapshot = next(self._snapshots)
+        if isinstance(snapshot, Exception):
+            raise snapshot
+        return snapshot
 
     def execute(self) -> None:
         self.calls.append("cell")
@@ -97,7 +104,7 @@ class _Rung:
             self.execute,
             read_metrics=self.read_metrics,
             result_path=self._result_path,
-            arm="on",
+            arm=self._arm,
             run=1,
             model=_MODEL,
             write_record=self.write_record,
@@ -152,6 +159,31 @@ def test_a_cell_whose_counters_went_backwards_writes_no_record(
     with pytest.raises(PrefixCacheError, match="backwards"):
         rung.run()
 
+    assert rung.records == []
+
+
+def test_an_off_arm_cell_that_advanced_the_connector_writes_no_record(
+    tmp_path: Path,
+) -> None:
+    # _BEFORE to _AFTER advances the external counters, which an off arm never loads.
+    rung = _Rung(tmp_path / "cell.json", arm="off")
+
+    with pytest.raises(KvAbRecordError, match="off arm"):
+        rung.run()
+
+    assert rung.records == []
+
+
+def test_an_unreadable_after_snapshot_names_the_cell_that_ran(tmp_path: Path) -> None:
+    rung = _Rung(
+        tmp_path / "cell.json",
+        snapshots=(_BEFORE, MetricsError("could not read the engine's metrics")),
+    )
+
+    with pytest.raises(MetricsError, match=r"cell\.json ran") as raised:
+        rung.run()
+
+    assert isinstance(raised.value.__cause__, MetricsError)
     assert rung.records == []
 
 
