@@ -184,35 +184,33 @@ def extract_deployment_doc(manifest_text: str, *, deployment: str = _DEPLOYMENT)
     )
 
 
-def deploy_gpu_point(
-    point: EnginePoint,
+def deploy_gpu(
+    engine_args: EngineArgs,
     *,
-    grid: SweepGrid,
+    kv_cache_offload: bool,
     manifest_text: str,
     kubectl: Kubectl,
     namespace: str = _NAMESPACE,
     deployment: str = _DEPLOYMENT,
     rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
 ) -> None:
-    """Redeploy the GPU for one engine point's knobs and wait for the rollout (Tier-1).
+    """Redeploy the GPU with the given engine args and offload switch, then wait.
 
-    Renders the point's swept knobs into the manifest with KV cache offload off (the knob
-    sweep does not sweep offload), applies **only** the Deployment
-    document (the get + patch the worker's RBAC allows), then blocks on the rollout so
-    the point's ladder never runs against a half-rolled engine. ``kubectl`` raises on a
-    non-zero exit, so a failed apply or a stalled rollout aborts the point loudly.
+    Renders the engine args and the KV cache offload switch into the manifest, applies
+    **only** the Deployment document (the get + patch the worker's RBAC allows), then
+    blocks on the rollout so no cell runs against a half-rolled engine. ``kubectl``
+    raises on a non-zero exit, so a failed apply or a stalled rollout aborts loudly.
 
-    :param point: the engine-knob point to redeploy.
-    :param grid: the validated grid the point's manifest knobs are resolved from.
+    :param engine_args: the max-num-seqs, kv-cache token, and caching flag to run with.
+    :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU tier.
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
     :param kubectl: the transport the apply and rollout wait are issued through.
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment's name.
     :param rollout_timeout_s: the ceiling the rollout wait trips at.
     """
-    engine_args = get_engine_args(grid, point)
     rendered = render_gpu_manifest(
-        manifest_text, engine_args=engine_args, kv_cache_offload=False
+        manifest_text, engine_args=engine_args, kv_cache_offload=kv_cache_offload
     )
     deployment_doc = extract_deployment_doc(rendered, deployment=deployment)
     kubectl(["apply", "-n", namespace, "-f", "-"], deployment_doc)
@@ -226,6 +224,40 @@ def deploy_gpu_point(
             f"--timeout={int(rollout_timeout_s)}s",
         ],
         None,
+    )
+
+
+def deploy_gpu_point(
+    point: EnginePoint,
+    *,
+    grid: SweepGrid,
+    manifest_text: str,
+    kubectl: Kubectl,
+    namespace: str = _NAMESPACE,
+    deployment: str = _DEPLOYMENT,
+    rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
+) -> None:
+    """Redeploy the GPU for one engine point's knobs and wait for the rollout (Tier-1).
+
+    Resolves the point's swept knobs from the grid and redeploys with KV cache offload
+    off (the knob sweep does not sweep offload); see :func:`deploy_gpu`.
+
+    :param point: the engine-knob point to redeploy.
+    :param grid: the validated grid the point's manifest knobs are resolved from.
+    :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
+    :param kubectl: the transport the apply and rollout wait are issued through.
+    :param namespace: the namespace the Deployment lives in.
+    :param deployment: the Deployment's name.
+    :param rollout_timeout_s: the ceiling the rollout wait trips at.
+    """
+    deploy_gpu(
+        get_engine_args(grid, point),
+        kv_cache_offload=False,
+        manifest_text=manifest_text,
+        kubectl=kubectl,
+        namespace=namespace,
+        deployment=deployment,
+        rollout_timeout_s=rollout_timeout_s,
     )
 
 
