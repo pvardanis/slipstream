@@ -1,4 +1,4 @@
-<!-- ADR recording why the knob-sweep flow renders its grid-level result artifacts to the Prefect UI from a single terminal task that runs after the point loop: the two aggregators fold the whole run, so the ceiling and cliff views are cross-point and belong on the parent run page, not per subflow; the task is a @task (not inline like the config artifact) so a render failure retries idempotently off S3 without discarding the already-persisted cells; tables publish as durable markdown artifacts and plots as image artifacts; the 2026-10-07 amendment points those image artifacts at a public, non-expiring S3 URL off a scoped `sweeps/*/charts/*` bucket policy (superseding the presigned/data-URI plans that both rot in the UI). The cost baseline (report command) stays offline — the knob sweep does not run its arms. Depends on the report member of ADR-0017. -->
+<!-- ADR recording why the knob-sweep flow renders its grid-level result artifacts to the Prefect UI from a single terminal task that runs after the point loop: the two aggregators fold the whole run, so the ceiling and cliff views are cross-point and belong on the parent run page, not per subflow; the task is a @task (not inline like the config artifact) so a render failure retries idempotently off S3 without discarding the already-persisted cells; tables publish as durable markdown artifacts and plots as image artifacts; the 2026-10-07 amendment points those image artifacts at a public, non-expiring S3 URL off a scoped `sweeps/*/charts/*` bucket policy (superseding the presigned/data-URI plans that both rot in the UI). The cost baseline (report command) stays offline — the knob sweep does not run its arms. Depends on the report member of ADR-0017. The 2026-10-20 amendment records the kv-cache-extension-ab flow rendering its tables and chart the same way, its chart under sweeps/kv-ab/<run>/charts/, which the same public prefix covers. -->
 
 # ADR-0018: The knob sweep renders grid-level result artifacts to the Prefect UI
 
@@ -149,3 +149,19 @@ markdown body. The image publisher is injected into `render_results` alongside t
   The scoped policy + its tftest are the mitigation.
 - The S3 PNG is no longer merely a durable fallback behind an expiring preview — it **is** the object
   the artifact serves. The durable markdown tables are unchanged.
+
+## Amendment (2026-10-20): the KV cache A/B renders the same way
+
+The `kv-cache-extension-ab` flow (#326) ends in its own terminal `@task`, shaped like the knob
+sweep's: it folds the run's labelled rung records with `report`'s kv-ab fold, publishes two
+markdown tables (each arm's rungs as the median and range across its runs, and each arm run's
+concurrency ceiling), and publishes one chart as an image artifact. It reads the records off the
+pointers the flow returns rather than listing a prefix, so it folds exactly the rungs this run
+measured or resumed. A render failure leaves the records in S3, and a re-run resumes every cached
+arm run and re-renders.
+
+The chart reuses the knob sweep's upload and image publish, under
+`sweeps/kv-ab/<run>/charts/kv-ab-by-max-concurrency.png`. The public-read policy needs no change:
+its `sweeps/*/charts/*` wildcard spans `/`, so it covers the kv-ab charts prefix as well. That
+prefix holds only charts, and the A/B's raw results under `sweeps/kv-ab/<run>/<arm>-r<n>/` stay
+private like the knob sweep's.
