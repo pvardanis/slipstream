@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
+from slipstream_bench.contract.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     KvAbRigError,

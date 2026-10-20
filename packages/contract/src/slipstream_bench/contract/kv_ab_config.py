@@ -5,7 +5,7 @@ under each arm: the engine knobs held fixed across both arms, the prefix share, 
 concurrency ladder, the warmup rung, the runs per arm, and the client-load knobs the knob
 sweep's cells share (``LoadKnobs``). It is validated on load, so a malformed workload fails
 before the first GPU redeploy. The rig's capacities — the CPU tier and max-model-len — are
-not here: they are read off the vLLM manifest that configures them (``kv_ab_rig``).
+not here: the orchestration worker reads them off the vLLM manifest that configures them.
 """
 
 from pathlib import Path
