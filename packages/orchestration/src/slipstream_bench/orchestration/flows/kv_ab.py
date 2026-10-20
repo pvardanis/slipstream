@@ -13,10 +13,9 @@ whole.
 
 :func:`build_kv_ab_collaborators` binds those callables to kubectl, SSM, S3, and the
 engine's /metrics, and :func:`kv_ab_flow` is the ``@flow`` composition root the Prefect
-deployment registers: it builds the live transports inside the flow, drives the loop, then
-renders the run's tables and chart to its run page
-(:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`), so only serializable parameters
-cross the flow boundary.
+deployment registers: it builds the live transports inside the flow, so only serializable
+parameters cross the flow boundary, drives the loop, then renders the run's tables and chart
+to its run page (:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`).
 """
 
 import logging

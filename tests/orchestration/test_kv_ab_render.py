@@ -20,16 +20,7 @@ from slipstream_bench.orchestration.tasks.kv_ab_render import (
     read_kv_ab_record,
     render_kv_ab_results,
 )
-from slipstream_bench.report.kv_ab_aggregation import (
-    KvAbRung,
-    get_kv_ab_ceilings,
-    summarize_kv_ab_rungs,
-)
-from slipstream_bench.report.kv_ab_chart import (
-    kv_ab_ceilings_to_markdown,
-    kv_ab_spreads_to_markdown,
-)
-from tests.report.kv_ab_records import SOURCE, build_record
+from tests.report.kv_ab_records import build_record
 
 # A PNG file leads with this 8-byte signature.
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -113,15 +104,6 @@ def test_the_render_reads_every_record_then_publishes_the_tables_then_the_chart(
         "store kv-ab-by-max-concurrency.png",
         "plot kv-ab-plot",
     ]
-    rungs = [KvAbRung.from_record(record, SOURCE) for record in _RECORDS.values()]
-    assert (
-        kv_ab_spreads_to_markdown(summarize_kv_ab_rungs(rungs))
-        in (render.tables["kv-ab-rung-spreads"])
-    )
-    assert (
-        kv_ab_ceilings_to_markdown(get_kv_ab_ceilings(rungs))
-        in (render.tables["kv-ab-ceilings"])
-    )
     assert render.stored["kv-ab-by-max-concurrency.png"].startswith(_PNG_MAGIC)
     (plot,) = render.plots
     assert plot["s3_key"] == "sweeps/kv-ab/ab1/charts/kv-ab-by-max-concurrency.png"
@@ -234,6 +216,35 @@ def test_a_failed_chart_upload_leaves_both_tables_published() -> None:
     assert render.plots == []
 
 
+def test_the_ceiling_table_prints_each_arm_runs_ceiling() -> None:
+    render = _Render()
+
+    render.drive(list(_RECORDS))
+
+    # Every rung holds the goodput floor, so each arm's single run tops out at rung 2.
+    assert "| off | 2 | 2 |" in render.tables["kv-ab-ceilings"]
+    assert "| on | 2 | 2 |" in render.tables["kv-ab-ceilings"]
+
+
+def test_a_run_with_one_arm_fails_before_publishing_anything() -> None:
+    on_only = {p: r for p, r in _RECORDS.items() if r["kv_ab"]["arm"] == "on"}
+    render = _Render(records=on_only)
+
+    with pytest.raises(SweepAggregationError, match="no off arm rungs"):
+        render.drive(list(on_only))
+
+    assert not any(event.startswith(("table", "store")) for event in render.events)
+
+
+def test_a_record_that_cannot_be_read_names_its_pointer() -> None:
+    with pytest.raises(KeyError) as raised:
+        read_kv_ab_record("s3://bench/kv-ab/ab1/on-r2/c.json", s3_client=_RecordS3({}))
+
+    assert raised.value.__notes__ == [
+        "reading kv-ab record s3://bench/kv-ab/ab1/on-r2/c.json"
+    ]
+
+
 def test_the_spread_table_prints_each_arms_rung() -> None:
     render = _Render()
 
@@ -248,7 +259,11 @@ def test_the_spread_table_prints_each_arms_rung() -> None:
 
 @pytest.mark.parametrize(
     ("body", "message"),
-    [(b"{not json", "is not valid JSON"), (b"[]", "is not a JSON object")],
+    [
+        (b"{not json", "is not valid JSON"),
+        (b'{"a": "\xff"}', "is not valid JSON"),
+        (b"[]", "is not a JSON object"),
+    ],
 )
 def test_a_record_object_that_is_not_a_json_object_names_its_pointer(
     body: bytes, message: str
