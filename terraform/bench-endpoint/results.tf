@@ -26,9 +26,12 @@ resource "aws_s3_bucket_public_access_block" "results" {
 
 # Opens exactly the chart prefix for anonymous read, so the render task's plot PNGs load as
 # public image artifacts in the Prefect UI (inline, zoomable, never expiring — ADR-0018
-# Amendment). Scoped to sweeps/<run>/charts/* and nothing wider: the sibling cell-result JSONs
-# under sweeps/<run>/<point>/ hold the measurements and stay private. depends_on the public
-# access block so block_public_policy is already off when PutBucketPolicy runs.
+# Amendment). Scoped to sweeps/*/charts/*; the * spans "/", so it matches any charts/ path
+# under sweeps/ — the knob sweep's sweeps/<run>/charts/ and the kv-ab flow's
+# sweeps/kv-ab/<run>/charts/. The cell-result JSONs under sweeps/<run>/<point>/ and
+# sweeps/kv-ab/<run>/<arm>-r<n>/ hold the measurements, carry no charts/ segment, and stay
+# private. depends_on the public access block so block_public_policy is already off when
+# PutBucketPolicy runs.
 resource "aws_s3_bucket_policy" "results_public_charts" {
   bucket = aws_s3_bucket.results.id
 
