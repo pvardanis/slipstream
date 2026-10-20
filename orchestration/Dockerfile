@@ -103,16 +103,18 @@ ENV PATH="/app/.venv/bin:${PATH}"
 # this image captures them too, not only the in-cluster worker.
 ENV PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench
 
-# The three deep-config inputs the registered knob-sweep deployment reads on the worker at run
-# time (register-knob-sweep's in-image default paths, slipstream_bench.orchestration.cli): model.yaml
-# and sweep-grid.yaml are the served model and the sweep's grid, vllm-gpu.yaml is the redeploy template
-# whose serving image ref folds into the deep digest (ADR-0012). The worker has no source tree, so
-# they are baked rather than fetched. Copied low and narrowly so a config edit rebuilds only this
-# layer, never the dependency install above it. These files are image inputs: the content tag in
-# orchestration-image.yml hashes them and the build triggers watch them, so an edit republishes a
-# new image.
+# The deep-config inputs the registered knob-sweep and kv-cache-extension-ab deployments read on
+# the worker at run time (register-knob-sweep's and register-kv-ab's in-image default paths,
+# slipstream_bench.orchestration.cli): model.yaml is the served model both read; sweep-grid.yaml
+# is the knob sweep's grid; kv-cache-extension-ab.yaml is the kv-ab workload; vllm-gpu.yaml is
+# the redeploy template both render, whose serving image ref folds into the deep digest
+# (ADR-0012). The worker has no source tree, so they are baked rather than fetched. Copied low
+# and narrowly so a config edit rebuilds only this layer, never the dependency install above it.
+# These files are image inputs: the content tag in orchestration-image.yml hashes them and the
+# build triggers watch them, so an edit republishes a new image.
 COPY model.yaml /app/model.yaml
 COPY bench/sweep-grid.yaml /app/bench/sweep-grid.yaml
+COPY bench/kv-cache-extension-ab.yaml /app/bench/kv-cache-extension-ab.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
 # This image's own ECR ref (registry/repo:content-tag), passed by orchestration-image.yml at

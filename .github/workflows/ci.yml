@@ -166,8 +166,13 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.dockerignore'
-      # Build succeeding is the check: a broken Dockerfile or an unresolvable
-      # locked dependency fails the PR. No push.
+              - 'model.yaml'
+              - 'bench/sweep-grid.yaml'
+              - 'bench/kv-cache-extension-ab.yaml'
+              - 'k8s/vllm-gpu.yaml'
+      # Build succeeding is the check: a broken Dockerfile, an unresolvable
+      # locked dependency, or a baked config missing from the context fails
+      # the PR. No push.
       - name: Build the orchestration image (no push)
         if: steps.filter.outputs.orchestration == 'true'
         run: docker build --platform linux/amd64 -f orchestration/Dockerfile -t orchestration-image:pr-build .
