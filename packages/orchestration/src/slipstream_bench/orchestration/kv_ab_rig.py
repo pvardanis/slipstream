@@ -6,7 +6,8 @@ window. Both are configured in ``k8s/vllm-gpu.yaml`` — the tier by the vLLM co
 ``LMCACHE_MAX_LOCAL_CPU_SIZE`` env, the window by its ``--max-model-len`` arg — so they are
 read from there, their single source: a rig change is a manifest edit, not a flow edit.
 The guards refuse a workload the rig cannot run or cannot measure offload on, before the
-cells it would waste.
+cells it would waste. The GPU KV pool is the third capacity: vLLM sizes it at startup, so
+it is checked against the size the deployed engine reports, after each redeploy.
 """
 
 import math
@@ -48,6 +49,17 @@ class KvAbRig:
     max_model_len: int
     cpu_tier_bytes: int
 
+    def __post_init__(self) -> None:
+        """Reject a rig with no window or no tier to size a workload against.
+
+        :raise ValueError: when either capacity is not positive.
+        """
+        if self.max_model_len <= 0 or self.cpu_tier_bytes <= 0:
+            raise ValueError(
+                f"KvAbRig capacities must be positive: max_model_len "
+                f"{self.max_model_len}, cpu_tier_bytes {self.cpu_tier_bytes}"
+            )
+
     @property
     def cpu_tier_tokens(self) -> int:
         """The tokens of KV the CPU tier holds."""
@@ -61,7 +73,8 @@ def read_kv_ab_rig(manifest: Path) -> KvAbRig:
     :return: the rig's capacities.
     :raise KvAbRigError: when the vLLM container carries no positive ``--max-model-len``
         or ``LMCACHE_MAX_LOCAL_CPU_SIZE``.
-    :raise DigestError: when the manifest itself cannot be read (see ``read_vllm_args``).
+    :raise DigestError: when the manifest itself cannot be read, or its vLLM container's
+        env is not a list (see ``read_vllm_args`` and ``read_vllm_env``).
     """
     return KvAbRig(
         max_model_len=_read_max_model_len(manifest),
@@ -70,13 +83,19 @@ def read_kv_ab_rig(manifest: Path) -> KvAbRig:
 
 
 def _read_max_model_len(manifest: Path) -> int:
-    """Read the value following the vLLM container's ``--max-model-len`` arg."""
+    """Read the value following the vLLM container's last ``--max-model-len`` arg."""
     args = read_vllm_args(manifest)
+    # vLLM's argparse keeps a repeated flag's last value, so the last one is the window.
     value = next(
-        (after for flag, after in pairwise(args) if flag == _MAX_MODEL_LEN_FLAG),
+        (
+            after
+            for flag, after in reversed(list(pairwise(args)))
+            if flag == _MAX_MODEL_LEN_FLAG
+        ),
         None,
     )
-    if value is None or not value.isdigit() or int(value) == 0:
+    is_count = value is not None and value.isascii() and value.isdigit()
+    if not is_count or int(value) == 0:
         raise KvAbRigError(
             f"{manifest} vllm container sets no positive {_MAX_MODEL_LEN_FLAG} "
             f"(got {value!r})"
@@ -89,12 +108,15 @@ def _read_cpu_tier_bytes(manifest: Path) -> int:
     value = read_vllm_env(manifest).get(_TIER_SIZE_ENV)
     try:
         gib = float(value) if value is not None else 0.0
-    except ValueError:
-        gib = 0.0
+    except ValueError as error:
+        raise KvAbRigError(
+            f"{manifest} vllm container's {_TIER_SIZE_ENV} {value!r} is not a number "
+            f"of GiB"
+        ) from error
     if not (math.isfinite(gib) and gib > 0):
         raise KvAbRigError(
-            f"{manifest} vllm container sets no positive {_TIER_SIZE_ENV} "
-            f"(got {value!r})"
+            f"{manifest} vllm container sets no positive {_TIER_SIZE_ENV} as a literal "
+            f"value (got {value!r}); a valueFrom entry has no size to read"
         )
     return int(gib * _BYTES_PER_GIB)
 
