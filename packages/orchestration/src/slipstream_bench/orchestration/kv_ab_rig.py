@@ -72,7 +72,7 @@ def read_kv_ab_rig(manifest: Path) -> KvAbRig:
     :param manifest: the ``k8s/vllm-gpu.yaml`` Deployment manifest.
     :return: the rig's capacities.
     :raise KvAbRigError: when the vLLM container carries no positive ``--max-model-len``
-        or ``LMCACHE_MAX_LOCAL_CPU_SIZE``.
+        or ``LMCACHE_MAX_LOCAL_CPU_SIZE``, or a tier size that is not a number.
     :raise DigestError: when the manifest itself cannot be read, or its vLLM container's
         env is not a list (see ``read_vllm_args`` and ``read_vllm_env``).
     """
@@ -113,10 +113,11 @@ def _read_cpu_tier_bytes(manifest: Path) -> int:
             f"{manifest} vllm container's {_TIER_SIZE_ENV} {value!r} is not a number "
             f"of GiB"
         ) from error
-    if not (math.isfinite(gib) and gib > 0):
+    # LMCache reserves int(size * 1024**3) bytes, so a size under one byte reserves none.
+    if not (math.isfinite(gib) and int(gib * _BYTES_PER_GIB) > 0):
         raise KvAbRigError(
             f"{manifest} vllm container sets no positive {_TIER_SIZE_ENV} as a literal "
-            f"value (got {value!r}); a valueFrom entry has no size to read"
+            f"value (got {value!r}); an entry sourced through valueFrom reads as absent"
         )
     return int(gib * _BYTES_PER_GIB)
 

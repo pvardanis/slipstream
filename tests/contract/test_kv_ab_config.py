@@ -60,7 +60,7 @@ def test_a_prefix_the_alignment_floors_to_nothing_is_rejected(tmp_path: Path) ->
     """90% of 16 tokens is a 14-token prefix, which no whole 16-token block holds."""
     path = _write_config(tmp_path, load__total_len=16)
 
-    with pytest.raises(KvAbConfigError, match="floors to no whole 16-token block"):
+    with pytest.raises(KvAbConfigError, match="no whole 16-token block of prefix"):
         load_kv_ab_config(path)
 
 
@@ -98,7 +98,7 @@ def test_a_share_that_floors_to_no_prefix_token_is_rejected(tmp_path: Path) -> N
     """5% of 16 tokens floors to an empty prefix before any block alignment."""
     path = _write_config(tmp_path, prefix_share=5, load__total_len=16)
 
-    with pytest.raises(KvAbConfigError, match="floors to no whole 16-token block"):
+    with pytest.raises(KvAbConfigError, match="no whole 16-token block of prefix"):
         load_kv_ab_config(path)
 
 
