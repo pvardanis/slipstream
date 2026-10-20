@@ -18,8 +18,8 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
     SweepOutcome,
     build_sweep_summary,
     drive_knob_sweep,
-    enable_milestone_logging,
 )
+from slipstream_bench.orchestration.flows.run_setup import enable_milestone_logging
 
 _P1 = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _P2 = EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False)

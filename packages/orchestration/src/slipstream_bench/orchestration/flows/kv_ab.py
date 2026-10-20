@@ -43,7 +43,7 @@ from slipstream_bench.orchestration.cluster import (
     scrape_gpu_kv_pool,
 )
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
-from slipstream_bench.orchestration.flows.knob_sweep import (
+from slipstream_bench.orchestration.flows.run_setup import (
     enable_milestone_logging,
     tag_run_with_group,
 )
@@ -180,6 +180,8 @@ class KvAbInputs:
 
     :param config: the A/B workload.
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text each redeploy renders.
+    :param rig: the rig capacities read off that manifest, which every rung's digest
+        folds in.
     :param run: the A/B's run id, which every arm run's cells and records nest under.
     :param serving: the model and vLLM serving image every rung's digest folds in.
     :param instance_id: the bench host the cells run on.
@@ -192,6 +194,7 @@ class KvAbInputs:
 
     config: KvAbConfig
     manifest_text: str
+    rig: KvAbRig
     run: str
     serving: ServingConfig
     instance_id: str
@@ -232,9 +235,10 @@ def kv_ab_flow(
 
     The composition root the deployment registers: it reads the workload, the rig, and
     the run-wide digest inputs, binds the driver's collaborators to the live transports,
-    and drives the interleaved arm runs. Re-invoked with the same run id, it serves a run
-    whose rungs are all cached from cache and redoes any other run whole. The parameters are all serializable; the three paths
-    name in-image files read on the worker. The run is tagged ``run=<run-id>``.
+    and drives the interleaved arm runs. Re-invoked with the same run id, it reads a run
+    whose rungs are all cached from the cache and redoes any other run whole. The
+    parameters are all serializable; the three paths name in-image files read on the
+    worker. The run is tagged ``run=<run-id>``.
 
     :param run_id: the A/B's run id, which its cells and records nest under.
     :param instance_id: the bench host the cells run on.
@@ -262,6 +266,7 @@ def kv_ab_flow(
     inputs = KvAbInputs(
         config=config,
         manifest_text=vllm_manifest.read_text(encoding="utf-8"),
+        rig=read_kv_ab_rig(vllm_manifest),
         run=run_id,
         serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
         instance_id=instance_id,
@@ -277,7 +282,7 @@ def kv_ab_flow(
         task=kv_ab_cell_task(bucket, retries=retries),
         read_metrics=partial(fetch_metrics, metrics_url),
     )
-    result = drive_kv_ab(config, read_kv_ab_rig(vllm_manifest), collaborators)
+    result = drive_kv_ab(config, inputs.rig, collaborators)
     logger.info(
         "kv-ab run=%s complete: %d cells (%d runs run, %d resumed)",
         run_id,
@@ -510,7 +515,11 @@ def _get_rung(inputs: KvAbInputs, arm_run: ArmRun, concurrency: int) -> _Rung:
         cell=cell,
         run_id=get_kv_ab_run_id(inputs.run, arm_run.slug()),
         digest=get_kv_ab_cell_digest(
-            inputs.config, cell, serving=inputs.serving, image_ref=inputs.image_ref
+            inputs.config,
+            cell,
+            serving=inputs.serving,
+            image_ref=inputs.image_ref,
+            rig=inputs.rig,
         ),
         point_slug=arm_run.slug(),
         cell_name=get_cell_basename(cell),

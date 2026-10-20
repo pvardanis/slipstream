@@ -9,6 +9,7 @@ was measured with, so a change to the engine or the cell re-measures it.
 
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -26,20 +27,23 @@ from slipstream_bench.orchestration.kv_ab_cell import (
     get_kv_ab_run_id,
 )
 from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
+from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
 
 _CONFIG = load_kv_ab_config(
     Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab-agent.yaml"
 )
 _MODEL = "Qwen/Qwen3-8B-AWQ"
 _SERVING = ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v0.29.0")
+_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
 
 
-def _digest(config=_CONFIG, concurrency: int = 4) -> str:
+def _digest(config=_CONFIG, concurrency: int = 4, rig: KvAbRig = _RIG) -> str:
     return get_kv_ab_cell_digest(
         config,
         get_kv_ab_cell(config, concurrency, model=_MODEL),
         serving=_SERVING,
         image_ref="bench:sha",
+        rig=rig,
     )
 
 
@@ -90,6 +94,19 @@ def test_a_rungs_digest_changes_with_the_gpu_pool_cap() -> None:
     resized = _CONFIG.model_copy(update={"engine": engine})
 
     assert _digest(resized) != _digest()
+
+
+@pytest.mark.parametrize(
+    "rig",
+    [
+        replace(_RIG, cpu_tier_bytes=8 * 1024**3),
+        replace(_RIG, chunk_tokens=512),
+        replace(_RIG, max_model_len=8192),
+    ],
+)
+def test_a_rungs_digest_changes_with_the_rig(rig: KvAbRig) -> None:
+    # A resized CPU tier re-measures the on arm rather than serving the old tier's cells.
+    assert _digest(rig=rig) != _digest()
 
 
 def test_a_rungs_digest_is_stable_for_the_same_inputs() -> None:

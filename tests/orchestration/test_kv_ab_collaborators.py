@@ -51,6 +51,7 @@ _CELL_CONFIG = re.compile(r"CELL_CONFIG_B64='([^']+)'")
 _INPUTS = KvAbInputs(
     config=_CONFIG,
     manifest_text=(_REPO / "k8s" / "vllm-gpu.yaml").read_text(encoding="utf-8"),
+    rig=_RIG,
     run="ab1",
     serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v0.29.0"),
     instance_id="i-1",
