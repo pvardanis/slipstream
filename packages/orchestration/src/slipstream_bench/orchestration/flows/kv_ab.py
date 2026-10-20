@@ -246,7 +246,7 @@ def kv_ab_flow(
     :param bucket: the results bucket (RESULTS_BUCKET).
     :param image_ref: the bench-client image the cells run.
     :param model_yaml: model.yaml, the served model id and a digest input.
-    :param kv_ab_config: the A/B workload, e.g. the agent or chat config.
+    :param kv_ab_config: the A/B workload, by default bench/kv-cache-extension-ab.yaml.
     :param vllm_manifest: k8s/vllm-gpu.yaml, the redeploy template and the rig's
         capacities.
     :param metrics_url: the GPU engine's /metrics URL, reachable from the worker.

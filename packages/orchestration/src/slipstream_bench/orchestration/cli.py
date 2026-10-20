@@ -281,7 +281,7 @@ def register_kv_ab(
     kv_ab_config: Annotated[
         Path,
         typer.Option(help="In-image path to the A/B workload, read on the worker."),
-    ] = Path("/app/bench/kv-cache-extension-ab-agent.yaml"),
+    ] = Path("/app/bench/kv-cache-extension-ab.yaml"),
     vllm_manifest: Annotated[
         Path,
         typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
@@ -295,11 +295,11 @@ def register_kv_ab(
 ) -> None:
     """Register the kv-cache-extension-ab deployment on the process work pool (#326).
 
-    Creates the deployment ``just kv-ab`` triggers with the run id, the bench host, and
-    the workload config. Registered as ``register-knob-sweep`` registers the knob sweep:
-    a module-path entrypoint, no image build, the cluster-stable inputs as default
-    parameters. Region, bucket, and image ref are checked non-empty and the work pool
-    present first.
+    Creates the deployment ``just kv-ab`` triggers with the run id and the bench host;
+    the workload config is the in-image default. Registered as ``register-knob-sweep``
+    registers the knob sweep: a module-path entrypoint, no image build, the
+    cluster-stable inputs as default parameters. Region, bucket, and image ref are
+    checked non-empty and the work pool present first.
 
     :param region: AWS region of the host and bucket.
     :param bucket: results bucket (RESULTS_BUCKET).

@@ -21,7 +21,7 @@ from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
 
 _CONFIG = load_kv_ab_config(
-    Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab-agent.yaml"
+    Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab.agent.yaml"
 )
 # The committed manifest's rig: a 4096-token window, a 4.0 GiB tier, 256-token chunks.
 _RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)

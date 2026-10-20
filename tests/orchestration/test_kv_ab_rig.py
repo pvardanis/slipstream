@@ -104,8 +104,10 @@ def test_a_manifest_without_a_positive_chunk_size_is_rejected(
 
 
 _BENCH = _COMMITTED_MANIFEST.parents[1] / "bench"
-_AGENT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab-agent.yaml")
-_CHAT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab-chat.yaml")
+_AGENT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab.agent.yaml")
+_CHAT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab.chat.yaml")
+# The live config the image bakes and the deployment runs.
+_LIVE = load_kv_ab_config(_BENCH / "kv-cache-extension-ab.yaml")
 _KV_BYTES_PER_TOKEN = 73_728
 # The committed manifest's rig: a 4096-token window, a 4.0 GiB tier, 256-token chunks.
 _RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
@@ -124,9 +126,11 @@ def _with_pool(config: KvAbConfig, tokens: int) -> KvAbConfig:
     return config.model_copy(update={"engine": engine})
 
 
-@pytest.mark.parametrize("config", [_AGENT, _CHAT], ids=["agent", "chat"])
+@pytest.mark.parametrize(
+    "config", [_LIVE, _AGENT, _CHAT], ids=["live", "agent", "chat"]
+)
 def test_the_committed_workloads_fit_the_committed_manifest(config: KvAbConfig) -> None:
-    """Both workloads were sized against the g5.xlarge manifest's window, tier, and chunk."""
+    """The live and parked workloads fit the manifest's window, tier, and chunk."""
     check_fits_rig(config, read_kv_ab_rig(_COMMITTED_MANIFEST))
 
 
