@@ -121,6 +121,8 @@ spec:
           args:
             - --kv-cache-dtype
             - "${KV_CACHE_DTYPE}"
+            - --kv-cache-memory-bytes
+            - "${KV_CACHE_MEMORY_BYTES}"
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
