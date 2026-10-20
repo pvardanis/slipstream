@@ -107,19 +107,31 @@ prefect-storage-down:
       fi
     done
 
-# Register the knob-sweep and kv-cache-extension-ab deployments on the process work pool,
-# so a sweep is triggered with `prefect deployment run knob-sweep/knob-sweep --param
-# run_id=... --param instance_id=...`, an A/B with `just kv-ab`, and either is picked up
-# by the in-cluster worker (ADR-0015). The worker runs the baked orchestration image, so
-# the deployment stores a module-path entrypoint resolved by import — no source is
-# fetched and no image is built for the process pool. Registration hits the in-cluster
-# Prefect API over a transient port-forward (reaped on exit), the same way `prefect-up`
-# creates the pool; run it after `prefect-up`. The cluster-stable inputs become the
-# deployments' default parameters: region and results bucket are read from terraform,
-# the bench-client image from `_bench-image-ref`; run_id and instance_id are supplied per
-# run at trigger.
+# A sweep is then triggered with `prefect deployment run knob-sweep/knob-sweep --param
+# run_id=... --param instance_id=...` and picked up by the in-cluster worker
+# (ADR-0015). Run it after `prefect-up`; `_prefect-register` holds what registration
+# stores.
+# Register the knob-sweep deployment on the process work pool.
 [group('prefect')]
-prefect-register:
+prefect-register-sweep: (_prefect-register "knob-sweep")
+
+# An A/B is then triggered with `prefect deployment run
+# kv-cache-extension-ab/kv-cache-extension-ab --param run_id=... --param instance_id=...`
+# and picked up by the in-cluster worker. Run it after `prefect-up`; `_prefect-register`
+# holds what registration stores.
+# Register the kv-cache-extension-ab deployment on the process work pool.
+[group('prefect')]
+prefect-register-kv-ab: (_prefect-register "kv-ab")
+
+# Register one deployment with `slipstream-orchestrate register-<deployment>`. The
+# worker runs the baked orchestration image, so the deployment stores a module-path
+# entrypoint resolved by import — no source is fetched and no image is built for the
+# process pool. Registration hits the in-cluster Prefect API over a transient
+# port-forward (reaped on exit), the same way `prefect-up` creates the pool. The
+# cluster-stable inputs become the deployment's default parameters: region and results
+# bucket are read from terraform, the bench-client image from `_bench-image-ref`; run_id
+# and instance_id are supplied per run at trigger.
+_prefect-register deployment:
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed output lookup aborts; the non-empty checks then catch
@@ -139,42 +151,11 @@ prefect-register:
     source bench/prefect-portforward.sh
     namespace="$(prefect_namespace {{ eks_dir }})"
     prefect_api_portforward "${namespace}" {{ prefect_port }}
-    uv run slipstream-orchestrate register-knob-sweep \
+    uv run slipstream-orchestrate register-{{ deployment }} \
       --region "${region}" \
       --bucket "${bucket}" \
       --image-ref "${image}" \
       --work-pool {{ prefect_work_pool }}
-    uv run slipstream-orchestrate register-kv-ab \
-      --region "${region}" \
-      --bucket "${bucket}" \
-      --image-ref "${image}" \
-      --work-pool {{ prefect_work_pool }}
-
-# Trigger the kv-cache-extension-ab deployment against the bench host. The worker runs
-# the workload in the image's bench/kv-cache-extension-ab.yaml; to run a parked one
-# (e.g. kv-cache-extension-ab.chat.yaml), copy it over that file and rebuild the image
-# first. An empty run_id is a fresh UTC-timestamp run, as the CI sweep trigger names
-# one; passing a run's id back resumes it. Records land under kv-ab/<run_id>/ in the
-# results bucket. Run after `prefect-register`.
-[group('prefect')]
-kv-ab run_id="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    run_id={{ quote(run_id) }}
-    if [[ -z "${run_id}" ]]; then
-      run_id="$(date -u +%Y%m%dT%H%M%SZ)"
-    fi
-    echo "==> kv-ab run ${run_id} (resume: just kv-ab ${run_id})" >&2
-    # Bare assignment so a failed output lookup aborts; the non-empty check catches the
-    # exit-0-empty-stdout case (see `prefect-register`).
-    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
-    [[ -n "${instance}" ]] || { echo "bench-endpoint output bench_host_instance_id is empty" >&2; exit 1; }
-    source bench/prefect-portforward.sh
-    namespace="$(prefect_namespace {{ eks_dir }})"
-    prefect_api_portforward "${namespace}" {{ prefect_port }}
-    uv run prefect deployment run kv-cache-extension-ab/kv-cache-extension-ab \
-      --param run_id="${run_id}" \
-      --param instance_id="${instance}"
 
 # Port-forward the Prefect UI/API to localhost and hold it open (Ctrl-C to stop).
 # No public endpoint — this is the only way in (ADR-0015 amendment). Visit

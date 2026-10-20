@@ -222,7 +222,8 @@ def register_knob_sweep(
     in-process from its baked image). The cluster-stable inputs become the deployment's
     default parameters; ``run_id`` and ``instance_id`` are supplied per run at trigger time.
 
-    Run over a port-forward to the in-cluster Prefect API (see ``just prefect-register``).
+    Run over a port-forward to the in-cluster Prefect API (see
+    ``just prefect-register-sweep``).
 
     The cluster-stable inputs are rejected here if empty: ``run_id`` and ``instance_id``
     are the only parameters ``prefect deployment run`` supplies per run, so an empty
@@ -295,8 +296,8 @@ def register_kv_ab(
 ) -> None:
     """Register the kv-cache-extension-ab deployment on the process work pool (#326).
 
-    Creates the deployment ``just kv-ab`` triggers with the run id and the bench host;
-    the workload config is the in-image default. Registered as ``register-knob-sweep``
+    Creates the deployment a run triggers with the run id and the bench host; the
+    workload config is the in-image default. Registered as ``register-knob-sweep``
     registers the knob sweep: a module-path entrypoint, no image build, the
     cluster-stable inputs as default parameters. Region, bucket, and image ref are
     checked non-empty and the work pool present first.
