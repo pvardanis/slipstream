@@ -282,9 +282,10 @@ run "bench_host_invariants" {
     error_message = "Results bucket must block public ACLs but allow a scoped public bucket policy for the chart prefix."
   }
 
-  # The only public grant is anonymous s3:GetObject on exactly the sweeps/<run>/charts/
-  # prefix — the chart PNGs the image artifacts link to. It must never widen to the bare
-  # bucket or the sibling cell-result JSONs under sweeps/<run>/<point>/.
+  # The only public grant is anonymous s3:GetObject on the sweeps/*/charts/* pattern — the
+  # chart PNGs the image artifacts link to, under sweeps/<run>/charts/ and
+  # sweeps/kv-ab/<run>/charts/. It must never widen to the bare bucket or the sibling
+  # cell-result JSONs under sweeps/<run>/<point>/.
   assert {
     condition     = length(jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement) == 1 && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Effect == "Allow" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Principal == "*" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Action == "s3:GetObject" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Resource == "${aws_s3_bucket.results.arn}/sweeps/*/charts/*"
     error_message = "Results bucket policy must grant anonymous s3:GetObject on exactly the sweeps/*/charts/* prefix, nothing wider."

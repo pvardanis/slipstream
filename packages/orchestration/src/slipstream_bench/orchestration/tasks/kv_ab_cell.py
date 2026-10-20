@@ -99,7 +99,8 @@ def run_kv_ab_cell(
     :raise InvalidCellError: when the result is not a measurement.
     :raise PrefixCacheError: when the snapshots yield no window, e.g. counters that went
         backwards because the engine restarted mid-cell.
-    :raise KvAbRecordError: when an off-arm cell's KV connector counters advanced.
+    :raise KvAbRecordError: when an off-arm cell's KV connector counters advanced, or an
+        on-arm cell's KV connector queries did not.
     :raise MetricsError: when /metrics cannot be read; after the cell, the error names
         the cell that ran, which the next run re-measures.
     """
