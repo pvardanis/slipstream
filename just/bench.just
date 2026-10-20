@@ -108,17 +108,18 @@ bench point_slug *args:
     fi
     exit "${rc}"
 
-# Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
+# Sync every sweep, prefix-cache, and KV cache A/B run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine. A/B rung records land in bench/results/kv-ab-records, beside the A/B's raw results in bench/results/kv-ab.
 [group('bench')]
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    mkdir -p bench/results/prefix-cache
+    mkdir -p bench/results/prefix-cache bench/results/kv-ab-records
     aws s3 sync "s3://${bucket}/sweeps" bench/results --region "${region}"
     aws s3 sync "s3://${bucket}/prefix-cache" bench/results/prefix-cache --region "${region}"
-    echo "synced sweep and prefix-cache results to bench/results/"
+    aws s3 sync "s3://${bucket}/kv-ab" bench/results/kv-ab-records --region "${region}"
+    echo "synced sweep, prefix-cache, and kv-ab results to bench/results/"
 
 # Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
