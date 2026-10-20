@@ -78,7 +78,7 @@ class _Render:
         drive_kv_ab_render(
             pointers=pointers,
             read_record=self.read_record,
-            publish=self.publish,
+            publish_artifact=self.publish,
             store=self.store,
             publish_plot=self.publish_plot,
         )
@@ -182,7 +182,7 @@ def test_the_task_uploads_the_chart_under_the_runs_public_charts_prefix() -> Non
         bucket="bench",
         region="us-east-1",
         s3_client=s3,
-        publish=lambda *, key, markdown: tables.append(key),
+        publish_artifact=lambda *, key, markdown: tables.append(key),
         publish_image=lambda **image: images.append(image),
     )
 

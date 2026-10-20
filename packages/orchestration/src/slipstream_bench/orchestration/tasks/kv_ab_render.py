@@ -85,7 +85,7 @@ def drive_kv_ab_render(
     *,
     pointers: Sequence[str],
     read_record: RecordReader,
-    publish: ArtifactPublisher,
+    publish_artifact: ArtifactPublisher,
     store: PlotStore,
     publish_plot: PlotPublisher,
 ) -> None:
@@ -96,7 +96,8 @@ def drive_kv_ab_render(
 
     :param pointers: every rung record's ``s3://`` pointer, as the flow returns them.
     :param read_record: reads a record off its pointer.
-    :param publish: the markdown-artifact publisher, called with ``key`` and ``markdown``.
+    :param publish_artifact: the markdown-artifact publisher, called with ``key`` and
+        ``markdown``.
     :param store: uploads the chart's PNG and returns its S3 key.
     :param publish_plot: embeds the uploaded chart as an inline image artifact.
     :raise ValueError: when ``pointers`` is empty, so there is nothing to render.
@@ -105,35 +106,29 @@ def drive_kv_ab_render(
     """
     if not pointers:
         raise ValueError("cannot render a kv-ab run with no rung records")
+
     _LOGGER.info("kv-ab render starting: folding %d rung records", len(pointers))
     rungs = [
         KvAbRung.from_record(read_record(pointer), Path(pointer.removeprefix("s3://")))
         for pointer in pointers
     ]
     _reject_missing_arms(rungs)
+
     spreads = kv_ab_spreads_to_markdown(summarize_kv_ab_rungs(rungs))
-    publish(
+    publish_artifact(
         key=_SPREADS_KEY,
         markdown=f"{_SPREADS_HEADING}\n\n{_SPREADS_BLURB}\n\n{spreads}\n",
     )
+
     ceilings = kv_ab_ceilings_to_markdown(get_kv_ab_ceilings(rungs))
-    publish(
+    publish_artifact(
         key=_CEILINGS_KEY,
         markdown=f"{_CEILINGS_HEADING}\n\n{_CEILINGS_BLURB}\n\n{ceilings}\n",
     )
+
     s3_key = store(name=_PLOT_NAME, data=plot_kv_ab_png(rungs))
     publish_plot(key=_PLOT_KEY, s3_key=s3_key, heading=_PLOT_HEADING, blurb=_PLOT_BLURB)
     _LOGGER.info("kv-ab render published: rung and ceiling tables and the chart")
-
-
-def _reject_missing_arms(rungs: list[KvAbRung]) -> None:
-    """Refuse a run missing an arm's rungs: its chart would compare nothing to nothing."""
-    measured = {rung.arm for rung in rungs}
-    for arm in get_args(Arm):
-        if arm not in measured:
-            raise SweepAggregationError(
-                f"kv-ab run has no {arm} arm rungs: an A/B compares both arms"
-            )
 
 
 def read_kv_ab_record(pointer: str, *, s3_client: Any) -> dict[str, object]:
@@ -151,18 +146,21 @@ def read_kv_ab_record(pointer: str, *, s3_client: Any) -> dict[str, object]:
     parts = urllib.parse.urlsplit(pointer)
     if parts.scheme != "s3" or not parts.netloc or not parts.path.strip("/"):
         raise ValueError(f"record pointer {pointer} is not an s3:// pointer")
+
     try:
         body = s3_client.get_object(Bucket=parts.netloc, Key=parts.path.lstrip("/"))
     except Exception as error:
         # The read error names neither bucket nor key: note the record that failed.
         error.add_note(f"reading kv-ab record {pointer}")
         raise
+
     try:
         record = json.loads(body["Body"].read())
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise SweepAggregationError(
             f"record {pointer} is not valid JSON: {error}"
         ) from error
+
     if not isinstance(record, dict):
         raise SweepAggregationError(f"record {pointer} is not a JSON object")
     return record
@@ -176,7 +174,7 @@ def render_kv_ab_results(
     bucket: str,
     region: str,
     s3_client: Any,
-    publish: ArtifactPublisher,
+    publish_artifact: ArtifactPublisher,
     publish_image: ArtifactPublisher,
 ) -> None:
     """Render the A/B's tables and chart to the flow run page — the terminal task.
@@ -191,14 +189,15 @@ def render_kv_ab_results(
     :param bucket: the results bucket the records and chart live in.
     :param region: the bucket's region, named in the chart's public image URL.
     :param s3_client: the boto3 S3 client the records are read and the chart uploaded with.
-    :param publish: the markdown-artifact publisher (create_markdown_artifact in production).
+    :param publish_artifact: the markdown-artifact publisher (create_markdown_artifact in
+        production).
     :param publish_image: the image-artifact publisher (create_image_artifact in
         production).
     """
     drive_kv_ab_render(
         pointers=pointers,
         read_record=partial(read_kv_ab_record, s3_client=s3_client),
-        publish=publish,
+        publish_artifact=publish_artifact,
         store=partial(
             upload_plot,
             run_prefix=get_kv_ab_run_prefix(run_id),
@@ -209,3 +208,13 @@ def render_kv_ab_results(
             publish_image_plot, bucket=bucket, region=region, publish=publish_image
         ),
     )
+
+
+def _reject_missing_arms(rungs: list[KvAbRung]) -> None:
+    """Refuse a run missing an arm's rungs: its chart would compare nothing to nothing."""
+    measured = {rung.arm for rung in rungs}
+    for arm in get_args(Arm):
+        if arm not in measured:
+            raise SweepAggregationError(
+                f"kv-ab run has no {arm} arm rungs: an A/B compares both arms"
+            )

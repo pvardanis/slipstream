@@ -298,7 +298,7 @@ def kv_ab_flow(
         bucket=bucket,
         region=region,
         s3_client=s3_client,
-        publish=create_markdown_artifact,
+        publish_artifact=create_markdown_artifact,
         publish_image=create_image_artifact,
     )
     logger.info(

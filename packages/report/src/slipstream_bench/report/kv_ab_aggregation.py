@@ -48,21 +48,8 @@ class KvAbRung:
             carries a bad arm, run, or hit rate, a combined hit rate below its GPU hit
             rate, or its raw result does not parse as a load cell.
         """
-        labels = record.get(LABELS_KEY)
-        if not isinstance(labels, dict):
-            raise SweepAggregationError(
-                f"result {source} has no {LABELS_KEY} labels: it is not a kv-ab "
-                f"rung record"
-            )
-        labels = cast(dict[str, object], labels)
-        gpu_hit_rate = _read_rate(labels, source, "hit_rate")
-        combined_hit_rate = _read_rate(labels, source, "combined_hit_rate")
-        # The combined rate counts the GPU hits plus the CPU tier's, so it never reads lower.
-        if combined_hit_rate < gpu_hit_rate:
-            raise SweepAggregationError(
-                f"result {source} has combined_hit_rate {combined_hit_rate} below its "
-                f"hit_rate {gpu_hit_rate}"
-            )
+        labels = _read_labels(record, source)
+        gpu_hit_rate, combined_hit_rate = _read_hit_rates(labels, source)
         return cls(
             arm=_read_arm(labels, source),
             run=_read_run(labels, source),
@@ -72,7 +59,7 @@ class KvAbRung:
         )
 
 
-class Spread(TypedDict):
+class MetricSpread(TypedDict):
     """A metric's median and range across an arm's runs of one rung."""
 
     median: float
@@ -80,18 +67,18 @@ class Spread(TypedDict):
     max: float
 
 
-class KvAbRungSpread(TypedDict):
+class KvAbRungSummary(TypedDict):
     """One arm's rung summarised across the runs that measured it."""
 
     arm: Arm
     max_concurrency: int
     runs: int
-    goodput_fraction: Spread
-    p95_ttft_ms: Spread
-    p95_tpot_ms: Spread
-    output_throughput: Spread
-    gpu_hit_rate: Spread
-    combined_hit_rate: Spread
+    goodput_fraction: MetricSpread
+    p95_ttft_ms: MetricSpread
+    p95_tpot_ms: MetricSpread
+    output_throughput: MetricSpread
+    gpu_hit_rate: MetricSpread
+    combined_hit_rate: MetricSpread
 
 
 class KvAbCeiling(TypedDict):
@@ -102,7 +89,7 @@ class KvAbCeiling(TypedDict):
     ceiling: int | None
 
 
-def summarize_kv_ab_rungs(rungs: list[KvAbRung]) -> list[KvAbRungSpread]:
+def summarize_kv_ab_rungs(rungs: list[KvAbRung]) -> list[KvAbRungSummary]:
     """Summarise each arm's rung across its runs as the median and range of each metric.
 
     :param rungs: every rung of the A/B's arm runs, in any order.
@@ -165,28 +152,47 @@ def _check_rungs(rungs: list[KvAbRung]) -> None:
 
 def _get_rung_spread(
     arm: Arm, max_concurrency: int, group: list[KvAbRung]
-) -> KvAbRungSpread:
+) -> KvAbRungSummary:
     """Summarise one arm's rung across the runs in ``group``."""
-
-    def spread(metric: Callable[[KvAbRung], float]) -> Spread:
-        values = [metric(rung) for rung in group]
-        return {
-            "median": statistics.median(values),
-            "min": min(values),
-            "max": max(values),
-        }
-
     return {
         "arm": arm,
         "max_concurrency": max_concurrency,
         "runs": len(group),
-        "goodput_fraction": spread(lambda rung: rung.cell.goodput_fraction),
-        "p95_ttft_ms": spread(lambda rung: rung.cell.p95_ttft_ms),
-        "p95_tpot_ms": spread(lambda rung: rung.cell.p95_tpot_ms),
-        "output_throughput": spread(lambda rung: rung.cell.output_throughput),
-        "gpu_hit_rate": spread(lambda rung: rung.gpu_hit_rate),
-        "combined_hit_rate": spread(lambda rung: rung.combined_hit_rate),
+        "goodput_fraction": _get_metric_spread(
+            group, lambda rung: rung.cell.goodput_fraction
+        ),
+        "p95_ttft_ms": _get_metric_spread(group, lambda rung: rung.cell.p95_ttft_ms),
+        "p95_tpot_ms": _get_metric_spread(group, lambda rung: rung.cell.p95_tpot_ms),
+        "output_throughput": _get_metric_spread(
+            group, lambda rung: rung.cell.output_throughput
+        ),
+        "gpu_hit_rate": _get_metric_spread(group, lambda rung: rung.gpu_hit_rate),
+        "combined_hit_rate": _get_metric_spread(
+            group, lambda rung: rung.combined_hit_rate
+        ),
     }
+
+
+def _get_metric_spread(
+    group: list[KvAbRung], metric: Callable[[KvAbRung], float]
+) -> MetricSpread:
+    """Read a metric's median and range across the runs in ``group``."""
+    values = [metric(rung) for rung in group]
+    return {
+        "median": statistics.median(values),
+        "min": min(values),
+        "max": max(values),
+    }
+
+
+def _read_labels(record: dict[str, object], source: Path) -> dict[str, object]:
+    """Read a record's ``kv_ab`` labels, refusing a record that carries none."""
+    labels = record.get(LABELS_KEY)
+    if not isinstance(labels, dict):
+        raise SweepAggregationError(
+            f"result {source} has no {LABELS_KEY} labels: it is not a kv-ab rung record"
+        )
+    return cast(dict[str, object], labels)
 
 
 def _read_arm(labels: dict[str, object], source: Path) -> Arm:
@@ -208,6 +214,21 @@ def _read_run(labels: dict[str, object], source: Path) -> int:
             f"result {source} has run {run!r}, not a 1-based repetition"
         )
     return run
+
+
+def _read_hit_rates(labels: dict[str, object], source: Path) -> tuple[float, float]:
+    """Read a rung's GPU and combined hit rates, refusing a combined rate below the GPU's.
+
+    The combined rate counts the GPU hits plus the CPU tier's, so it never reads lower.
+    """
+    gpu_hit_rate = _read_rate(labels, source, "hit_rate")
+    combined_hit_rate = _read_rate(labels, source, "combined_hit_rate")
+    if combined_hit_rate < gpu_hit_rate:
+        raise SweepAggregationError(
+            f"result {source} has combined_hit_rate {combined_hit_rate} below its "
+            f"hit_rate {gpu_hit_rate}"
+        )
+    return gpu_hit_rate, combined_hit_rate
 
 
 def _read_rate(labels: dict[str, object], source: Path, name: str) -> float:
