@@ -132,3 +132,9 @@ def test_a_non_finite_external_counter_is_rejected(value: str) -> None:
 
     with pytest.raises(PrefixCacheError, match="non-finite"):
         get_prefix_cache_window(before, after, model=MODEL)
+
+
+def test_gpu_hits_exceeding_queries_names_the_gpu_series() -> None:
+    """20 GPU hits of 10 queries is blamed on the GPU series, not the combined sum."""
+    with pytest.raises(PrefixCacheError, match=r"^prefix cache hits \(20\) exceed"):
+        PrefixCacheWindow(queries=10, hits=20, external_queries=0, external_hits=0)
