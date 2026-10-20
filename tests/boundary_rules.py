@@ -66,7 +66,9 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         # --package orchestration never installs its source. orchestration shares the
         # slipstream_bench namespace with its siblings, so that root cannot be forbidden;
         # allowed holds the AST guard to the closed set orchestration legitimately imports —
-        # Prefect, boto3, the report sibling, and the contract kernel.
+        # Prefect, boto3, the report sibling, the contract kernel, and pydantic, which
+        # validates the worker's own workload configs and which the kernel and Prefect
+        # already install.
         forbidden=frozenset(),
         allowed=frozenset(sys.stdlib_module_names)
         | {
@@ -74,6 +76,7 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "boto3",
             "botocore",
             "prefect",
+            "pydantic",
             "prefect_aws",
             "yaml",
             "typer",
