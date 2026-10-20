@@ -2,7 +2,8 @@
 
 ``report.chart`` holds the pure Markdown/JSON table renderers; the matplotlib/seaborn
 plotters live in ``report.plotters``. A caller that only renders tables must not drag in
-matplotlib, so this loads ``report.chart`` in a clean interpreter and asserts the plotting
+matplotlib, so this loads ``report.chart`` and the kv-ab tables' ``report.kv_ab_chart`` in a
+clean interpreter and asserts the plotting
 stack stayed out of ``sys.modules`` (ADR-0017). The import runs in a subprocess because an
 in-process check would see matplotlib already imported by the plotter tests.
 """
@@ -15,8 +16,10 @@ def test_rendering_tables_does_not_import_the_plotting_stack() -> None:
     """Importing the table renderers leaves matplotlib, pandas, and seaborn unloaded."""
     probe = (
         "import slipstream_bench.report.chart as chart\n"
+        "import slipstream_bench.report.kv_ab_chart as kv_ab_chart\n"
         "import sys\n"
         "assert chart.rows_to_markdown is not None\n"
+        "assert kv_ab_chart.kv_ab_spreads_to_markdown is not None\n"
         "leaked = sorted(\n"
         "    name\n"
         "    for name in ('matplotlib', 'pandas', 'seaborn')\n"
