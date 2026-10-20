@@ -8,6 +8,7 @@ run once with its transport builders swapped for the same fakes.
 """
 
 import base64
+import io
 import json
 import re
 from collections.abc import Iterator, Sequence
@@ -138,11 +139,12 @@ class _Ssm:
 class _S3:
     """Serve each cell a valid result, or a failed one under a key holding a marker.
 
-    Records each object written.
+    Records each object written, and serves each record written back.
     """
 
     def __init__(self, failing: tuple[str, ...] = ()) -> None:
         self.puts: dict[str, dict[str, Any]] = {}
+        self.charts: dict[str, bytes] = {}
         self._failing = failing
 
     def download_file(self, _bucket: str, key: str, dest: str) -> None:
@@ -153,8 +155,16 @@ class _S3:
     def put_object(
         self, *, Bucket: str, Key: str, Body: bytes, ContentType: str
     ) -> None:
-        assert (Bucket, ContentType) == ("bench", "application/json")
+        assert Bucket == "bench"
+        if ContentType == "image/png":
+            self.charts[Key] = Body
+            return
+        assert ContentType == "application/json"
         self.puts[Key] = json.loads(Body)
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        assert Bucket == "bench"
+        return {"Body": io.BytesIO(json.dumps(self.puts[Key]).encode())}
 
 
 class _Metrics:
@@ -364,7 +374,7 @@ def test_redeploying_the_same_arm_run_rolls_a_fresh_engine(tmp_path: Path) -> No
     assert first != again
 
 
-def test_the_flow_drives_its_workload_and_returns_the_record_pointers(
+def test_the_flow_drives_its_workload_renders_it_and_returns_the_record_pointers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workload = tmp_path / "kv-ab.yaml"
@@ -383,7 +393,8 @@ def test_the_flow_drives_its_workload_and_returns_the_record_pointers(
 
     monkeypatch.setattr(kv_ab_module, "build_kubectl", lambda: kubectl)
     monkeypatch.setattr(kv_ab_module, "build_ssm_client", lambda _region: _Ssm())
-    monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: _S3())
+    s3 = _S3()
+    monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: s3)
     monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
     monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
 
@@ -405,3 +416,5 @@ def test_the_flow_drives_its_workload_and_returns_the_record_pointers(
         for cap in (1, 2, 4)
     ]
     assert set(metrics_urls) == {"http://engine:8000/metrics"}
+    # The terminal render folds the records and uploads the chart under the run's charts.
+    assert list(s3.charts) == ["sweeps/kv-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
