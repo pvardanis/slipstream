@@ -11,6 +11,7 @@ the last matching line or raises.
 import json
 import re
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -57,9 +58,9 @@ load:
   goodput: ["ttft:1000", "tpot:50"]
 """
 
-# A manifest with the three swept placeholders and the two KV cache offload ones, plus
-# the Namespace and Service the operator applied at stack-up — the redeploy must apply
-# only the Deployment.
+# A manifest with the three swept placeholders, the GPU KV pool cap, and the two KV cache
+# offload ones, plus the Namespace and Service the operator applied at stack-up — the
+# redeploy must apply only the Deployment.
 _MANIFEST = """\
 apiVersion: v1
 kind: Namespace
@@ -79,6 +80,8 @@ spec:
           args:
             - --kv-cache-dtype
             - "${KV_CACHE_DTYPE}"
+            - --kv-cache-memory-bytes
+            - "${KV_CACHE_MEMORY_BYTES}"
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
@@ -136,6 +139,33 @@ def test_render_substitutes_the_swept_knobs() -> None:
     assert "--enable-prefix-caching" in rendered
 
 
+def _kv_cache_memory_bytes(container: dict[str, Any]) -> str:
+    """The value the container passes to vLLM's --kv-cache-memory-bytes."""
+    args = container["args"]
+    return args[args.index("--kv-cache-memory-bytes") + 1]
+
+
+def test_render_caps_the_gpu_kv_pool_at_the_engine_args_bytes() -> None:
+    engine_args = replace(
+        get_engine_args(_grid(), _POINT), kv_cache_memory_bytes=1_207_959_552
+    )
+
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=engine_args, kv_cache_offload=False
+    )
+
+    assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "1207959552"
+
+
+def test_render_leaves_a_sweep_point_s_gpu_kv_pool_uncapped() -> None:
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=get_engine_args(_grid(), _POINT), kv_cache_offload=False
+    )
+
+    # vLLM parses the literal "None" as no cap: gpu-memory-utilization sizes the pool.
+    assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "None"
+
+
 def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
     engine_args = get_engine_args(_grid(), _FP16_OFF)
 
@@ -154,6 +184,7 @@ def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
     [
         "${MAX_NUM_SEQS}",
         "${KV_CACHE_DTYPE}",
+        "${KV_CACHE_MEMORY_BYTES}",
         "${PREFIX_CACHING_FLAG}",
         "${KV_TRANSFER_CONFIG}",
         "${MEMORY_LIMIT}",
@@ -289,6 +320,18 @@ def test_the_recipe_renders_the_same_offload_values_as_the_worker() -> None:
     assert f"kv_transfer_config='{_kv_transfer_config(on)}'\n" in recipe
     assert f"memory_limit={off['resources']['limits']['memory']}\n" in recipe
     assert f"memory_limit={on['resources']['limits']['memory']}\n" in recipe
+
+
+def test_the_recipe_leaves_the_gpu_kv_pool_uncapped_as_the_sweep_does() -> None:
+    # A plain `just gpu-deploy` must size the pool as a sweep point's redeploy does.
+    recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
+        encoding="utf-8"
+    )
+    uncapped = _kv_cache_memory_bytes(
+        _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    )
+
+    assert f'KV_CACHE_MEMORY_BYTES="${{KV_CACHE_MEMORY_BYTES:-{uncapped}}}"' in recipe
 
 
 def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:

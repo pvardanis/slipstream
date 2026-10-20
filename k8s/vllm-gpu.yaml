@@ -108,6 +108,14 @@ spec:
             - "4096"
             - --gpu-memory-utilization
             - "0.90"
+            # GPU KV pool cap in bytes, uncapped by default. The KV cache extension A/B
+            # (#326) caps the pool so its working set overflows the GPU and offload has
+            # evicted prefixes to reload; set, vLLM sizes the pool from it and ignores
+            # gpu-memory-utilization for the KV cache. Uncapped renders "None", which
+            # vLLM parses as no cap. Rendered from KV_CACHE_MEMORY_BYTES by
+            # `_render-gpu-manifest`, and by the worker's render.
+            - --kv-cache-memory-bytes
+            - "${KV_CACHE_MEMORY_BYTES}"
             # Swept knobs, rendered per point by the knob sweep (#33). The committed
             # rig's default values live in `_render-gpu-manifest`, so a plain
             # `just gpu-deploy` renders these placeholders to that config; `just

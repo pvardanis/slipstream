@@ -18,18 +18,21 @@ _KV_ENGINE_TOKEN: dict[KvLabel, str] = {"fp8": "fp8", "fp16": "float16"}
 
 @dataclass(frozen=True)
 class EngineArgs:
-    """The three swept vLLM args one Tier-1 engine point runs with.
+    """The vLLM args a GPU redeploy renders into the manifest.
 
     A single engine point's engine args: ``max-num-seqs``, the ``--kv-cache-dtype``
-    token (the chart label mapped to what vLLM accepts, fp16 -> float16), and the
-    prefix-caching flag (``--enable-prefix-caching`` / ``--no-enable-prefix-caching``).
-    Binding them into one value keeps a caller from threading three loose strings it
-    could transpose, and reuses the one label->token mapping the manifest render reads.
+    token (the chart label mapped to what vLLM accepts, fp16 -> float16), the
+    prefix-caching flag (``--enable-prefix-caching`` / ``--no-enable-prefix-caching``),
+    and the GPU KV pool cap in bytes (``--kv-cache-memory-bytes``), which ``None`` leaves
+    to ``--gpu-memory-utilization``. Binding them into one value keeps a caller from
+    threading loose strings it could transpose, and reuses the one label->token mapping
+    the manifest render reads.
     """
 
     max_num_seqs: int
     kv_engine_token: str
     prefix_caching_flag: str
+    kv_cache_memory_bytes: int | None
 
 
 def get_engine_args(grid: SweepGrid, point: EnginePoint) -> EngineArgs:
@@ -55,6 +58,17 @@ def get_engine_args(grid: SweepGrid, point: EnginePoint) -> EngineArgs:
     )
     return EngineArgs(
         max_num_seqs=point.max_num_seqs,
-        kv_engine_token=_KV_ENGINE_TOKEN[kv_label],
+        kv_engine_token=get_kv_engine_token(kv_label),
         prefix_caching_flag=arm.flag,
+        # The sweep charts what the engine sizes from gpu-memory-utilization, uncapped.
+        kv_cache_memory_bytes=None,
     )
+
+
+def get_kv_engine_token(label: KvLabel) -> str:
+    """Map a KV cache dtype's chart label to the token vLLM's --kv-cache-dtype accepts.
+
+    :param label: the chart label, ``fp8`` or ``fp16``.
+    :return: the engine token, e.g. ``float16`` for ``fp16``.
+    """
+    return _KV_ENGINE_TOKEN[label]
