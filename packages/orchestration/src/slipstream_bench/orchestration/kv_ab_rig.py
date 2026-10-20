@@ -93,6 +93,69 @@ def read_kv_ab_rig(manifest: Path) -> KvAbRig:
     )
 
 
+def check_fits_rig(config: KvAbConfig, rig: KvAbRig) -> None:
+    """Refuse a workload the manifest or its own engine config rules out, before deploy.
+
+    The window, tier, and chunk are read off the manifest and the GPU KV pool is set by
+    the config's ``kv_cache_memory_bytes``, so a workload past any fails before a GPU
+    minute is spent: a request past max-model-len is rejected by vLLM, so every cell
+    would fail alike; a prefix ending mid-chunk loses that chunk's reuse from the tier;
+    prompts whose chunks overflow the tier evict the prefixes it would serve; a pool that
+    holds the working set measures no offload; and one below the top rung's requests
+    measures preemption in both arms.
+
+    :param config: the A/B workload.
+    :param rig: the rig capacities read off the manifest.
+    :raise KvAbWorkloadError: when prompt plus output exceeds max-model-len, the prefix
+        is not whole chunks, the prompts' chunks overflow the CPU tier, or the configured
+        GPU KV pool holds the working set or not the top rung's requests.
+    """
+    request_len = config.request_tokens
+    if request_len > rig.max_model_len:
+        raise KvAbWorkloadError(
+            f"a request spans {request_len} tokens ({config.load.total_len} prompt + "
+            f"{config.load.output_len} output), past the rig's max-model-len "
+            f"{rig.max_model_len}: lower load.total_len or load.output_len"
+        )
+    _check_fits_cpu_tier(config, rig)
+    check_gpu_kv_pool(
+        config,
+        gpu_pool_tokens=config.engine.kv_cache_memory_bytes // _KV_BYTES_PER_TOKEN,
+    )
+
+
+def check_gpu_kv_pool(config: KvAbConfig, *, gpu_pool_tokens: int) -> None:
+    """Refuse a GPU KV pool that holds the working set, or not the top rung's requests.
+
+    A pool that holds every prefix never evicts one, so the GPU prefix cache alone serves
+    the workload and the CPU tier has nothing to add; a pool below the top rung's
+    requests preempts them, so both arms measure recompute. :func:`check_fits_rig` runs
+    this on the configured pool before deploy, and the driver on the size the engine
+    reported after each redeploy.
+
+    :param config: the A/B workload.
+    :param gpu_pool_tokens: the GPU KV pool size, in tokens.
+    :raise KvAbWorkloadError: when the working set fits the pool, or the top rung's
+        requests do not.
+    """
+    working_set = config.working_set_tokens
+    if working_set <= gpu_pool_tokens:
+        raise KvAbWorkloadError(
+            f"the {working_set}-token working set fits the {gpu_pool_tokens}-token "
+            f"GPU KV pool, so offload has nothing to serve: raise load.num_prefixes "
+            f"or lower engine.kv_cache_memory_bytes"
+        )
+    top_rung = max(config.max_concurrency)
+    request_len = config.request_tokens
+    if top_rung * request_len > gpu_pool_tokens:
+        raise KvAbWorkloadError(
+            f"the top rung's {top_rung} requests of {request_len} tokens need "
+            f"{top_rung * request_len} tokens, past the {gpu_pool_tokens}-token GPU KV "
+            f"pool, so vLLM preempts them: raise engine.kv_cache_memory_bytes or lower "
+            f"max_concurrency"
+        )
+
+
 def _read_max_model_len(manifest: Path) -> int:
     """Read the value following the vLLM container's last ``--max-model-len`` arg."""
     args = read_vllm_args(manifest)
@@ -144,37 +207,6 @@ def _read_chunk_tokens(manifest: Path) -> int:
     return int(value)
 
 
-def check_fits_rig(config: KvAbConfig, rig: KvAbRig) -> None:
-    """Refuse a workload the manifest or its own engine config rules out, before deploy.
-
-    The window, tier, and chunk are read off the manifest and the GPU KV pool is set by
-    the config's ``kv_cache_memory_bytes``, so a workload past any fails before a GPU
-    minute is spent: a request past max-model-len is rejected by vLLM, so every cell
-    would fail alike; a prefix ending mid-chunk loses that chunk's reuse from the tier;
-    prompts whose chunks overflow the tier evict the prefixes it would serve; a pool that
-    holds the working set measures no offload; and one below the top rung's requests
-    measures preemption in both arms.
-
-    :param config: the A/B workload.
-    :param rig: the rig capacities read off the manifest.
-    :raise KvAbWorkloadError: when prompt plus output exceeds max-model-len, the prefix
-        is not whole chunks, the prompts' chunks overflow the CPU tier, or the configured
-        GPU KV pool holds the working set or not the top rung's requests.
-    """
-    request_len = config.request_tokens
-    if request_len > rig.max_model_len:
-        raise KvAbWorkloadError(
-            f"a request spans {request_len} tokens ({config.load.total_len} prompt + "
-            f"{config.load.output_len} output), past the rig's max-model-len "
-            f"{rig.max_model_len}: lower load.total_len or load.output_len"
-        )
-    _check_fits_cpu_tier(config, rig)
-    check_gpu_pool(
-        config,
-        gpu_pool_tokens=config.engine.kv_cache_memory_bytes // _KV_BYTES_PER_TOKEN,
-    )
-
-
 def _check_fits_cpu_tier(config: KvAbConfig, rig: KvAbRig) -> None:
     """Refuse a prefix off the chunk grid, or prompts whose chunks overflow the tier.
 
@@ -197,36 +229,4 @@ def _check_fits_cpu_tier(config: KvAbConfig, rig: KvAbRig) -> None:
             f"prompt chunks, past the {rig.cpu_tier_tokens}-token CPU tier, so the tier "
             f"evicts what it would serve: raise {_TIER_SIZE_ENV} in the manifest or "
             f"lower load.num_prefixes"
-        )
-
-
-def check_gpu_pool(config: KvAbConfig, *, gpu_pool_tokens: int) -> None:
-    """Refuse a GPU KV pool that holds the working set, or not the top rung's requests.
-
-    A pool that holds every prefix never evicts one, so the GPU prefix cache alone serves
-    the workload and the CPU tier has nothing to add; a pool below the top rung's
-    requests preempts them, so both arms measure recompute. :func:`check_fits_rig` runs
-    this on the configured pool before deploy, and the driver on the size the engine
-    reported after each redeploy.
-
-    :param config: the A/B workload.
-    :param gpu_pool_tokens: the GPU KV pool size, in tokens.
-    :raise KvAbWorkloadError: when the working set fits the pool, or the top rung's
-        requests do not.
-    """
-    working_set = config.working_set_tokens
-    if working_set <= gpu_pool_tokens:
-        raise KvAbWorkloadError(
-            f"the {working_set}-token working set fits the {gpu_pool_tokens}-token "
-            f"GPU KV pool, so offload has nothing to serve: raise load.num_prefixes "
-            f"or lower engine.kv_cache_memory_bytes"
-        )
-    top_rung = max(config.max_concurrency)
-    request_len = config.request_tokens
-    if top_rung * request_len > gpu_pool_tokens:
-        raise KvAbWorkloadError(
-            f"the top rung's {top_rung} requests of {request_len} tokens need "
-            f"{top_rung * request_len} tokens, past the {gpu_pool_tokens}-token GPU KV "
-            f"pool, so vLLM preempts them: raise engine.kv_cache_memory_bytes or lower "
-            f"max_concurrency"
         )

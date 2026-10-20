@@ -20,7 +20,7 @@ from slipstream_bench.contract.kv_ab_config import KvAbConfig
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     check_fits_rig,
-    check_gpu_pool,
+    check_gpu_kv_pool,
 )
 
 Arm = Literal["off", "on"]
@@ -95,7 +95,7 @@ class KvAbCollaborators:
 
 
 @dataclass(frozen=True)
-class KvAbOutcome:
+class KvAbResult:
     """The A/B's result: its cell pointers and how many runs ran or resumed.
 
     :param pointers: the S3 pointer of every ladder cell, in run order.
@@ -114,14 +114,14 @@ class KvAbOutcome:
         """
         if self.runs_run < 0 or self.runs_resumed < 0:
             raise ValueError(
-                f"KvAbOutcome run counts must be non-negative: runs_run "
+                f"KvAbResult run counts must be non-negative: runs_run "
                 f"{self.runs_run}, runs_resumed {self.runs_resumed}"
             )
 
 
 def drive_kv_ab(
     config: KvAbConfig, rig: KvAbRig, collaborators: KvAbCollaborators
-) -> KvAbOutcome:
+) -> KvAbResult:
     """Run every arm's runs, interleaved, each a redeploy, warmup, and ladder.
 
     The context window, the CPU tier, and the configured GPU pool are checked before the
@@ -134,7 +134,7 @@ def drive_kv_ab(
     :param config: the A/B workload.
     :param rig: the rig capacities read off the manifest.
     :param collaborators: the callables the runs are sequenced through.
-    :return: the outcome — the cell pointers and the run/resume split.
+    :return: the result — the cell pointers and the run/resume split.
     :raise KvAbWorkloadError: when a request overruns max-model-len, a prefix is off the
         chunk grid, the prompts overflow the CPU tier, or the GPU pool holds the working
         set or not the top rung's requests.
@@ -154,21 +154,11 @@ def drive_kv_ab(
             collaborators.run_cell(arm_run, concurrency, pending)
             for concurrency in config.max_concurrency
         )
-    return KvAbOutcome(
+    return KvAbResult(
         pointers=tuple(pointers),
         runs_run=runs_run,
         runs_resumed=len(arm_runs) - runs_run,
     )
-
-
-def _prepare_run(
-    arm_run: ArmRun, config: KvAbConfig, collaborators: KvAbCollaborators
-) -> None:
-    """Redeploy for the run's arm, guard the working set, and warm the arm's tiers."""
-    collaborators.deploy(arm_run)
-    gpu_pool_tokens = collaborators.scrape_gpu_pool()
-    check_gpu_pool(config, gpu_pool_tokens=gpu_pool_tokens)
-    collaborators.warm_up(arm_run)
 
 
 def list_arm_runs(runs_per_arm: int) -> list[ArmRun]:
@@ -180,3 +170,13 @@ def list_arm_runs(runs_per_arm: int) -> list[ArmRun]:
     return [
         ArmRun(arm=arm, run=run) for run in range(1, runs_per_arm + 1) for arm in _ARMS
     ]
+
+
+def _prepare_run(
+    arm_run: ArmRun, config: KvAbConfig, collaborators: KvAbCollaborators
+) -> None:
+    """Redeploy for the run's arm, guard the working set, and warm the arm's tiers."""
+    collaborators.deploy(arm_run)
+    gpu_pool_tokens = collaborators.scrape_gpu_pool()
+    check_gpu_kv_pool(config, gpu_pool_tokens=gpu_pool_tokens)
+    collaborators.warm_up(arm_run)
