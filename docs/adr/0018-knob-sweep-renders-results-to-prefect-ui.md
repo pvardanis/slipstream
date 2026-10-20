@@ -162,6 +162,7 @@ arm run and re-renders.
 
 The chart reuses the knob sweep's upload and image publish, under
 `sweeps/kv-ab/<run>/charts/kv-ab-by-max-concurrency.png`. The public-read policy needs no change:
-its `sweeps/*/charts/*` wildcard spans `/`, so it covers the kv-ab charts prefix as well. That
-prefix holds only charts, and the A/B's raw results under `sweeps/kv-ab/<run>/<arm>-r<n>/` stay
-private like the knob sweep's.
+its `sweeps/*/charts/*` wildcard spans `/`, so it covers the kv-ab charts prefix as well. The
+A/B's raw results under `sweeps/kv-ab/<run>/<arm>-r<n>/` stay private like the knob sweep's, on
+the same condition: the wildcard matches any `charts/` path under `sweeps/`, so no run id may
+have a `charts` segment. Nothing validates the run id.

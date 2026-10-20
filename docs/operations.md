@@ -72,8 +72,11 @@ runs one unrecorded warmup cell, then the concurrency ladder.
 **The workload** is [`bench/kv-cache-extension-ab.yaml`](../bench/kv-cache-extension-ab.yaml),
 the one config the orchestration image bakes and the deployment runs. Other workloads are
 parked beside it: `kv-cache-extension-ab.agent.yaml` (the live one is a copy of it) and
-`kv-cache-extension-ab.chat.yaml`. To run a parked one, copy it over the live file and
-rebuild the orchestration image first.
+`kv-cache-extension-ab.chat.yaml`. To run a parked one, either copy it over the live file
+and publish the orchestration image (a push to `main` publishes it; for a branch, see the
+`e2e-test-orchestration-branch` skill), or copy it into the worker pod and pass
+`--param kv_ab_config=/tmp/<file>` at trigger. The pod's `/tmp` does not survive a worker
+restart.
 
 **From a workstation** (there is no dispatch workflow):
 
@@ -88,8 +91,8 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run \
 ```
 
 As with the knob sweep, **do not run `just gpu-deploy` while an A/B is in flight**. After
-an A/B the replica keeps the last arm's offload switch and capped pool; `just gpu-deploy`
-with `KV_CACHE_OFFLOAD` and `KV_CACHE_MEMORY_BYTES` unset restores the committed config.
+an A/B the replica keeps the last arm's offload switch and capped pool; the knob sweep's
+restore step above returns it to the committed config.
 
 **Refusals.** Before the first redeploy, the run fails if a request (`total_len` plus
 `output_len`) is past the manifest's max-model-len, if the prefix is not whole LMCache
@@ -112,9 +115,19 @@ other is redeployed and re-measured whole. A new `run_id` re-measures everything
 **Results** land in the results bucket. Each rung's labelled record (the raw result plus
 its arm, run, and prefix-cache hit rates) is under `kv-ab/<run-id>/<arm>-r<n>/`; the
 bench host's raw results are under `sweeps/kv-ab/<run-id>/` and the chart under
-`sweeps/kv-ab/<run-id>/charts/`. `just bench-results-sync` pulls the raw results but not
-the labelled records; pull those with
-`aws s3 sync "s3://<bucket>/kv-ab" bench/results/kv-ab-records`.
+`sweeps/kv-ab/<run-id>/charts/`. Each arm run's warmup cell lands beside its rungs under
+`<arm>-r<n>/warmup/`; leave it out when folding raw results by hand. `just
+bench-results-sync` pulls the raw results but not the labelled records; pull those with:
+
+```sh
+bucket="$(terraform -chdir=terraform/bench-endpoint output -raw results_bucket_name)"
+region="$(terraform -chdir=terraform/eks output -raw region)"
+aws s3 sync "s3://${bucket}/kv-ab" bench/results/kv-ab-records --region "${region}"
+```
+
+The chart is public, like the knob sweep's: the bucket serves any `charts/` path under
+`sweeps/` anonymously. So never use `charts` as a run id or a run id segment, or that
+run's raw results become public too.
 
 ## One point, prefix cache
 

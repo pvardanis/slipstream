@@ -45,7 +45,7 @@ Done when the rollout reports success. Terraform does not see this swap; `just s
 
 ## Step 3 — Register from the branch
 
-Run `just prefect-register-sweep` from the branch (`just prefect-register-kv-ab` for the KV cache A/B), so the deployment's parameters match the branch's flow, and hold `just prefect-ui` open in the background for the API port-forward. Trigger every run from the workstation; a `sweep-dispatch` run re-registers `main`'s deployment over this one.
+Run `just prefect-register-sweep` from the branch (`just prefect-register-kv-ab` for the KV cache A/B), so the deployment's parameters match the branch's flow, and hold `just prefect-ui` open in the background for the API port-forward. Trigger every run from the workstation; a `sweep-dispatch` run re-registers `main`'s knob-sweep deployment over this one.
 
 ## Step 4 — Write the test grids
 
@@ -56,6 +56,8 @@ uv run python -c "from pathlib import Path; from slipstream_bench.contract.grid 
 ```
 
 - Keep `load.num_prompts` a multiple of `load.num_prefixes`. The client sends `num_prefixes × floor(num_prompts / num_prefixes)` requests while the validity gate counts `num_prompts` as attempted, so a remainder reads as failed requests and a healthy cell is rejected.
+
+For the KV cache A/B the same holds for its workload: the image bakes `bench/kv-cache-extension-ab.yaml` at `/app/bench/kv-cache-extension-ab.yaml`, and the deployment takes it as the `kv_ab_config` parameter.
 
 Copy each grid into the pod, and copy again after any worker restart: `/tmp` in the pod does not survive one.
 
