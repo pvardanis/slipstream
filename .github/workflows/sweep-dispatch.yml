@@ -2,14 +2,14 @@
 # 'CI/CD later'). A workflow_dispatch that fires `prefect deployment run` against the
 # self-hosted, no-public-endpoint Prefect server, so a sweep is kicked off from the
 # GitHub UI without a workstation's kubectl. It registers the knob-sweep deployment
-# (the same `register-knob-sweep` command `just prefect-register` runs), then triggers a
-# run of it against an already-live stack. Registration overwrites the deployment, so
-# every dispatch runs with defaults resolved from the live stack and main, including
-# after a cluster-down wiped the server's SQLite. It does not stand the cluster up
-# (`just stack-up`), which stays a deliberate operator step that brackets the GPU spend
-# (ADR-0015). The run itself executes in-cluster on the worker to completion; this
-# workflow returns as soon as the run is created (no --watch), consistent with the ADR's
-# fire-and-forget trigger.
+# (the same `register-knob-sweep` command `just prefect-register-sweep` runs), then
+# triggers a run of it against an already-live stack. Registration overwrites the
+# deployment, so every dispatch runs with defaults resolved from the live stack and
+# main, including after a cluster-down wiped the server's SQLite. It does not stand
+# the cluster up (`just stack-up`), which stays a deliberate operator step that
+# brackets the GPU spend (ADR-0015). The run itself executes in-cluster on the worker
+# to completion; this workflow returns as soon as the run is created (no --watch),
+# consistent with the ADR's fire-and-forget trigger.
 # Dispatch it from main: the OIDC role trusts only main-branch runs.
 name: sweep-dispatch
 
@@ -217,7 +217,8 @@ jobs:
 
           # Register (or overwrite) the deployment with the resolved defaults; the
           # in-image paths and the sweep-pool work pool keep the command's defaults, as
-          # in `just prefect-register`. The command fails if the work pool is absent.
+          # in `just prefect-register-sweep`. The command fails if the work pool is
+          # absent.
           uv run slipstream-orchestrate register-knob-sweep \
             --region "${AWS_REGION}" \
             --bucket "${BUCKET}" \
