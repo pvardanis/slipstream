@@ -30,6 +30,10 @@ from slipstream_bench.orchestration.tasks.cell import CellExecution
 # host). It reads the cell env this module prefixes and runs one docker cell.
 _BENCH_CELL_SCRIPT = "/usr/local/bin/bench-sweep.sh"
 
+# The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
+# before a ladder's cells, so the whole ladder shares one proxy.
+BENCH_PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
+
 # Placeholder base_url: bench-sweep.sh supplies the real --base-url (the loopback
 # proxy) as a flag, and render_cell_config strips it, so the value enumerated here is
 # never sent — it only satisfies the non-empty CellConfig field.
@@ -191,6 +195,35 @@ def build_cell_execution(
         key=get_cell_s3_key(context.run_id, cell),
         dest=dest,
     )
+
+
+def start_bench_proxy(
+    ssm_client: Any,
+    *,
+    instance_id: str,
+    timeout_s: float,
+    command: str = BENCH_PROXY_SCRIPT,
+    poll_interval_s: float = 5.0,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """Bring the bench host's loopback mTLS proxy up, the endpoint every cell targets.
+
+    :param ssm_client: the boto3 SSM client (or stand-in) the command is sent through.
+    :param instance_id: the bench host running the cells.
+    :param timeout_s: the ceiling on the proxy's SSM command.
+    :param command: the host command that brings the proxy up.
+    :param poll_interval_s: the wait between SSM invocation polls.
+    :param sleep: the wait function, injected for tests.
+    """
+    run_kwargs: dict[str, Any] = {
+        "instance_id": instance_id,
+        "command": command,
+        "timeout_s": timeout_s,
+        "poll_interval_s": poll_interval_s,
+    }
+    if sleep is not None:
+        run_kwargs["sleep"] = sleep
+    run_command(ssm_client, **run_kwargs)
 
 
 def build_s3_client(region: str) -> Any:

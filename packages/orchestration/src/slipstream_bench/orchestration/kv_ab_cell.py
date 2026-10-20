@@ -7,9 +7,16 @@ their raw results land under ``sweeps/kv-ab/``, apart from any knob sweep's, and
 labelled record the worker writes lands at the same path under ``kv-ab/``. The digest
 folds in the engine args both arms deploy and the cell's knobs, so a cached rung is
 re-measured when either changes; the arm and run are cache-key parts of their own.
+The worker reads the engine's /metrics over the cluster network around each rung
+(:func:`fetch_metrics`) and writes each rung's record to S3 (:func:`write_kv_ab_record`).
 """
 
+import json
+import urllib.error
+import urllib.request
+from collections.abc import Mapping
 from dataclasses import asdict
+from typing import Any
 
 from slipstream_bench.contract import CellConfig, get_cell_basename
 from slipstream_bench.orchestration.cell_run import (
@@ -30,6 +37,10 @@ _BURSTINESS = 1.0
 
 # The prefix every A/B run's cells and records nest under.
 _KV_AB_PREFIX = "kv-ab"
+
+
+class MetricsError(Exception):
+    """A serving engine whose /metrics could not be read."""
 
 
 def get_kv_ab_cell(config: KvAbConfig, concurrency: int, *, model: str) -> CellConfig:
@@ -92,3 +103,42 @@ def get_kv_ab_cell_digest(
         sweep_flags=(),
         max_error_rate=DEFAULT_MAX_ERROR_RATE,
     )
+
+
+def fetch_metrics(url: str, *, timeout_s: float = 10.0) -> str:
+    """Read the serving engine's Prometheus /metrics exposition text.
+
+    :param url: the engine's /metrics URL, e.g.
+        ``http://vllm-gpu.slipstream.svc:8000/metrics``.
+    :param timeout_s: the ceiling on the request.
+    :return: the exposition text.
+    :raise MetricsError: when the request fails or the engine answers with an error.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as response:
+            return response.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise MetricsError(
+            f"could not read the engine's metrics at {url}: {error}: is the vLLM "
+            f"Service up and reachable from the worker?"
+        ) from error
+
+
+def write_kv_ab_record(
+    record: Mapping[str, Any], *, s3_client: Any, bucket: str, key: str
+) -> str:
+    """Write a rung's labelled record to S3 as JSON and return its pointer.
+
+    :param record: the labelled record.
+    :param s3_client: the boto3 S3 client (or stand-in) the record is written with.
+    :param bucket: the results bucket.
+    :param key: the record's object key (:func:`get_kv_ab_record_key`).
+    :return: the record's ``s3://`` URI.
+    """
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=json.dumps(record).encode("utf-8"),
+        ContentType="application/json",
+    )
+    return f"s3://{bucket}/{key}"

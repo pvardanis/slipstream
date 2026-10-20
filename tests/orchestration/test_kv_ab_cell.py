@@ -7,11 +7,19 @@ while the labelled record lands under ``kv-ab/``. The digest names what a cached
 was measured with, so a change to the engine or the cell re-measures it.
 """
 
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from slipstream_bench.orchestration.cell_run import get_cell_knobs, get_cell_s3_key
 from slipstream_bench.orchestration.digest import ServingConfig
 from slipstream_bench.orchestration.kv_ab_cell import (
+    MetricsError,
+    fetch_metrics,
     get_kv_ab_cell,
     get_kv_ab_cell_digest,
     get_kv_ab_record_key,
@@ -86,3 +94,44 @@ def test_a_rungs_digest_changes_with_the_gpu_pool_cap() -> None:
 
 def test_a_rungs_digest_is_stable_for_the_same_inputs() -> None:
     assert _digest() == _digest()
+
+
+_EXPOSITION = "# TYPE vllm:prefix_cache_queries counter\n"
+
+
+class _MetricsHandler(BaseHTTPRequestHandler):
+    """Serve the exposition at /metrics and a 500 anywhere else."""
+
+    def do_GET(self) -> None:
+        status, body = (200, _EXPOSITION) if self.path == "/metrics" else (500, "")
+        self.send_response(status)
+        self.end_headers()
+        self.wfile.write(body.encode("utf-8"))
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Keep the test output clean of the server's access log."""
+
+
+@pytest.fixture
+def _engine() -> Iterator[str]:
+    server = HTTPServer(("127.0.0.1", 0), _MetricsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_metrics_fetch_reads_the_engines_exposition(_engine: str) -> None:
+    assert fetch_metrics(f"{_engine}/metrics") == _EXPOSITION
+
+
+def test_an_engine_answering_with_an_error_fails_the_fetch(_engine: str) -> None:
+    with pytest.raises(MetricsError, match="500"):
+        fetch_metrics(f"{_engine}/broken")
+
+
+def test_an_unreachable_engine_fails_the_fetch() -> None:
+    # Port 9 (discard) on loopback has no listener, so the connection is refused.
+    with pytest.raises(MetricsError, match="127.0.0.1:9"):
+        fetch_metrics("http://127.0.0.1:9/metrics", timeout_s=1.0)
