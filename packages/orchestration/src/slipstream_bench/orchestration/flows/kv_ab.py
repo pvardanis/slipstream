@@ -12,16 +12,50 @@ server. A run whose cells are all cached skips its redeploy; any other run is re
 whole.
 """
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
 
+from prefect import Task
+
+from slipstream_bench.contract import CellConfig, get_cell_basename
 from slipstream_bench.contract.kv_ab_record import Arm
-from slipstream_bench.orchestration.kv_ab_config import KvAbConfig
+from slipstream_bench.orchestration.cell_run import (
+    CellExecutionContext,
+    build_cell_execution,
+    start_bench_proxy,
+)
+from slipstream_bench.orchestration.cluster import (
+    Kubectl,
+    deploy_gpu,
+    scrape_gpu_kv_pool,
+)
+from slipstream_bench.orchestration.digest import ServingConfig
+from slipstream_bench.orchestration.kv_ab_cell import (
+    get_kv_ab_cell,
+    get_kv_ab_cell_digest,
+    get_kv_ab_record_key,
+    get_kv_ab_run_id,
+    write_kv_ab_record,
+)
+from slipstream_bench.orchestration.kv_ab_config import (
+    KvAbConfig,
+    get_kv_ab_engine_args,
+)
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     check_fits_rig,
     check_gpu_kv_pool,
 )
+from slipstream_bench.orchestration.tasks.cell import is_cell_cached
+from slipstream_bench.orchestration.tasks.kv_ab_cell import MetricsReader
+from slipstream_bench.orchestration.validity import validate_cell
+
+_LOGGER = logging.getLogger(__name__)
 
 # The arms in the order each repetition runs them.
 _ARMS: tuple[Arm, ...] = ("off", "on")
@@ -117,6 +151,43 @@ class KvAbResult:
             )
 
 
+@dataclass(frozen=True)
+class KvAbInputs:
+    """The per-A/B inputs every arm run shares.
+
+    :param config: the A/B workload.
+    :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text each redeploy renders.
+    :param run: the A/B's run id, which every arm run's cells and records nest under.
+    :param serving: the model and vLLM serving image every rung's digest folds in.
+    :param instance_id: the bench host the cells run on.
+    :param image_ref: the bench-client image the cells run.
+    :param bucket: the results bucket.
+    :param model: the served model id the cells measure and the counters are labelled by.
+    :param proxy_timeout_s: the ceiling on the bench proxy's SSM command.
+    :param cell_timeout_s: the ceiling on each cell's SSM command.
+    """
+
+    config: KvAbConfig
+    manifest_text: str
+    run: str
+    serving: ServingConfig
+    instance_id: str
+    image_ref: str
+    bucket: str
+    model: str
+    proxy_timeout_s: float = 240.0
+    cell_timeout_s: float = 3600.0
+
+    def __post_init__(self) -> None:
+        """Reject inputs that would address the A/B's cells with an empty key.
+
+        :raise ValueError: when an addressing field is blank.
+        """
+        for name in ("run", "instance_id", "image_ref", "bucket", "model"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"KvAbInputs.{name} must be a non-empty string")
+
+
 def drive_kv_ab(
     config: KvAbConfig, rig: KvAbRig, collaborators: KvAbCollaborators
 ) -> KvAbResult:
@@ -170,6 +241,54 @@ def list_arm_runs(runs_per_arm: int) -> list[ArmRun]:
     ]
 
 
+def build_kv_ab_collaborators(
+    inputs: KvAbInputs,
+    *,
+    kubectl: Kubectl,
+    ssm_client: Any,
+    s3_client: Any,
+    task: Task[..., str],
+    read_metrics: MetricsReader,
+) -> KvAbCollaborators:
+    """Bind the driver's collaborators to the live transports.
+
+    The redeploy renders the A/B's engine args and the run's offload switch into the
+    manifest; the pool scrape reads the engine's startup log. The warmup brings the bench
+    proxy up and runs one cell at the warmup concurrency under ``<run id>/warmup``,
+    gated but neither cached nor recorded. Each rung runs through the kv-ab cell task,
+    keyed by the run's ``kv-ab/<run>/<arm>-r<n>`` run id and ``<arm>-r<n>`` slug, and the
+    pending gate reads that task's cache for every rung of the run.
+
+    :param inputs: the per-A/B inputs every arm run shares.
+    :param kubectl: the transport the redeploy and pool scrape are issued through.
+    :param ssm_client: the boto3 SSM client the proxy and cells are sent through.
+    :param s3_client: the boto3 S3 client results are downloaded and records written with.
+    :param task: the kv-ab cell task each rung is cached and measured with.
+    :param read_metrics: reads the serving engine's /metrics around each rung.
+    :return: the collaborators :func:`drive_kv_ab` sequences.
+    """
+    transports = {"ssm_client": ssm_client, "s3_client": s3_client}
+    return KvAbCollaborators(
+        deploy=partial(_deploy_arm_run, inputs=inputs, kubectl=kubectl),
+        scrape_gpu_pool=partial(_scrape_gpu_pool, kubectl=kubectl),
+        warm_up=partial(_warm_up, inputs=inputs, **transports),
+        run_cell=partial(
+            _run_rung, inputs=inputs, task=task, read_metrics=read_metrics, **transports
+        ),
+        has_pending_cells=partial(_run_has_pending_cells, inputs=inputs, task=task),
+    )
+
+
+@dataclass(frozen=True)
+class _Rung:
+    """One rung of one arm run, addressed: its cell, run id, cell name, and digest."""
+
+    cell: CellConfig
+    run_id: str
+    cell_name: str
+    digest: str
+
+
 def _prepare_run(
     arm_run: ArmRun, config: KvAbConfig, collaborators: KvAbCollaborators
 ) -> None:
@@ -178,3 +297,134 @@ def _prepare_run(
     gpu_pool_tokens = collaborators.scrape_gpu_pool()
     check_gpu_kv_pool(config, gpu_pool_tokens=gpu_pool_tokens)
     collaborators.warm_up(arm_run)
+
+
+def _deploy_arm_run(arm_run: ArmRun, *, inputs: KvAbInputs, kubectl: Kubectl) -> None:
+    """Redeploy the GPU with the A/B's engine args and the run's offload switch."""
+    _LOGGER.info("run %s redeploy starting", arm_run.slug())
+    deploy_gpu(
+        get_kv_ab_engine_args(inputs.config.engine),
+        kv_cache_offload=arm_run.kv_cache_offload,
+        manifest_text=inputs.manifest_text,
+        kubectl=kubectl,
+    )
+    _LOGGER.info("run %s redeploy finished", arm_run.slug())
+
+
+def _scrape_gpu_pool(*, kubectl: Kubectl) -> int:
+    """Read the redeployed engine's GPU KV pool size and record it in the log."""
+    tokens = scrape_gpu_kv_pool(kubectl=kubectl)
+    _LOGGER.info("GPU KV cache pool: %d tokens", tokens)
+    return tokens
+
+
+def _warm_up(
+    arm_run: ArmRun, *, inputs: KvAbInputs, ssm_client: Any, s3_client: Any
+) -> None:
+    """Bring the proxy up and run the run's warmup cell, gated but not recorded.
+
+    :raise InvalidCellError: when the warmup produced no measurement, so the ladder never
+        runs against tiers the warmup failed to fill.
+    """
+    start_bench_proxy(
+        ssm_client, instance_id=inputs.instance_id, timeout_s=inputs.proxy_timeout_s
+    )
+    config = inputs.config
+    cell = get_kv_ab_cell(config, config.warmup_concurrency, model=inputs.model)
+    run_id = f"{get_kv_ab_run_id(inputs.run, arm_run.slug())}/warmup"
+    context = _get_execution_context(inputs, run_id, ssm_client, s3_client)
+    with TemporaryDirectory() as scratch:
+        dest = Path(scratch) / get_cell_basename(cell)
+        build_cell_execution(cell, context=context, dest=dest)()
+        validate_cell(dest)
+    _LOGGER.info("run %s warmed up", arm_run.slug())
+
+
+def _run_rung(
+    arm_run: ArmRun,
+    concurrency: int,
+    refresh: bool,
+    *,
+    inputs: KvAbInputs,
+    ssm_client: Any,
+    s3_client: Any,
+    task: Task[..., str],
+    read_metrics: MetricsReader,
+) -> str:
+    """Run one rung through the kv-ab cell task and return its record's pointer."""
+    rung = _get_rung(inputs, arm_run, concurrency)
+    context = _get_execution_context(inputs, rung.run_id, ssm_client, s3_client)
+    record_key = get_kv_ab_record_key(inputs.run, arm_run.slug(), rung.cell)
+    # The download is read only by the validity gate and the record; the durable copies
+    # stay in S3, and the worker's root filesystem is read-only, so it lands in /tmp.
+    with TemporaryDirectory() as scratch:
+        dest = Path(scratch) / rung.cell_name
+        return task.with_options(refresh_cache=refresh)(
+            run_id=rung.run_id,
+            digest=rung.digest,
+            point_slug=arm_run.slug(),
+            cell_name=rung.cell_name,
+            execute_func=build_cell_execution(rung.cell, context=context, dest=dest),
+            read_metrics=read_metrics,
+            result_path=dest,
+            arm=arm_run.arm,
+            run=arm_run.run,
+            model=inputs.model,
+            write_record=partial(
+                write_kv_ab_record,
+                s3_client=s3_client,
+                bucket=inputs.bucket,
+                key=record_key,
+            ),
+        )
+
+
+def _run_has_pending_cells(
+    arm_run: ArmRun, *, inputs: KvAbInputs, task: Task[..., str]
+) -> bool:
+    """Report whether any rung of the run lacks a cache record, logging the first."""
+    for concurrency in inputs.config.max_concurrency:
+        rung = _get_rung(inputs, arm_run, concurrency)
+        if not is_cell_cached(
+            task,
+            run_id=rung.run_id,
+            digest=rung.digest,
+            point_slug=arm_run.slug(),
+            cell_name=rung.cell_name,
+        ):
+            _LOGGER.info(
+                "run %s pending: cell %s has no cache record",
+                arm_run.slug(),
+                rung.cell_name,
+            )
+            return True
+    return False
+
+
+def _get_rung(inputs: KvAbInputs, arm_run: ArmRun, concurrency: int) -> _Rung:
+    """Address one rung of a run: the rung task and the pending gate both read this."""
+    cell = get_kv_ab_cell(inputs.config, concurrency, model=inputs.model)
+    return _Rung(
+        cell=cell,
+        run_id=get_kv_ab_run_id(inputs.run, arm_run.slug()),
+        cell_name=get_cell_basename(cell),
+        digest=get_kv_ab_cell_digest(
+            inputs.config, cell, serving=inputs.serving, image_ref=inputs.image_ref
+        ),
+    )
+
+
+def _get_execution_context(
+    inputs: KvAbInputs, run_id: str, ssm_client: Any, s3_client: Any
+) -> CellExecutionContext:
+    """Build the context a run's cells execute in, under the given bench-host run id."""
+    return CellExecutionContext(
+        ssm_client=ssm_client,
+        s3_client=s3_client,
+        instance_id=inputs.instance_id,
+        image_ref=inputs.image_ref,
+        bucket=inputs.bucket,
+        model=inputs.model,
+        run_id=run_id,
+        timeout_s=inputs.cell_timeout_s,
+    )

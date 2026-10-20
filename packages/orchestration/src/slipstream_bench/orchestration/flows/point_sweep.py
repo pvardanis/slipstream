@@ -36,12 +36,14 @@ from slipstream_bench.contract import (
     load_grid,
 )
 from slipstream_bench.orchestration.cell_run import (
+    BENCH_PROXY_SCRIPT,
     PLACEHOLDER_BASE_URL,
     PLACEHOLDER_OUT_DIR,
     CellExecutionContext,
     build_cell_execution,
     get_cell_knobs,
     get_cell_result_uri,
+    start_bench_proxy,
 )
 from slipstream_bench.orchestration.digest import (
     ServingConfig,
@@ -49,13 +51,8 @@ from slipstream_bench.orchestration.digest import (
     read_sweep_flags,
 )
 from slipstream_bench.orchestration.grid import get_engine_args
-from slipstream_bench.orchestration.ssm import run_command
 from slipstream_bench.orchestration.task_labels import get_cell_run_tags
 from slipstream_bench.orchestration.validity import DEFAULT_MAX_ERROR_RATE
-
-# The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
-# per flow, before any cell, so the whole point's ladder shares one proxy.
-_PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
 
 
 @dataclass(frozen=True)
@@ -129,7 +126,7 @@ def run_point_sweep(
     ssm_client: Any,
     s3_client: Any,
     task: Task[..., str],
-    proxy_command: str = _PROXY_SCRIPT,
+    proxy_command: str = BENCH_PROXY_SCRIPT,
     poll_interval_s: float = 5.0,
     sleep: Callable[[float], None] | None = None,
 ) -> list[str]:
@@ -187,15 +184,14 @@ def _drive_point_sweep(
     sleep: Callable[[float], None] | None,
 ) -> list[str]:
     """Bring the proxy up once, then run each enumerated cell through the task."""
-    proxy_kwargs: dict[str, Any] = {
-        "instance_id": context.instance_id,
-        "command": proxy_command,
-        "timeout_s": context.proxy_timeout_s,
-        "poll_interval_s": poll_interval_s,
-    }
-    if sleep is not None:
-        proxy_kwargs["sleep"] = sleep
-    run_command(ssm_client, **proxy_kwargs)
+    start_bench_proxy(
+        ssm_client,
+        instance_id=context.instance_id,
+        command=proxy_command,
+        timeout_s=context.proxy_timeout_s,
+        poll_interval_s=poll_interval_s,
+        sleep=sleep,
+    )
 
     grid = load_grid(grid_path)
     execution_context = CellExecutionContext(
