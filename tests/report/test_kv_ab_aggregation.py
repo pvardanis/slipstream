@@ -5,6 +5,8 @@ reads each into a rung, summarises every arm's rung across its runs as the media
 range, and reads each arm run's ceiling off its ladder.
 """
 
+from collections.abc import Callable
+
 import pytest
 
 from slipstream_bench.contract import SweepAggregationError
@@ -23,7 +25,7 @@ def test_a_record_reads_into_its_arm_run_rung_and_hit_rates() -> None:
     assert rung.cell.max_concurrency == 4
     assert rung.cell.goodput_fraction == pytest.approx(0.95)
     assert rung.cell.p95_ttft_ms == 760.0
-    assert (rung.hit_rate, rung.combined_hit_rate) == (0.3, 0.85)
+    assert (rung.gpu_hit_rate, rung.combined_hit_rate) == (0.3, 0.85)
 
 
 def test_a_record_without_its_labels_is_refused() -> None:
@@ -83,7 +85,7 @@ def test_each_arms_rung_is_summarised_across_its_runs_as_median_and_range() -> N
     )
     assert on_mc1["p95_tpot_ms"] == {"median": 34.0, "min": 34.0, "max": 34.0}
     assert on_mc1["output_throughput"] == {"median": 131.0, "min": 131.0, "max": 131.0}
-    assert on_mc1["hit_rate"] == {"median": 0.3, "min": 0.3, "max": 0.3}
+    assert on_mc1["gpu_hit_rate"] == {"median": 0.3, "min": 0.3, "max": 0.3}
 
 
 def test_each_arm_runs_ceiling_is_its_highest_rung_holding_the_goodput_floor() -> None:
@@ -102,3 +104,14 @@ def test_each_arm_runs_ceiling_is_its_highest_rung_holding_the_goodput_floor() -
         {"arm": "off", "run": 2, "ceiling": None},
         {"arm": "on", "run": 1, "ceiling": 4},
     ]
+
+
+@pytest.mark.parametrize("fold", [summarize_kv_ab_rungs, get_kv_ab_ceilings])
+def test_an_arm_runs_rung_recorded_twice_is_refused(
+    fold: Callable[[list[KvAbRung]], object],
+) -> None:
+    # A rung recorded twice would count as an extra run in its arm's spread.
+    rungs = [build_rung("on", 1, 4), build_rung("on", 1, 4)]
+
+    with pytest.raises(SweepAggregationError, match="on arm run 1 .* 4 rung twice"):
+        fold(rungs)

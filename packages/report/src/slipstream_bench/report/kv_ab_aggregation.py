@@ -15,7 +15,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import TypedDict, cast
 
 from slipstream_bench.contract import LoadCell, SweepAggregationError, to_numeric_metric
 from slipstream_bench.contract.kv_ab_record import Arm
@@ -29,14 +29,15 @@ _LABELS_KEY = "kv_ab"
 class KvAbRung:
     """One rung of one arm run: its load cell and the prefix-cache hit rates over it.
 
-    ``hit_rate`` is the GPU prefix cache's share of the rung's queried tokens;
-    ``combined_hit_rate`` adds the tokens the KV connector's CPU tier served.
+    ``gpu_hit_rate`` is the GPU prefix cache's share of the rung's queried tokens (the
+    record's ``hit_rate``); ``combined_hit_rate`` adds the tokens the KV connector's CPU
+    tier served.
     """
 
     arm: Arm
     run: int
     cell: LoadCell
-    hit_rate: float
+    gpu_hit_rate: float
     combined_hit_rate: float
 
     @classmethod
@@ -61,7 +62,7 @@ class KvAbRung:
             arm=_read_arm(labels, source),
             run=_read_run(labels, source),
             cell=LoadCell.from_record(record, source),
-            hit_rate=_read_rate(labels, source, "hit_rate"),
+            gpu_hit_rate=_read_rate(labels, source, "hit_rate"),
             combined_hit_rate=_read_rate(labels, source, "combined_hit_rate"),
         )
 
@@ -84,7 +85,7 @@ class KvAbRungSpread(TypedDict):
     p95_ttft_ms: Spread
     p95_tpot_ms: Spread
     output_throughput: Spread
-    hit_rate: Spread
+    gpu_hit_rate: Spread
     combined_hit_rate: Spread
 
 
@@ -101,7 +102,9 @@ def summarize_kv_ab_rungs(rungs: list[KvAbRung]) -> list[KvAbRungSpread]:
 
     :param rungs: every rung of the A/B's arm runs, in any order.
     :return: one spread per arm and rung, off before on, then by rung.
+    :raise SweepAggregationError: when an arm run's rung is recorded twice.
     """
+    _reject_duplicate_rungs(rungs)
     groups: dict[tuple[Arm, int], list[KvAbRung]] = defaultdict(list)
     for rung in rungs:
         groups[(rung.arm, rung.cell.max_concurrency)].append(rung)
@@ -116,7 +119,9 @@ def get_kv_ab_ceilings(rungs: list[KvAbRung]) -> list[KvAbCeiling]:
 
     :param rungs: every rung of the A/B's arm runs, in any order.
     :return: one ceiling per arm run, off before on, then by run.
+    :raise SweepAggregationError: when an arm run's rung is recorded twice.
     """
+    _reject_duplicate_rungs(rungs)
     ladders: dict[tuple[Arm, int], list[LoadCell]] = defaultdict(list)
     for rung in rungs:
         ladders[(rung.arm, rung.run)].append(rung.cell)
@@ -126,6 +131,19 @@ def get_kv_ab_ceilings(rungs: list[KvAbRung]) -> list[KvAbCeiling]:
         ceiling = held.max_concurrency if held else None
         ceilings.append({"arm": arm, "run": run, "ceiling": ceiling})
     return ceilings
+
+
+def _reject_duplicate_rungs(rungs: list[KvAbRung]) -> None:
+    """Refuse an arm run's rung recorded twice, which would count as an extra run."""
+    seen: set[tuple[Arm, int, int]] = set()
+    for rung in rungs:
+        key = (rung.arm, rung.run, rung.cell.max_concurrency)
+        if key in seen:
+            raise SweepAggregationError(
+                f"{rung.arm} arm run {rung.run} records its "
+                f"--max-concurrency {rung.cell.max_concurrency} rung twice"
+            )
+        seen.add(key)
 
 
 def _get_rung_spread(
@@ -149,20 +167,20 @@ def _get_rung_spread(
         "p95_ttft_ms": spread(lambda rung: rung.cell.p95_ttft_ms),
         "p95_tpot_ms": spread(lambda rung: rung.cell.p95_tpot_ms),
         "output_throughput": spread(lambda rung: rung.cell.output_throughput),
-        "hit_rate": spread(lambda rung: rung.hit_rate),
+        "gpu_hit_rate": spread(lambda rung: rung.gpu_hit_rate),
         "combined_hit_rate": spread(lambda rung: rung.combined_hit_rate),
     }
 
 
-def _read_arm(labels: dict[str, Any], source: Path) -> Arm:
+def _read_arm(labels: dict[str, object], source: Path) -> Arm:
     """Read a rung's arm, refusing anything but off or on."""
     arm = labels.get("arm")
     if arm not in ("off", "on"):
         raise SweepAggregationError(f"result {source} has arm {arm!r}, not off or on")
-    return arm
+    return cast(Arm, arm)
 
 
-def _read_run(labels: dict[str, Any], source: Path) -> int:
+def _read_run(labels: dict[str, object], source: Path) -> int:
     """Read a rung's 1-based run, refusing a non-integer or a run below 1."""
     run = labels.get("run")
     if isinstance(run, bool) or not isinstance(run, int) or run < 1:

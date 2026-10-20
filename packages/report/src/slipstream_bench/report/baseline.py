@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
+from slipstream_bench.report.chart import to_markdown_table
+
 
 class UnitCost(TypedDict):
     """A priced arm's $/1M at SLO: its input and output rates."""
@@ -353,7 +355,4 @@ def render_markdown(rows: list[Row]) -> str:
         ordered.
     :return: the table as a single string: header, separator, one row per segment.
     """
-    header = "| " + " | ".join(_COLUMNS) + " |"
-    separator = "| " + " | ".join("---" for _ in _COLUMNS) + " |"
-    body = ["| " + " | ".join(_row_cells(row)) + " |" for row in rows]
-    return "\n".join([header, separator, *body])
+    return to_markdown_table(_COLUMNS, [_row_cells(row) for row in rows])

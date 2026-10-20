@@ -8,6 +8,7 @@ seaborn/matplotlib plotters that draw them live beside this in
 """
 
 import json
+from collections.abc import Sequence
 
 from slipstream_bench.report.aggregation import CeilingRow, RungRow
 
@@ -52,9 +53,19 @@ def rows_to_markdown(rows: list[CeilingRow]) -> str:
         emitted, already sorted by point then prefix-share.
     :return: the table as one string: header, separator, one row per ceiling row.
     """
-    header = "| " + " | ".join(_TABLE_COLUMNS) + " |"
-    separator = "| " + " | ".join("---" for _ in _TABLE_COLUMNS) + " |"
-    body = ["| " + " | ".join(_row_cells(row)) + " |" for row in rows]
+    return to_markdown_table(_TABLE_COLUMNS, [_row_cells(row) for row in rows])
+
+
+def to_markdown_table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """Lay printed cells out as a GitHub-flavored Markdown table.
+
+    :param columns: the header's column names.
+    :param rows: each row's printed cells, in column order.
+    :return: the table as one string: header, separator, one line per row.
+    """
+    header = "| " + " | ".join(columns) + " |"
+    separator = "| " + " | ".join("---" for _ in columns) + " |"
+    body = ["| " + " | ".join(cells) + " |" for cells in rows]
     return "\n".join([header, separator, *body])
 
 
@@ -83,10 +94,7 @@ def rungs_to_markdown(rungs: list[RungRow]) -> str:
         emitted, already sorted by point, then prefix-share, then offered concurrency.
     :return: the table as one string: header, separator, one row per rung.
     """
-    header = "| " + " | ".join(_RUNG_TABLE_COLUMNS) + " |"
-    separator = "| " + " | ".join("---" for _ in _RUNG_TABLE_COLUMNS) + " |"
-    body = ["| " + " | ".join(_rung_cells(rung)) + " |" for rung in rungs]
-    return "\n".join([header, separator, *body])
+    return to_markdown_table(_RUNG_TABLE_COLUMNS, [_rung_cells(rung) for rung in rungs])
 
 
 def rungs_to_json(rungs: list[RungRow]) -> str:
