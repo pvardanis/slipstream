@@ -33,7 +33,7 @@ class KvAbRigError(Exception):
     """A vLLM manifest that cannot yield the rig's CPU tier size or max-model-len."""
 
 
-class WorkingSetError(Exception):
+class KvAbWorkloadError(Exception):
     """A workload the rig cannot run, or cannot measure KV cache offload on."""
 
 
@@ -99,50 +99,50 @@ def _read_cpu_tier_bytes(manifest: Path) -> int:
     return int(gib * _BYTES_PER_GIB)
 
 
-def check_fits_context(config: KvAbConfig, rig: KvAbRig) -> None:
-    """Refuse a workload whose requests overrun the rig's context window.
+def check_fits_rig(config: KvAbConfig, rig: KvAbRig) -> None:
+    """Refuse a workload the rig's manifest already rules out, before any redeploy.
 
-    Checked before any redeploy: every request spans the prompt plus its output, and
-    vLLM rejects one past max-model-len, so every cell would fail the same way.
+    Both capacities are read off the manifest, so a workload past either fails before a GPU
+    minute is spent: a request past max-model-len is rejected by vLLM, so every cell would
+    fail alike; and a working set past the CPU tier is evicted from it before it is
+    served, so both arms would measure recompute.
 
     :param config: the A/B workload.
     :param rig: the rig capacities read off the manifest.
-    :raise WorkingSetError: when prompt plus output exceeds max-model-len.
+    :raise KvAbWorkloadError: when prompt plus output exceeds max-model-len, or the
+        working set overflows the CPU tier.
     """
     request_len = config.load.total_len + config.load.output_len
     if request_len > rig.max_model_len:
-        raise WorkingSetError(
+        raise KvAbWorkloadError(
             f"a request spans {request_len} tokens ({config.load.total_len} prompt + "
             f"{config.load.output_len} output), past the rig's max-model-len "
             f"{rig.max_model_len}: lower load.total_len or load.output_len"
         )
-
-
-def check_working_set(
-    config: KvAbConfig, rig: KvAbRig, *, gpu_pool_tokens: int
-) -> None:
-    """Refuse a working set the A/B cannot measure offload on.
-
-    The working set must overflow the GPU KV pool, or the GPU prefix cache alone serves
-    every prefix and the CPU tier has nothing to add; and it must fit the CPU tier, or the
-    tier evicts what it would serve and both arms measure recompute. The GPU pool is
-    scraped after each redeploy, since vLLM sizes it by profiling memory at startup.
-
-    :param config: the A/B workload.
-    :param rig: the rig capacities read off the manifest.
-    :param gpu_pool_tokens: the GPU KV pool size the deployed engine reported.
-    :raise WorkingSetError: when the working set fits the GPU pool or overflows the tier.
-    """
     working_set = config.working_set_tokens
-    if working_set <= gpu_pool_tokens:
-        raise WorkingSetError(
-            f"the {working_set}-token working set fits the {gpu_pool_tokens}-token "
-            f"GPU KV pool, so offload has nothing to serve: raise load.num_prefixes "
-            f"or prefix_share"
-        )
     if working_set > rig.cpu_tier_tokens:
-        raise WorkingSetError(
+        raise KvAbWorkloadError(
             f"the {working_set}-token working set overflows the "
             f"{rig.cpu_tier_tokens}-token CPU tier, so the tier evicts what it would "
             f"serve: raise {_TIER_SIZE_ENV} in the manifest or shrink the working set"
+        )
+
+
+def check_overflows_gpu_pool(config: KvAbConfig, *, gpu_pool_tokens: int) -> None:
+    """Refuse a working set the GPU KV pool holds whole, once the engine has sized it.
+
+    A pool that holds every prefix never evicts one, so the GPU prefix cache alone serves
+    the workload and the CPU tier has nothing to add. vLLM sizes the pool by profiling
+    memory at startup, so this runs after each redeploy, on the size the engine reported.
+
+    :param config: the A/B workload.
+    :param gpu_pool_tokens: the GPU KV pool size the deployed engine reported.
+    :raise KvAbWorkloadError: when the working set fits the GPU pool.
+    """
+    working_set = config.working_set_tokens
+    if working_set <= gpu_pool_tokens:
+        raise KvAbWorkloadError(
+            f"the {working_set}-token working set fits the {gpu_pool_tokens}-token "
+            f"GPU KV pool, so offload has nothing to serve: raise load.num_prefixes "
+            f"or prefix_share"
         )

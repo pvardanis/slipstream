@@ -17,7 +17,7 @@ from slipstream_bench.orchestration.flows.kv_ab import (
     KvAbCollaborators,
     drive_kv_ab,
 )
-from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, WorkingSetError
+from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
 
 _CONFIG = load_kv_ab_config(
     Path(__file__).parents[2] / "bench" / "kv-cache-extension-ab.yaml"
@@ -96,7 +96,18 @@ def test_a_request_past_max_model_len_is_refused_before_any_redeploy() -> None:
     cluster = _FakeCluster()
     rig = KvAbRig(max_model_len=3700, cpu_tier_bytes=16 * 1024**3)
 
-    with pytest.raises(WorkingSetError, match="max-model-len"):
+    with pytest.raises(KvAbWorkloadError, match="max-model-len"):
+        drive_kv_ab(_CONFIG, rig, cluster.collaborators())
+
+    assert cluster.calls == []
+
+
+def test_a_working_set_past_the_cpu_tier_is_refused_before_any_redeploy() -> None:
+    """The tier is read off the manifest, so its overflow needs no GPU to find."""
+    cluster = _FakeCluster()
+    rig = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3)
+
+    with pytest.raises(KvAbWorkloadError, match="CPU tier"):
         drive_kv_ab(_CONFIG, rig, cluster.collaborators())
 
     assert cluster.calls == []
@@ -106,7 +117,7 @@ def test_a_working_set_the_gpu_pool_holds_is_refused_before_any_cell() -> None:
     """The pool is known only once the engine starts, so the first run stops there."""
     cluster = _FakeCluster(gpu_pool_tokens=300_000)
 
-    with pytest.raises(WorkingSetError, match="GPU KV pool"):
+    with pytest.raises(KvAbWorkloadError, match="GPU KV pool"):
         drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
 
     assert cluster.calls == ["deploy off-r1 no-offload", "scrape"]

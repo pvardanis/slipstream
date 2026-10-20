@@ -209,11 +209,12 @@ def read_vllm_env(
     :param manifest: the ``k8s/vllm-gpu.yaml`` Deployment manifest.
     :param container: the container name whose env is the serving engine's.
     :return: each literal env entry's name and value, as strings.
-    :raise DigestError: when the manifest is missing, unreadable, not valid YAML, or holds
-        no such container.
+    :raise DigestError: when the manifest is missing, unreadable, not valid YAML, holds no
+        such container, or that container's env is not a list.
     """
-    env = _find_container(manifest, container).get("env")
-    entries = env if isinstance(env, list) else []
+    entries = _find_container(manifest, container).get("env", [])
+    if not isinstance(entries, list):
+        raise DigestError(f"{manifest} '{container}' container env is not a list")
     return {
         str(entry["name"]): str(entry["value"])
         for entry in entries

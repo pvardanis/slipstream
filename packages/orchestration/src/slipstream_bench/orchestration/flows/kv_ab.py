@@ -4,8 +4,8 @@
 off, then on, ``runs_per_arm`` times — so a drift over the session lands on both arms
 alike. Each run redeploys the GPU with its arm's offload switch, which clears both cache
 tiers; scrapes the GPU KV pool the engine sized at startup and refuses a working set the
-pool holds or the CPU tier cannot; warms both tiers with one unrecorded cell; then runs
-the concurrency ladder. Its collaborators are injected as callables, so the whole path is
+pool holds; warms both tiers with one unrecorded cell; then runs the concurrency ladder. A
+workload the manifest's capacities already rule out is refused before the first redeploy. Its collaborators are injected as callables, so the whole path is
 testable against fakes with no cluster, GPU, or Prefect server. A run whose cells are all
 cached skips its redeploy; any other run is redone whole.
 """
@@ -17,8 +17,8 @@ from typing import Literal
 from slipstream_bench.contract.kv_ab_config import KvAbConfig
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
-    check_fits_context,
-    check_working_set,
+    check_fits_rig,
+    check_overflows_gpu_pool,
 )
 
 Arm = Literal["off", "on"]
@@ -48,6 +48,23 @@ class ArmRun:
         return f"{self.arm}-r{self.run}"
 
 
+# The GPU redeploy with the run's offload switch, sequenced for its rollout.
+DeployFn = Callable[[ArmRun], None]
+
+# The GPU KV pool size, in tokens, the deployed engine reported at startup.
+PoolScrapeFn = Callable[[], int]
+
+# The run's one unrecorded warmup cell, sequenced for the tiers it fills.
+WarmUpFn = Callable[[ArmRun], None]
+
+# One ladder rung of a run: (run, concurrency, refresh) -> the result's S3 pointer. With
+# refresh set the rung is re-measured even when a cached result exists.
+CellFn = Callable[[ArmRun, int, bool], str]
+
+# Whether any of the run's cells lacks a cached result.
+PendingRunFn = Callable[[ArmRun], bool]
+
+
 @dataclass(frozen=True)
 class KvAbCollaborators:
     """The in-cluster and per-cell callables the driver sequences.
@@ -60,11 +77,11 @@ class KvAbCollaborators:
     :param has_pending_cells: whether any of the run's cells lacks a cached result.
     """
 
-    deploy: Callable[[ArmRun], None]
-    scrape_gpu_pool: Callable[[], int]
-    warm_up: Callable[[ArmRun], None]
-    run_cell: Callable[[ArmRun, int, bool], str]
-    has_pending_cells: Callable[[ArmRun], bool]
+    deploy: DeployFn
+    scrape_gpu_pool: PoolScrapeFn
+    warm_up: WarmUpFn
+    run_cell: CellFn
+    has_pending_cells: PendingRunFn
 
 
 @dataclass(frozen=True)
@@ -86,8 +103,8 @@ def drive_kv_ab(
 ) -> KvAbOutcome:
     """Run every arm's runs, interleaved, each a redeploy, warmup, and ladder.
 
-    The context window is checked before the first redeploy; the working set after each,
-    against the pool the engine sized at startup. Resume is per whole run: a redeploy
+    The context window and the CPU tier, both read off the manifest, are checked before
+    the first redeploy; the GPU pool after each, as the engine sized it at startup. Resume is per whole run: a redeploy
     clears both cache tiers, so a ladder measured on one deploy cannot be finished on
     another. A run whose every cell is cached skips its redeploy and reads its cells from
     cache; any other run is redeployed and re-measures every cell.
@@ -96,18 +113,20 @@ def drive_kv_ab(
     :param rig: the rig capacities read off the manifest.
     :param collaborators: the callables the runs are sequenced through.
     :return: the outcome — the cell pointers and the run/resume split.
-    :raise WorkingSetError: when a request overruns max-model-len, or the working set
-        fits the GPU pool or overflows the CPU tier.
+    :raise KvAbWorkloadError: when a request overruns max-model-len, or the working set
+        overflows the CPU tier or fits the GPU pool.
     """
-    check_fits_context(config, rig)
+    check_fits_rig(config, rig)
     pointers: list[str] = []
     runs_run = 0
     arm_runs = list_arm_runs(config.runs_per_arm)
     for arm_run in arm_runs:
         pending = collaborators.has_pending_cells(arm_run)
         if pending:
-            _prepare_run(arm_run, config, rig, collaborators)
+            _prepare_run(arm_run, config, collaborators)
             runs_run += 1
+        # A pending run was redeployed, which cleared both tiers, so every rung is
+        # re-measured on this deploy; a fully cached run reads every rung from cache.
         pointers.extend(
             collaborators.run_cell(arm_run, concurrency, pending)
             for concurrency in config.max_concurrency
@@ -120,12 +139,12 @@ def drive_kv_ab(
 
 
 def _prepare_run(
-    arm_run: ArmRun, config: KvAbConfig, rig: KvAbRig, collaborators: KvAbCollaborators
+    arm_run: ArmRun, config: KvAbConfig, collaborators: KvAbCollaborators
 ) -> None:
     """Redeploy for the run's arm, guard the working set, and warm both tiers."""
     collaborators.deploy(arm_run)
     gpu_pool_tokens = collaborators.scrape_gpu_pool()
-    check_working_set(config, rig, gpu_pool_tokens=gpu_pool_tokens)
+    check_overflows_gpu_pool(config, gpu_pool_tokens=gpu_pool_tokens)
     collaborators.warm_up(arm_run)
 
 
