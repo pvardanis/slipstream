@@ -117,13 +117,8 @@ its arm, run, and prefix-cache hit rates) is under `kv-ab/<run-id>/<arm>-r<n>/`;
 bench host's raw results are under `sweeps/kv-ab/<run-id>/` and the chart under
 `sweeps/kv-ab/<run-id>/charts/`. Each arm run's warmup cell lands beside its rungs under
 `<arm>-r<n>/warmup/`; leave it out when folding raw results by hand. `just
-bench-results-sync` pulls the raw results but not the labelled records; pull those with:
-
-```sh
-bucket="$(terraform -chdir=terraform/bench-endpoint output -raw results_bucket_name)"
-region="$(terraform -chdir=terraform/eks output -raw region)"
-aws s3 sync "s3://${bucket}/kv-ab" bench/results/kv-ab-records --region "${region}"
-```
+bench-results-sync` pulls the raw results into `bench/results/kv-ab/` and the labelled
+records into `bench/results/kv-ab-records/`.
 
 The chart is public, like the knob sweep's: the bucket serves any `charts/` path under
 `sweeps/` anonymously. So never use `charts` as a run id or a run id segment, or that
