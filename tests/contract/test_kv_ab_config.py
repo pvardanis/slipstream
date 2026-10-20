@@ -76,3 +76,19 @@ def test_a_missing_config_is_named(tmp_path: Path) -> None:
     """The error names the path the flow was pointed at."""
     with pytest.raises(KvAbConfigError, match="not found"):
         load_kv_ab_config(tmp_path / "absent.yaml")
+
+
+def test_an_fp16_kv_cache_is_rejected(tmp_path: Path) -> None:
+    """The CPU tier is sized at fp8's 73,728 bytes a token; fp16 holds half as many."""
+    path = _write_config(tmp_path, engine__kv_cache_dtype="fp16")
+
+    with pytest.raises(KvAbConfigError, match="kv_cache_dtype"):
+        load_kv_ab_config(path)
+
+
+def test_a_warmup_above_the_lowest_rung_is_rejected(tmp_path: Path) -> None:
+    """Warmup fills the tiers at low concurrency: 16 is past the ladder's first rung, 8."""
+    path = _write_config(tmp_path, warmup_concurrency=16)
+
+    with pytest.raises(KvAbConfigError, match="warmup_concurrency 16"):
+        load_kv_ab_config(path)

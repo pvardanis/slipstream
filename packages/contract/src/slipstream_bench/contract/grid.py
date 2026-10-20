@@ -13,7 +13,6 @@ from itertools import product
 from pathlib import Path
 from typing import Annotated, Literal
 
-import yaml
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -35,6 +34,7 @@ from slipstream_bench.contract.records import (
     KvLabel,
     SweepAggregationError,
 )
+from slipstream_bench.contract.yaml_model import load_yaml_model
 
 # The KV-cache dtype and prefix-caching arms are keyed by their chart labels, the
 # same tokens EnginePoint.from_dirname parses off a slug. The grid carries only the
@@ -126,30 +126,7 @@ def load_grid(path: Path) -> SweepGrid:
         YAML, or fails validation — so the whole grid is checked before the sweep
         touches a GPU.
     """
-    try:
-        text = path.read_text()
-    except FileNotFoundError as error:
-        raise SweepGridError(f"sweep grid not found: {path}") from error
-    except (OSError, UnicodeDecodeError) as error:
-        raise SweepGridError(
-            f"sweep grid could not be read: {path}: {error}"
-        ) from error
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as error:
-        raise SweepGridError(f"{path} is not valid YAML: {error}") from error
-    # safe_load returns None for an empty or comment-only file without raising;
-    # name that here so the sweep aborts on a clear message, not an opaque
-    # "input should be a mapping" from validating None.
-    if data is None:
-        raise SweepGridError(f"sweep grid is empty: {path}")
-    try:
-        # model_validate, not SweepGrid(**data): a list or scalar top level would
-        # make **data raise TypeError past this handler; model_validate turns any
-        # non-mapping into the ValidationError we wrap.
-        return SweepGrid.model_validate(data)
-    except ValidationError as error:
-        raise SweepGridError(f"invalid sweep grid ({path}):\n{error}") from error
+    return load_yaml_model(path, SweepGrid, label="sweep grid", error=SweepGridError)
 
 
 def build_point_sweep_config(

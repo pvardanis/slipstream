@@ -9,21 +9,19 @@ not here: the orchestration worker reads them off the vLLM manifest that configu
 """
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    ValidationError,
     model_validator,
 )
 
 from slipstream_bench.contract.config import LoadKnobs, SweepError
 from slipstream_bench.contract.fields import PositiveInt, UniquePositiveInts
 from slipstream_bench.contract.naming import split_lengths
-from slipstream_bench.contract.records import KvLabel
+from slipstream_bench.contract.yaml_model import load_yaml_model
 
 # vLLM's KV block size: the manifest sets no --block-size, so the engine runs its default.
 # Only full blocks are prefix-cached, so a prefix that is not a whole number of blocks
@@ -45,7 +43,9 @@ class KvAbEngine(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     max_num_seqs: PositiveInt
-    kv_cache_dtype: KvLabel
+    # fp8 only: the guard sizes the CPU tier at fp8's bytes per token, so another dtype
+    # would let a working set the tier cannot hold pass it.
+    kv_cache_dtype: Literal["fp8"]
 
 
 class KvAbConfig(BaseModel):
@@ -81,6 +81,20 @@ class KvAbConfig(BaseModel):
             raise ValueError(str(error)) from error
         return self
 
+    @model_validator(mode="after")
+    def _hold_warmup_to_the_lowest_rung(self) -> "KvAbConfig":
+        """Hold the warmup to low concurrency, at or below the ladder's lowest rung.
+
+        :raise ValueError: when the warmup runs above every rung it warms up for.
+        """
+        lowest = min(self.max_concurrency)
+        if self.warmup_concurrency > lowest:
+            raise ValueError(
+                f"warmup_concurrency {self.warmup_concurrency} is above the ladder's "
+                f"lowest rung {lowest}: the warmup fills the tiers at low concurrency"
+            )
+        return self
+
     @property
     def prefix_len(self) -> int:
         """The tokens of each shared prefix, floored to whole KV blocks."""
@@ -103,21 +117,6 @@ def load_kv_ab_config(path: Path) -> KvAbConfig:
     :raise KvAbConfigError: when the file is missing, unreadable, empty, not valid YAML,
         or fails validation.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError as error:
-        raise KvAbConfigError(f"kv-ab config not found: {path}") from error
-    except (OSError, UnicodeDecodeError) as error:
-        raise KvAbConfigError(
-            f"kv-ab config could not be read: {path}: {error}"
-        ) from error
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as error:
-        raise KvAbConfigError(f"{path} is not valid YAML: {error}") from error
-    if data is None:
-        raise KvAbConfigError(f"kv-ab config is empty: {path}")
-    try:
-        return KvAbConfig.model_validate(data)
-    except ValidationError as error:
-        raise KvAbConfigError(f"invalid kv-ab config ({path}):\n{error}") from error
+    return load_yaml_model(
+        path, KvAbConfig, label="kv-ab config", error=KvAbConfigError
+    )
