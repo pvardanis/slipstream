@@ -13,8 +13,10 @@ whole.
 
 :func:`build_kv_ab_collaborators` binds those callables to kubectl, SSM, S3, and the
 engine's /metrics, and :func:`kv_ab_flow` is the ``@flow`` composition root the Prefect
-deployment registers: it builds the live transports inside the flow and drives the loop,
-so only serializable parameters cross the flow boundary.
+deployment registers: it builds the live transports inside the flow, drives the loop, then
+renders the run's tables and chart to its run page
+(:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`), so only serializable parameters
+cross the flow boundary.
 """
 
 import logging
@@ -27,6 +29,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from prefect import Task, flow
+from prefect.artifacts import create_image_artifact, create_markdown_artifact
 from prefect.logging import get_run_logger
 
 from slipstream_bench.contract import CellConfig, get_cell_basename
@@ -74,6 +77,7 @@ from slipstream_bench.orchestration.tasks.kv_ab_cell import (
     MetricsReader,
     kv_ab_cell_task,
 )
+from slipstream_bench.orchestration.tasks.kv_ab_render import render_kv_ab_results
 from slipstream_bench.orchestration.validity import validate_cell
 
 _LOGGER = logging.getLogger(__name__)
@@ -236,7 +240,8 @@ def kv_ab_flow(
 
     The composition root the deployment registers: it reads the workload, the rig, and
     the run-wide digest inputs, binds the driver's collaborators to the live transports,
-    and drives the interleaved arm runs. Re-invoked with the same run id, it reads a run
+    drives the interleaved arm runs, and renders every rung's record into the run page's
+    tables and chart. Re-invoked with the same run id, it reads a run
     whose rungs are all cached from the cache and redoes any other run whole. The
     parameters are all serializable; the three paths name in-image files read on the
     worker. The run is tagged ``run=<run-id>``.
@@ -275,15 +280,28 @@ def kv_ab_flow(
         bucket=bucket,
         model=read_model_id(model_yaml),
     )
+    s3_client = build_s3_client(region)
     collaborators = build_kv_ab_collaborators(
         inputs,
         kubectl=build_kubectl(),
         ssm_client=build_ssm_client(region),
-        s3_client=build_s3_client(region),
+        s3_client=s3_client,
         task=kv_ab_cell_task(bucket, retries=retries),
         read_metrics=partial(fetch_metrics, metrics_url),
     )
     result = drive_kv_ab(config, inputs.rig, collaborators)
+    # Every rung's record is in S3; fold them into the tables and chart on this run page as
+    # a terminal task, so a render failure leaves the records intact and a re-run resumes
+    # every cached run and re-renders.
+    render_kv_ab_results(
+        pointers=result.pointers,
+        run_id=run_id,
+        bucket=bucket,
+        region=region,
+        s3_client=s3_client,
+        publish=create_markdown_artifact,
+        publish_image=create_image_artifact,
+    )
     logger.info(
         "kv-ab run=%s complete: %d cells (%d runs run, %d resumed)",
         run_id,

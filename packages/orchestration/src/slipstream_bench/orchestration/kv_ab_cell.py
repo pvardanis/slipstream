@@ -65,6 +65,15 @@ def get_kv_ab_cell(config: KvAbConfig, concurrency: int, *, model: str) -> CellC
     )
 
 
+def get_kv_ab_run_prefix(run: str) -> str:
+    """Name the prefix an A/B's arm runs and charts nest under: ``kv-ab/<run>``.
+
+    :param run: the A/B's run id.
+    :return: the prefix, without a trailing slash.
+    """
+    return f"{_KV_AB_PREFIX}/{run}"
+
+
 def get_kv_ab_run_id(run: str, arm_run_slug: str) -> str:
     """Name the run id one A/B run's cells run under: ``kv-ab/<run>/<arm>-r<n>``.
 
@@ -72,7 +81,7 @@ def get_kv_ab_run_id(run: str, arm_run_slug: str) -> str:
     :param arm_run_slug: the arm run's slug, e.g. ``on-r2``.
     :return: the bench host's ``RUN_ID`` and the cells' cache-key run id.
     """
-    return f"{_KV_AB_PREFIX}/{run}/{arm_run_slug}"
+    return f"{get_kv_ab_run_prefix(run)}/{arm_run_slug}"
 
 
 def get_kv_ab_record_key(run: str, arm_run_slug: str, cell: CellConfig) -> str:
