@@ -76,8 +76,8 @@ class KvAbConfig(BaseModel):
             )
         empty_prefix = ValueError(
             f"prefix_share {self.prefix_share}% of load.total_len "
-            f"{self.load.total_len} floors to no whole {align}-token block: raise "
-            f"load.total_len or prefix_share, or lower load.align_blocks"
+            f"{self.load.total_len} leaves no whole {align}-token block of prefix: "
+            f"raise load.total_len or prefix_share"
         )
         try:
             prefix_len, _ = split_lengths(

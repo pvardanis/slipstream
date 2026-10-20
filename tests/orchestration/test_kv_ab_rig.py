@@ -65,7 +65,7 @@ def test_a_manifest_without_a_positive_max_model_len_is_rejected(
         read_kv_ab_rig(manifest)
 
 
-@pytest.mark.parametrize("size", [None, "", "four", "0", "-1.0", "nan", "inf"])
+@pytest.mark.parametrize("size", [None, "", "four", "0", "-1.0", "nan", "inf", "1e-12"])
 def test_a_manifest_without_a_positive_tier_size_is_rejected(
     tmp_path: Path, size: str | None
 ) -> None:
