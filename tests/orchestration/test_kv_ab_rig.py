@@ -20,7 +20,7 @@ from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRigError,
     KvAbWorkloadError,
     check_fits_rig,
-    check_gpu_pool,
+    check_gpu_kv_pool,
     read_kv_ab_rig,
 )
 
@@ -208,7 +208,7 @@ def test_a_scraped_pool_between_the_top_rung_and_the_working_set_passes(
     gpu_pool_tokens: int,
 ) -> None:
     """The pool holds 4 x 3712 tokens and is overflowed by the 24,576-token set."""
-    check_gpu_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
+    check_gpu_kv_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
 
 
 @pytest.mark.parametrize("gpu_pool_tokens", [24_576, 185_696])
@@ -217,13 +217,13 @@ def test_a_scraped_pool_that_holds_the_working_set_is_refused(
 ) -> None:
     """A pool that holds every prefix never evicts, so offload has nothing to serve."""
     with pytest.raises(KvAbWorkloadError, match="24576-token working set fits"):
-        check_gpu_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
+        check_gpu_kv_pool(_AGENT, gpu_pool_tokens=gpu_pool_tokens)
 
 
 def test_a_scraped_pool_below_the_top_rung_is_refused() -> None:
     """The engine sized the pool below 4 x 3712 tokens, so the top rung would preempt."""
     with pytest.raises(KvAbWorkloadError, match="top rung"):
-        check_gpu_pool(_AGENT, gpu_pool_tokens=14_847)
+        check_gpu_kv_pool(_AGENT, gpu_pool_tokens=14_847)
 
 
 def test_a_configured_pool_a_byte_short_of_the_top_rung_is_refused() -> None:
@@ -241,7 +241,7 @@ def test_the_top_rung_is_the_ladder_s_highest_whatever_its_order() -> None:
     config = _AGENT.model_copy(update={"max_concurrency": [4, 1, 2]})
 
     with pytest.raises(KvAbWorkloadError, match="top rung's 4 requests"):
-        check_gpu_pool(config, gpu_pool_tokens=14_847)
+        check_gpu_kv_pool(config, gpu_pool_tokens=14_847)
 
 
 @pytest.mark.parametrize("env", ["LMCACHE_MAX_LOCAL_CPU_SIZE=4.0", {"a": "b"}])

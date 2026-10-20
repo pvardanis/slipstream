@@ -15,7 +15,7 @@ from slipstream_bench.contract.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.flows.kv_ab import (
     ArmRun,
     KvAbCollaborators,
-    KvAbOutcome,
+    KvAbResult,
     drive_kv_ab,
 )
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
@@ -129,7 +129,7 @@ def test_a_fully_cached_run_skips_its_redeploy_and_reads_its_cells_from_cache() 
     """off-r1 and on-r1 hold every cell: no redeploy, no warmup, no re-measure."""
     cluster = _FakeCluster(cached_runs=frozenset({"off-r1", "on-r1"}))
 
-    outcome = drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
+    result = drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
 
     cached = [
         f"cell {slug} c{c} refresh=False"
@@ -138,21 +138,21 @@ def test_a_fully_cached_run_skips_its_redeploy_and_reads_its_cells_from_cache() 
     ]
     assert cluster.calls[: len(cached)] == cached
     assert cluster.calls[len(cached)] == "deploy off-r2 no-offload"
-    assert (outcome.runs_run, outcome.runs_resumed) == (4, 2)
+    assert (result.runs_run, result.runs_resumed) == (4, 2)
 
 
-def test_the_outcome_carries_every_cell_pointer_in_run_order() -> None:
+def test_the_result_carries_every_cell_pointer_in_run_order() -> None:
     """Six runs of a three-rung ladder are 18 pointers, off-r1's ladder first."""
     cluster = _FakeCluster()
 
-    outcome = drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
+    result = drive_kv_ab(_CONFIG, _RIG, cluster.collaborators())
 
-    assert len(outcome.pointers) == 18
-    assert outcome.pointers[:2] == (
+    assert len(result.pointers) == 18
+    assert result.pointers[:2] == (
         "s3://bucket/kv-ab/run/off-r1/c1.json",
         "s3://bucket/kv-ab/run/off-r1/c2.json",
     )
-    assert outcome.pointers[-1] == "s3://bucket/kv-ab/run/on-r3/c4.json"
+    assert result.pointers[-1] == "s3://bucket/kv-ab/run/on-r3/c4.json"
 
 
 def test_a_later_run_whose_pool_holds_the_working_set_stops_before_its_cells() -> None:
@@ -176,9 +176,9 @@ def test_an_arm_run_before_the_first_repetition_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(("runs_run", "runs_resumed"), [(-1, 1), (1, -1)])
-def test_an_outcome_with_a_negative_run_count_is_rejected(
+def test_a_result_with_a_negative_run_count_is_rejected(
     runs_run: int, runs_resumed: int
 ) -> None:
     """A run count is a tally of runs; below zero it misreports the A/B."""
     with pytest.raises(ValueError, match="non-negative"):
-        KvAbOutcome(pointers=(), runs_run=runs_run, runs_resumed=runs_resumed)
+        KvAbResult(pointers=(), runs_run=runs_run, runs_resumed=runs_resumed)
