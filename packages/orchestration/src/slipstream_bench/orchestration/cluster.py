@@ -59,10 +59,11 @@ _CEILING_PATTERN = re.compile(
 )
 
 # vLLM logs its KV cache capacity in tokens once at startup, on the same line as the
-# ceiling, e.g. "GPU KV cache size: 185,696 tokens, Maximum concurrency for ...". The
-# count is the pool the engine profiled, which vLLM renders back from the concurrency
-# estimate (the estimate times max-model-len), so it may sit a token below the blocks.
-_KV_POOL_PATTERN = re.compile(r"GPU KV cache size: ([\d,]+) tokens")
+# ceiling, e.g. "GPU KV cache size: 185,696 tokens, Maximum concurrency for ...". vLLM
+# computes the count as int(concurrency estimate * max-model-len), not from the
+# profiled blocks directly, so on a full-attention model truncation can leave it a
+# token under the blocks times the block size.
+_KV_POOL_PATTERN = re.compile(r"GPU KV cache size: (\d[\d,]*) tokens")
 
 # The manifest placeholders the knob sweep renders per point (k8s/vllm-gpu.yaml). Only
 # these three and the two KV cache offload ones below are substituted, so nothing else
@@ -216,10 +217,10 @@ def deploy_gpu(
 
     Renders the engine args and the KV cache offload switch into the manifest, applies
     **only** the Deployment document (the get + patch the worker's RBAC allows), then
-    blocks on the rollout so no cell runs against a half-rolled engine. ``kubectl``
+    blocks on the rollout so nothing runs against a half-rolled engine. ``kubectl``
     raises on a non-zero exit, so a failed apply or a stalled rollout aborts loudly.
 
-    :param engine_args: the max-num-seqs, kv-cache token, and caching flag to run with.
+    :param engine_args: the max-num-seqs, --kv-cache-dtype token, and caching flag.
     :param kv_cache_offload: whether the replica offloads KV cache to LMCache's CPU tier.
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text with the placeholders.
     :param kubectl: the transport the apply and rollout wait are issued through.
@@ -357,8 +358,8 @@ def _get_last_log_match(
     One replica, so the log is the pod just rolled out.
 
     :param kubectl: the transport the log read is issued through.
-    :param pattern: the startup line to find; its one group, when it has one, is
-        returned instead of the whole match.
+    :param pattern: the startup line to find, with at most one group; the group, when
+        it has one, is returned instead of the whole match.
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment whose pod log is read.
     :return: the last match, or ``None`` when the log carries none.

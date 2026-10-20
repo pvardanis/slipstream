@@ -426,20 +426,31 @@ def test_scrape_raises_when_the_log_carries_no_ceiling() -> None:
 
 _KV_POOL_LOG = """\
 INFO startup begins
+INFO GPU KV cache size: 9,999 tokens, Maximum concurrency for 4,096 tokens per request: 2.44x
+INFO restarted
 INFO GPU KV cache size: 185,696 tokens, Maximum concurrency for 4,096 tokens per request: 45.34x
 INFO serving
 """
 
 
-def test_scrape_gpu_kv_pool_reads_the_token_count_off_the_startup_log() -> None:
+def test_scrape_gpu_kv_pool_reads_the_last_token_count_off_the_startup_log() -> None:
     kubectl = _FakeKubectl(logs=_KV_POOL_LOG)
 
     assert scrape_gpu_kv_pool(kubectl=kubectl) == 185_696
     assert kubectl.calls[0][0] == ["logs", "-n", "slipstream", "deployment/vllm-gpu"]
 
 
-def test_scrape_gpu_kv_pool_raises_when_the_log_carries_no_pool_size() -> None:
-    kubectl = _FakeKubectl(logs="INFO startup\nINFO serving, no pool line\n")
+@pytest.mark.parametrize(
+    "logs",
+    [
+        "INFO startup\nINFO serving, no pool line\n",
+        "INFO GPU KV cache size: , tokens, Maximum ...\n",
+    ],
+)
+def test_scrape_gpu_kv_pool_raises_when_the_log_carries_no_pool_size(
+    logs: str,
+) -> None:
+    kubectl = _FakeKubectl(logs=logs)
 
     with pytest.raises(KvPoolScrapeError, match="deployment/vllm-gpu"):
         scrape_gpu_kv_pool(kubectl=kubectl)
