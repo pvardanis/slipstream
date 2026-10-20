@@ -17,10 +17,11 @@ dependency only the callers that read /metrics need.
 
 import math
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
-from itertools import chain
 
 from prometheus_client.parser import text_string_to_metric_families
+from prometheus_client.samples import Sample
 
 _QUERIES_METRIC = "vllm:prefix_cache_queries"
 _HITS_METRIC = "vllm:prefix_cache_hits"
@@ -172,21 +173,21 @@ def _read_snapshot(exposition: str, source: str, model: str) -> dict[str, float]
         zero; or when a counter is non-finite or the snapshot cannot be parsed.
     """
     totals = _sum_counters(exposition, source, model)
-    missing = [metric for metric in _GPU_METRICS if metric not in totals]
-    if missing:
+    missing = next((metric for metric in _GPU_METRICS if metric not in totals), None)
+    if missing is not None:
         raise PrefixCacheError(
-            f"metric {', '.join(missing)} not found in {source} for model {model!r} "
+            f"metric {missing} not found in {source} for model {model!r} "
             f"(wrong model selected, or a server without the counter?)"
         )
     # NaN and infinities in the exposition parse to floats and would produce a
     # non-finite (NaN or inf) hit rate the window guards do not reliably catch, so
     # reject a non-finite counter here, before the delta.
-    non_finite = [
-        metric for metric, total in totals.items() if not math.isfinite(total)
-    ]
-    if non_finite:
+    non_finite = next(
+        (metric for metric, total in totals.items() if not math.isfinite(total)), None
+    )
+    if non_finite is not None:
         raise PrefixCacheError(
-            f"metric {', '.join(non_finite)} has a non-finite value in {source} "
+            f"metric {non_finite} has a non-finite value in {source} "
             f"for model {model!r}"
         )
     return totals
@@ -210,10 +211,7 @@ def _sum_counters(exposition: str, source: str, model: str) -> dict[str, float]:
     totals: defaultdict[str, float] = defaultdict(float)
     # The parser is lazy: a malformed line raises while the samples are iterated.
     try:
-        samples = chain.from_iterable(
-            family.samples for family in text_string_to_metric_families(exposition)
-        )
-        for sample in samples:
+        for sample in _iter_samples(exposition):
             name = sample.name.removesuffix("_total")
             if name in _COUNTER_METRICS and sample.labels.get("model_name") == model:
                 totals[name] += sample.value
@@ -222,6 +220,17 @@ def _sum_counters(exposition: str, source: str, model: str) -> dict[str, float]:
             f"cannot parse metrics snapshot {source}: {error}"
         ) from error
     return dict(totals)
+
+
+def _iter_samples(exposition: str) -> Iterator[Sample]:
+    """Yield every sample of every metric family in a /metrics exposition, in order.
+
+    :param exposition: the /metrics exposition text.
+    :return: the samples, one series value each, across all families.
+    :raise ValueError: on a malformed line, when the iteration reaches it.
+    """
+    for family in text_string_to_metric_families(exposition):
+        yield from family.samples
 
 
 def _get_window_deltas(
