@@ -59,3 +59,24 @@ def test_the_panels_plot_hit_rate_ttft_and_goodput_against_the_ladder() -> None:
             assert {text.get_text() for text in legend.get_texts()} >= {"off", "on"}
     finally:
         plt.close(figure)
+
+
+def test_each_runs_dot_is_nudged_alike_at_every_rung_of_the_log_axis() -> None:
+    # Three runs reading alike on a 1, 2, 64 ladder: on the log-2 axis the closest rungs
+    # sit one unit apart, so every rung's dots spread within the same +/-0.08 log-2 band,
+    # the high rung's as visibly as the low ones'. Seaborn jitters off numpy's global
+    # generator, seeded here so the spread is fixed.
+    np.random.seed(0)
+    rungs = [build_rung("on", run, cap) for run in (1, 2, 3) for cap in (1, 2, 64)]
+    figure = _plot_kv_ab(rungs)
+    try:
+        dots = np.concatenate(
+            [np.asarray(c.get_offsets())[:, 0] for c in figure.axes[0].collections[1:]]
+        )
+        for cap in (1, 2, 64):
+            nudges = np.log2(dots[np.isclose(dots, cap, rtol=0.1)]) - np.log2(cap)
+            assert len(nudges) == 3
+            assert np.all(np.abs(nudges) <= 0.08)
+            assert np.ptp(nudges) > 0.02
+    finally:
+        plt.close(figure)

@@ -35,7 +35,8 @@ _PANELS = (
 # The arms' colours, offload off grey and on blue, so the two read apart in every panel.
 _PALETTE = {"off": "#7f7f7f", "on": "#1f77b4"}
 
-# How far each run's dot is nudged sideways off its rung, in rung widths.
+# How far each run's dot is nudged sideways off its rung, as a share of the gap between
+# adjacent rungs on the log-2 axis.
 _JITTER = 0.08
 
 
@@ -63,6 +64,9 @@ def _plot_kv_ab(rungs: list[KvAbRung]) -> Figure:
     ladder = sorted(frame["max_concurrency"].unique())
     figure, axes = plt.subplots(1, len(_PANELS), figsize=(15, 4.6))
     for ax, (metric, label) in zip(axes, _PANELS, strict=True):
+        # Log-scale the axis before drawing, so seaborn nudges each run's dot in log space:
+        # an even share of the gap between rungs at every rung of the doubling ladder.
+        ax.set_xscale("log", base=2)
         sns.lineplot(
             data=frame,
             x="max_concurrency",
@@ -87,7 +91,6 @@ def _plot_kv_ab(rungs: list[KvAbRung]) -> Figure:
             legend=False,
             ax=ax,
         )
-        ax.set_xscale("log", base=2)
         ax.set_xticks(ladder, labels=[str(cap) for cap in ladder])
         ax.set_xlabel("--max-concurrency")
         ax.set_ylabel(label)

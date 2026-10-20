@@ -28,14 +28,14 @@ def test_each_spread_renders_as_its_median_and_range() -> None:
         "p95_ttft_ms": _spread(760.0, 730.4, 820.6),
         "p95_tpot_ms": _spread(34.0, 32.0, 36.0),
         "output_throughput": _spread(131.0, 126.04, 135.0),
-        "hit_rate": _spread(0.27, 0.26, 0.28),
+        "gpu_hit_rate": _spread(0.27, 0.26, 0.28),
         "combined_hit_rate": _spread(0.81, 0.8, 0.82),
     }
 
     assert kv_ab_spreads_to_markdown([spread]).splitlines() == [
         (
             "| arm | max_concurrency | runs | goodput_fraction | p95_ttft_ms "
-            "| p95_tpot_ms | output_throughput | hit_rate | combined_hit_rate |"
+            "| p95_tpot_ms | output_throughput | gpu_hit_rate | combined_hit_rate |"
         ),
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         (
@@ -62,4 +62,17 @@ def test_the_ceilings_render_one_row_per_arm_with_a_column_per_run() -> None:
         "| --- | --- | --- | --- | --- |",
         "| off | 2 | 1 | 2 | 2 |",
         "| on | 4 | none | 4 |  |",
+    ]
+
+
+def test_a_run_an_arm_has_no_record_of_is_left_blank_with_its_median() -> None:
+    ceilings: list[KvAbCeiling] = [
+        {"arm": "off", "run": 1, "ceiling": 2},
+        {"arm": "off", "run": 2, "ceiling": 2},
+        {"arm": "on", "run": 1, "ceiling": 4},
+    ]
+
+    assert kv_ab_ceilings_to_markdown(ceilings).splitlines()[2:] == [
+        "| off | 2 | 2 | 2 |",
+        "| on | 4 |  |  |",
     ]
