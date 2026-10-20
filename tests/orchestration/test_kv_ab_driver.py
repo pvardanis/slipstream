@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from slipstream_bench.contract.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.flows.kv_ab import (
     ArmRun,
     KvAbCollaborators,
     KvAbResult,
     drive_kv_ab,
 )
+from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
 
 _CONFIG = load_kv_ab_config(

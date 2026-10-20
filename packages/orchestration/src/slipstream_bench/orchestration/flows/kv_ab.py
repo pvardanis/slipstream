@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from slipstream_bench.contract.kv_ab_config import KvAbConfig
+from slipstream_bench.orchestration.kv_ab_config import KvAbConfig
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     check_fits_rig,

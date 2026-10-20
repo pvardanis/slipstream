@@ -5,8 +5,8 @@ a workload the KV cache offload A/B measures under each arm: the engine knobs he
 across both arms, the prefix share, the concurrency ladder, the warmup rung, the runs per
 arm, and the client-load knobs the knob sweep's cells share (``LoadKnobs``). Each is
 validated on load, so a malformed workload fails before the first GPU redeploy. The rig's
-capacities — the CPU tier, its chunk size, and max-model-len — are not here: the
-orchestration worker reads them off the vLLM manifest that configures them.
+capacities — the CPU tier, its chunk size, and max-model-len — are not here:
+``kv_ab_rig`` reads them off the vLLM manifest that configures them.
 """
 
 from pathlib import Path

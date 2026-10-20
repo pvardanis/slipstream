@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
-from slipstream_bench.contract.kv_ab_config import KvAbConfig
 from slipstream_bench.orchestration.digest import read_vllm_args, read_vllm_env
+from slipstream_bench.orchestration.kv_ab_config import KvAbConfig
 
 # The KV bytes one token occupies for the served Qwen3-8B with the fp8 KV cache: 36 layers
 # x 8 KV heads x 128 head dim x 2 (K and V) x 1 byte. It sizes the CPU tier in tokens.
