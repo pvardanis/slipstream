@@ -135,6 +135,15 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Action   = ["s3:PutObject"]
         Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/sweeps/*/charts/*"
       },
+      # The kv-cache-extension-ab flow labels each rung's raw result with its arm, run, and
+      # prefix-cache hit rates and writes the record under kv-ab/<run>/ at the bucket root
+      # (#326). PutObject is scoped to that prefix, never the host's raw results under sweeps/.
+      {
+        Sid      = "KvAbRecordObjects"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/kv-ab/*"
+      },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;
       # the send is split so the document is unconditional and the instance target is
