@@ -21,6 +21,7 @@ from slipstream_bench.orchestration.cluster import (
     CeilingScrapeError,
     KubectlError,
     build_kubectl,
+    deploy_gpu,
     deploy_gpu_point,
     extract_deployment_doc,
     render_gpu_manifest,
@@ -365,6 +366,25 @@ def test_deploy_renders_without_kv_cache_offload() -> None:
     container = _applied_container(kubectl)
     assert _kv_transfer_config(container) == "None"
     assert container["resources"]["limits"]["memory"] == "8Gi"
+
+
+def test_deploy_gpu_with_kv_cache_offload_applies_the_lmcache_connector() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu(
+        get_engine_args(_grid(), _POINT),
+        kv_cache_offload=True,
+        manifest_text=_MANIFEST,
+        kubectl=kubectl,
+    )
+
+    container = _applied_container(kubectl)
+    assert json.loads(_kv_transfer_config(container)) == {
+        "kv_connector": "LMCacheConnectorV1",
+        "kv_role": "kv_both",
+    }
+    assert container["resources"]["limits"]["memory"] == "12Gi"
+    assert kubectl.calls[1][0][:2] == ["rollout", "status"]
 
 
 def test_deploy_raises_when_kubectl_fails() -> None:
