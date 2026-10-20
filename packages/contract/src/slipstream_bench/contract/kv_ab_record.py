@@ -22,7 +22,7 @@ from slipstream_bench.contract.prefix_cache_window import PrefixCacheWindow
 Arm = Literal["off", "on"]
 
 # The key the A/B's labels sit under, beside the raw result's own keys.
-_LABELS_KEY = "kv_ab"
+LABELS_KEY = "kv_ab"
 
 
 class KvAbRecordError(Exception):
@@ -46,7 +46,7 @@ def build_kv_ab_record(
     _reject_counters_contradicting_arm(arm, run, window)
     return {
         **result,
-        _LABELS_KEY: {
+        LABELS_KEY: {
             "arm": arm,
             "run": run,
             "prefix_cache_queries": window.queries,

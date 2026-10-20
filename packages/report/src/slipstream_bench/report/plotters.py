@@ -31,6 +31,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from matplotlib.figure import Figure
 
 from slipstream_bench.report.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 from slipstream_bench.report.chart import (
@@ -146,7 +147,7 @@ def plot_ceilings_png(rows: list[CeilingRow]) -> bytes:
         raise ValueError(
             "cannot chart an empty ceiling table: the run aggregated no rows"
         )
-    return _get_figure_png_bytes(_plot_ceilings(rows))
+    return get_figure_png_bytes(_plot_ceilings(rows).figure)
 
 
 def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
@@ -165,16 +166,19 @@ def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
         raise ValueError(
             "cannot chart an empty cliff table: the run aggregated no rungs"
         )
-    return _get_figure_png_bytes(_plot_cliffs(rungs))
+    return get_figure_png_bytes(_plot_cliffs(rungs).figure)
 
 
-def _get_figure_png_bytes(grid: sns.FacetGrid) -> bytes:
-    """Encode a grid as PNG bytes and close its figure, freeing it even on an encode error."""
+def get_figure_png_bytes(figure: Figure) -> bytes:
+    """Encode a figure as PNG bytes, trimmed to its drawn extent, and close it.
+
+    The figure is freed even on an encode error.
+    """
     buffer = io.BytesIO()
     try:
-        grid.savefig(buffer, format="png")
+        figure.savefig(buffer, format="png", bbox_inches="tight")
     finally:
-        plt.close(grid.figure)
+        plt.close(figure)
     return buffer.getvalue()
 
 

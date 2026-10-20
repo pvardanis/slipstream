@@ -76,3 +76,17 @@ def test_a_run_an_arm_has_no_record_of_is_left_blank_with_its_median() -> None:
         "| off | 2 | 2 | 2 |",
         "| on | 4 |  |  |",
     ]
+
+
+def test_an_even_count_of_runs_prints_the_mean_of_its_middle_two_ceilings() -> None:
+    ceilings: list[KvAbCeiling] = [
+        {"arm": "off", "run": 1, "ceiling": 1},
+        {"arm": "off", "run": 2, "ceiling": 2},
+        {"arm": "on", "run": 1, "ceiling": 2},
+        {"arm": "on", "run": 2, "ceiling": 4},
+    ]
+
+    assert kv_ab_ceilings_to_markdown(ceilings).splitlines()[2:] == [
+        "| off | 1 | 2 | 1.5 |",
+        "| on | 2 | 4 | 3 |",
+    ]

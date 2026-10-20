@@ -1,4 +1,5 @@
-"""Render a knob-sweep run's aggregated rows to Markdown and JSON tables.
+"""Render a knob-sweep run's aggregated rows to Markdown and JSON tables, and lay any printed
+cells out as a Markdown table.
 
 The tables are the durable artifacts (ADR-0009): Markdown the human-readable view, JSON the
 structured table later layers re-read. These renderers are pure and import no plotting

@@ -9,8 +9,6 @@ sideways so runs that read alike stay apart. The chart renders offline through m
 Agg backend.
 """
 
-import io
-
 import matplotlib
 
 # Select the non-interactive Agg backend before importing pyplot/seaborn: the chart is an
@@ -24,6 +22,7 @@ from matplotlib.figure import Figure
 
 from slipstream_bench.report.aggregation import _GOODPUT_FLOOR
 from slipstream_bench.report.kv_ab_aggregation import KvAbRung
+from slipstream_bench.report.plotters import get_figure_png_bytes
 
 # Each panel's metric and its y-axis label, left to right.
 _PANELS = (
@@ -35,8 +34,8 @@ _PANELS = (
 # The arms' colours, offload off grey and on blue, so the two read apart in every panel.
 _PALETTE = {"off": "#7f7f7f", "on": "#1f77b4"}
 
-# How far each run's dot is nudged sideways off its rung, as a share of the gap between
-# adjacent rungs on the log-2 axis.
+# How far each run's dot is nudged sideways off its rung, either side, as a share of the gap
+# between the closest pair of rungs on the log-2 axis.
 _JITTER = 0.08
 
 
@@ -49,13 +48,7 @@ def plot_kv_ab_png(rungs: list[KvAbRung]) -> bytes:
     """
     if not rungs:
         raise ValueError("cannot chart a kv-ab run with no rungs")
-    figure = _plot_kv_ab(rungs)
-    buffer = io.BytesIO()
-    try:
-        figure.savefig(buffer, format="png")
-    finally:
-        plt.close(figure)
-    return buffer.getvalue()
+    return get_figure_png_bytes(_plot_kv_ab(rungs))
 
 
 def _plot_kv_ab(rungs: list[KvAbRung]) -> Figure:
@@ -123,10 +116,11 @@ def _rung_frame(rungs: list[KvAbRung]) -> pd.DataFrame:
 
 
 def _get_title(frame: pd.DataFrame) -> str:
-    """Name what the chart draws: the runs per arm and the prefix share they ran."""
-    runs = frame.groupby("arm")["run"].nunique().max()
+    """Name what the chart draws: each arm's run count and the prefix share they ran."""
+    runs = frame.groupby("arm")["run"].nunique()
+    counts = ", ".join(f"{arm} {count}" for arm, count in runs.items())
     shares = ", ".join(str(share) for share in sorted(frame["prefix_share"].unique()))
     return (
-        f"KV cache offload A/B — prefix share {shares}: median of {runs} runs per arm, "
+        f"KV cache offload A/B — prefix share {shares}: median of {counts} runs, "
         f"band = range, dots = runs"
     )
