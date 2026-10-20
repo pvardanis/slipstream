@@ -49,6 +49,11 @@ CellExecution = Callable[[], None]
 # ``prefect.artifacts.create_markdown_artifact``.
 ArtifactPublisher = Callable[..., Any]
 
+# The function a cell task wraps: called with the cell's four cache-key parts —
+# ``run_id``, ``digest``, ``point_slug``, ``cell_name`` — and its own keyword arguments,
+# it measures the cell and returns its S3 pointer.
+CellBody = Callable[..., str]
+
 # The heading the per-cell artifact carries on its sub-task's Artifacts tab.
 _CELL_ARTIFACT_HEADING = "## cell result"
 
@@ -66,7 +71,9 @@ _RESULT_BLOCK = "sweep-cell-results"
 _CACHE_KEY_BLOCK = "sweep-cell-cache-keys"
 
 
-def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
+def cell_task(
+    bucket: str, *, retries: int = 0, body: CellBody | None = None
+) -> Task[..., str]:
     """Build the bench-cell task with its result and cache storage on S3.
 
     The production wiring of :func:`build_cell_task`: both storage blocks are rooted
@@ -81,6 +88,7 @@ def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
 
     :param bucket: the sweep results bucket (``RESULTS_BUCKET``).
     :param retries: opt-in retries for a flaky cell.
+    :param body: the cell body the task wraps (:func:`build_cell_task`).
     :return: the configured task, its state on S3.
     :raise StorageError: when ``bucket`` is blank, or the cache-key storage fails its
         write/read probe.
@@ -95,7 +103,7 @@ def cell_task(bucket: str, *, retries: int = 0) -> Task[..., str]:
     cache_keys.save(_CACHE_KEY_BLOCK, overwrite=True, _sync=True)  # ty: ignore[unknown-argument]
     storage.check_cache_key_storage(cache_keys, bucket=bucket)
     return build_cell_task(
-        result_storage=result, key_storage=cache_keys, retries=retries
+        result_storage=result, key_storage=cache_keys, retries=retries, body=body
     )
 
 
@@ -104,6 +112,7 @@ def build_cell_task(
     result_storage: Any,
     key_storage: Any,
     retries: int = 0,
+    body: CellBody | None = None,
 ) -> Task[..., str]:
     """Build the Prefect task wrapping one bench cell, keyed for per-cell resume.
 
@@ -118,9 +127,11 @@ def build_cell_task(
     :param key_storage: the block Prefect stores cache records into.
     :param retries: opt-in retries for a flaky cell (ADR-0012: retries are per
         invocation).
-    :return: the configured ``@task`` — call it with ``run_id``, ``digest``,
-        ``point_slug``, ``cell_name``, ``execute_func``, ``result_path``, and
-        ``result_uri``.
+    :param body: the cell body the task wraps, called with the four cache-key parts and
+        its own keyword arguments; the knob sweep's cell when omitted.
+    :return: the configured ``@task`` — the knob sweep's cell is called with
+        ``run_id``, ``digest``, ``point_slug``, ``cell_name``, ``execute_func``,
+        ``result_path``, and ``result_uri``.
     """
     policy = CachePolicy.from_cache_key_fn(get_cell_cache_key).configure(
         key_storage=key_storage
@@ -132,7 +143,7 @@ def build_cell_task(
         persist_result=True,
         retries=retries,
     )
-    return as_task(_bench_cell)
+    return as_task(body or _bench_cell)
 
 
 def is_cell_cached(
@@ -221,6 +232,20 @@ def run_cell(
     _LOGGER.info("cell %s starting", result_uri)
     execute_func()
     validate_cell(result_path, max_error_rate=max_error_rate)
+    report_cell(publish, result_path=result_path, result_uri=result_uri)
+    return result_uri
+
+
+def report_cell(
+    publish: ArtifactPublisher, *, result_path: Path, result_uri: str
+) -> None:
+    """Publish a gated cell's metrics artifact and log its done milestone.
+
+    :param publish: the markdown-artifact publisher, called with ``key`` and
+        ``markdown``.
+    :param result_path: the gated cell's result JSON, read for its headline metrics.
+    :param result_uri: the cell's S3 pointer, shown on the artifact and the log line.
+    """
     cell = LoadCell.from_record(read_result(result_path), result_path)
     _publish_cell_artifact(publish, cell, result_uri)
     _LOGGER.info(
@@ -231,7 +256,6 @@ def run_cell(
         cell.p95_tpot_ms,
         cell.output_throughput,
     )
-    return result_uri
 
 
 def _publish_cell_artifact(
