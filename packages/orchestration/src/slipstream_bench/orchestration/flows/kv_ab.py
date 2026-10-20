@@ -14,16 +14,14 @@ whole.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
 
+from slipstream_bench.contract.kv_ab_record import Arm
 from slipstream_bench.orchestration.kv_ab_config import KvAbConfig
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     check_fits_rig,
     check_gpu_kv_pool,
 )
-
-Arm = Literal["off", "on"]
 
 # The arms in the order each repetition runs them.
 _ARMS: tuple[Arm, ...] = ("off", "on")
