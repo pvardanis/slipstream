@@ -60,7 +60,8 @@ _CEILING_PATTERN = re.compile(
 
 # vLLM logs its KV cache capacity in tokens once at startup, on the same line as the
 # ceiling, e.g. "GPU KV cache size: 185,696 tokens, Maximum concurrency for ...". The
-# count is the pool the engine profiled, max-model-len times the concurrency estimate.
+# count is the pool the engine profiled, which vLLM renders back from the concurrency
+# estimate (the estimate times max-model-len), so it may sit a token below the blocks.
 _KV_POOL_PATTERN = re.compile(r"GPU KV cache size: ([\d,]+) tokens")
 
 # The manifest placeholders the knob sweep renders per point (k8s/vllm-gpu.yaml). Only
@@ -302,15 +303,16 @@ def scrape_ceiling(
         none, so the point fails loudly instead of measuring its ladder against a garbage
         ceiling (ADR-0015).
     """
-    logs = _read_engine_log(kubectl, namespace=namespace, deployment=deployment)
-    matches = _CEILING_PATTERN.findall(logs)
-    if not matches:
+    ceiling = _get_last_log_match(
+        kubectl, _CEILING_PATTERN, namespace=namespace, deployment=deployment
+    )
+    if ceiling is None:
         raise CeilingScrapeError(
             f"no concurrency ceiling in the vLLM startup log for point "
             f"{point.slug()}: the engine reported none, so its Tier-2 ladder must "
             f"not run against a garbage ceiling (ADR-0015)"
         )
-    return matches[-1]
+    return ceiling
 
 
 def scrape_gpu_kv_pool(
@@ -325,26 +327,42 @@ def scrape_gpu_kv_pool(
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment whose pod log is read.
     :return: the GPU KV cache pool size in tokens.
-    :raise KvPoolScrapeError: when the log carries no pool size line, so the A/B's
-        working-set guard never sizes against a guessed pool.
+    :raise KvPoolScrapeError: when the log carries no pool size line or an empty pool,
+        so the A/B's working-set guard never sizes against a guessed pool.
     """
-    logs = _read_engine_log(kubectl, namespace=namespace, deployment=deployment)
-    matches = _KV_POOL_PATTERN.findall(logs)
-    if not matches:
+    pool = _get_last_log_match(
+        kubectl, _KV_POOL_PATTERN, namespace=namespace, deployment=deployment
+    )
+    if pool is None:
         raise KvPoolScrapeError(
             f"no GPU KV cache size in the vLLM startup log of "
             f"deployment/{deployment} in {namespace}: the working set cannot be "
             f"sized against the GPU pool"
         )
-    return int(matches[-1].replace(",", ""))
+    tokens = int(pool.replace(",", ""))
+    if tokens == 0:
+        raise KvPoolScrapeError(
+            f"empty GPU KV cache pool (0 tokens) in the vLLM startup log of "
+            f"deployment/{deployment} in {namespace}: no working set can be "
+            f"sized against it"
+        )
+    return tokens
 
 
-def _read_engine_log(kubectl: Kubectl, *, namespace: str, deployment: str) -> str:
-    """Read the Deployment's pod log: one replica, so the pod just rolled out.
+def _get_last_log_match(
+    kubectl: Kubectl, pattern: re.Pattern[str], *, namespace: str, deployment: str
+) -> str | None:
+    """Read the Deployment's pod log and return the pattern's last match.
+
+    One replica, so the log is the pod just rolled out.
 
     :param kubectl: the transport the log read is issued through.
+    :param pattern: the startup line to find; its one group, when it has one, is
+        returned instead of the whole match.
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment whose pod log is read.
-    :return: the log text.
+    :return: the last match, or ``None`` when the log carries none.
     """
-    return kubectl(["logs", "-n", namespace, f"deployment/{deployment}"], None)
+    logs = kubectl(["logs", "-n", namespace, f"deployment/{deployment}"], None)
+    matches = pattern.findall(logs)
+    return matches[-1] if matches else None
