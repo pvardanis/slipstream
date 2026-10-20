@@ -198,6 +198,29 @@ def read_vllm_args(manifest: Path, *, container: str = _VLLM_CONTAINER) -> list[
     return [str(arg) for arg in args]
 
 
+def read_vllm_env(
+    manifest: Path, *, container: str = _VLLM_CONTAINER
+) -> dict[str, str]:
+    """Read the serving-engine container's literal env values out of the vLLM manifest.
+
+    Only entries with a literal ``value`` are read; an entry sourced through
+    ``valueFrom`` (a Secret, say) has no value in the manifest and is left out.
+
+    :param manifest: the ``k8s/vllm-gpu.yaml`` Deployment manifest.
+    :param container: the container name whose env is the serving engine's.
+    :return: each literal env entry's name and value, as strings.
+    :raise DigestError: when the manifest is missing, unreadable, not valid YAML, or holds
+        no such container.
+    """
+    env = _find_container(manifest, container).get("env")
+    entries = env if isinstance(env, list) else []
+    return {
+        str(entry["name"]): str(entry["value"])
+        for entry in entries
+        if isinstance(entry, dict) and "name" in entry and "value" in entry
+    }
+
+
 def _find_container(manifest: Path, container: str) -> dict[str, object]:
     """Find a named container entry in the vLLM Deployment manifest.
 
