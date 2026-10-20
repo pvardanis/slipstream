@@ -10,6 +10,11 @@ already rule out is refused before the first redeploy. Its collaborators are inj
 callables, so the whole path is testable against fakes with no cluster, GPU, or Prefect
 server. A run whose cells are all cached skips its redeploy; any other run is redone
 whole.
+
+:func:`build_kv_ab_collaborators` binds those callables to kubectl, SSM, S3, and the
+engine's /metrics, and :func:`kv_ab_flow` is the ``@flow`` composition root the Prefect
+deployment registers: it builds the live transports inside the flow and drives the loop,
+so only serializable parameters cross the flow boundary.
 """
 
 import logging
@@ -20,22 +25,30 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from prefect import Task
+from prefect import Task, flow
+from prefect.logging import get_run_logger
 
 from slipstream_bench.contract import CellConfig, get_cell_basename
 from slipstream_bench.contract.kv_ab_record import Arm
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
     build_cell_execution,
+    build_s3_client,
     start_bench_proxy,
 )
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
+    build_kubectl,
     deploy_gpu,
     scrape_gpu_kv_pool,
 )
-from slipstream_bench.orchestration.digest import ServingConfig
+from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
+from slipstream_bench.orchestration.flows.knob_sweep import (
+    enable_milestone_logging,
+    tag_run_with_group,
+)
 from slipstream_bench.orchestration.kv_ab_cell import (
+    fetch_metrics,
     get_kv_ab_cell,
     get_kv_ab_cell_digest,
     get_kv_ab_record_key,
@@ -45,17 +58,27 @@ from slipstream_bench.orchestration.kv_ab_cell import (
 from slipstream_bench.orchestration.kv_ab_config import (
     KvAbConfig,
     get_kv_ab_engine_args,
+    load_kv_ab_config,
 )
 from slipstream_bench.orchestration.kv_ab_rig import (
     KvAbRig,
     check_fits_rig,
     check_gpu_kv_pool,
+    read_kv_ab_rig,
 )
+from slipstream_bench.orchestration.model_config import read_model_id
+from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import is_cell_cached
-from slipstream_bench.orchestration.tasks.kv_ab_cell import MetricsReader
+from slipstream_bench.orchestration.tasks.kv_ab_cell import (
+    MetricsReader,
+    kv_ab_cell_task,
+)
 from slipstream_bench.orchestration.validity import validate_cell
 
 _LOGGER = logging.getLogger(__name__)
+
+# The GPU engine's /metrics, read by the in-cluster worker through the vLLM Service.
+_ENGINE_METRICS_URL = "http://vllm-gpu.slipstream.svc:8000/metrics"
 
 # The arms in the order each repetition runs them.
 _ARMS: tuple[Arm, ...] = ("off", "on")
@@ -186,6 +209,80 @@ class KvAbInputs:
         for name in ("run", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KvAbInputs.{name} must be a non-empty string")
+
+
+@flow(name="kv-cache-extension-ab")
+def kv_ab_flow(
+    *,
+    run_id: str,
+    instance_id: str,
+    region: str,
+    bucket: str,
+    image_ref: str,
+    model_yaml: Path,
+    kv_ab_config: Path,
+    vllm_manifest: Path,
+    metrics_url: str = _ENGINE_METRICS_URL,
+    retries: int = 0,
+) -> list[str]:
+    """Run the KV cache offload A/B as one Prefect flow and return its record pointers.
+
+    The composition root the deployment registers: it reads the workload, the rig, and
+    the run-wide digest inputs, binds the driver's collaborators to the live transports,
+    and drives the interleaved arm runs. Re-invoked with the same run id, it resumes every
+    run whose rungs are all cached. The parameters are all serializable; the three paths
+    name in-image files read on the worker. The run is tagged ``run=<run-id>``.
+
+    :param run_id: the A/B's run id, which its cells and records nest under.
+    :param instance_id: the bench host the cells run on.
+    :param region: the AWS region of the host and bucket.
+    :param bucket: the results bucket (RESULTS_BUCKET).
+    :param image_ref: the bench-client image the cells run.
+    :param model_yaml: model.yaml, the served model id and a digest input.
+    :param kv_ab_config: the A/B workload, e.g. the agent or chat config.
+    :param vllm_manifest: k8s/vllm-gpu.yaml, the redeploy template and the rig's
+        capacities.
+    :param metrics_url: the GPU engine's /metrics URL, reachable from the worker.
+    :param retries: opt-in cell retries for a transient transport fault.
+    :return: the record pointer of every ladder rung, in run order.
+    """
+    logger = get_run_logger()
+    enable_milestone_logging()
+    tag_run_with_group(run_id)
+    config = load_kv_ab_config(kv_ab_config)
+    logger.info(
+        "kv-ab run=%s starting: %s, %d runs per arm",
+        run_id,
+        kv_ab_config.name,
+        config.runs_per_arm,
+    )
+    inputs = KvAbInputs(
+        config=config,
+        manifest_text=vllm_manifest.read_text(encoding="utf-8"),
+        run=run_id,
+        serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
+        instance_id=instance_id,
+        image_ref=image_ref,
+        bucket=bucket,
+        model=read_model_id(model_yaml),
+    )
+    collaborators = build_kv_ab_collaborators(
+        inputs,
+        kubectl=build_kubectl(),
+        ssm_client=build_ssm_client(region),
+        s3_client=build_s3_client(region),
+        task=kv_ab_cell_task(bucket, retries=retries),
+        read_metrics=partial(fetch_metrics, metrics_url),
+    )
+    result = drive_kv_ab(config, read_kv_ab_rig(vllm_manifest), collaborators)
+    logger.info(
+        "kv-ab run=%s complete: %d cells (%d runs run, %d resumed)",
+        run_id,
+        len(result.pointers),
+        result.runs_run,
+        result.runs_resumed,
+    )
+    return list(result.pointers)
 
 
 def drive_kv_ab(
