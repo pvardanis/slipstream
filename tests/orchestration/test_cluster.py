@@ -32,6 +32,10 @@ from slipstream_bench.orchestration.cluster import (
     scrape_gpu_kv_pool,
 )
 from slipstream_bench.orchestration.grid import get_engine_args
+from slipstream_bench.orchestration.kv_ab_config import (
+    get_kv_ab_engine_args,
+    load_kv_ab_config,
+)
 
 _GRID = """
 tier1:
@@ -320,6 +324,26 @@ def test_the_recipe_renders_the_same_offload_values_as_the_worker() -> None:
     assert f"kv_transfer_config='{_kv_transfer_config(on)}'\n" in recipe
     assert f"memory_limit={off['resources']['limits']['memory']}\n" in recipe
     assert f"memory_limit={on['resources']['limits']['memory']}\n" in recipe
+
+
+@pytest.mark.parametrize("workload", ["agent", "chat"])
+def test_the_committed_manifest_caps_the_pool_at_the_kv_ab_workload_s_bytes(
+    workload: str,
+) -> None:
+    config = load_kv_ab_config(
+        _COMMITTED_MANIFEST.parents[1]
+        / "bench"
+        / f"kv-cache-extension-ab-{workload}.yaml"
+    )
+
+    rendered = render_gpu_manifest(
+        _COMMITTED_MANIFEST.read_text(encoding="utf-8"),
+        engine_args=get_kv_ab_engine_args(config.engine),
+        kv_cache_offload=True,
+    )
+
+    # 16,384 tokens of fp8 KV at 73,728 bytes each.
+    assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "1207959552"
 
 
 def test_the_recipe_leaves_the_gpu_kv_pool_uncapped_as_the_sweep_does() -> None:
