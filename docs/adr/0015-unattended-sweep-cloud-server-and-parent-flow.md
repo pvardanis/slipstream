@@ -269,11 +269,11 @@ The "CI later" arm of the trigger decision is taken as a manual `workflow_dispat
 a GPU and stays a deliberate act, so CI removes only the need for a workstation, not the
 operator's decision. Over a transient `kubectl port-forward` — the server keeps **no public
 endpoint** — the workflow registers the knob-sweep deployment with the same command the manual
-arm's `just prefect-register` runs, then runs the same `prefect deployment run`, and stays
+arm's `just prefect-register-sweep` runs, then runs the same `prefect deployment run`, and stays
 fire-and-forget: it returns once the run is created. Registering on every dispatch is cheap
 and idempotent (it overwrites the deployment), and it is what keeps the trigger working after
 a `cluster-down`, which wipes the server's SQLite and every deployment in it. The overwrite
-also replaces any override a manual `just prefect-register` set, such as a pinned bench
+also replaces any override a manual `just prefect-register-sweep` set, such as a pinned bench
 image tag: a dispatched sweep always runs `main`'s defaults.
 
 **Access is an OIDC role plus namespaced RBAC.** The workflow assumes a bootstrap-stack role
@@ -288,7 +288,7 @@ grant. The access entry is gated with the worker layer, like the rest of the swe
 **Consequences.** A green dispatch means the run was created against a deployment registered
 from `main` whose work pool had a worker polling it; the workflow reads the deployment back
 and checks the pool before creating the run. It does not stand the stack up — `just stack-up`
-stays the operator step bracketing the GPU spend, and `just prefect-register` stays for the
+stays the operator step bracketing the GPU spend, and `just prefect-register-sweep` stays for the
 manual arm. The **schedule** stays declined, for the reason above.
 
 ## Amendment (2026-10-14): the worker and sweep-dispatch access come up with every cluster

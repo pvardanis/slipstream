@@ -15,14 +15,14 @@ and `run_id` to a UTC timestamp. The workflow does not stand the stack up, and f
 before creating the run if no worker is polling the pool.
 
 Each dispatch re-registers the deployment with defaults resolved from the live stack
-and `main`'s image, so it **overwrites** any override a manual `just prefect-register`
+and `main`'s image, so it **overwrites** any override a manual `just prefect-register-sweep`
 set (a pinned `bench_image_tag`, retries).
 
 **From a workstation:**
 
 ```sh
-just prefect-register   # register the deployment on the worker's pool
-just prefect-ui         # hold a port-forward open; UI at http://localhost:4200
+just prefect-register-sweep   # register the deployment on the worker's pool
+just prefect-ui               # hold a port-forward open; UI at http://localhost:4200
 # in another shell:
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-sweep/knob-sweep \
   --param run_id=<run-id> \
@@ -33,8 +33,8 @@ The flow redeploys `deploy/vllm-gpu` for each engine point, so **do not run
 `just gpu-deploy` while a sweep is in flight**: it recreates the replica under the running
 cell, and the point's later cells measure the committed config while being recorded under the
 point's knobs; the flow does not notice. After a sweep the replica keeps the last point's
-knobs; `just gpu-deploy` with `MAX_NUM_SEQS`, `KV_CACHE_DTYPE` and `PREFIX_CACHING_FLAG` unset
-restores the committed config
+knobs; `just gpu-deploy` with `MAX_NUM_SEQS`, `KV_CACHE_DTYPE`, `PREFIX_CACHING_FLAG`,
+`KV_CACHE_OFFLOAD` and `KV_CACHE_MEMORY_BYTES` unset restores the committed config
 ([ADR-0015](adr/0015-unattended-sweep-cloud-server-and-parent-flow.md)).
 
 A failed redeploy, ceiling scrape, or cell fails the run. **To resume**, run again with
@@ -61,6 +61,61 @@ uv run slipstream-bench aggregate-sweep --run-dir bench/results/<run-id>   # cei
 uv run slipstream-bench chart --run-dir bench/results/<run-id>             # tables + plots
 ```
 
+## KV cache A/B
+
+The `kv-cache-extension-ab` flow (#326) measures KV cache offload off against on at one
+engine point, on the same in-cluster worker as the knob sweep. Its arm runs are
+interleaved — off, on, off, on — `runs_per_arm` times. Each arm run redeploys
+`deploy/vllm-gpu` with the arm's offload switch and the workload's capped GPU KV pool,
+runs one unrecorded warmup cell, then the concurrency ladder.
+
+**The workload** is [`bench/kv-cache-extension-ab.yaml`](../bench/kv-cache-extension-ab.yaml),
+the one config the orchestration image bakes and the deployment runs. Other workloads are
+parked beside it: `kv-cache-extension-ab.agent.yaml` (the live one is a copy of it) and
+`kv-cache-extension-ab.chat.yaml`. To run a parked one, copy it over the live file and
+rebuild the orchestration image first.
+
+**From a workstation** (there is no dispatch workflow):
+
+```sh
+just prefect-register-kv-ab   # register the deployment on the worker's pool
+just prefect-ui               # hold a port-forward open; UI at http://localhost:4200
+# in another shell:
+PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run \
+  kv-cache-extension-ab/kv-cache-extension-ab \
+  --param run_id=<run-id> \
+  --param instance_id="$(terraform -chdir=terraform/bench-endpoint output -raw bench_host_instance_id)"
+```
+
+As with the knob sweep, **do not run `just gpu-deploy` while an A/B is in flight**. After
+an A/B the replica keeps the last arm's offload switch and capped pool; `just gpu-deploy`
+with `KV_CACHE_OFFLOAD` and `KV_CACHE_MEMORY_BYTES` unset restores the committed config.
+
+**Refusals.** Before the first redeploy, the run fails if a request (`total_len` plus
+`output_len`) is past the manifest's max-model-len, if the prefix is not whole LMCache
+chunks, if the prompts' chunks overflow the manifest's CPU tier, or if the configured GPU
+KV pool holds the working set or cannot hold the top rung's requests. After each redeploy
+the pool check runs again on the size the engine logged at startup. Every rung also checks
+the KV connector's counters (`vllm:external_prefix_cache_*`) against its arm:
+
+- an **off-arm** rung that advanced them ran on an engine that offloads KV cache;
+- an **on-arm** rung that sent the connector no queries ran on an engine without the
+  LMCache connector. Check the vLLM pod's `KV_CACHE_OFFLOAD` and its startup log for the
+  connector.
+
+Either refusal fails the run with no record written for that rung.
+
+**To resume**, run again with the same `run_id`. Resume is per whole arm run: a redeploy
+clears both cache tiers, so an arm run whose every rung is cached is skipped, and any
+other is redeployed and re-measured whole. A new `run_id` re-measures everything.
+
+**Results** land in the results bucket. Each rung's labelled record (the raw result plus
+its arm, run, and prefix-cache hit rates) is under `kv-ab/<run-id>/<arm>-r<n>/`; the
+bench host's raw results are under `sweeps/kv-ab/<run-id>/` and the chart under
+`sweeps/kv-ab/<run-id>/charts/`. `just bench-results-sync` pulls the raw results but not
+the labelled records; pull those with
+`aws s3 sync "s3://<bucket>/kv-ab" bench/results/kv-ab-records`.
+
 ## One point, prefix cache
 
 Against whatever engine point is currently deployed, over the bench endpoint:
@@ -81,11 +136,13 @@ the branch's content image, then pin the run to it with the `bench_image_tag` va
 ```sh
 just bench-image
 just bench_image_tag="$(bench/image-tag.sh sha-tag)" bench <point-slug>
-just bench_image_tag="$(bench/image-tag.sh sha-tag)" prefect-register   # for a knob sweep
+just bench_image_tag="$(bench/image-tag.sh sha-tag)" prefect-register-sweep   # for a knob sweep
+just bench_image_tag="$(bench/image-tag.sh sha-tag)" prefect-register-kv-ab   # for a KV cache A/B
 ```
 
 A `sweep-dispatch` run re-registers with the `-main` image, so trigger a pinned knob
-sweep from a workstation.
+sweep from a workstation. The KV cache A/B has no dispatch workflow; it is always
+triggered from a workstation.
 
 ## Cloud verify
 
