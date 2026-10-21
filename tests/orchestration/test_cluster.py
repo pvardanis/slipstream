@@ -472,6 +472,40 @@ def test_deploy_gpu_with_kv_cache_offload_applies_the_lmcache_connector() -> Non
     assert kubectl.calls[1][0][:2] == ["rollout", "status"]
 
 
+def _applied_pod_annotations(kubectl: _FakeKubectl) -> dict[str, str] | None:
+    """The pod-template annotations of the Deployment the fake kubectl applied."""
+    applied = kubectl.calls[0][1]
+    assert applied is not None
+    template = next(iter(yaml.safe_load_all(applied)))["spec"]["template"]
+    return template.get("metadata", {}).get("annotations")
+
+
+def test_deploy_gpu_stamps_a_restart_time_on_the_pod_template() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu(
+        get_engine_args(_grid(), _POINT),
+        kv_cache_offload=True,
+        manifest_text=_MANIFEST,
+        kubectl=kubectl,
+        restarted_at="2026-10-21T16:39:12Z",
+    )
+
+    # The annotation `kubectl rollout restart` sets: a changed pod template is what makes
+    # Kubernetes roll a new pod when the engine args and offload switch are unchanged.
+    assert _applied_pod_annotations(kubectl) == {
+        "kubectl.kubernetes.io/restartedAt": "2026-10-21T16:39:12Z"
+    }
+
+
+def test_deploy_gpu_point_applies_the_pod_template_unstamped() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu_point(_POINT, grid=_grid(), manifest_text=_MANIFEST, kubectl=kubectl)
+
+    assert _applied_pod_annotations(kubectl) is None
+
+
 def test_deploy_raises_when_kubectl_fails() -> None:
     def failing(_args: Sequence[str], _stdin: str | None = None) -> str:
         raise KubectlError("boom")

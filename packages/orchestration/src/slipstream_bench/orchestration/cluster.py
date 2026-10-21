@@ -15,8 +15,8 @@ The scrape returns the ceiling text it read (the composition root records it) bu
 :class:`CeilingScrapeError` when the engine reported none, so a point's ladder never runs
 against a garbage ceiling — the one failure an unattended sweep cannot tolerate.
 
-The KV cache extension A/B redeploys the same Deployment per arm with the offload switch
-flipped, and scrapes the GPU KV pool size from the same startup log to size its working
+The KV cache extension A/B redeploys the same Deployment per run with its arm's offload
+switch and a restart stamp on the pod template, and scrapes the GPU KV pool size from the same startup log to size its working
 set; that scrape raises :class:`KvPoolScrapeError` when the engine reported none.
 """
 
@@ -94,6 +94,9 @@ _MEMORY_LIMIT_DEFAULT = "8Gi"
 # The worker's RBAC scopes it to the slipstream namespace's vllm-gpu Deployment.
 _NAMESPACE = "slipstream"
 _DEPLOYMENT = "vllm-gpu"
+
+# The pod-template annotation `kubectl rollout restart` patches to force new pods.
+_RESTARTED_AT_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
 
 # A cold g5 must be provisioned by Karpenter, pull the ~10 GB image, and load the AWQ
 # weights before the pod goes ready; the manifest's own progressDeadlineSeconds (1200)
@@ -222,6 +225,7 @@ def deploy_gpu(
     namespace: str = _NAMESPACE,
     deployment: str = _DEPLOYMENT,
     rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
+    restarted_at: str | None = None,
 ) -> None:
     """Redeploy the GPU with the given engine args and offload switch, then wait.
 
@@ -229,6 +233,12 @@ def deploy_gpu(
     **only** the Deployment document (the get + patch the worker's RBAC allows), then
     blocks on the rollout so nothing runs against a half-rolled engine. ``kubectl``
     raises on a non-zero exit, so a failed apply or a stalled rollout aborts loudly.
+
+    Kubernetes rolls a Deployment out only when its pod template changes, so applying
+    the knobs already deployed leaves the running engine and its warm cache tiers in
+    place. A ``restarted_at`` stamp is written to the pod template's
+    ``kubectl.kubernetes.io/restartedAt`` annotation, as ``kubectl rollout restart``
+    does, so a fresh stamp rolls a new engine even then.
 
     :param engine_args: the max-num-seqs, --kv-cache-dtype token, caching flag, and GPU
         KV pool cap.
@@ -238,11 +248,15 @@ def deploy_gpu(
     :param namespace: the namespace the Deployment lives in.
     :param deployment: the Deployment's name.
     :param rollout_timeout_s: the ceiling the rollout wait trips at.
+    :param restarted_at: the restart time to stamp on the pod template, or ``None`` to
+        apply the template unstamped.
     """
     rendered = render_gpu_manifest(
         manifest_text, engine_args=engine_args, kv_cache_offload=kv_cache_offload
     )
     deployment_doc = extract_deployment_doc(rendered, deployment=deployment)
+    if restarted_at is not None:
+        deployment_doc = _stamp_restart(deployment_doc, restarted_at)
     kubectl(["apply", "-n", namespace, "-f", "-"], deployment_doc)
     kubectl(
         [
@@ -378,3 +392,11 @@ def _get_last_log_match(
     logs = kubectl(["logs", "-n", namespace, f"deployment/{deployment}"], None)
     matches = pattern.findall(logs)
     return matches[-1] if matches else None
+
+
+def _stamp_restart(deployment_doc: str, restarted_at: str) -> str:
+    """Return the Deployment document with the restart time on its pod template."""
+    doc = yaml.safe_load(deployment_doc)
+    metadata = doc["spec"]["template"].setdefault("metadata", {})
+    metadata.setdefault("annotations", {})[_RESTARTED_AT_ANNOTATION] = restarted_at
+    return yaml.safe_dump(doc, sort_keys=False)
