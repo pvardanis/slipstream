@@ -17,6 +17,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import yaml
 from prefect import Task, flow
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
@@ -342,6 +343,25 @@ def test_a_partly_cached_run_is_redeployed_and_re_measured_whole(
         "kv-ab/ab1/off-r1@mc4",
     ]
     assert "kv-ab/ab1/off-r1/pshare90_burst1.0_mc1.json" in resumed.s3.puts
+
+
+def test_redeploying_the_same_arm_run_rolls_a_fresh_engine(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+    failed = _Ab(task, failing=("off-r1/pshare90_burst1.0_mc2",))
+    with pytest.raises(InvalidCellError):
+        failed.drive()
+    resumed = _Ab(task)
+
+    resumed.drive()
+
+    # Kubernetes rolls a Deployment out only when its pod template changes, so the
+    # resume's redeploy of the same arm and knobs must still apply a different template,
+    # or the engine keeps the failed attempt's warm cache tiers.
+    first, again = (
+        yaml.safe_load(ab.kubectl.applied[0])["spec"]["template"]
+        for ab in (failed, resumed)
+    )
+    assert first != again
 
 
 def test_the_flow_drives_its_workload_and_returns_the_record_pointers(

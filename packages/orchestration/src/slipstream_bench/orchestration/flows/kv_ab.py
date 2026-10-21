@@ -2,8 +2,8 @@
 
 :func:`drive_kv_ab` is the transport-free loop. It alternates the two arms' runs — offload
 off, then on, ``runs_per_arm`` times — so a drift over the session lands on both arms
-alike. Each run redeploys the GPU with its arm's offload switch, which clears the arm's
-cache tiers; scrapes the GPU KV pool the engine sized at startup and refuses a working set
+alike. Each run redeploys the GPU with its arm's offload switch and a restart stamp, which
+rolls a fresh engine and so clears the arm's cache tiers; scrapes the GPU KV pool the engine sized at startup and refuses a working set
 the pool holds; warms the arm's cache tiers with one unrecorded cell; then runs the
 concurrency ladder. A workload the manifest's capacities or its own configured pool
 already rule out is refused before the first redeploy. Its collaborators are injected as
@@ -20,6 +20,7 @@ so only serializable parameters cross the flow boundary.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -407,13 +408,18 @@ def _prepare_run(
 
 
 def _deploy_arm_run(arm_run: ArmRun, *, inputs: KvAbInputs, kubectl: Kubectl) -> None:
-    """Redeploy the GPU with the A/B's engine args and the run's offload switch."""
+    """Redeploy the GPU with the A/B's engine args and the run's offload switch.
+
+    Stamped with the time, so the engine restarts with empty cache tiers even when the
+    run's arm and knobs are the ones already deployed.
+    """
     _LOGGER.info("run %s redeploy starting", arm_run.slug())
     deploy_gpu(
         get_kv_ab_engine_args(inputs.config.engine),
         kv_cache_offload=arm_run.kv_cache_offload,
         manifest_text=inputs.manifest_text,
         kubectl=kubectl,
+        restarted_at=datetime.now(UTC).isoformat(),
     )
     _LOGGER.info("run %s redeploy finished", arm_run.slug())
 
