@@ -92,7 +92,7 @@ def write_artifacts(
         emitted.
     :param rungs: the rows :func:`slipstream_bench.report.aggregation.aggregate_rungs`
         emitted.
-    :param charts_dir: the ``bench/results/<run_id>/charts`` directory to write into.
+    :param charts_dir: the ``bench/results/sweeps/<run_id>/charts`` directory to write into.
     :return: the written paths, keyed ``markdown`` / ``json`` / ``png`` for the ceiling
         table and its plot, ``rungs_markdown`` / ``rungs_json`` / ``rungs_png`` for the
         cliff table and its plot.

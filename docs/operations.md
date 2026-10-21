@@ -57,8 +57,8 @@ Pull the results first, then build the artifacts locally:
 
 ```sh
 just bench-results-sync
-uv run slipstream-bench aggregate-sweep --run-dir bench/results/<run-id>   # ceiling table
-uv run slipstream-bench chart --run-dir bench/results/<run-id>             # tables + plots
+uv run slipstream-bench aggregate-sweep --run-dir bench/results/sweeps/<run-id>   # ceiling table
+uv run slipstream-bench chart --run-dir bench/results/sweeps/<run-id>             # tables + plots
 ```
 
 ## KV cache A/B
@@ -117,8 +117,8 @@ its arm, run, and prefix-cache hit rates) is under `kv-ab/<run-id>/<arm>-r<n>/`;
 bench host's raw results are under `sweeps/kv-ab/<run-id>/` and the chart under
 `sweeps/kv-ab/<run-id>/charts/`. Each arm run's warmup cell lands beside its rungs under
 `<arm>-r<n>/warmup/`; leave it out when folding raw results by hand. `just
-bench-results-sync` pulls the raw results into `bench/results/kv-ab/` and the labelled
-records into `bench/results/kv-ab-records/`.
+bench-results-sync` pulls the raw results into `bench/results/sweeps/kv-ab/` and the
+labelled records into `bench/results/kv-ab/`.
 
 The chart is public, like the knob sweep's: the bucket serves any `charts/` path under
 `sweeps/` anonymously. So never use `charts` as a run id or a run id segment, or that
