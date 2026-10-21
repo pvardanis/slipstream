@@ -60,10 +60,11 @@ run "github_oidc_trust_and_permissions" {
     condition     = local.bench_push_permissions_policy.Statement[0].Resource == "*"
     error_message = "GetAuthorizationToken has no resource scope and must be granted on *."
   }
-  # A docker push needs the full layer-upload sequence plus PutImage; dropping any
-  # one silently breaks the push at runtime, so assert the whole set rather than a
-  # single action. DescribeImages sits on its own statement and backs the workflow's
-  # content-hash existence check.
+  # A docker push needs the full layer-upload sequence plus PutImage, and BatchGetImage
+  # for the manifest HEAD Docker 29 makes after the layers; dropping any one silently
+  # breaks the push at runtime, so assert the whole set rather than a single action.
+  # DescribeImages sits on its own statement and backs the workflow's content-hash
+  # existence check.
   assert {
     condition = alltrue([
       for action in [
@@ -72,6 +73,7 @@ run "github_oidc_trust_and_permissions" {
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
         "ecr:PutImage",
+        "ecr:BatchGetImage",
       ] : contains(local.bench_push_permissions_policy.Statement[1].Action, action)
     ])
     error_message = "Push statement must grant the full docker-push action set."
@@ -105,6 +107,7 @@ run "orchestration_push_permissions" {
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
         "ecr:PutImage",
+        "ecr:BatchGetImage",
       ] : contains(local.orchestration_push_permissions_policy.Statement[1].Action, action)
     ])
     error_message = "Push statement must grant the full docker-push action set."

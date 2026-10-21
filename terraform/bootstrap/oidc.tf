@@ -36,6 +36,19 @@ locals {
     }]
   }
 
+  # The actions a docker push makes against one repository: the layer-upload sequence,
+  # PutImage, and BatchGetImage because Docker 29 HEADs the manifest by digest after
+  # uploading the layers, and ECR authorises a manifest HEAD as BatchGetImage. Both push
+  # roles grant this set, each on its own repository.
+  ecr_push_actions = [
+    "ecr:BatchCheckLayerAvailability",
+    "ecr:InitiateLayerUpload",
+    "ecr:UploadLayerPart",
+    "ecr:CompleteLayerUpload",
+    "ecr:PutImage",
+    "ecr:BatchGetImage",
+  ]
+
   # GetAuthorizationToken is an account-level action with no resource scope, so it
   # must be granted on "*"; the write and read actions are each scoped to the
   # bench-client repo ARN so the role touches that repository and no other. The read
@@ -51,15 +64,9 @@ locals {
         Resource = "*"
       },
       {
-        Sid    = "PushBenchClientImage"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:PutImage",
-        ]
+        Sid      = "PushBenchClientImage"
+        Effect   = "Allow"
+        Action   = local.ecr_push_actions
         Resource = aws_ecr_repository.bench_client.arn
       },
       {
@@ -83,15 +90,9 @@ locals {
         Resource = "*"
       },
       {
-        Sid    = "PushOrchestrationImage"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:PutImage",
-        ]
+        Sid      = "PushOrchestrationImage"
+        Effect   = "Allow"
+        Action   = local.ecr_push_actions
         Resource = aws_ecr_repository.orchestration.arn
       },
       {
