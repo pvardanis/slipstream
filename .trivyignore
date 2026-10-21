@@ -21,9 +21,16 @@
 # runes, unicode/norm, secure/bidirule, ...) but no secure/precis symbol, so the flagged
 # code is not in the image. v1.36.5 is still the latest patch on the EKS-pinned minor.
 #
+# CVE-2026-111943 (GO-2026-6809, Go stdlib crypto/x509, fixed in Go 1.26.10 / 1.27.3)
+# adds compromised public intermediates to x509's denylist. The worker's kubectl never
+# builds a chain from the system roots: it runs on the pod's service-account config,
+# whose only root is the cluster CA, so a public intermediate cannot sign for the EKS API
+# it talks to. v1.36.5 and v1.37.1 (latest) are both built on go1.26.8.
+#
 # Drop each line once upstream kubectl rebuilds on the patched Go or x/text. The exp date
 # forces the scan to fail again and this file to be revisited rather than rot silently.
 CVE-2026-78667 exp:2026-11-08
 CVE-2026-97031 exp:2026-11-08
 CVE-2026-78669 exp:2026-11-08
 CVE-2026-56851 exp:2026-11-08
+CVE-2026-111943 exp:2026-11-08
