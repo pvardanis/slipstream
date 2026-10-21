@@ -65,6 +65,17 @@ RUN apt-get update \
     && apt-get upgrade --yes \
     && rm -rf /var/lib/apt/lists/*
 
+# The base ships its own Prefect and dependencies in the system Python, outside uv.lock and
+# unused here: the venv below is first on PATH, so the worker and its process flow runs both
+# run on the venv's interpreter and packages. Empty that site-packages so the image holds one
+# Python package set, the locked one, and the Trivy scan-gate sees only packages uv.lock pins.
+# The interpreter and stdlib stay; the venv runs on them. The path comes from the base's own
+# interpreter (the venv is not on PATH yet), and `test -d` fails the build rather than letting
+# the glob match nothing if that path ever moves.
+RUN site="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+    && test -d "$site" \
+    && rm -rf "$site"/*
+
 # The worker drives the per-point GPU redeploy and ceiling scrape by shelling out to
 # kubectl (slipstream_bench.orchestration.cluster), so the image must carry the binary.
 # Pinned to the EKS control-plane minor (terraform/eks kubernetes_version 1.36) to hold
@@ -79,7 +90,7 @@ ADD --chmod=0755 \
 
 # The venv built in the builder stage carries the orchestration member's deps and flow code.
 # Prepend its bin so the locked `prefect` and the package's console scripts resolve ahead of the
-# base image's own Prefect. The chart runs the container as an arbitrary uid; the venv is copied
+# base's leftover console scripts in /usr/local/bin. The chart runs the container as an arbitrary uid; the venv is copied
 # world-readable (0755 dirs, 0644 files), so that uid can read and execute it without a chown.
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:${PATH}"
