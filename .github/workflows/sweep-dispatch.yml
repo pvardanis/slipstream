@@ -59,7 +59,7 @@ env:
 jobs:
   trigger:
     name: trigger the knob-sweep deployment
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # OIDC needs a token to exchange for the dispatch role; checkout needs read. No
     # other scope — the job creates a Prefect run, it does not write to the repo.

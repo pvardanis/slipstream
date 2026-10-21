@@ -1,0 +1,6 @@
+# actionlint config. GitHub's ubuntu-26.04 hosted runner postdates actionlint's built-in
+# label list, so it is declared here; actionlint files every extra label under
+# self-hosted-runner, hosted or not.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
