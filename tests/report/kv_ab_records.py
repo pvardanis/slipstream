@@ -2,7 +2,7 @@
 
 A record is the raw ``vllm bench serve`` result of a rung at 8 req/s plus the ``kv_ab``
 block :func:`slipstream_bench.contract.kv_ab_record.build_kv_ab_record` adds, so the fold,
-the chart, and the render all read the shape the A/B writes.
+the chart, and the render all read the shape the A/B's render joins.
 """
 
 from pathlib import Path
@@ -10,8 +10,10 @@ from typing import Any
 
 from slipstream_bench.report.kv_ab_aggregation import KvAbRung
 
-# Where the shared record reads as having come from, for the fold's error messages.
-SOURCE = Path("bench/kv-ab/ab1/on-r2/pshare90_burst1.0_mc4.json")
+# Where the shared record's raw result and labels read as having come from, for the
+# fold's error messages.
+SOURCE = Path("bench/kv-offload-ab/ab1/on-r2/pshare90_burst1.0_mc4.json")
+LABELS_SOURCE = Path("bench/kv-offload-ab/ab1/on-r2/pshare90_burst1.0_mc4.kv_ab.json")
 
 
 def build_record(
@@ -50,4 +52,4 @@ def build_record(
 def build_rung(arm: str, run: int, max_concurrency: int, **metrics: float) -> KvAbRung:
     """Parse a labelled record of the arm run's rung, its metrics overridden."""
     record = build_record(arm=arm, run=run, max_concurrency=max_concurrency, **metrics)
-    return KvAbRung.from_record(record, SOURCE)
+    return KvAbRung.from_record(record, SOURCE, labels_source=LABELS_SOURCE)

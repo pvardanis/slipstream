@@ -142,14 +142,18 @@ class _Ssm:
 class _S3:
     """Serve each cell a valid result at its rung, or a failed one under a marked key.
 
-    Serves each cell's raw result as the bench host stored it, both to the worker's
-    download and back to the render's read, records each object the worker writes, and
-    serves each one written back; the chart upload raises ``chart_error`` when set.
+    Serves each cell's raw result only at the key the bench host stored it under, both to
+    the worker's download and back to the render's read, records each object the worker
+    writes, and serves each one written back; the chart upload raises ``chart_error``
+    when set.
     """
 
     def __init__(
         self, failing: tuple[str, ...] = (), chart_error: Exception | None = None
     ) -> None:
+        # The bench host whose cell runs write the raw results this bucket serves.
+        self.ssm = _Ssm()
+        self.raw_reads: list[str] = []
         self.puts: dict[str, dict[str, Any]] = {}
         self.charts: dict[str, bytes] = {}
         self._failing = failing
@@ -172,11 +176,29 @@ class _S3:
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
         assert Bucket == "bench"
-        body = self.puts[Key] if Key in self.puts else self._raw_result(Key)
+        if Key in self.puts:
+            body = self.puts[Key]
+        else:
+            self.raw_reads.append(Key)
+            body = self._raw_result(Key)
         return {"Body": io.BytesIO(json.dumps(body).encode())}
+
+    def _host_keys(self) -> set[str]:
+        """The keys the bench host stored raw results under: ``<RUN_ID>/<cell>.json``.
+
+        Every cell of the agent workload is named ``pshare90_burst1.0_mc<concurrency>``.
+        """
+        keys = set()
+        for run in self.ssm.script_runs():
+            if run != "proxy":
+                run_id, cap = run.split("@mc")
+                keys.add(f"{run_id}/pshare90_burst1.0_mc{cap}.json")
+        return keys
 
     def _raw_result(self, key: str) -> dict[str, Any]:
         """The raw result the bench host stored at ``key``."""
+        if key not in self._host_keys():
+            raise KeyError(f"the bench host stored no raw result at {key}")
         failed = any(marker in key for marker in self._failing)
         result = _FAILED_RESULT if failed else _VALID_RESULT
         # Each rung's result reports the concurrency its cell basename names.
@@ -226,8 +248,8 @@ class _Ab:
 
     def __init__(self, task: Task[..., str], failing: tuple[str, ...] = ()) -> None:
         self.kubectl = _Kubectl()
-        self.ssm = _Ssm()
         self.s3 = _S3(failing)
+        self.ssm = self.s3.ssm
         self.collaborators = build_kv_ab_collaborators(
             _INPUTS,
             kubectl=self.kubectl,
@@ -418,7 +440,7 @@ def _drive_flow(
         return metrics()
 
     monkeypatch.setattr(kv_ab_module, "build_kubectl", lambda: kubectl)
-    monkeypatch.setattr(kv_ab_module, "build_ssm_client", lambda _region: _Ssm())
+    monkeypatch.setattr(kv_ab_module, "build_ssm_client", lambda _region: s3.ssm)
     monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: s3)
     monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
     monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
@@ -453,6 +475,10 @@ def test_the_flow_drives_its_workload_renders_it_and_returns_the_labels_pointers
     pointers, metrics_urls = _drive_flow(tmp_path, monkeypatch, s3)
 
     assert pointers == [f"s3://bench/{key}" for key in _LABELS_KEYS]
+    # The render joins each rung's labels to the raw result the bench host stored.
+    assert s3.raw_reads == [
+        key.removesuffix(".kv_ab.json") + ".json" for key in _LABELS_KEYS
+    ]
     assert set(metrics_urls) == {"http://engine:8000/metrics"}
     # The terminal render folds the records and uploads the chart under the run's charts.
     assert list(s3.charts) == ["kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"]

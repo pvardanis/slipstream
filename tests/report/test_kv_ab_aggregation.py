@@ -1,7 +1,7 @@
 """Tests for the kv-ab fold: labelled records into rungs, per-arm spreads, and ceilings.
 
-The KV cache offload A/B writes one labelled record per rung of each arm run. The fold
-reads each into a rung, summarises every arm's rung across its runs as the median and
+The KV cache offload A/B's render joins each rung's labels to its raw result into one
+labelled record. The fold reads each into a rung, summarises every arm's rung across its runs as the median and
 range, and reads each arm run's ceiling off its ladder.
 """
 
@@ -15,11 +15,16 @@ from slipstream_bench.report.kv_ab_aggregation import (
     get_kv_ab_ceilings,
     summarize_kv_ab_rungs,
 )
-from tests.report.kv_ab_records import SOURCE, build_record, build_rung
+from tests.report.kv_ab_records import (
+    LABELS_SOURCE,
+    SOURCE,
+    build_record,
+    build_rung,
+)
 
 
 def test_a_record_reads_into_its_arm_run_rung_and_hit_rates() -> None:
-    rung = KvAbRung.from_record(build_record(), SOURCE)
+    rung = KvAbRung.from_record(build_record(), SOURCE, labels_source=LABELS_SOURCE)
 
     assert (rung.arm, rung.run) == ("on", 2)
     assert rung.cell.max_concurrency == 4
@@ -33,7 +38,7 @@ def test_a_record_without_its_labels_is_refused() -> None:
     del record["kv_ab"]
 
     with pytest.raises(SweepAggregationError, match=f"{SOURCE}.*kv_ab"):
-        KvAbRung.from_record(record, SOURCE)
+        KvAbRung.from_record(record, SOURCE, labels_source=LABELS_SOURCE)
 
 
 @pytest.mark.parametrize(
@@ -56,7 +61,7 @@ def test_a_record_with_a_bad_label_is_refused(
     record["kv_ab"][label] = value
 
     with pytest.raises(SweepAggregationError, match=message):
-        KvAbRung.from_record(record, SOURCE)
+        KvAbRung.from_record(record, SOURCE, labels_source=LABELS_SOURCE)
 
 
 def test_each_arms_rung_is_summarised_across_its_runs_as_median_and_range() -> None:
@@ -126,7 +131,10 @@ def test_rungs_of_more_than_one_prefix_share_are_refused(
     # Rungs of two workloads would fold into one arm's spread and ceiling unremarked.
     record = build_record(arm="on", run=1, max_concurrency=2)
     record["prefix_share"] = 50
-    rungs = [build_rung("on", 1, 1), KvAbRung.from_record(record, SOURCE)]
+    rungs = [
+        build_rung("on", 1, 1),
+        KvAbRung.from_record(record, SOURCE, labels_source=LABELS_SOURCE),
+    ]
 
     with pytest.raises(SweepAggregationError, match="prefix shares 50, 90"):
         fold(rungs)

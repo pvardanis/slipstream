@@ -113,7 +113,11 @@ def drive_kv_ab_render(
 
     _LOGGER.info("kv-ab render starting: folding %d rung records", len(pointers))
     rungs = [
-        KvAbRung.from_record(read_record(pointer), Path(pointer.removeprefix("s3://")))
+        KvAbRung.from_record(
+            read_record(pointer),
+            Path(get_kv_ab_result_key(pointer.removeprefix("s3://"))),
+            labels_source=Path(pointer.removeprefix("s3://")),
+        )
         for pointer in pointers
     ]
     _reject_missing_arms(rungs)
@@ -157,7 +161,7 @@ def read_kv_ab_record(pointer: str, *, s3_client: Any) -> dict[str, object]:
     result = _read_json_object(
         s3_client, bucket=bucket, key=result_key, what="raw result"
     )
-    return build_kv_ab_record(result, labels)
+    return build_kv_ab_record(result, labels=labels)
 
 
 def _read_json_object(

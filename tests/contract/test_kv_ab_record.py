@@ -40,7 +40,7 @@ def test_the_labels_name_the_arm_run_and_window() -> None:
 def test_the_record_keeps_the_raw_result_and_nests_the_labels() -> None:
     labels = {"arm": "on", "run": 2, "hit_rate": 0.6, "combined_hit_rate": 0.9}
 
-    record = build_kv_ab_record(_RESULT, labels)
+    record = build_kv_ab_record(_RESULT, labels=labels)
 
     assert record == {**_RESULT, "kv_ab": labels}
 
