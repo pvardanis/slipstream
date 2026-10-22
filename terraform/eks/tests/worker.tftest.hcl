@@ -124,7 +124,8 @@ run "worker_layer_shape" {
   }
   # The worker persists its resume state with persist_result=True: the task result under
   # prefect/results and the cache-key records under prefect/cache-keys. PutObject is scoped
-  # to exactly those two prefixes, never the host-owned sweep objects at the bucket root.
+  # to exactly those two prefixes, never the host-owned cell objects under the experiment
+  # roots.
   # Resource is normalised to a list so the membership checks never run against a bare
   # string Resource on the other statements (which errors where && does not short-circuit).
   assert {
@@ -147,6 +148,18 @@ run "worker_layer_shape" {
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbLabelObjects" && s.Effect == "Allow" && length(s.Action) == 1 && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-offload-ab/*.kv_ab.json")]) == 1
     error_message = "The policy must allow only s3:PutObject on the kv-offload-ab/ *.kv_ab.json labels for the kv-ab flow's rung labels."
+  }
+  # Every PutObject resource across all statements is exactly the worker's own objects,
+  # so no added statement or resource lets the worker write the host's raw cell results.
+  assert {
+    condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : try(tolist(s.Resource), [s.Resource]) if contains(s.Action, "s3:PutObject")])) == toset([
+      "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*",
+      "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*",
+      "arn:aws:s3:::slipstream-bench-endpoint-results-*/knob-sweep/*/charts/*",
+      "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-offload-ab/*/charts/*",
+      "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-offload-ab/*.kv_ab.json",
+    ])
+    error_message = "s3:PutObject must cover exactly the worker's prefect state, charts, and kv-ab label objects."
   }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
   # written as a bare string or appended to a statement's resource list.

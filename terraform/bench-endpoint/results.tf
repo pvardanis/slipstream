@@ -30,8 +30,9 @@ resource "aws_s3_bucket_public_access_block" "results" {
 # matches any charts/ path under its experiment's prefix — the knob sweep's
 # knob-sweep/<run>/charts/ and the kv-ab flow's kv-offload-ab/<run>/charts/. The
 # cell-result JSONs under knob-sweep/<run>/<point>/ and kv-offload-ab/<run>/<arm>-r<n>/
-# hold the measurements and stay private only while no run id has a charts segment. depends_on the public access block so block_public_policy is
-# already off when PutBucketPolicy runs.
+# hold the measurements and stay private only while no run id has a charts segment.
+# depends_on the public access block so block_public_policy is already off when
+# PutBucketPolicy runs.
 resource "aws_s3_bucket_policy" "results_public_charts" {
   bucket = aws_s3_bucket.results.id
 

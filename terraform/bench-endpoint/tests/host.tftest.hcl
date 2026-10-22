@@ -140,6 +140,13 @@ run "bench_host_invariants" {
     condition     = strcontains(local.bench_user_data, local.bench_sweep_script)
     error_message = "Boot script must embed the rendered bench sweep script the SSM command runs."
   }
+  # The sweep script copies each cell under s3://<bucket>/<RUN_ID>/ and adds no prefix of
+  # its own: the run id carries the experiment root (knob-sweep/ or kv-offload-ab/) the
+  # worker reads the cell back from (ADR-0024).
+  assert {
+    condition     = strcontains(local.bench_sweep_script, "\"s3://$${RESULTS_BUCKET}/$${RUN_ID}/\"") && !strcontains(local.bench_sweep_script, "sweeps/")
+    error_message = "The sweep script must copy each cell to s3://<bucket>/<RUN_ID>/ with no fixed prefix of its own."
+  }
   # The sweep script runs the secret field reader by path to pull the api-key; the boot
   # script must embed its rendered content so the host has the file when the sweep runs.
   assert {
