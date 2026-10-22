@@ -38,6 +38,10 @@ _PALETTE = {"off": "#7f7f7f", "on": "#1f77b4"}
 # between the closest pair of rungs on the log-2 axis.
 _JITTER = 0.08
 
+# How far the axis reaches past the ladder's lowest and highest rungs, in log-2 units
+# (octaves). Fixed limits keep a one-rung ladder from zooming onto its dots' nudge.
+_AXIS_PAD_OCTAVES = 0.5
+
 
 def plot_kv_ab_png(rungs: list[KvAbRung]) -> bytes:
     """Render the A/B's three-panel chart straight to PNG bytes.
@@ -85,6 +89,7 @@ def _plot_kv_ab(rungs: list[KvAbRung]) -> Figure:
             ax=ax,
         )
         ax.set_xticks(ladder, labels=[str(cap) for cap in ladder])
+        ax.set_xlim(ladder[0] / 2**_AXIS_PAD_OCTAVES, ladder[-1] * 2**_AXIS_PAD_OCTAVES)
         ax.set_xlabel("--max-concurrency")
         ax.set_ylabel(label)
         if metric == "goodput_fraction":
