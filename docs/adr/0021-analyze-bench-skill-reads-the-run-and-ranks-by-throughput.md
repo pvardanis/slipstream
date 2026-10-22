@@ -1,4 +1,4 @@
-<!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). AMENDED 2026-10-19: the two plots are downloaded into the report directory and embedded by relative path, since the results bucket and its URLs die on teardown. AMENDED 2026-10-22: a sibling skill, analyze-kv-ab, reports the KV cache A/B's verdict on the same terms, judging each rung by whether the arms' ranges separate, and reads each run's own artifact versions rather than the latest per key. -->
+<!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). AMENDED 2026-10-19: the two plots are downloaded into the report directory and embedded by relative path, since the results bucket and its URLs die on teardown. AMENDED 2026-10-22: a sibling skill, analyze-kv-ab, reports the KV cache A/B's verdict on the same terms, judging each rung by whether the arms' ranges separate, and reads each run's own artifact versions rather than the latest per key. AMENDED 2026-10-22 (later): report directories are named by run kind, reports/sweep-grid-<stamp>/ and reports/kv-cache-ab-<run_id>/, and the KV A/B report names LMCache as the offload and states why the GPU KV pool is capped. -->
 
 # ADR-0021: analyze-bench reads the run and ranks by throughput
 
@@ -114,3 +114,22 @@ ceilings is the cost ratio.
 The skill reads each run's own artifact versions (`/artifacts/filter` by flow run,
 newest first), because `/artifacts/latest/filter` returns a key's newest version across
 all runs and so comes back empty for any run that is not the newest writer of that key.
+
+## Amendment (2026-10-22, later): report directories are named by run kind
+
+`reports/<run_id>/` does not say which flow produced a report, and a run id is free-form, so a
+listing of `reports/` mixes knob sweeps and A/Bs with nothing to tell them apart. Each skill now
+prefixes its directory with the run kind. `analyze-bench` writes `reports/sweep-grid-<stamp>/`,
+where `<stamp>` is the `run_id` with any leading `sweep-full-` dropped, so
+`sweep-full-20261008T130350Z` lands in `reports/sweep-grid-20261008T130350Z/`. `analyze-kv-ab`
+writes `reports/kv-cache-ab-<run_id>/`. The report still names its run by the `run_id` itself,
+since that is the Prefect `run=` tag. `.gitignore` admits each skill's chart by file name,
+`kv-ab-by-max-concurrency.png` beside the knob sweep's two.
+
+The KV A/B report also says what "offload" is and why the GPU pool is small. The on arm is vLLM
+with KV cache offload to LMCache's CPU tier (`LMCacheConnectorV1` in `kv_both` role); the off
+arm has no KV connector, and both keep the GPU prefix cache. When the workload sets
+`engine.kv_cache_memory_bytes`, the report states that the GPU KV pool was capped below the
+tier because the g5.xlarge's host RAM cannot hold a tier larger than the uncapped pool, and
+that the g5.2xlarge which could is waiting on a vCPU quota increase (ADR-0023). Every cost
+ratio it quotes is labelled as holding on the capped pool, not on the uncapped rig.
