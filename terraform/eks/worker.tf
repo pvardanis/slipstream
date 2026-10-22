@@ -116,7 +116,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
       },
       # The worker persists its own resume state with persist_result=True: the task result
       # under prefect/results and the cache-key records under prefect/cache-keys. PutObject
-      # is scoped to those two prefixes, never the host-owned cell objects at the root.
+      # is scoped to those two prefixes, never the host-owned cell objects under the
+      # experiment roots.
       {
         Sid    = "PrefectStateObjects"
         Effect = "Allow"
