@@ -91,8 +91,8 @@ def test_point_sweep_echoes_each_cell_pointer(
     def _fake_run(**kwargs: object) -> list[str]:
         captured.update(kwargs)
         return [
-            "s3://bench-bucket/sweeps/run1/mns64/pshare10_burst1.0_mc64.json",
-            "s3://bench-bucket/sweeps/run1/mns64/pshare50_burst1.0_mc64.json",
+            "s3://bench-bucket/knob-sweep/run1/mns64/pshare10_burst1.0_mc64.json",
+            "s3://bench-bucket/knob-sweep/run1/mns64/pshare50_burst1.0_mc64.json",
         ]
 
     monkeypatch.setattr(cli_module, "run_point_sweep", _fake_run)

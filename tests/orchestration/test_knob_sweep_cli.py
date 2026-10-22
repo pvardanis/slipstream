@@ -372,7 +372,7 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         captured.update(kwargs)
         return SweepOutcome(
             pointers=(
-                "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json",
+                "s3://bench-bucket/knob-sweep/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json",
             ),
             cells_run=1,
             cells_resumed=0,
@@ -440,7 +440,7 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     # After the loop the terminal render task materialized the whole run off the flow-built
     # S3 client, under the run's prefix — so the flow->render wiring reaches S3 (ADR-0018).
     assert (
-        "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
+        "knob-sweep/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
         in captures["s3"].keys
     )
     # ...and published the two tables as markdown artifacts to the parent run page, ceiling
@@ -462,22 +462,22 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
             "knob-sweep-goodput-cliff-plot",
             (
                 "https://bench-bucket.s3.us-east-1.amazonaws.com/"
-                "sweeps/run1/charts/goodput-by-max-concurrency.png"
+                "knob-sweep/run1/charts/goodput-by-max-concurrency.png"
             ),
         ),
         (
             "knob-sweep-ceiling-plot",
             (
                 "https://bench-bucket.s3.us-east-1.amazonaws.com/"
-                "sweeps/run1/charts/ceiling-by-max-num-seqs.png"
+                "knob-sweep/run1/charts/ceiling-by-max-num-seqs.png"
             ),
         ),
     ]
     # Each plot's PNG uploaded to S3 as its durable copy, under the run's charts prefix — so
     # the render's plot upload reached the flow-built client, the object the image URL points at.
     assert captures["s3"].uploads == [
-        ("sweeps/run1/charts/goodput-by-max-concurrency.png", "image/png"),
-        ("sweeps/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
+        ("knob-sweep/run1/charts/goodput-by-max-concurrency.png", "image/png"),
+        ("knob-sweep/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
     ]
 
 

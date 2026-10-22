@@ -4,7 +4,7 @@ Exercises the transport-free render core (drive_kv_ab_render) over the real repo
 plotter, with the record reads, the artifact publishes, and the plot upload faked: it reads
 every rung's record off the flow's pointers, publishes the spread and ceiling tables, then
 uploads the chart and embeds it on the run page. The S3 record reader is exercised against a
-fake S3 serving the record objects.
+fake S3 serving each rung's labels and the raw result beside them, which it joins.
 """
 
 import io
@@ -25,14 +25,31 @@ from tests.report.kv_ab_records import build_record
 # A PNG file leads with this 8-byte signature.
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
-# One run per arm over a two-rung ladder, keyed by the pointer the flow returns for each.
+# One run per arm over a two-rung ladder, keyed by the labels pointer the flow returns.
 _RECORDS = {
-    f"s3://bench/kv-ab/ab1/{arm}-r1/pshare90_burst1.0_mc{cap}.json": build_record(
-        arm=arm, run=1, max_concurrency=cap
+    f"s3://bench/kv-offload-ab/ab1/{arm}-r1/pshare90_burst1.0_mc{cap}.kv_ab.json": (
+        build_record(arm=arm, run=1, max_concurrency=cap)
     )
     for arm in ("off", "on")
     for cap in (1, 2)
 }
+
+# One rung's labels and raw result keys, and its labels pointer.
+_LABELS_KEY = "kv-offload-ab/ab1/on-r2/c.kv_ab.json"
+_RESULT_KEY = "kv-offload-ab/ab1/on-r2/c.json"
+_POINTER = f"s3://bench/{_LABELS_KEY}"
+
+
+def _store_rung(key: str, record: dict[str, Any]) -> dict[tuple[str, str], bytes]:
+    """Store a record as the A/B does: its labels at ``key``, its raw result beside them."""
+    labels = record["kv_ab"]
+    result = {k: v for k, v in record.items() if k != "kv_ab"}
+    return {
+        ("bench", key): json.dumps(labels).encode(),
+        ("bench", key.removesuffix(".kv_ab.json") + ".json"): json.dumps(
+            result
+        ).encode(),
+    }
 
 
 class _Render:
@@ -66,7 +83,7 @@ class _Render:
             raise self._store_error
         self.events.append(f"store {name}")
         self.stored[name] = data
-        return f"sweeps/kv-ab/ab1/charts/{name}"
+        return f"kv-offload-ab/ab1/charts/{name}"
 
     def publish_plot(self, *, key: str, s3_key: str, heading: str, blurb: str) -> None:
         self.events.append(f"plot {key}")
@@ -106,7 +123,7 @@ def test_the_render_reads_every_record_then_publishes_the_tables_then_the_chart(
     ]
     assert render.stored["kv-ab-by-max-concurrency.png"].startswith(_PNG_MAGIC)
     (plot,) = render.plots
-    assert plot["s3_key"] == "sweeps/kv-ab/ab1/charts/kv-ab-by-max-concurrency.png"
+    assert plot["s3_key"] == "kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"
 
 
 def test_a_run_with_no_records_fails_before_publishing_anything() -> None:
@@ -119,7 +136,7 @@ def test_a_run_with_no_records_fails_before_publishing_anything() -> None:
 
 
 class _RecordS3:
-    """Serve each record object's JSON body, as boto3's get_object returns it."""
+    """Serve each object's JSON body, as boto3's get_object returns it."""
 
     def __init__(self, objects: dict[tuple[str, str], bytes]) -> None:
         self._objects = objects
@@ -128,20 +145,20 @@ class _RecordS3:
         return {"Body": io.BytesIO(self._objects[(Bucket, Key)])}
 
 
-def test_a_record_is_read_off_its_pointer() -> None:
+def test_a_record_joins_the_labels_off_its_pointer_and_the_raw_result_beside_them() -> (
+    None
+):
     record = build_record()
-    s3 = _RecordS3({("bench", "kv-ab/ab1/on-r2/c.json"): json.dumps(record).encode()})
+    s3 = _RecordS3(_store_rung(_LABELS_KEY, record))
 
-    assert (
-        read_kv_ab_record("s3://bench/kv-ab/ab1/on-r2/c.json", s3_client=s3) == record
-    )
+    assert read_kv_ab_record(_POINTER, s3_client=s3) == record
 
 
 @pytest.mark.parametrize(
     "pointer",
     [
-        "bench/kv-ab/ab1/on-r2/c.json",
-        "https://bench/kv-ab/ab1/on-r2/c.json",
+        "bench/kv-offload-ab/ab1/on-r2/c.kv_ab.json",
+        "https://bench/kv-offload-ab/ab1/on-r2/c.kv_ab.json",
         "s3://bench/",
     ],
 )
@@ -150,18 +167,19 @@ def test_a_pointer_outside_s3_is_refused(pointer: str) -> None:
         read_kv_ab_record(pointer, s3_client=_RecordS3({}))
 
 
+def test_a_pointer_that_is_not_a_rungs_labels_is_refused() -> None:
+    with pytest.raises(ValueError, match="not a .kv_ab.json"):
+        read_kv_ab_record(f"s3://bench/{_RESULT_KEY}", s3_client=_RecordS3({}))
+
+
 class _RunS3(_RecordS3):
-    """Serve the run's records and keep each object the render puts."""
+    """Serve the run's labels and raw results and keep each object the render puts."""
 
     def __init__(self) -> None:
-        super().__init__(
-            {
-                ("bench", pointer.removeprefix("s3://bench/")): json.dumps(
-                    record
-                ).encode()
-                for pointer, record in _RECORDS.items()
-            }
-        )
+        objects: dict[tuple[str, str], bytes] = {}
+        for pointer, record in _RECORDS.items():
+            objects |= _store_rung(pointer.removeprefix("s3://bench/"), record)
+        super().__init__(objects)
         self.puts: dict[str, tuple[bytes, str]] = {}
 
     def put_object(
@@ -186,7 +204,7 @@ def test_the_task_uploads_the_chart_under_the_runs_public_charts_prefix() -> Non
         publish_image=lambda **image: images.append(image),
     )
 
-    key = "sweeps/kv-ab/ab1/charts/kv-ab-by-max-concurrency.png"
+    key = "kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"
     body, content_type = s3.puts[key]
     assert (body[:8], content_type) == (_PNG_MAGIC, "image/png")
     assert tables == ["kv-ab-rung-spreads", "kv-ab-ceilings"]
@@ -196,11 +214,13 @@ def test_the_task_uploads_the_chart_under_the_runs_public_charts_prefix() -> Non
 
 
 def test_a_record_that_is_not_a_kv_ab_rung_fails_before_publishing_anything() -> None:
-    pointer = "s3://bench/kv-ab/ab1/on-r1/pshare90_burst1.0_mc1.json"
+    pointer = "s3://bench/kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc1.kv_ab.json"
     unlabelled = {k: v for k, v in _RECORDS[pointer].items() if k != "kv_ab"}
     render = _Render(records={pointer: unlabelled})
 
-    with pytest.raises(SweepAggregationError, match="bench/kv-ab/ab1/on-r1/.*kv_ab"):
+    with pytest.raises(
+        SweepAggregationError, match="bench/kv-offload-ab/ab1/on-r1/.*kv_ab"
+    ):
         render.drive([pointer])
 
     assert render.events == [f"read {pointer}"]
@@ -236,12 +256,25 @@ def test_a_run_with_one_arm_fails_before_publishing_anything() -> None:
     assert not any(event.startswith(("table", "store")) for event in render.events)
 
 
-def test_a_record_that_cannot_be_read_names_its_pointer() -> None:
+def test_labels_that_cannot_be_read_name_their_object() -> None:
     with pytest.raises(KeyError) as raised:
-        read_kv_ab_record("s3://bench/kv-ab/ab1/on-r2/c.json", s3_client=_RecordS3({}))
+        read_kv_ab_record(_POINTER, s3_client=_RecordS3({}))
+
+    assert raised.value.__notes__ == [f"reading kv-ab labels {_POINTER}"]
+
+
+def test_a_raw_result_that_cannot_be_read_names_its_object() -> None:
+    labels_only = {
+        key: body
+        for key, body in _store_rung(_LABELS_KEY, build_record()).items()
+        if key == ("bench", _LABELS_KEY)
+    }
+
+    with pytest.raises(KeyError) as raised:
+        read_kv_ab_record(_POINTER, s3_client=_RecordS3(labels_only))
 
     assert raised.value.__notes__ == [
-        "reading kv-ab record s3://bench/kv-ab/ab1/on-r2/c.json"
+        f"reading kv-ab raw result s3://bench/{_RESULT_KEY}"
     ]
 
 
@@ -265,12 +298,11 @@ def test_the_spread_table_prints_each_arms_rung() -> None:
         (b"[]", "is not a JSON object"),
     ],
 )
-def test_a_record_object_that_is_not_a_json_object_names_its_pointer(
-    body: bytes, message: str
+@pytest.mark.parametrize("key", [_LABELS_KEY, _RESULT_KEY])
+def test_an_object_that_is_not_a_json_object_names_itself(
+    body: bytes, message: str, key: str
 ) -> None:
-    s3 = _RecordS3({("bench", "kv-ab/ab1/on-r2/c.json"): body})
+    s3 = _RecordS3({**_store_rung(_LABELS_KEY, build_record()), ("bench", key): body})
 
-    with pytest.raises(
-        SweepAggregationError, match=f"s3://bench/kv-ab/ab1/on-r2/c.json {message}"
-    ):
-        read_kv_ab_record("s3://bench/kv-ab/ab1/on-r2/c.json", s3_client=s3)
+    with pytest.raises(SweepAggregationError, match=f"s3://bench/{key} {message}"):
+        read_kv_ab_record(_POINTER, s3_client=s3)

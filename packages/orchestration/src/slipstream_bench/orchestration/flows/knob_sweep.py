@@ -38,6 +38,7 @@ from slipstream_bench.contract import (
     list_engine_points,
     load_grid,
 )
+from slipstream_bench.orchestration.cell_objects import get_knob_sweep_prefix
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
@@ -155,7 +156,7 @@ class KnobSweepInputs:
         The keying and addressing fields must be non-empty, so a misconfigured sweep
         fails here, before its first ~20-minute GPU redeploy, rather than at the first
         cache lookup or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
-        cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
+        cells under ``knob-sweep//<slug>/``). The two file paths are checked to exist by the
         command that reads them. The extra load-cell flags must be readable, since every
         cell's digest folds them in.
 
@@ -274,7 +275,7 @@ def knob_sweep_flow(
     # only the render, and a re-run re-renders off S3 without re-running a cell (no automatic retry).
     render_results(
         grid=grid,
-        run_prefix=run_id,
+        run_prefix=get_knob_sweep_prefix(run_id),
         bucket=bucket,
         region=region,
         s3_client=s3_client,

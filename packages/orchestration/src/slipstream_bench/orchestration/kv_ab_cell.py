@@ -2,14 +2,15 @@
 
 Each rung of an A/B run is one cell of the workload's load knobs at its prefix share and
 the rung's concurrency. ``bench-sweep.sh`` copies every raw cell result to
-``sweeps/<RUN_ID>/``, so a run's cells run under the run id ``kv-ab/<run>/<arm>-r<n>``:
-their raw results land under ``sweeps/kv-ab/``, apart from any knob sweep's, and the
-labelled record the worker writes lands at the same path under ``kv-ab/``. The digest
+``<RUN_ID>/``, so a run's cells run under the run id ``kv-offload-ab/<run>/<arm>-r<n>``:
+their raw results land under ``kv-offload-ab/``, apart from any knob sweep's, and the
+labels the worker writes land beside each raw ``<cell>.json`` as ``<cell>.kv_ab.json``,
+so the raw result is stored once. The digest
 folds in the engine args both arms deploy, the rig's capacities, and the cell's knobs,
 so a cached rung is re-measured when any changes; the arm and run are cache-key parts
 of their own.
 The worker reads the engine's /metrics over the cluster network around each rung
-(:func:`fetch_metrics`) and writes each rung's record to S3 (:func:`write_kv_ab_record`).
+(:func:`fetch_metrics`) and writes each rung's labels to S3 (:func:`write_kv_ab_labels`).
 """
 
 import http.client
@@ -20,7 +21,7 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
-from slipstream_bench.contract import CellConfig, get_cell_basename
+from slipstream_bench.contract import CellConfig
 from slipstream_bench.orchestration.cell_run import (
     PLACEHOLDER_BASE_URL,
     PLACEHOLDER_OUT_DIR,
@@ -38,8 +39,12 @@ from slipstream_bench.orchestration.validity import DEFAULT_MAX_ERROR_RATE
 # unbounded, so the concurrency cap alone paces the rung.
 _BURSTINESS = 1.0
 
-# The prefix every A/B run's cells and records nest under.
-_KV_AB_PREFIX = "kv-ab"
+# The prefix every A/B run's cells, labels, and charts nest under.
+_KV_AB_PREFIX = "kv-offload-ab"
+
+# The suffixes of a rung's raw result object and of the labels object beside it.
+_RESULT_SUFFIX = ".json"
+_LABELS_SUFFIX = ".kv_ab.json"
 
 
 class MetricsError(Exception):
@@ -66,10 +71,10 @@ def get_kv_ab_cell(config: KvAbConfig, concurrency: int, *, model: str) -> CellC
 
 
 def get_kv_ab_run_prefix(run: str) -> str:
-    """Name the run-id prefix an A/B's arm runs nest under: ``kv-ab/<run>``.
+    """Name the run-id prefix an A/B's arm runs nest under: ``kv-offload-ab/<run>``.
 
-    The labelled records land under ``kv-ab/<run>/`` at the bucket root, and the bench
-    host's raw results and the run's chart under ``sweeps/kv-ab/<run>/``.
+    The bench host's raw results, the rungs' labels beside them, and the run's chart all
+    land under ``kv-offload-ab/<run>/`` at the bucket root.
 
     :param run: the A/B's run id.
     :return: the prefix, without a trailing slash.
@@ -78,7 +83,7 @@ def get_kv_ab_run_prefix(run: str) -> str:
 
 
 def get_kv_ab_run_id(run: str, arm_run_slug: str) -> str:
-    """Name the run id one A/B run's cells run under: ``kv-ab/<run>/<arm>-r<n>``.
+    """Name the run id one A/B run's cells run under: ``kv-offload-ab/<run>/<arm>-r<n>``.
 
     :param run: the A/B's run id.
     :param arm_run_slug: the arm run's slug, e.g. ``on-r2``.
@@ -87,15 +92,30 @@ def get_kv_ab_run_id(run: str, arm_run_slug: str) -> str:
     return f"{get_kv_ab_run_prefix(run)}/{arm_run_slug}"
 
 
-def get_kv_ab_record_key(run: str, arm_run_slug: str, cell: CellConfig) -> str:
-    """Address a rung's labelled record: ``kv-ab/<run>/<arm>-r<n>/<cell>.json``.
+def get_kv_ab_label_key(result_key: str) -> str:
+    """Address a rung's labels beside its raw result: ``<cell>.json`` to ``<cell>.kv_ab.json``.
 
-    :param run: the A/B's run id.
-    :param arm_run_slug: the arm run's slug, e.g. ``on-r2``.
-    :param cell: the rung's cell.
-    :return: the object key, without the bucket.
+    :param result_key: the rung's raw result object key (``get_cell_s3_key``).
+    :return: the labels' object key, without the bucket.
+    :raise ValueError: when ``result_key`` is not a .json object key.
     """
-    return f"{get_kv_ab_run_id(run, arm_run_slug)}/{get_cell_basename(cell)}"
+    if not result_key.endswith(_RESULT_SUFFIX):
+        raise ValueError(
+            f"result key {result_key} is not a {_RESULT_SUFFIX} object key"
+        )
+    return f"{result_key.removesuffix(_RESULT_SUFFIX)}{_LABELS_SUFFIX}"
+
+
+def get_kv_ab_result_key(label_key: str) -> str:
+    """Address a rung's raw result from its labels: ``<cell>.kv_ab.json`` to ``<cell>.json``.
+
+    :param label_key: the rung's labels object key (:func:`get_kv_ab_label_key`).
+    :return: the raw result's object key, without the bucket.
+    :raise ValueError: when ``label_key`` is not a .kv_ab.json object key.
+    """
+    if not label_key.endswith(_LABELS_SUFFIX):
+        raise ValueError(f"labels key {label_key} is not a {_LABELS_SUFFIX} object key")
+    return f"{label_key.removesuffix(_LABELS_SUFFIX)}{_RESULT_SUFFIX}"
 
 
 def get_kv_ab_cell_digest(
@@ -156,21 +176,21 @@ def fetch_metrics(url: str, *, timeout_s: float = 10.0) -> str:
         ) from error
 
 
-def write_kv_ab_record(
-    record: Mapping[str, Any], *, s3_client: Any, bucket: str, key: str
+def write_kv_ab_labels(
+    labels: Mapping[str, Any], *, s3_client: Any, bucket: str, key: str
 ) -> str:
-    """Write a rung's labelled record to S3 as JSON and return its pointer.
+    """Write a rung's labels to S3 as JSON and return their pointer.
 
-    :param record: the labelled record.
-    :param s3_client: the boto3 S3 client (or stand-in) the record is written with.
+    :param labels: the rung's labels.
+    :param s3_client: the boto3 S3 client (or stand-in) the labels are written with.
     :param bucket: the results bucket.
-    :param key: the record's object key (:func:`get_kv_ab_record_key`).
-    :return: the record's ``s3://`` URI.
+    :param key: the labels' object key (:func:`get_kv_ab_label_key`).
+    :return: the labels' ``s3://`` URI.
     """
     s3_client.put_object(
         Bucket=bucket,
         Key=key,
-        Body=json.dumps(record).encode("utf-8"),
+        Body=json.dumps(labels).encode("utf-8"),
         ContentType="application/json",
     )
     return f"s3://{bucket}/{key}"

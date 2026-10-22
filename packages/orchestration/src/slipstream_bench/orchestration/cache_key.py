@@ -26,8 +26,8 @@ def build_cache_key(
 ) -> str:
     """Join the four parts into a cell's cache key, rejecting a bad part.
 
-    :param run_id: the run's bucket prefix the cell's pointer lies under (a new one
-        re-measures).
+    :param run_id: the cell's run id, a knob-sweep point's ``<run>/<point-slug>`` or an
+        A/B's ``kv-offload-ab/<run>/<arm>-r<n>`` (a new one re-measures).
     :param digest: the deep config digest (config identity).
     :param point_slug: the engine-knob point slug, e.g. ``mns64_kvfp8_pcon``.
     :param cell_name: the client-load cell name, e.g. ``pshare50_burst1.0_mc64.json``.

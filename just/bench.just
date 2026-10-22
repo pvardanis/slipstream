@@ -96,9 +96,9 @@ bench point_slug *args:
     # re-downloaded locally, and a partially-failed point (a permanent cell fault raises
     # through the flow after earlier cells landed) still leaves valid cells worth pulling
     # into the per-run subdir. Surface the sweep's status only after the copy is complete.
-    mkdir -p "bench/results/sweeps/${run_id}"
-    aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/sweeps/${run_id}" --region "${region}"
-    echo "results synced to bench/results/sweeps/${run_id}/"
+    mkdir -p "bench/results/knob-sweep/${run_id}"
+    aws s3 sync "s3://${bucket}/knob-sweep/${run_id}" "bench/results/knob-sweep/${run_id}" --region "${region}"
+    echo "results synced to bench/results/knob-sweep/${run_id}/"
     # A standalone point sweep that ended non-zero left cells unmeasured; surface the id
     # to resume it. A nested run (BENCH_RUN_ID set, standalone=0) leaves the resume hint
     # to its caller, so the two never print conflicting resume commands.
@@ -108,18 +108,18 @@ bench point_slug *args:
     fi
     exit "${rc}"
 
-# Sync every sweep, prefix-cache, and KV cache A/B run's results from the bench endpoint results bucket to bench/results for local reporting, one subdir per bucket prefix (sweeps, prefix-cache, kv-ab); use to pull runs made from another machine.
+# Sync every knob sweep, prefix-cache, and KV cache A/B run's results from the bench endpoint results bucket to bench/results for local reporting, one subdir per bucket prefix (knob-sweep, prefix-cache, kv-offload-ab); use to pull runs made from another machine.
 [group('bench')]
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    mkdir -p bench/results/sweeps bench/results/prefix-cache bench/results/kv-ab
-    aws s3 sync "s3://${bucket}/sweeps" bench/results/sweeps --region "${region}"
+    mkdir -p bench/results/knob-sweep bench/results/prefix-cache bench/results/kv-offload-ab
+    aws s3 sync "s3://${bucket}/knob-sweep" bench/results/knob-sweep --region "${region}"
     aws s3 sync "s3://${bucket}/prefix-cache" bench/results/prefix-cache --region "${region}"
-    aws s3 sync "s3://${bucket}/kv-ab" bench/results/kv-ab --region "${region}"
-    echo "synced sweep, prefix-cache, and kv-ab results to bench/results/"
+    aws s3 sync "s3://${bucket}/kv-offload-ab" bench/results/kv-offload-ab --region "${region}"
+    echo "synced knob-sweep, prefix-cache, and kv-offload-ab results to bench/results/"
 
 # Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]

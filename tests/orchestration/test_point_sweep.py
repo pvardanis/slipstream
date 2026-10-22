@@ -124,6 +124,17 @@ class _UnhealthyOnceS3:
             Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
 
 
+class _KeyRecordingS3:
+    """Record each downloaded key, serving every cell a valid result."""
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        self.keys.append(key)
+        Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
+
+
 class _DestRecordingS3:
     """Record each download destination, serving every cell a valid result."""
 
@@ -194,7 +205,7 @@ def test_first_run_executes_every_cell(tmp_path: Path) -> None:
 
     # 2 prefix_shares x 1 burstiness x 2 concurrency rungs = 4 cells.
     assert len(pointers) == 4
-    assert all(p.startswith("s3://bench-bucket/sweeps/run1/") for p in pointers)
+    assert all(p.startswith("s3://bench-bucket/knob-sweep/run1/") for p in pointers)
     assert ssm.proxy_ups() == 1
     assert ssm.cell_runs() == 4
 
@@ -257,6 +268,20 @@ def test_second_run_resumes_and_re_executes_no_cell(tmp_path: Path) -> None:
     assert second_ssm.cell_runs() == 0  # every cell hit the cache
 
 
+def test_the_host_writes_and_the_worker_reads_each_cell_under_the_knob_sweep_prefix(
+    tmp_path: Path,
+) -> None:
+    ssm = _FakeSsm()
+    s3 = _KeyRecordingS3()
+
+    pointers = _drive(tmp_path, ssm, _isolated_task(tmp_path), s3=s3)
+
+    cell_commands = [c for c in ssm.commands if _CELL in c]
+    assert all("RUN_ID='knob-sweep/run1/mns64_kvfp8_pcon'" in c for c in cell_commands)
+    assert pointers == [f"s3://bench-bucket/{key}" for key in s3.keys]
+    assert all(key.startswith("knob-sweep/run1/mns64_kvfp8_pcon/") for key in s3.keys)
+
+
 def test_a_new_run_id_re_executes_every_cell_under_its_own_prefix(
     tmp_path: Path,
 ) -> None:
@@ -267,7 +292,7 @@ def test_a_new_run_id_re_executes_every_cell_under_its_own_prefix(
     second = _drive(tmp_path, second_ssm, task, run_id="run2/mns64_kvfp8_pcon")
 
     assert second_ssm.cell_runs() == 4  # no cell is served from run1's cache
-    assert all(p.startswith("s3://bench-bucket/sweeps/run2/") for p in second)
+    assert all(p.startswith("s3://bench-bucket/knob-sweep/run2/") for p in second)
 
 
 def test_run_ids_sharing_a_parent_re_execute_under_their_own_prefix(
@@ -283,7 +308,7 @@ def test_run_ids_sharing_a_parent_re_execute_under_their_own_prefix(
 
     assert second_ssm.cell_runs() == 4
     assert all(
-        p.startswith("s3://bench-bucket/sweeps/run1/b-mns64_kvfp8_pcon/")
+        p.startswith("s3://bench-bucket/knob-sweep/run1/b-mns64_kvfp8_pcon/")
         for p in second
     )
 

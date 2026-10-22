@@ -4,7 +4,7 @@ ADR-0012: resume survives a server or laptop death only if ``result_storage`` an
 ``key_storage`` live in S3, not Prefect's local ``~/.prefect/storage/`` default. The
 per-cell JSON (the numbers) and Prefect's cache/key index (pointers + metadata) are
 two distinct, non-duplicating prefixes in the same results bucket the sweep already
-writes to (``RESULTS_BUCKET``, ``s3://<bucket>/sweeps/…``). These builders return the
+writes to (``RESULTS_BUCKET``, ``s3://<bucket>/knob-sweep/…``). These builders return the
 S3 blocks the later sweep task binds to ``result_storage`` and a cache policy's
 ``key_storage``; AWS credentials come from the ambient default chain, as the ``aws``
 CLI already uses in ``just bench``.
@@ -32,7 +32,7 @@ def result_storage(bucket: str) -> S3Bucket:
     """Build the S3 block Prefect persists task results into.
 
     :param bucket: the results bucket (``RESULTS_BUCKET``), shared with the sweep's
-        own ``s3://<bucket>/sweeps/…`` output under a separate prefix.
+        own ``s3://<bucket>/knob-sweep/…`` output under a separate prefix.
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the result prefix.
     :raise StorageError: when ``bucket`` is blank.
     """

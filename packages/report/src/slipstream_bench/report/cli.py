@@ -39,7 +39,7 @@ def aggregate_sweep(
         typer.Option(
             exists=True,
             file_okay=False,
-            help="The bench/results/sweeps/<run_id> directory the sweep wrote, one subdir "
+            help="The bench/results/knob-sweep/<run_id> directory the sweep wrote, one subdir "
             "per engine-knob point.",
         ),
     ],
@@ -125,7 +125,7 @@ def chart(
         typer.Option(
             exists=True,
             file_okay=False,
-            help="The bench/results/sweeps/<run_id> directory the sweep wrote, one subdir "
+            help="The bench/results/knob-sweep/<run_id> directory the sweep wrote, one subdir "
             "per engine-knob point.",
         ),
     ],
