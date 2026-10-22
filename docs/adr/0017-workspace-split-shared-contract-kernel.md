@@ -1,4 +1,4 @@
-<!-- ADR recording why the single slipstream-bench distribution is split into a four-member uv workspace (contract, executor, report, orchestration) under a shared PEP-420 slipstream_bench namespace, with a pure-data contract kernel every layer depends inward on and neither executor nor worker importing the other: the split strips the dead pandas/seaborn plotting stack from both deployment images, names the config-in/result-out contract the layers already pass across the SSM seam, and inverts the orchestration->executor edge into orchestration->contract<-executor. Tripped the split deferred by ADR-0012 §Amendment. See ADR-0018 for the render-to-UI work that puts the orchestration->report edge in. The 2026-10-20 amendment admits a type to the kernel only once two members share it: the prefix-cache window and the kv-ab record join it, the kv-ab workload config stays in orchestration. -->
+<!-- ADR recording why the single slipstream-bench distribution is split into a four-member uv workspace (contract, executor, report, orchestration) under a shared PEP-420 slipstream_bench namespace, with a pure-data contract kernel every layer depends inward on and neither executor nor worker importing the other: the split strips the dead pandas/seaborn plotting stack from both deployment images, names the config-in/result-out contract the layers already pass across the SSM seam, and inverts the orchestration->executor edge into orchestration->contract<-executor. Tripped the split deferred by ADR-0012 §Amendment. See ADR-0018 for the render-to-UI work that puts the orchestration->report edge in. The 2026-10-20 amendment admits a type to the kernel only once two members share it: the prefix-cache window and the kv-ab record join it, the kv-ab workload config stays in orchestration. The 2026-10-22 amendment stores a rung's labels apart from its raw result, the record joined only at read time (ADR-0024). -->
 
 # ADR-0017: The orchestration/executor/report split into a uv workspace on a shared contract kernel
 
@@ -168,3 +168,10 @@ member boundary go in `contract`:
 
 A new type that one member reads stays in that member. It moves into the kernel when a second
 member needs it, not before.
+
+## Amendment (2026-10-22): the kv-ab record is joined at read time
+
+`contract.kv_ab_record` builds a rung's labels (`build_kv_ab_labels`) and joins them to the
+rung's raw result (`build_kv_ab_record`). The worker writes only the labels, beside the raw
+result the bench host stored, so the result is stored once (ADR-0024). The worker's render
+joins the two and hands `report` the same record as before, so `report` reads it unchanged.

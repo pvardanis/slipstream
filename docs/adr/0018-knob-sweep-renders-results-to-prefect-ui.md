@@ -1,4 +1,4 @@
-<!-- ADR recording why the knob-sweep flow renders its grid-level result artifacts to the Prefect UI from a single terminal task that runs after the point loop: the two aggregators fold the whole run, so the ceiling and cliff views are cross-point and belong on the parent run page, not per subflow; the task is a @task (not inline like the config artifact) so a render failure retries idempotently off S3 without discarding the already-persisted cells; tables publish as durable markdown artifacts and plots as image artifacts; the 2026-10-07 amendment points those image artifacts at a public, non-expiring S3 URL off a scoped `sweeps/*/charts/*` bucket policy (superseding the presigned/data-URI plans that both rot in the UI). The cost baseline (report command) stays offline — the knob sweep does not run its arms. Depends on the report member of ADR-0017. The 2026-10-20 amendment records the kv-cache-extension-ab flow rendering its tables and chart the same way, its chart under sweeps/kv-ab/<run>/charts/, which the same public prefix covers. -->
+<!-- ADR recording why the knob-sweep flow renders its grid-level result artifacts to the Prefect UI from a single terminal task that runs after the point loop: the two aggregators fold the whole run, so the ceiling and cliff views are cross-point and belong on the parent run page, not per subflow; the task is a @task (not inline like the config artifact) so a render failure retries idempotently off S3 without discarding the already-persisted cells; tables publish as durable markdown artifacts and plots as image artifacts; the 2026-10-07 amendment points those image artifacts at a public, non-expiring S3 URL off a scoped `sweeps/*/charts/*` bucket policy (superseding the presigned/data-URI plans that both rot in the UI). The cost baseline (report command) stays offline — the knob sweep does not run its arms. Depends on the report member of ADR-0017. The 2026-10-20 amendment records the kv-cache-extension-ab flow rendering its tables and chart the same way, its chart under sweeps/kv-ab/<run>/charts/, which the same public prefix covers. The 2026-10-22 amendment moves the charts to each experiment's own root, knob-sweep/<run>/charts/ and kv-offload-ab/<run>/charts/, per ADR-0024. -->
 
 # ADR-0018: The knob sweep renders grid-level result artifacts to the Prefect UI
 
@@ -166,3 +166,14 @@ its `sweeps/*/charts/*` wildcard spans `/`, so it covers the kv-ab charts prefix
 A/B's raw results under `sweeps/kv-ab/<run>/<arm>-r<n>/` stay private like the knob sweep's, on
 the same condition: the wildcard matches any `charts/` path under `sweeps/`, so no run id may
 have a `charts` segment. Nothing validates the run id.
+
+## Amendment (2026-10-22): the charts move to each experiment's root
+
+The results bucket is rooted per experiment (ADR-0024), superseding the paths above. The knob
+sweep's cells land under `knob-sweep/<run>/<point>/` and its charts under
+`knob-sweep/<run>/charts/`; the KV cache A/B's raw results under
+`kv-offload-ab/<run>/<arm>-r<n>/` and its chart under `kv-offload-ab/<run>/charts/`. The
+public-read policy and the worker's chart PutObject cover exactly `knob-sweep/*/charts/*`
+and `kv-offload-ab/*/charts/*`. The condition above holds under each root: no run id may
+have a `charts` segment. The A/B's render reads each rung's labels off the flow's pointers
+and joins them to the raw result beside them, rather than reading a labelled record.

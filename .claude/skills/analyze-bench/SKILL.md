@@ -52,7 +52,7 @@ Expect these five keys. Check they are all present before reading:
 - `knob-sweep-config` — markdown embedding the run's `sweep-grid.yaml`. Read the SLO from its `goodput:` line, e.g. `goodput: ["ttft:1000", "tpot:50"]`. **This is the SLO you report for — never ask the user for one, and never infer one.** If the `goodput:` line is absent or does not parse into ttft/tpot thresholds, stop and report the config artifact is malformed — a report scoped to a guessed SLO is worse than none.
 - `knob-sweep-ceiling-table` — markdown table, one row per `(max_num_seqs, kv_cache_dtype, prefix_caching, prefix_share)`, with columns `ceiling`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`. This is the ranking data.
 - `knob-sweep-goodput-cliff` — markdown; read it to explain where ladders fell.
-- `knob-sweep-ceiling-plot`, `knob-sweep-goodput-cliff-plot` — image artifacts whose `data` field is an S3 `https` URL to a PNG. The chart prefix (`sweeps/*/charts/*`) is public-read by bucket policy, so Step 4 downloads them with plain `curl`, no AWS credentials.
+- `knob-sweep-ceiling-plot`, `knob-sweep-goodput-cliff-plot` — image artifacts whose `data` field is an S3 `https` URL to a PNG. The chart prefix (`knob-sweep/*/charts/*`) is public-read by bucket policy, so Step 4 downloads them with plain `curl`, no AWS credentials.
 
 If `knob-sweep-config` or `knob-sweep-ceiling-table` is missing, stop and say which — the report cannot be built without them. If only a plot or the cliff is missing, continue but say in the report that it is degraded and which piece is absent.
 

@@ -1,4 +1,4 @@
-<!-- ADR recording that Prefect's task cache is the single source of truth for whether a sweep cell is complete, reversing ADR-0012's "the JSON wins on disagreement": a cell is identified by run id + a config digest narrowed to the inputs that change its numbers + engine point + cell; the knob sweep's redeploy-skip gate looks up the same cache records with the same key function instead of reading cell JSON; a flow-start preflight write/read-probes the cache-key storage so a bad bucket aborts before a GPU redeploy; re-measuring means a new run id, never hand-deleting S3 objects; and the commercial-arm collision is a known gap. Supersedes in part ADR-0012's resume/caching sections and ADR-0015's redeploy-skip gate paragraph. -->
+<!-- ADR recording that Prefect's task cache is the single source of truth for whether a sweep cell is complete, reversing ADR-0012's "the JSON wins on disagreement": a cell is identified by run id + a config digest narrowed to the inputs that change its numbers + engine point + cell; the knob sweep's redeploy-skip gate looks up the same cache records with the same key function instead of reading cell JSON; a flow-start preflight write/read-probes the cache-key storage so a bad bucket aborts before a GPU redeploy; re-measuring means a new run id, never hand-deleting S3 objects; and the commercial-arm collision is a known gap. Supersedes in part ADR-0012's resume/caching sections and ADR-0015's redeploy-skip gate paragraph. The 2026-10-22 amendment moves the cell objects under knob-sweep/ (ADR-0024). -->
 
 # ADR-0022: Resume is scoped to a run id and decided by Prefect's cache
 
@@ -142,3 +142,9 @@ ADR-0012's "delete-and-resweep" for re-sampling a cell.
   arms under different run ids until this is fixed.
 - Folding a new meaning-bearing input into a cell means adding it to the digest; one missed
   is a silent stale reuse, the failure this ADR removes.
+
+## Amendment (2026-10-22): the cells live under `knob-sweep/`
+
+The results bucket is rooted per experiment (ADR-0024): a knob sweep's cell objects live
+under `knob-sweep/<run-id>/<point-slug>/`, not `sweeps/<run-id>/<point-slug>/`. The cache
+key's run id stays `<run-id>/<point-slug>`, so the identity this ADR defines is unchanged.
