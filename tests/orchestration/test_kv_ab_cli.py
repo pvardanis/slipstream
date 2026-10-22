@@ -57,7 +57,7 @@ def test_register_kv_ab_registers_a_module_path_deployment(
         "bucket": "bench-bucket",
         "image_ref": "repo:tag",
         "model_yaml": "/app/model.yaml",
-        "kv_ab_config": "/app/bench/kv-cache-extension-ab.yaml",
+        "kv_ab_config": "/app/bench/configs/kv-cache-extension-ab.yaml",
         "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
         "metrics_url": "http://vllm-gpu.slipstream.svc:8000/metrics",
         "retries": 0,
@@ -70,14 +70,17 @@ def test_register_kv_ab_threads_overrides_onto_the_deployment(
     captured = _invoke(
         monkeypatch,
         **{
-            "kv-ab-config": "/app/bench/kv-cache-extension-ab.chat.yaml",
+            "kv-ab-config": "/app/bench/configs/kv-cache-extension-ab.chat.yaml",
             "retries": "2",
         },
     )
 
     assert captured["exit_code"] == 0, captured["output"]
     parameters = captured["parameters"]
-    assert parameters["kv_ab_config"] == "/app/bench/kv-cache-extension-ab.chat.yaml"
+    assert (
+        parameters["kv_ab_config"]
+        == "/app/bench/configs/kv-cache-extension-ab.chat.yaml"
+    )
     assert parameters["retries"] == 2
 
 

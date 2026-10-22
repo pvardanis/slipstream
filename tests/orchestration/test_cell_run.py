@@ -29,7 +29,7 @@ from slipstream_bench.orchestration.cell_run import (
 
 def _first_cell():
     sweep = load_sweep_config(
-        Path("bench/load-sweep.yaml"),
+        Path("bench/configs/load-sweep.yaml"),
         base_url="http://ignored:8000",
         model="Qwen/Qwen2.5-0.5B-Instruct",
         out_dir="bench/results",

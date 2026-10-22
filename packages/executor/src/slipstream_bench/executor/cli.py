@@ -126,7 +126,7 @@ def load_sweep(
             dir_okay=False,
             help="The experiment-definition YAML: the grid axes, lengths, SLO, seed.",
         ),
-    ] = Path("bench/load-sweep.yaml"),
+    ] = Path("bench/configs/load-sweep.yaml"),
     base_url: Annotated[
         str, typer.Option(help="OpenAI-compatible endpoint the sweep targets.")
     ] = "http://localhost:8000",
@@ -194,7 +194,7 @@ def load_cell(
             help="The cell-definition YAML: the coordinate (share, burstiness, "
             "optional max_concurrency) plus the shared lengths, SLO, seed.",
         ),
-    ] = Path("bench/load-cell.yaml"),
+    ] = Path("bench/configs/load-cell.yaml"),
     base_url: Annotated[
         str, typer.Option(help="OpenAI-compatible endpoint the cell targets.")
     ] = "http://localhost:8000",

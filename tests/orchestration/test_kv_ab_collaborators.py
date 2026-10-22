@@ -43,7 +43,7 @@ from slipstream_bench.orchestration.validity import InvalidCellError
 _REPO = Path(__file__).parents[2]
 # One run per arm keeps the script short: off-r1, then on-r1.
 _CONFIG = load_kv_ab_config(
-    _REPO / "bench" / "kv-cache-extension-ab.agent.yaml"
+    _REPO / "bench" / "configs" / "kv-cache-extension-ab.agent.yaml"
 ).model_copy(update={"runs_per_arm": 1})
 _RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
 _MODEL = "Qwen/Qwen3-8B-AWQ"
@@ -393,9 +393,9 @@ def _drive_flow(
     """Drive the flow over a one-run-per-arm workload, returning its pointers and the
     metrics URLs it scraped."""
     workload = tmp_path / "kv-ab.yaml"
-    agent = (_REPO / "bench" / "kv-cache-extension-ab.agent.yaml").read_text(
-        encoding="utf-8"
-    )
+    agent = (
+        _REPO / "bench" / "configs" / "kv-cache-extension-ab.agent.yaml"
+    ).read_text(encoding="utf-8")
     workload.write_text(agent.replace("runs_per_arm: 3", "runs_per_arm: 1"))
     task = _isolated_task(tmp_path)
     kubectl = _Kubectl()

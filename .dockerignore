@@ -13,6 +13,6 @@
 !uv.lock
 !packages
 !model.yaml
-!bench/sweep-grid.yaml
-!bench/kv-cache-extension-ab.yaml
+!bench/configs/sweep-grid.yaml
+!bench/configs/kv-cache-extension-ab.yaml
 !k8s/vllm-gpu.yaml

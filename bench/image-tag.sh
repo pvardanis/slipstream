@@ -58,9 +58,9 @@ fi
 # directory and the whole packages/ tree (the slipstream-bench-contract workspace member the
 # image installs; only installed members belong under packages/, so watching the tree
 # needs no per-member list and a new installed member rolls the tag on its own). And
-# bench/load-sweep.yaml and bench/load-cell.yaml live under bench/ — but those
-# files are the experiment/cell config mounted into the container at run time, not baked
-# into the image, so they are excluded: editing them leaves the tokenizer-and-harness
+# bench/configs/ lives under bench/ — but its files are the load configs mounted into
+# the container at run time and the orchestration flows' configs, none baked into this
+# image, so the directory is excluded: editing them leaves the tokenizer-and-harness
 # image unchanged and must not roll the tag or force a rebuild of identical bits. The PR
 # build gate in .github/workflows/ci.yml (bench-image-build) mirrors this pathspec as a
 # dorny/paths-filter list: keep the two in sync. This names committed state only:
@@ -71,7 +71,7 @@ image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
     bench src packages pyproject.toml model.yaml \
-    ':(exclude)bench/load-sweep.yaml' ':(exclude)bench/load-cell.yaml')"
+    ':(exclude)bench/configs')"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2

@@ -1,8 +1,8 @@
 """The knob-sweep grid model and the loaders that fold a point into a sweep.
 
-bench/sweep-grid.yaml holds every value the sweep varies. This validates it against the
-``SweepGrid`` pydantic model so a malformed or out-of-range value fails before any GPU
-redeploy (ADR-0009), and folds a single engine point's caching-arm shares, pinned
+bench/configs/sweep-grid.yaml holds every value the sweep varies. This validates it
+against the ``SweepGrid`` pydantic model so a malformed or out-of-range value fails
+before any GPU redeploy (ADR-0009), and folds a single engine point's caching-arm shares, pinned
 burstiness, and concurrency ladder into the ``SweepConfig`` the orchestration driver
 enumerates — the grid alone, not a second load-sweep file, being the single source of a
 point's cells (ADR-0012). The grid data and these loaders are the kernel both the worker
@@ -120,7 +120,7 @@ class SweepGrid(BaseModel):
 def load_grid(path: Path) -> SweepGrid:
     """Read and validate the sweep grid at ``path``.
 
-    :param path: the grid YAML file, e.g. bench/sweep-grid.yaml.
+    :param path: the grid YAML file, e.g. bench/configs/sweep-grid.yaml.
     :return: the validated grid.
     :raise SweepGridError: when the file is missing, unreadable, empty, not valid
         YAML, or fails validation — so the whole grid is checked before the sweep

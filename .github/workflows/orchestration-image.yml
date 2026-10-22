@@ -19,8 +19,8 @@ on:
       - orchestration/Dockerfile
       - .dockerignore
       - model.yaml
-      - bench/sweep-grid.yaml
-      - bench/kv-cache-extension-ab.yaml
+      - bench/configs/sweep-grid.yaml
+      - bench/configs/kv-cache-extension-ab.yaml
       - k8s/vllm-gpu.yaml
       - .trivyignore
       - .github/workflows/orchestration-image.yml
@@ -131,7 +131,7 @@ jobs:
           # re-tag the same content and defeat the presence probe below.
           sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
             packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
-            model.yaml bench/sweep-grid.yaml bench/kv-cache-extension-ab.yaml \
+            model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
             k8s/vllm-gpu.yaml)"
           if [[ -z "${sha_tag}" ]]; then
             echo "::error::could not derive a content tag — no commit touches the image inputs"
