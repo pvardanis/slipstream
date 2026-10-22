@@ -131,8 +131,8 @@ flowchart TB
   the KV connector's counters (`vllm:external_prefix_cache_*`) against its arm, and its
   record carries the GPU and combined prefix-cache hit rates. Resume is per whole arm run.
   The workload is [`bench/configs/kv-cache-extension-ab.yaml`](../bench/configs/kv-cache-extension-ab.yaml);
-  the refusals and results are in [`operations.md`](operations.md#kv-cache-ab)
-  ([ADR-0023](adr/0023-kv-cache-extension-cpu-tier-and-ab.md)).
+  the refusals and results are in [`operations.md`](operations.md#kv-cache-ab), and the
+  decisions in [ADR-0023](adr/0023-kv-cache-extension-cpu-tier-and-ab.md).
 
 ## Terraform stacks
 

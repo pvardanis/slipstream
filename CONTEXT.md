@@ -84,10 +84,8 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **KV cache offload** — the engine copying KV cache blocks out of GPU memory into a
   CPU-memory tier (LMCache), so a prefix evicted from the GPU can be loaded back instead of
   recomputed.
-- **KV cache extension** — the reuse KV cache offload adds past the GPU KV pool: prefixes
-  the GPU has evicted that a request loads back from the CPU tier instead of recomputing.
-  The A/B measures it. There is none unless the CPU tier holds more than the GPU KV pool,
-  because the tier copies every prefill and both evict least recently used first.
+- **KV cache extension** — the KV cache reaching past GPU memory through KV cache offload:
+  a prefix the GPU has evicted is loaded back from the CPU tier instead of recomputed.
 - **Chunk** — the unit the CPU tier stores and reuses KV cache in: a fixed run of tokens,
   configured as a whole number of the engine's blocks. A prefix reuses only its whole chunks.
 - **Working set** — the distinct prefix tokens a workload keeps reusing. Offload can only
