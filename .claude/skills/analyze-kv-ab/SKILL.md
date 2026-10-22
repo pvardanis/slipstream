@@ -101,7 +101,7 @@ With no `kv-ab-plot` artifact, run only the `mkdir` and `rm -f` lines. A missing
 
 Write `reports/kv-cache-ab-<run_id>/RECOMMENDATION.md` with these sections, in order:
 
-1. **Run** — the `run_id`, what each arm is (on: KV cache offload to LMCache's CPU tier enabled; off: GPU prefix cache only), the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm`, the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, and the GPU pool cap (`kv_cache_memory_bytes`, in bytes and tokens) with why it is capped (Step 2), plus the three image refs from the config artifact.
+1. **Run** — the `run_id`, what each arm is (on: KV cache offload to LMCache's CPU tier enabled; off: GPU prefix cache only), the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm`, the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, and the GPU pool cap (`kv_cache_memory_bytes`, in bytes and tokens) with why it is capped (Step 2), plus the three image refs from the config artifact, with the AWS account ID in an ECR registry host replaced by `<account>` (`<account>.dkr.ecr.<region>.amazonaws.com/...`).
 2. **Verdict** — one line: the verdict, naming LMCache KV cache offload, the rungs it rests on, and the workload it holds for.
 3. **Evidence** — a table per rung: off and on `median [range]` for `goodput_fraction`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`, and a column naming the judged metrics that separate. Under it, the SLO attribution. State the permutation p for this run's `n`.
 4. **Mechanism** — both hit rates per arm and the CPU tier's share, with the mechanism check's conclusion.
