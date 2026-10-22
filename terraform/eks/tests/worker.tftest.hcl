@@ -109,10 +109,11 @@ run "worker_layer_shape" {
 
   # S3: on the bench-endpoint results bucket. The bucket's name carries a random suffix
   # and lives in a stack this one cannot reference without a dependency cycle, so it is
-  # scoped by ARN prefix, not an exact ARN. The host writes the sweep result objects the
-  # worker reads back; the worker itself writes only under its own prefixes: Prefect's resume
-  # state under prefect/, the render task's charts under sweeps/<run>/charts/, and the
-  # kv-ab flow's labelled rung records under kv-ab/.
+  # scoped by ARN prefix, not an exact ARN. The host writes the cell result objects the
+  # worker reads back; the worker itself writes only its own objects: Prefect's resume
+  # state under prefect/, the render tasks' charts under knob-sweep/<run>/charts/ and
+  # kv-offload-ab/<run>/charts/, and the kv-ab flow's rung labels, the *.kv_ab.json
+  # objects under kv-offload-ab/.
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ResultsBucketObjects" && contains(s.Action, "s3:GetObject") && s.Resource == "arn:aws:s3:::slipstream-bench-endpoint-results-*/*"]) == 1
     error_message = "The policy must allow s3:GetObject on the results bucket objects, scoped by ARN prefix."
@@ -130,21 +131,22 @@ run "worker_layer_shape" {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "PrefectStateObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 2 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/results/*") && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/prefect/cache-keys/*")]) == 1
     error_message = "The policy must allow s3:PutObject scoped to exactly the prefect/results and prefect/cache-keys prefixes."
   }
-  # The terminal render task uploads each plot's PNG under sweeps/<run>/charts/ as the run's
-  # durable copy (ADR-0018), so the worker needs PutObject on that charts prefix. It is a
-  # separate statement scoped to exactly the charts prefix, never the sibling cell-result
-  # JSONs the host writes under sweeps/<run>/<point>/.
+  # The terminal render tasks upload each plot's PNG under knob-sweep/<run>/charts/ or
+  # kv-offload-ab/<run>/charts/ as the run's durable copy (ADR-0018), so the worker needs
+  # PutObject on those two charts prefixes. It is a separate statement scoped to exactly
+  # them, never the sibling cell-result JSONs the host writes beside them.
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ChartObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/sweeps/*/charts/*")]) == 1
-    error_message = "The policy must allow s3:PutObject on the sweeps/<run>/charts/ prefix for the render task's plot uploads."
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ChartObjects" && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 2 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/knob-sweep/*/charts/*") && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-offload-ab/*/charts/*")]) == 1
+    error_message = "The policy must allow s3:PutObject on exactly the knob-sweep/<run>/charts/ and kv-offload-ab/<run>/charts/ prefixes for the render tasks' plot uploads."
   }
-  # The kv-cache-extension-ab flow writes each rung's labelled record under kv-ab/<run>/ at
-  # the bucket root (#326), so the worker needs PutObject on the kv-ab/ prefix: a separate
-  # statement allowing that one action on exactly it, never the host's raw results under
-  # sweeps/.
+  # The kv-cache-extension-ab flow writes each rung's label (arm, run, prefix-cache window)
+  # as a <cell>.kv_ab.json object beside the host's raw <cell>.json under
+  # kv-offload-ab/<run>/<arm>-r<n>/ (#326), so the worker needs PutObject on that suffix: a
+  # separate statement allowing that one action on exactly it, never the host's raw results
+  # it sits beside.
   assert {
-    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbRecordObjects" && s.Effect == "Allow" && length(s.Action) == 1 && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-ab/*")]) == 1
-    error_message = "The policy must allow only s3:PutObject on the kv-ab/ prefix for the kv-ab flow's rung records."
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbLabelObjects" && s.Effect == "Allow" && length(s.Action) == 1 && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-endpoint-results-*/kv-offload-ab/*.kv_ab.json")]) == 1
+    error_message = "The policy must allow only s3:PutObject on the kv-offload-ab/ *.kv_ab.json labels for the kv-ab flow's rung labels."
   }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
   # written as a bare string or appended to a statement's resource list.
