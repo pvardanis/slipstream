@@ -1,8 +1,8 @@
-<!-- Reads a completed knob-sweep Prefect flow run over the REST API and writes a server-config recommendation report for the run's own SLO. Prose-only: no repo code, no S3 sync, no report CLI. -->
 ---
 name: analyze-bench
 description: Recommend the best vLLM engine config from a knob-sweep benchmark. Use when the user gives a knob-sweep run_id or `run=` tag and wants the best server configuration for that run's SLO, or a report analysing a sweep's ceiling/goodput results.
 ---
+<!-- Reads a completed knob-sweep Prefect flow run over the REST API and writes a server-config recommendation report for the run's own SLO. Prose-only: no repo code, no S3 sync, no report CLI. -->
 
 # analyze-bench
 
@@ -40,11 +40,11 @@ Keep the runs whose `name` does not match `mns\d+_kv(fp8|fp16)_pc(on|off)`:
 
 ## Step 2 — Read the parent's artifacts
 
-Keyed artifacts are versioned — each render re-run appends a new version — so read the **latest per key**:
+Keyed artifacts are versioned across runs: `/artifacts/latest/filter` returns a key's newest version from any run, so filtered to an older run it comes back empty. Read this run's own versions instead, newest first, and keep the first of each key:
 
 ```bash
-curl -fsS -m 10 -X POST "$API/artifacts/latest/filter" -H 'Content-Type: application/json' \
-  -d '{"artifacts":{"flow_run_id":{"any_":["<parent-id>"]}},"limit":50}'
+curl -fsS -m 10 -X POST "$API/artifacts/filter" -H 'Content-Type: application/json' \
+  -d '{"artifacts":{"flow_run_id":{"any_":["<parent-id>"]}},"sort":"CREATED_DESC","limit":100}'
 ```
 
 Expect these five keys. Check they are all present before reading:

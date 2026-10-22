@@ -1,8 +1,8 @@
-<!-- Runs an unmerged orchestration branch end to end on the live in-cluster Prefect worker: build and push a qa-tagged image, swap it onto the worker, register from the branch, copy test grids into the pod, then walk the user through one scenario at a time and clean up. -->
 ---
 name: e2e-test-orchestration-branch
 description: Test an unmerged orchestration branch or PR stack end to end on the live Prefect worker. Use when the user wants a branch's sweep, cache, resume, or flow behaviour verified on the cluster before merge.
 ---
+<!-- Runs an unmerged orchestration branch end to end on the live in-cluster Prefect worker: build and push a qa-tagged image, swap it onto the worker, register from the branch, copy test grids into the pod, then walk the user through one scenario at a time and clean up. -->
 
 # e2e-test-orchestration-branch
 
