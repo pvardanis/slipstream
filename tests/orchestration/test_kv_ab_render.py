@@ -226,6 +226,30 @@ def test_a_record_that_is_not_a_kv_ab_rung_fails_before_publishing_anything() ->
     assert render.events == [f"read {pointer}"]
 
 
+def test_a_bad_raw_result_names_the_raw_result_not_the_labels() -> None:
+    pointer = "s3://bench/kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc1.kv_ab.json"
+    record = {k: v for k, v in _RECORDS[pointer].items() if k != "request_goodput"}
+    render = _Render(records={pointer: record})
+
+    with pytest.raises(
+        SweepAggregationError,
+        match=r"bench/kv-offload-ab/ab1/on-r1/pshare90_burst1\.0_mc1\.json.*request_goodput",
+    ):
+        render.drive([pointer])
+
+
+def test_a_bad_label_names_the_labels_not_the_raw_result() -> None:
+    pointer = "s3://bench/kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc1.kv_ab.json"
+    record = {**_RECORDS[pointer], "kv_ab": {**_RECORDS[pointer]["kv_ab"], "run": 0}}
+    render = _Render(records={pointer: record})
+
+    with pytest.raises(
+        SweepAggregationError,
+        match=r"bench/kv-offload-ab/ab1/on-r1/pshare90_burst1\.0_mc1\.kv_ab\.json has run 0",
+    ):
+        render.drive([pointer])
+
+
 def test_a_failed_chart_upload_leaves_both_tables_published() -> None:
     render = _Render(store_error=OSError("upload failed"))
 

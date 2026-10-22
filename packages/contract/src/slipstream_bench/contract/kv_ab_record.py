@@ -11,7 +11,8 @@ request's GPU-missed tokens (the GPU never serves a whole prompt), so its extern
 queries must advance. Labels that say otherwise are refused.
 
 Like the prefix-cache window it reads, the module is kept out of the kernel's package
-surface: only the A/B's /metrics readers and its render need it.
+surface: only the A/B's /metrics readers, its flow and render, and the report's kv-ab
+fold need it.
 """
 
 from collections.abc import Mapping
@@ -56,7 +57,7 @@ def build_kv_ab_labels(
 
 
 def build_kv_ab_record(
-    result: Mapping[str, Any], labels: Mapping[str, Any]
+    result: Mapping[str, Any], *, labels: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Join a cell's raw result and its labels into the record the report folds.
 

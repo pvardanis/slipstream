@@ -1,8 +1,9 @@
 """Fold a kv-cache-extension-ab run's labelled records into per-arm rung spreads and ceilings.
 
-The KV cache offload A/B (#326) writes one labelled record per rung of each arm run: the
-raw ``vllm bench serve`` result plus a ``kv_ab`` block naming its arm and run and its
-prefix-cache hit rates (:mod:`slipstream_bench.contract.kv_ab_record`). A record reads into
+The KV cache offload A/B (#326) labels each rung of each arm run, and its render joins the
+labels to the rung's raw ``vllm bench serve`` result into one record: the raw result plus a
+``kv_ab`` block naming its arm and run and its prefix-cache hit rates
+(:mod:`slipstream_bench.contract.kv_ab_record`). A record reads into
 a :class:`KvAbRung`, the raw result parsed as a load cell beside its labels. The fold
 summarises each arm's rung across its runs as the median and range of its metrics
 (:func:`summarize_kv_ab_rungs`), the runs too few for a confidence interval, and reads each
@@ -38,21 +39,24 @@ class KvAbRung:
     combined_hit_rate: float
 
     @classmethod
-    def from_record(cls, record: dict[str, object], source: Path) -> "KvAbRung":
+    def from_record(
+        cls, record: dict[str, object], source: Path, *, labels_source: Path
+    ) -> "KvAbRung":
         """Read a labelled record into its rung, validating the labels at the seam.
 
         :param record: the rung's labelled record.
-        :param source: where the record was read from, for the error message.
+        :param source: where the raw result was read from, for the error message.
+        :param labels_source: where the labels were read from, for the error message.
         :return: the rung's arm, run, load cell, and two hit rates.
         :raise SweepAggregationError: when the record lacks its ``kv_ab`` labels or
             carries a bad arm, run, or hit rate, a combined hit rate below its GPU hit
             rate, or its raw result does not parse as a load cell.
         """
         labels = _read_labels(record, source)
-        gpu_hit_rate, combined_hit_rate = _read_hit_rates(labels, source)
+        gpu_hit_rate, combined_hit_rate = _read_hit_rates(labels, labels_source)
         return cls(
-            arm=_read_arm(labels, source),
-            run=_read_run(labels, source),
+            arm=_read_arm(labels, labels_source),
+            run=_read_run(labels, labels_source),
             cell=LoadCell.from_record(record, source),
             gpu_hit_rate=gpu_hit_rate,
             combined_hit_rate=combined_hit_rate,

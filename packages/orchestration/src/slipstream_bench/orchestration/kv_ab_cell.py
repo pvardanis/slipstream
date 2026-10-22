@@ -99,11 +99,9 @@ def get_kv_ab_label_key(result_key: str) -> str:
     :return: the labels' object key, without the bucket.
     :raise ValueError: when ``result_key`` is not a .json object key.
     """
-    if not result_key.endswith(_RESULT_SUFFIX):
-        raise ValueError(
-            f"result key {result_key} is not a {_RESULT_SUFFIX} object key"
-        )
-    return f"{result_key.removesuffix(_RESULT_SUFFIX)}{_LABELS_SUFFIX}"
+    return _swap_suffix(
+        result_key, old=_RESULT_SUFFIX, new=_LABELS_SUFFIX, what="result"
+    )
 
 
 def get_kv_ab_result_key(label_key: str) -> str:
@@ -113,9 +111,16 @@ def get_kv_ab_result_key(label_key: str) -> str:
     :return: the raw result's object key, without the bucket.
     :raise ValueError: when ``label_key`` is not a .kv_ab.json object key.
     """
-    if not label_key.endswith(_LABELS_SUFFIX):
-        raise ValueError(f"labels key {label_key} is not a {_LABELS_SUFFIX} object key")
-    return f"{label_key.removesuffix(_LABELS_SUFFIX)}{_RESULT_SUFFIX}"
+    return _swap_suffix(
+        label_key, old=_LABELS_SUFFIX, new=_RESULT_SUFFIX, what="labels"
+    )
+
+
+def _swap_suffix(key: str, *, old: str, new: str, what: str) -> str:
+    """Swap a rung object key's ``old`` suffix for ``new``, refusing a key without it."""
+    if not key.endswith(old):
+        raise ValueError(f"{what} key {key} is not a {old} object key")
+    return f"{key.removesuffix(old)}{new}"
 
 
 def get_kv_ab_cell_digest(

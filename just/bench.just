@@ -96,9 +96,10 @@ bench point_slug *args:
     # re-downloaded locally, and a partially-failed point (a permanent cell fault raises
     # through the flow after earlier cells landed) still leaves valid cells worth pulling
     # into the per-run subdir. Surface the sweep's status only after the copy is complete.
-    mkdir -p "bench/results/knob-sweep/${run_id}"
-    aws s3 sync "s3://${bucket}/knob-sweep/${run_id}" "bench/results/knob-sweep/${run_id}" --region "${region}"
-    echo "results synced to bench/results/knob-sweep/${run_id}/"
+    out="knob-sweep/${run_id}"
+    mkdir -p "bench/results/${out}"
+    aws s3 sync "s3://${bucket}/${out}" "bench/results/${out}" --region "${region}"
+    echo "results synced to bench/results/${out}/"
     # A standalone point sweep that ended non-zero left cells unmeasured; surface the id
     # to resume it. A nested run (BENCH_RUN_ID set, standalone=0) leaves the resume hint
     # to its caller, so the two never print conflicting resume commands.
@@ -115,10 +116,10 @@ bench-results-sync:
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    mkdir -p bench/results/knob-sweep bench/results/prefix-cache bench/results/kv-offload-ab
-    aws s3 sync "s3://${bucket}/knob-sweep" bench/results/knob-sweep --region "${region}"
-    aws s3 sync "s3://${bucket}/prefix-cache" bench/results/prefix-cache --region "${region}"
-    aws s3 sync "s3://${bucket}/kv-offload-ab" bench/results/kv-offload-ab --region "${region}"
+    for prefix in knob-sweep prefix-cache kv-offload-ab; do
+      mkdir -p "bench/results/${prefix}"
+      aws s3 sync "s3://${bucket}/${prefix}" "bench/results/${prefix}" --region "${region}"
+    done
     echo "synced knob-sweep, prefix-cache, and kv-offload-ab results to bench/results/"
 
 # Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).

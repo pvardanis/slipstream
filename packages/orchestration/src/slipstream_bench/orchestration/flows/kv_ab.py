@@ -133,8 +133,8 @@ PoolScrapeFn = Callable[[], int]
 # The run's one unrecorded warmup cell, sequenced for the tiers it fills.
 WarmUpFn = Callable[[ArmRun], None]
 
-# One ladder rung of a run: (run, concurrency, refresh) -> the result's S3 pointer. With
-# refresh set the rung is re-measured even when a cached result exists.
+# One ladder rung of a run: (run, concurrency, refresh) -> the rung labels' S3 pointer.
+# With refresh set the rung is re-measured even when a cached result exists.
 CellFn = Callable[[ArmRun, int, bool], str]
 
 # Whether any of the run's cells lacks a cached result.
@@ -149,7 +149,7 @@ class KvAbCollaborators:
     :param scrape_gpu_pool: read the GPU KV pool size, in tokens, off the startup log.
     :param warm_up: run the run's unrecorded warmup cell.
     :param run_cell: run one ladder rung of a run, re-measuring it when ``refresh`` is
-        set, and return its result's S3 pointer.
+        set, and return its labels' S3 pointer.
     :param has_pending_cells: whether any of the run's cells lacks a cached result.
     """
 
@@ -164,7 +164,7 @@ class KvAbCollaborators:
 class KvAbResult:
     """The A/B's result: its cell pointers and how many runs ran or resumed.
 
-    :param pointers: the S3 pointer of every ladder cell, in run order.
+    :param pointers: the labels' S3 pointer of every ladder cell, in run order.
     :param runs_run: the runs redeployed and measured.
     :param runs_resumed: the runs whose every cell was read from cache.
     """
