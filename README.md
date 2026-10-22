@@ -201,7 +201,7 @@ re-runs anything.
 | Skill | Run | Writes |
 | --- | --- | --- |
 | [`analyze-knob-sweep`](.claude/skills/analyze-knob-sweep/SKILL.md) | knob sweep | `reports/sweep-grid-<stamp>/`: the engine config to deploy for the run's SLO, ranked by throughput at the concurrency ceiling |
-| [`analyze-kv-ab`](.claude/skills/analyze-kv-ab/SKILL.md) | KV cache offload A/B | `reports/kv-cache-ab-<run_id>/`: whether LMCache offload paid off, rung by rung, with the hit-rate check and the cost ratio |
+| [`analyze-kv-ab`](.claude/skills/analyze-kv-ab/SKILL.md) | KV cache offload A/B | `reports/kv-cache-ab-<run_id>/`: whether LMCache offload paid off, rung by rung, with the hit-rate check, the cost ratio, the CPU tier's host-memory cost, and whether to turn offload on by default |
 
 Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 `just prefect-ui` running.
