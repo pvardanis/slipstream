@@ -10,7 +10,7 @@ Given a KV cache A/B `run_id`, read its completed Prefect flow run and write a v
 
 Input: a `run_id` (e.g. `kv-ab-agent-20261023T090000Z`).
 
-The two arms: **on** is vLLM with KV cache offload to LMCache's CPU tier enabled (`--kv-transfer-config` loads `LMCacheConnectorV1` in `kv_both` role, `packages/orchestration/src/slipstream_bench/orchestration/cluster.py:87`); **off** is vLLM with no KV connector. Both keep vLLM's GPU prefix cache. "Offload" in this skill and in the report always means KV cache offload to LMCache.
+The two arms: **on** is vLLM with KV cache offload to LMCache's CPU tier enabled (`--kv-transfer-config` loads `LMCacheConnectorV1` in `kv_both` role, `_KV_TRANSFER_CONFIG_OFFLOAD` in `packages/orchestration/src/slipstream_bench/orchestration/cluster.py`); **off** is vLLM with no KV connector. Both keep vLLM's GPU prefix cache. "Offload" in this skill and in the report always means KV cache offload to LMCache.
 
 ## Preconditions
 
