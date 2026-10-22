@@ -450,6 +450,9 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
     ]
+    # The config artifact keeps the knob sweep's own key, so its cross-run history in the
+    # Prefect UI stays apart from the kv-ab config's.
+    assert captures["artifacts"][0][0] == "knob-sweep-config"
     # ...and the two plots as image artifacts, each pointing at its public, virtual-hosted S3
     # URL in the run's region — the cliff plot first, so a no-ceiling run keeps its diagnostic
     # before the ceiling plot raises — so a dropped image publish or a mis-built URL at the

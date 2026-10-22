@@ -45,6 +45,11 @@ from slipstream_bench.orchestration.cluster import (
     deploy_gpu,
     scrape_gpu_kv_pool,
 )
+from slipstream_bench.orchestration.config_artifact import (
+    ImageRefs,
+    publish_config_artifact,
+    read_orch_image_ref,
+)
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.run_setup import (
     enable_milestone_logging,
@@ -261,6 +266,18 @@ def kv_ab_flow(
     logger = get_run_logger()
     enable_milestone_logging()
     tag_run_with_group(run_id)
+    # Surface the run's configuration on its Prefect run page before the workload is
+    # loaded, so a workload the loader or the rig and pool guards refuse still shows the
+    # config it was given.
+    publish_config_artifact(
+        flow="kv-ab",
+        run_id=run_id,
+        images=ImageRefs(bench=image_ref, orch=read_orch_image_ref(logger)),
+        model_yaml=model_yaml,
+        workload=kv_ab_config,
+        vllm_manifest=vllm_manifest,
+        publish=create_markdown_artifact,
+    )
     config = load_kv_ab_config(kv_ab_config)
     logger.info(
         "kv-ab run=%s starting: %s, %d runs per arm",
