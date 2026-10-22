@@ -22,8 +22,8 @@ than its GPU KV pool.
 
 The knowledge base's `vllm-internals.md` covers the KV connector hooks and block-aligned
 prefix caching (§2, §4), but not CPU offload or LMCache's configuration. The facts here come
-from #324, #325 and #326, and from the vLLM v0.29.0 and LMCache v0.5.4 sources those
-tickets cite.
+from #324, #325 and #326, from the vLLM v0.29.0 and LMCache v0.5.4 sources those
+tickets cite, and, for `--kv-offloading-backend`, from vLLM v0.29.0's documentation.
 
 ### Facts verified in #325's smoke run
 
@@ -46,8 +46,9 @@ also shape the design:
 
 - LMCache copies each prefill's KV to the CPU tier when the prefill runs, not when the GPU
   evicts it. A tail shorter than one chunk is not stored (`save_unfull_chunk: False`).
-- With a GPU pool capped at 16,384 tokens, a ~2.3k-token prefix evicted by eight other
-  prompts reloaded from the tier with 0 tokens recomputed. The request took 0.40 s against
+- With the GPU pool shrunk to 16,384 tokens by `--num-gpu-blocks-override 1024`, a
+  ~2.5k-token prompt evicted by eight other prompts reloaded its 2304 whole-chunk tokens
+  from the tier with 0 tokens recomputed. The request took 0.40 s against
   0.87 s for the first send and 0.96 s for a new prompt, and the reload ran at 20.4 GB/s.
 - vLLM counts LMCache hits in `vllm:external_prefix_cache_hits` and
   `vllm:external_prefix_cache_queries`, not in `vllm:prefix_cache_*`. External hits are the
@@ -60,19 +61,19 @@ also shape the design:
 The tier is 4 GiB of pinned CPU memory (`LMCACHE_MAX_LOCAL_CPU_SIZE: "4.0"`) in 256-token
 chunks. With offload on, the pod memory limit rises from 8Gi to 12Gi: the 8Gi the engine
 needs plus the tier. The smoke run measured the pod at 9.6 GiB idle under that limit, and an
-unlimited memlock, so the pinned allocation does not fail.
+unlimited memlock, so the pinned allocation succeeded on that rig.
 
 Alternatives considered:
 
 - **A disk or NVMe tier.** It would need instance-store setup on the node pool, and it is
   slower than host RAM. It is out of scope for #34.
-- **A larger CPU tier on the g5.xlarge.** The node has 14.4 GiB allocatable. The engine
-  takes about 8 GiB idle, so a tier larger than the GPU pool (185,696 tokens is about
-  12.8 GiB) does not fit.
+- **A larger CPU tier on the g5.xlarge.** The node has 14.4 GiB allocatable. A tier
+  larger than the GPU pool (185,696 tokens is about 12.8 GiB) plus the engine's 2.9 GiB of
+  anonymous memory alone is past that, so it does not fit.
 - **A g5.2xlarge (32 GiB host RAM).** It would fit a ~16 GiB tier (~233k tokens) under a
   ~24Gi limit, which exceeds the uncapped GPU pool. It needs a G-instance vCPU quota
-  increase to 8 in eu-west-1. Moving to it is a follow-up; the
-  flow reads the tier size from the manifest, so its code does not change when the rig does.
+  increase to 8 in eu-west-1. Moving to it is a follow-up; the flow reads the tier size
+  from the manifest, so its code does not change when the rig does.
 
 ### LMCache loads through vLLM's V1 KV connector
 
@@ -103,7 +104,7 @@ The spec planned a derived image: the stock `vllm/vllm-openai:v0.29.0` plus a pi
 with a build check that vLLM and torch stayed the same. #324 found the stock image already
 has LMCache. Its release build ran with `INSTALL_KV_CONNECTORS=true`, and the layer that
 installs `requirements/kv_connectors.txt` adds LMCache 0.5.4, nixl 1.3.2 and
-mooncake-transfer-engine 0.3.13.post1, with no torch or vLLM dist-info. LMCache 0.5.4 builds
+mooncake-transfer-engine-cuda13 0.3.13.post1, with no torch or vLLM dist-info. LMCache 0.5.4 builds
 against `torch==2.13.0`, the torch vLLM 0.29.0 pins. The smoke run then confirmed that 0.5.4
 supports the fp8 KV cache dtype.
 
@@ -176,14 +177,16 @@ deploy, the flow refuses a workload when:
 
 - a request runs past max-model-len;
 - a prefix is not a whole number of chunks, since the last partial chunk is never reused;
-- the prompts, rounded up to whole chunks, overflow the tier. LMCache stores every chunk of
-  every prompt, so the unique tails share the tier with the prefixes;
+- one prompt per distinct prefix, rounded up to whole chunks, overflows the tier. LMCache
+  stores every chunk of every prompt, so between two reuses of a prefix the tier also takes
+  unique tails: it has to hold each prefix's whole prompt, not only the prefix;
 - the pool holds the whole working set, so offload has nothing to serve;
 - the pool cannot hold the top rung's requests, so both arms would measure preemption.
 
 After each redeploy, the driver checks the last two again against the pool size the engine
-reports in its startup log (`GPU KV cache size: N tokens`). A scrape that finds no size
-fails the run.
+reports in its startup log (`GPU KV cache size: N tokens`). A scrape that finds no size,
+or a zero-token pool, fails the run. Each arm caps the pool with `--kv-cache-memory-bytes`;
+#325's smoke run shrank it with `--num-gpu-blocks-override` instead.
 
 Alternatives considered:
 
