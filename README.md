@@ -157,18 +157,30 @@ bench CLI.
 
 ## What a run looks like
 
-Every sweep and A/B is a Prefect flow run you follow from the UI (`just prefect-ui`).
-These are from KV cache A/B run `20261022T131457Z`. Each arm redeploys vLLM, either with
-KV cache offload to LMCache's CPU tier enabled (on) or without it (off). It then runs
-three repetitions of the `max_concurrency` ladder, and one task renders the tables and
-the chart as artifacts:
+Every knob sweep and KV cache offload A/B is a Prefect flow run you follow from the UI
+(`just prefect-ui`). These are from KV cache offload A/B run `20261022T131457Z`. Each arm
+redeploys vLLM, either with KV cache offload to LMCache's CPU tier enabled (on) or
+without it (off). It then runs three repetitions of the `max_concurrency` ladder, and one
+task renders the tables and the chart as artifacts:
 
-![Prefect flow run of the KV cache A/B](docs/images/prefect-kv-ab-run.png)
+![Prefect flow run of the KV cache offload A/B](docs/images/prefect-kv-ab-run.png)
 
-The `kv-ab-rung-spreads` artifact gives each arm's median and range per rung. These are
-the numbers the `analyze-kv-ab` skill reads to judge the run:
+Every cell is a task run: one arm's repetition at one rung. The final task renders the
+results:
+
+![Task runs of the KV cache offload A/B](docs/images/prefect-kv-ab-task-runs.png)
+
+Clicking the artifact marker on a cell in the flow graph opens that cell's result as
+markdown in a side panel:
+
+![A cell's result artifact opened from the flow graph](docs/images/prefect-kv-ab-graph-artifact.png)
+
+The `kv-ab-rung-spreads` artifact gives each arm's median and range per rung, and
+`kv-ab-plot` charts them against the goodput floor:
 
 ![kv-ab-rung-spreads artifact in the Prefect UI](docs/images/prefect-kv-ab-rung-spreads.png)
+
+![kv-ab-plot artifact in the Prefect UI](docs/images/prefect-kv-ab-plot.png)
 
 The run caps the GPU KV pool at 16,384 tokens, below LMCache's CPU tier. The g5.xlarge's
 RAM cannot hold a tier larger than the uncapped pool, and the g5.2xlarge quota that would
@@ -179,6 +191,19 @@ to `max_concurrency` 4, while off held it only at 1. That is 3.7× the output th
 the SLO. It measures the mechanism on the capped pool, not a gain on the uncapped rig. The
 full verdict is in
 [`reports/kv-cache-ab-20261022T131457Z/`](reports/kv-cache-ab-20261022T131457Z/RECOMMENDATION.md).
+
+### Analysing a run
+
+Two Claude Code skills read a completed run's artifacts from the Prefect API and write a
+report, with the run's charts, under `reports/`. Neither one re-runs anything.
+
+| Skill | Run | Writes |
+| --- | --- | --- |
+| [`analyze-bench`](.claude/skills/analyze-bench/SKILL.md) | knob sweep | `reports/sweep-grid-<stamp>/`: the engine config to deploy for the run's SLO, ranked by throughput at the concurrency ceiling |
+| [`analyze-kv-ab`](.claude/skills/analyze-kv-ab/SKILL.md) | KV cache offload A/B | `reports/kv-cache-ab-<run_id>/`: whether LMCache offload paid off, rung by rung, with the hit-rate check and the cost ratio |
+
+Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
+`just prefect-ui` running.
 
 ## Recipes
 
