@@ -1,15 +1,8 @@
 # Manual CI trigger for the unattended knob sweep (ADR-0015 'CI later' arm, ADR-0012
-# 'CI/CD later'). A workflow_dispatch that fires `prefect deployment run` against the
-# self-hosted, no-public-endpoint Prefect server, so a sweep is kicked off from the
-# GitHub UI without a workstation's kubectl. It registers the knob-sweep deployment
-# (the same `register-knob-sweep` command `just prefect-register-sweep` runs), then
-# triggers a run of it against an already-live stack. Registration overwrites the
-# deployment, so every dispatch runs with defaults resolved from the live stack and
-# main, including after a cluster-down wiped the server's SQLite. It does not stand
-# the cluster up (`just stack-up`), which stays a deliberate operator step that
-# brackets the GPU spend (ADR-0015). The run itself executes in-cluster on the worker
-# to completion; this workflow returns as soon as the run is created (no --watch),
-# consistent with the ADR's fire-and-forget trigger.
+# 'CI/CD later'): a workflow_dispatch that registers the knob-sweep deployment and fires a
+# run of it against an already-live stack, from the GitHub UI without a workstation's
+# kubectl. The body is flow-dispatch.yml, shared with the KV cache A/B's trigger; see it
+# for what each step does and what it leaves to the operator.
 # Dispatch it from main: the OIDC role trusts only main-branch runs.
 name: sweep-dispatch
 
@@ -18,7 +11,7 @@ on:
     inputs:
       instance_id:
         description: >-
-          Bench host instance id the sweep drives over SSM. Leave blank to resolve it
+          Bench host instance id the run drives over SSM. Leave blank to resolve it
           from the running bench host's tags; set it only to override that (e.g. to
           target a specific host when more than one is running).
         required: false
@@ -26,14 +19,14 @@ on:
         default: ""
       run_id:
         description: >-
-          Run id to tag this sweep's results under in S3. Leave blank to generate a
+          Run id to tag this run's results under in S3. Leave blank to generate a
           UTC timestamp (the same default the manual `just bench` arm uses).
         required: false
         type: string
         default: ""
 
 # Least privilege at the top: only read. The trigger job raises id-token for the OIDC
-# exchange itself, scoped to the one job that needs it.
+# exchange the called workflow makes; a called workflow gets no more than its caller grants.
 permissions:
   contents: read
 
@@ -45,245 +38,13 @@ concurrency:
   group: sweep-dispatch
   cancel-in-progress: false
 
-env:
-  # Repo variables (see README), so the workflow tracks the infrastructure terraform
-  # created rather than restating its values here: AWS_REGION is the one the image
-  # workflows set from the bootstrap `region` output; the cluster name and Prefect
-  # namespace come from the eks stack's `cluster_name` and `prefect_namespace` outputs;
-  # ECR_REPOSITORY is the bench-client repository name bench-image.yml pushes to.
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-  PREFECT_NAMESPACE: ${{ vars.PREFECT_NAMESPACE }}
-
 jobs:
   trigger:
-    name: trigger the knob-sweep deployment
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    # OIDC needs a token to exchange for the dispatch role; checkout needs read. No
-    # other scope — the job creates a Prefect run, it does not write to the repo.
     permissions:
       contents: read
-      id-token: write
-    steps:
-      # The dispatch role trusts only main-branch runs, so a dispatch from any other ref
-      # would fail at the OIDC exchange with an opaque STS error; fail here with the fix.
-      - name: Require a main-branch dispatch
-        env:
-          REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          if [[ "${REF}" != "refs/heads/main" ]]; then
-            echo "::error::dispatch sweep-dispatch from main (got ${REF}); the OIDC role trusts only main-branch runs"
-            exit 1
-          fi
-
-      # Full history, so the grid summary can read the sweep grid at the commit the
-      # worker image was built from, not only at main.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-
-      # Run the Prefect CLI from the repo's lockfile so its version matches the prefect
-      # the worker image was built against — a client/server skew is the one failure a
-      # bare `pip install prefect` would invite.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          python-version: "3.11"
-          enable-cache: true
-
-      - name: Authenticate to AWS via OIDC
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_SWEEP_DISPATCH_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Point kubectl at the cluster
-        run: |
-          set -euo pipefail
-          # Fail loud with a fix hint if a repo variable is unset/empty rather than
-          # letting an empty name reach the AWS API as a vague error.
-          : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
-          : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
-          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
-
-      - name: Resolve the bench host instance id
-        id: host
-        env:
-          INSTANCE_ID: ${{ inputs.instance_id }}
-        run: |
-          set -euo pipefail
-          : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
-          # The bench-endpoint stack names its host ${cluster_name}-bench-endpoint-host
-          # and tags it Project=slipstream (terraform/bench-endpoint). The same filters
-          # resolve the host when the input is blank and validate it when set, so an
-          # override must still name a running bench host. One running host per live
-          # stack, so exactly one id is expected: zero means the stack is not up (or the
-          # override is not a running bench host), and more than one is ambiguous — both
-          # fail loud rather than guess, and the input is the override for the ambiguous
-          # case. JSON output, because text output applies the query per page.
-          # The override, if any, rides in the positional args ("$@" expands to nothing
-          # when unset, under set -u on any bash).
-          set --
-          if [[ -n "${INSTANCE_ID}" ]]; then
-            set -- --instance-ids "${INSTANCE_ID}"
-          fi
-          resolved="$(aws ec2 describe-instances "$@" \
-            --filters "Name=tag:Name,Values=${EKS_CLUSTER_NAME}-bench-endpoint-host" \
-                      "Name=tag:Project,Values=slipstream" \
-                      "Name=instance-state-name,Values=running" \
-            --query 'Reservations[].Instances[].InstanceId' --output json)"
-          count="$(jq 'length' <<<"${resolved}")"
-          case "${count}" in
-            1) ;;
-            0)
-              if [[ -n "${INSTANCE_ID}" ]]; then
-                echo "::error::instance_id ${INSTANCE_ID} is not a running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host"
-              else
-                echo "::error::no running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host — is the stack up (just stack-up)?"
-              fi
-              exit 1
-              ;;
-            *)
-              echo "::error::multiple running bench hosts matched ($(jq -r 'join(" ")' <<<"${resolved}")); set the instance_id input to disambiguate"
-              exit 1
-              ;;
-          esac
-          echo "instance_id=$(jq -r '.[0]' <<<"${resolved}")" >>"${GITHUB_OUTPUT}"
-
-      - name: Resolve the deployment's registration inputs
-        id: registration
-        run: |
-          set -euo pipefail
-          : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
-          : "${ECR_REPOSITORY:?repo variable ECR_REPOSITORY is empty — set it to the bench-client ECR repository name (see README)}"
-          # The same bench-client image ref `_bench-image-ref` resolves locally with no
-          # bench_image_tag pin: the bootstrap repository URL
-          # (<account>.dkr.ecr.<region>.amazonaws.com/<name>) and the floating main tag
-          # image-tag.sh derives from model.yaml.
-          account="$(aws sts get-caller-identity --query Account --output text)"
-          tag="$(bench/image-tag.sh main-tag)"
-          echo "image_ref=${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${tag}" >>"${GITHUB_OUTPUT}"
-
-          # The bench-endpoint stack names the results bucket by prefix
-          # (${cluster_name}-bench-endpoint-results-<suffix>), so the suffix changes whenever
-          # the bucket is recreated and the bucket is found by listing. One bucket per live
-          # stack: zero means bench-endpoint is not up, and more than one is ambiguous —
-          # both fail loud rather than guess.
-          prefix="${EKS_CLUSTER_NAME}-bench-endpoint-results-"
-          buckets="$(aws s3api list-buckets --prefix "${prefix}" --query 'Buckets[].Name' --output json)"
-          count="$(jq 'length' <<<"${buckets}")"
-          case "${count}" in
-            1) ;;
-            0)
-              echo "::error::no results bucket named ${prefix}* — is bench-endpoint up (just stack-up)?"
-              exit 1
-              ;;
-            *)
-              echo "::error::multiple results buckets matched ${prefix}* ($(jq -r 'join(" ")' <<<"${buckets}")); remove the stale one"
-              exit 1
-              ;;
-          esac
-          echo "bucket=$(jq -r '.[0]' <<<"${buckets}")" >>"${GITHUB_OUTPUT}"
-
-      - name: Register and trigger the sweep over a transient port-forward
-        env:
-          BUCKET: ${{ steps.registration.outputs.bucket }}
-          IMAGE_REF: ${{ steps.registration.outputs.image_ref }}
-          INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
-          RUN_ID: ${{ inputs.run_id }}
-        run: |
-          set -euo pipefail
-          : "${INSTANCE_ID:?resolved instance id is empty}"
-          : "${BUCKET:?resolved results bucket is empty}"
-          : "${IMAGE_REF:?resolved bench-client image ref is empty}"
-          : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
-          # An empty run id means "generate one" — the same UTC-timestamp default the
-          # manual `just bench` arm uses, so a CI-triggered run is named like a local one.
-          sweep_run_id="${RUN_ID}"
-          if [[ -z "${sweep_run_id}" ]]; then
-            sweep_run_id="$(date -u +%Y%m%dT%H%M%SZ)"
-          fi
-
-          # Reach the in-cluster API over a transient port-forward (no public endpoint,
-          # ADR-0015), reaped on exit so it never outlives the job — the same helper the
-          # lifecycle recipes use, given the namespace from the repo var because the
-          # runner has no terraform state to resolve it from.
-          # shellcheck source=/dev/null
-          source bench/prefect-portforward.sh
-          prefect_api_portforward "${PREFECT_NAMESPACE}" 4200
-
-          # Register (or overwrite) the deployment with the resolved defaults; the
-          # in-image paths and the sweep-pool work pool keep the command's defaults, as
-          # in `just prefect-register-sweep`. The command fails if the work pool is
-          # absent.
-          uv run slipstream-orchestrate register-knob-sweep \
-            --region "${AWS_REGION}" \
-            --bucket "${BUCKET}" \
-            --image-ref "${IMAGE_REF}"
-
-          # `prefect deployment run` only creates the run; it exits 0 whether or not a
-          # worker is there to pick it up. Check before creating it that the deployment
-          # reads back and that its work pool is READY (a worker is polling), so a green
-          # job means the sweep will actually start.
-          deployment_name="knob-sweep/knob-sweep"
-          deployment="$(curl -sf --max-time 10 "${PREFECT_API_URL}/deployments/name/${deployment_name}")" || {
-            echo "::error::deployment ${deployment_name} not found after registering it"
-            exit 1
-          }
-          pool="$(jq -er '.work_pool_name' <<<"${deployment}")"
-          pool_status="$(curl -sf --max-time 10 "${PREFECT_API_URL}/work_pools/${pool}" | jq -er '.status')" || {
-            echo "::error::could not read work pool ${pool} from the Prefect API"
-            exit 1
-          }
-          if [[ "${pool_status}" != "READY" ]]; then
-            echo "::error::work pool ${pool} is ${pool_status}, not READY — no worker is polling it, so the run would sit unstarted; check the prefect-worker deployment"
-            exit 1
-          fi
-
-          # Show the grid this run will sweep in the job summary. The worker reads the
-          # grid baked into its image, not this checkout: the deployment's sweep_grid
-          # parameter is the in-image path (the Dockerfile copies repo files under
-          # /app/), and the worker image's tag is the commit it was built from
-          # (orchestration-image.yml), so that commit's copy of the file is the grid
-          # the worker runs. A grid that differs from main's means the worker has not
-          # been re-pinned since the grid changed.
-          sweep_grid="$(jq -er '.parameters.sweep_grid' <<<"${deployment}")" || {
-            echo "::error::deployment ${deployment_name} has no sweep_grid parameter"
-            exit 1
-          }
-          grid_repo_path="${sweep_grid#/app/}"
-          worker_images="$(kubectl -n "${PREFECT_NAMESPACE}" get pods \
-            -l app.kubernetes.io/name=prefect-worker --field-selector=status.phase=Running \
-            -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)"
-          if [[ -z "${worker_images}" || "${worker_images}" == *$'\n'* ]]; then
-            echo "::error::expected one running prefect-worker image, got: ${worker_images:-none}"
-            exit 1
-          fi
-          worker_commit="${worker_images##*:}"
-          grid_yaml="$(git show "${worker_commit}:${grid_repo_path}")" || {
-            echo "::error::cannot read ${grid_repo_path} at worker image commit ${worker_commit}"
-            exit 1
-          }
-          if ! git diff --quiet "${worker_commit}" HEAD -- "${grid_repo_path}"; then
-            echo "::warning::the worker runs ${grid_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) to sweep main's grid"
-          fi
-          {
-            echo "## Sweep grid"
-            echo
-            echo "Run \`${sweep_run_id}\` sweeps \`${grid_repo_path}\` as built into worker image \`${worker_images}\`."
-            echo
-            echo '```yaml'
-            echo "${grid_yaml}"
-            echo '```'
-          } >>"${GITHUB_STEP_SUMMARY}"
-
-          # Create the run and return; the worker picks it up and runs it to completion
-          # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
-          # go as one JSON object so each value stays a string (--param parses values as
-          # JSON, which would turn a numeric run id into a number).
-          uv run prefect deployment run "${deployment_name}" \
-            --params "$(jq -nc --arg run_id "${sweep_run_id}" --arg instance_id "${INSTANCE_ID}" \
-              '{run_id: $run_id, instance_id: $instance_id}')"
+      id-token: write # the OIDC exchange for the sweep-dispatch role
+    uses: ./.github/workflows/flow-dispatch.yml
+    with:
+      flow: knob-sweep
+      instance_id: ${{ inputs.instance_id }}
+      run_id: ${{ inputs.run_id }}
