@@ -6,7 +6,7 @@ description: Report whether KV cache offload paid off in a KV cache A/B run. Use
 
 # analyze-kv-ab
 
-Given a KV cache A/B `run_id`, read its completed Prefect flow run and write a verdict: did turning KV cache offload on beat leaving it off, for this run's workload and SLO, and how sure can the run make us. The run already carries every number and the chart (ADR-0018); this skill reads them and reasons — it does not re-run the A/B, sync S3, or call the report CLI. It is the A/B's sibling of `analyze-bench` (ADR-0021).
+Given a KV cache A/B `run_id`, read its completed Prefect flow run and write a verdict: did turning KV cache offload on beat leaving it off, for this run's workload and SLO, and how sure can the run make us. The run already carries every number and the chart (ADR-0018); this skill reads them and reasons — it does not re-run the A/B, sync S3, or call the report CLI. It is the A/B's sibling of `analyze-knob-sweep` (ADR-0021).
 
 Input: a `run_id` (e.g. `kv-ab-agent-20261023T090000Z`).
 
@@ -14,7 +14,7 @@ The two arms: **on** is vLLM with KV cache offload to LMCache's CPU tier enabled
 
 ## Preconditions
 
-Resolve the API base and check it the way `analyze-bench` does (its "Preconditions"): `API="${PREFECT_API_URL:-http://127.0.0.1:4200/api}"`, a `200` from `$API/health`, else stop and tell the user to run `just prefect-ui`. Every call uses `curl -fsS` with a timeout; any transport or HTTP error stops the skill and is reported as that error, never read as an empty result.
+Resolve the API base and check it the way `analyze-knob-sweep` does (its "Preconditions"): `API="${PREFECT_API_URL:-http://127.0.0.1:4200/api}"`, a `200` from `$API/health`, else stop and tell the user to run `just prefect-ui`. Every call uses `curl -fsS` with a timeout; any transport or HTTP error stops the skill and is reported as that error, never read as an empty result.
 
 ## Step 1 — Find the run
 
