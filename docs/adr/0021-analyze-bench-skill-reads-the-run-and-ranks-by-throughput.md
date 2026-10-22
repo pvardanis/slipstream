@@ -1,4 +1,4 @@
-<!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). AMENDED 2026-10-19: the two plots are downloaded into the report directory and embedded by relative path, since the results bucket and its URLs die on teardown. -->
+<!-- ADR recording why a knob-sweep is turned into a server-config recommendation by a prose-only Claude Code skill (analyze-bench) rather than new package code; why the skill reads the completed Prefect flow run over the REST API as its only source — filtering flow runs by the run= tag to the parent, then reading that parent's config/ceiling/cliff markdown artifacts and the two plot URLs — instead of syncing S3 or calling the report CLI; why the recommendation ranks engine configs by output_throughput at the ceiling, which is the exact cost ordering because the sweep runs on one fixed GPU so $/hr is constant and $/1M-tokens is inversely proportional to throughput; why a $/hr price is optional and only prints an absolute figure without changing the ranking; why prefix_share is treated as a workload property the recommendation reasons over rather than a server knob it selects; and why a bespoke winner-highlighted chart is deferred to a tested report-package plot function rather than a throwaway snippet in the skill. Builds on ADR-0018 (knob sweep renders results to the Prefect UI) and ADR-0019 (SLO gates and token rate per rung). AMENDED 2026-10-19: the two plots are downloaded into the report directory and embedded by relative path, since the results bucket and its URLs die on teardown. AMENDED 2026-10-22: a sibling skill, analyze-kv-ab, reports the KV cache A/B's verdict on the same terms, judging each rung by whether the arms' ranges separate, and reads each run's own artifact versions rather than the latest per key. -->
 
 # ADR-0021: analyze-bench reads the run and ranks by throughput
 
@@ -93,3 +93,24 @@ public chart objects, not an S3 sync, so the skill still needs no AWS credential
 code, or report CLI. A plot is kept only when its download completes and is a PNG; a
 plot that cannot be fetched degrades the report the way a missing artifact does, since
 the ranking never depends on it.
+
+## Amendment (2026-10-22): a sibling skill reports the KV cache A/B
+
+The KV cache A/B (#326) asks a different question of a different run: not which engine
+config to deploy, but whether turning KV cache offload on beat leaving it off. Its run
+carries its own artifacts (`kv-ab-config`, `kv-ab-rung-spreads`, `kv-ab-ceilings`,
+`kv-ab-plot`), so it gets its own prose-only skill, `analyze-kv-ab`
+(`.claude/skills/analyze-kv-ab/SKILL.md`), built on the same terms as this one: the
+completed Prefect run is the only source, the SLO and workload are read from the run's
+config artifact, and the chart is copied into `reports/<run_id>/` beside the report.
+
+The verdict rests on separation: a metric favours an arm at a rung only when the two
+arms' ranges across their runs do not overlap. With a handful of runs per arm that is the
+strongest claim the data supports; complete separation with `n` runs per arm has a
+one-sided permutation p of `1 / C(2n, n)`, which the report states. Cost follows this
+ADR's argument unchanged: both arms run on the same node, so the throughput ratio at the
+ceilings is the cost ratio.
+
+The skill reads each run's own artifact versions (`/artifacts/filter` by flow run,
+newest first), because `/artifacts/latest/filter` returns a key's newest version across
+all runs and so comes back empty for any run that is not the newest writer of that key.
