@@ -23,7 +23,7 @@ runner = CliRunner()
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 # The experiment-defining knobs a config YAML carries; the CLI injects base_url,
-# model, and out_dir on top. Mirrors bench/load-sweep.yaml's documented defaults.
+# model, and out_dir on top. Mirrors bench/configs/load-sweep.yaml's documented defaults.
 _EXPERIMENT: dict[str, object] = {
     "prefix_shares": [10, 50, 90],
     "burstiness_values": [0.2, 1.0],
@@ -67,7 +67,7 @@ def _dry_run(config: Path, *args: str):
 
 
 def test_default_dry_run_reads_the_committed_config() -> None:
-    """A bare dry run reads bench/load-sweep.yaml and emits its 3x2 default grid."""
+    """A bare dry run reads bench/configs/load-sweep.yaml and emits its 3x2 default grid."""
     result = runner.invoke(app, ["load-sweep", "--dry-run"])
 
     assert result.exit_code == 0, plain(result)
@@ -183,7 +183,7 @@ def test_request_rate_inf_from_config_is_accepted(tmp_path: Path) -> None:
 # --- load-cell: one cell, its coordinate defined by its config ---------------
 
 # The shared knobs plus one coordinate a cell YAML carries; the CLI injects base_url,
-# model, and out_dir on top. Mirrors bench/load-cell.yaml's documented defaults.
+# model, and out_dir on top. Mirrors bench/configs/load-cell.yaml's documented defaults.
 _CELL: dict[str, object] = {
     "prefix_share": 90,
     "burstiness": 1.0,
@@ -213,13 +213,13 @@ def _cell_dry_run(config: Path, *args: str):
 
 
 def test_default_cell_dry_run_reads_the_committed_config() -> None:
-    """A bare load-cell dry run reads bench/load-cell.yaml and emits its one documented cell."""
+    """A bare load-cell dry run reads bench/configs/load-cell.yaml and emits its one documented cell."""
     result = runner.invoke(app, ["load-cell", "--dry-run"])
 
     assert result.exit_code == 0, plain(result)
     assert result.stdout.count("vllm bench serve") == 1
     assert "--model Qwen/Qwen2.5-0.5B-Instruct" in result.stdout
-    # bench/load-cell.yaml's documented coordinate: share 50, floored by align_blocks:
+    # bench/configs/load-cell.yaml's documented coordinate: share 50, floored by align_blocks:
     # 16 to a 496/504 split, burstiness 1.0.
     assert "--prefix-repetition-prefix-len 496" in result.stdout
     assert "--burstiness 1.0" in result.stdout

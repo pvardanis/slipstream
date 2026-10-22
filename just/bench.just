@@ -36,7 +36,7 @@ bench-image: _bootstrap-init
     {{ build_image_tool }} "${repo}:${sha_tag}"
     docker push "${repo}:${sha_tag}"
 
-# Run one engine point's Tier-2 client-load ladder — the cells bench/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by its run id and config digest, so a re-run under the same BENCH_RUN_ID skips cells that already hold a cache record (ADR-0022). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
+# Run one engine point's Tier-2 client-load ladder — the cells bench/configs/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by its run id and config digest, so a re-run under the same BENCH_RUN_ID skips cells that already hold a cache record (ADR-0022). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
 bench point_slug *args:
     #!/usr/bin/env bash
@@ -88,7 +88,7 @@ bench point_slug *args:
       --bucket "${bucket}" \
       --image-ref "${image}" \
       --model-yaml model.yaml \
-      --sweep-grid bench/sweep-grid.yaml \
+      --sweep-grid bench/configs/sweep-grid.yaml \
       --vllm-manifest {{ gpu_manifests }} \
       --sweep-args-b64 "${args_b64}" || rc=$?
 
@@ -154,7 +154,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
 
     # Compose the cold/warm cell's experiment config: the base definition from
-    # bench/load-sweep.yaml, narrowed to this one cell — a single prefix share and
+    # bench/configs/load-sweep.yaml, narrowed to this one cell — a single prefix share and
     # burstiness, no concurrency ladder — with the residency-isolating overrides. A seed
     # unique to this invocation makes the cold run emit prefixes the server has never
     # cached, so it genuinely misses; the cold and warm runs share it, so the warm run
@@ -172,7 +172,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     prefix_config="${out}/sweep-config.yaml"
     SHARE="[{{ prefix_share }}]" BURST="[{{ burstiness }}]" SEED="${seed}" \
       yq '.prefix_shares = env(SHARE) | .burstiness_values = env(BURST) | .max_concurrency_values = [] | .align_blocks = 16 | .num_prefixes = 16 | .seed = env(SEED)' \
-      bench/load-sweep.yaml >"${prefix_config}"
+      bench/configs/load-sweep.yaml >"${prefix_config}"
 
     # Pass the per-run values as environment prefixed to the host command. The plain
     # values carry no shell-special characters, so single-quoting suffices; the config

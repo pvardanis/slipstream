@@ -113,8 +113,8 @@ ENV PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench
 # These files are image inputs: the content tag in orchestration-image.yml hashes them and the
 # build triggers watch them, so an edit republishes a new image.
 COPY model.yaml /app/model.yaml
-COPY bench/sweep-grid.yaml /app/bench/sweep-grid.yaml
-COPY bench/kv-cache-extension-ab.yaml /app/bench/kv-cache-extension-ab.yaml
+COPY bench/configs/sweep-grid.yaml /app/bench/configs/sweep-grid.yaml
+COPY bench/configs/kv-cache-extension-ab.yaml /app/bench/configs/kv-cache-extension-ab.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
 # This image's own ECR ref (registry/repo:content-tag), passed by orchestration-image.yml at

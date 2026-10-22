@@ -17,7 +17,7 @@ from slipstream_bench.orchestration.kv_ab_config import (
     load_kv_ab_config,
 )
 
-_BENCH = Path(__file__).parents[2] / "bench"
+_BENCH = Path(__file__).parents[2] / "bench" / "configs"
 _COMMITTED_CONFIG = _BENCH / "kv-cache-extension-ab.agent.yaml"
 
 

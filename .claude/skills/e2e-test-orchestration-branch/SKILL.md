@@ -49,7 +49,7 @@ Run `just prefect-register-sweep` from the branch (`just prefect-register-kv-ab`
 
 ## Step 4 — Write the test grids
 
-The image bakes `bench/sweep-grid.yaml` at `/app/bench/sweep-grid.yaml`, and the deployment takes the grid as the `sweep_grid` parameter. So derive each grid a scenario needs from `bench/sweep-grid.yaml` into `/tmp/qa-<label>/`, with the fewest points and cells that show the behaviour, and validate each:
+The image bakes `bench/configs/sweep-grid.yaml` at `/app/bench/configs/sweep-grid.yaml`, and the deployment takes the grid as the `sweep_grid` parameter. So derive each grid a scenario needs from `bench/configs/sweep-grid.yaml` into `/tmp/qa-<label>/`, with the fewest points and cells that show the behaviour, and validate each:
 
 ```bash
 uv run python -c "from pathlib import Path; from slipstream_bench.contract.grid import load_grid; print(load_grid(Path('/tmp/qa-<label>/grid-2pt.yaml')).tier1)"
@@ -57,7 +57,7 @@ uv run python -c "from pathlib import Path; from slipstream_bench.contract.grid 
 
 - Keep `load.num_prompts` a multiple of `load.num_prefixes`. The client sends `num_prefixes × floor(num_prompts / num_prefixes)` requests while the validity gate counts `num_prompts` as attempted, so a remainder reads as failed requests and a healthy cell is rejected.
 
-For the KV cache A/B the same holds for its workload: the image bakes `bench/kv-cache-extension-ab.yaml` at `/app/bench/kv-cache-extension-ab.yaml`, and the deployment takes it as the `kv_ab_config` parameter.
+For the KV cache A/B the same holds for its workload: the image bakes `bench/configs/kv-cache-extension-ab.yaml` at `/app/bench/configs/kv-cache-extension-ab.yaml`, and the deployment takes it as the `kv_ab_config` parameter.
 
 Copy each grid into the pod, and copy again after any worker restart: `/tmp` in the pod does not survive one.
 

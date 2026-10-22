@@ -7,7 +7,7 @@ Runbooks for the live rig. All but cloud verify assume the stack is up
 
 The two-tier sweep ([ADR-0009](adr/0009-knob-sweep-rig-and-ceiling-method.md)) runs
 unattended on the in-cluster Prefect worker. Every swept value lives in
-[`bench/sweep-grid.yaml`](../bench/sweep-grid.yaml).
+[`bench/configs/sweep-grid.yaml`](../bench/configs/sweep-grid.yaml).
 
 **From CI** — Actions → `sweep-dispatch` → Run workflow, **on `main`** (the role trusts
 only `main`). Both inputs are optional: `instance_id` defaults to the running bench host
@@ -69,7 +69,7 @@ interleaved — off, on, off, on — `runs_per_arm` times. Each arm run redeploy
 `deploy/vllm-gpu` with the arm's offload switch and the workload's capped GPU KV pool,
 runs one unrecorded warmup cell, then the concurrency ladder.
 
-**The workload** is [`bench/kv-cache-extension-ab.yaml`](../bench/kv-cache-extension-ab.yaml),
+**The workload** is [`bench/configs/kv-cache-extension-ab.yaml`](../bench/configs/kv-cache-extension-ab.yaml),
 the one config the orchestration image bakes and the deployment runs. Other workloads are
 parked beside it: `kv-cache-extension-ab.agent.yaml` (the live one is a copy of it) and
 `kv-cache-extension-ab.chat.yaml`. To run a parked one, either copy it over the live file

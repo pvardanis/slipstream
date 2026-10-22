@@ -121,14 +121,13 @@ jobs:
         with:
           # Excludes must be final, matching the git pathspec's :(exclude): under the
           # default 'some' quantifier a lone '!' pattern ORs in as match-all-but-that-file,
-          # so bench/load-sweep.yaml or bench/load-cell.yaml (or any unrelated file) would still
-          # trip the build.
+          # so a file under bench/configs/ (or any unrelated file) would still trip the
+          # build.
           predicate-quantifier: some-with-excludes
           filters: |
             bench:
               - 'bench/**'
-              - '!bench/load-sweep.yaml'
-              - '!bench/load-cell.yaml'
+              - '!bench/configs/**'
               - 'packages/**'
               - 'pyproject.toml'
               - 'model.yaml'
@@ -167,8 +166,8 @@ jobs:
               - 'uv.lock'
               - '.dockerignore'
               - 'model.yaml'
-              - 'bench/sweep-grid.yaml'
-              - 'bench/kv-cache-extension-ab.yaml'
+              - 'bench/configs/sweep-grid.yaml'
+              - 'bench/configs/kv-cache-extension-ab.yaml'
               - 'k8s/vllm-gpu.yaml'
       # Build succeeding is the check: a broken Dockerfile, an unresolvable
       # locked dependency, or a baked config missing from the context fails

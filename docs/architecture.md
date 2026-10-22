@@ -103,7 +103,7 @@ flowchart TB
   (`max-num-seqs` × KV-cache dtype × prefix caching). Tier 2 walks a client concurrency
   ladder against that point to find the highest rung that holds goodput at the SLO
   ([ADR-0009](adr/0009-knob-sweep-rig-and-ceiling-method.md)). All values come from
-  [`bench/sweep-grid.yaml`](../bench/sweep-grid.yaml).
+  [`bench/configs/sweep-grid.yaml`](../bench/configs/sweep-grid.yaml).
 - **Resumable within a run.** Each cell is a Prefect task keyed by its run id, config
   digest, engine point, and cell, with results and cache keys on S3. The cache record
   decides whether a cell is complete: rerunning the same run id skips any cell whose

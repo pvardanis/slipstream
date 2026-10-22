@@ -103,7 +103,7 @@ def test_a_manifest_without_a_positive_chunk_size_is_rejected(
         read_kv_ab_rig(manifest)
 
 
-_BENCH = _COMMITTED_MANIFEST.parents[1] / "bench"
+_BENCH = _COMMITTED_MANIFEST.parents[1] / "bench" / "configs"
 _AGENT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab.agent.yaml")
 _CHAT = load_kv_ab_config(_BENCH / "kv-cache-extension-ab.chat.yaml")
 # The live config the image bakes and the deployment runs.

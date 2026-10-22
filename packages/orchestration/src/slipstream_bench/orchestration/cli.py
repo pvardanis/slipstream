@@ -197,7 +197,7 @@ def register_knob_sweep(
     ] = Path("/app/model.yaml"),
     sweep_grid: Annotated[
         Path, typer.Option(help="In-image path to sweep-grid.yaml, read on the worker.")
-    ] = Path("/app/bench/sweep-grid.yaml"),
+    ] = Path("/app/bench/configs/sweep-grid.yaml"),
     vllm_manifest: Annotated[
         Path,
         typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
@@ -282,7 +282,7 @@ def register_kv_ab(
     kv_ab_config: Annotated[
         Path,
         typer.Option(help="In-image path to the A/B workload, read on the worker."),
-    ] = Path("/app/bench/kv-cache-extension-ab.yaml"),
+    ] = Path("/app/bench/configs/kv-cache-extension-ab.yaml"),
     vllm_manifest: Annotated[
         Path,
         typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),

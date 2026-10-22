@@ -43,7 +43,7 @@ from slipstream_bench.report.chart import (
 
 # The ceiling axis names its SLO predicate: the KB pairs a goodput/ceiling number with
 # the SLO it was read at, never bare. The ttft/tpot thresholds mirror the harness's
-# default goodput (bench/load-sweep.yaml) and the 95% floor mirrors
+# default goodput (bench/configs/load-sweep.yaml) and the 95% floor mirrors
 # report.aggregation._GOODPUT_FLOOR (ADR-0009). The title also names the pinned
 # burstiness the whole grid ran at — the aggregated rows do not carry it, so it is
 # asserted here from the grid's pin, not read from the data. This label is a manual
