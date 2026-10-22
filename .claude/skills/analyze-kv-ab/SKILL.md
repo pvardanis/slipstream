@@ -2,7 +2,7 @@
 name: analyze-kv-ab
 description: Report whether KV cache offload paid off in a KV cache A/B run. Use when the user gives a `kv-cache-extension-ab` run_id or `run=` tag and wants its verdict, or a report on the A/B's spreads, ceilings, or hit rates.
 ---
-<!-- Reads a completed KV cache A/B Prefect flow run over the REST API and writes a verdict report: whether KV cache offload paid off for the run's workload and SLO, rung by rung, with the evidence, the hit-rate mechanism check, the cost ratio, and the run's chart. Prose-only: no repo code, no S3 sync, no report CLI. -->
+<!-- Reads a completed KV cache A/B Prefect flow run over the REST API and writes a verdict report: whether KV cache offload paid off for the run's workload and SLO, rung by rung, with the evidence, the hit-rate mechanism check, the cost ratio and host-memory cost, a recommendation on turning offload on by default, and the run's chart. Prose-only: no repo code, no S3 sync, no report CLI. -->
 
 # analyze-kv-ab
 
@@ -49,6 +49,15 @@ Expect four keys:
 - `kv-ab-ceilings` — one row per arm: each run's ceiling (`r1`, `r2`, …; `none` when no rung held the floor) and the median (blank when any run is `none`).
 - `kv-ab-plot` — an image artifact whose `data` is a public `https` URL to the chart PNG.
 
+**The CPU tier's host-memory cost.** The config artifact does not carry it; the orchestration image's tag does. That tag (`orch_image`, after the `:`) is the short hash of the last commit that touched the image's inputs, the vLLM manifest and the package source among them, so read the run's values from that commit:
+
+```bash
+git show <tag>:k8s/vllm-gpu.yaml | rg -A1 'LMCACHE_MAX_LOCAL_CPU_SIZE|LMCACHE_CHUNK_SIZE'
+git show <tag>:packages/orchestration/src/slipstream_bench/orchestration/cluster.py | rg '_MEMORY_LIMIT_(OFFLOAD|DEFAULT) ='
+```
+
+`LMCACHE_MAX_LOCAL_CPU_SIZE` is the tier in GiB of pinned host memory; the two limits are the pod memory limit with offload on and off. A tag that is not a commit in the local clone (`git cat-file -t <tag>` fails) degrades the report: run `git fetch origin` once, and if it still fails, name the cost as unknown.
+
 A missing `kv-ab-config` or `kv-ab-rung-spreads` stops the skill: say which. A missing ceilings table or plot degrades the report; continue and name the absent piece in it.
 
 The goodput floor is `0.95`, a source constant (`packages/report/src/slipstream_bench/report/aggregation.py:28`).
@@ -57,7 +66,7 @@ Done when you hold the SLO, the workload fields above, and the parsed spreads ta
 
 ## Step 3 — Judge each rung
 
-For every `max_concurrency` both arms measured, compare on against off on `goodput_fraction`, `p95_ttft_ms`, and `output_throughput`. A metric **separates** at a rung when the two arms' ranges do not overlap; the direction says which arm it favours (higher goodput and throughput, lower TTFT).
+For every `max_concurrency` both arms measured, compare on against off on `goodput_fraction`, `p95_ttft_ms`, and `output_throughput`. A metric **separates** at a rung when the two arms' ranges do not overlap; the direction says which arm it favours (higher goodput and throughput, lower TTFT). A metric whose ranges overlap at a rung is **inconclusive** there; label it so, for `p95_tpot_ms` too, never as a win or a loss.
 
 Separation is the strongest claim the run supports. With `n` runs per arm, complete separation in the direction you predicted has a one-sided permutation p of `1 / C(2n, n)`: `n=2` → 1/6, `n=3` → 1/20, `n=4` → 1/70. With `n=1` there are no ranges; every comparison is directional only.
 
@@ -80,7 +89,16 @@ The **verdict** is one of:
 - Both median ceilings set → the on/off throughput ratio at each arm's ceiling rung is the cost ratio at the SLO.
 - An arm's median ceiling blank → that arm held the SLO at no rung in every run: it cannot serve this SLO at the tested concurrency. Give the throughput ratio at the highest rung both arms measured as well, labelled as a ratio at that rung, not at the SLO.
 
-Done when every shared rung has a separation call per metric, the verdict follows from them, and the SLO attribution, mechanism check, and cost comparison are stated.
+**Host-memory cost.** Next to the cost ratio, state what offload costs in host RAM: the tier's GiB and the pod limit on against off (Step 2).
+
+**Recommendation** on turning offload on by default, which is a follow-up change, not part of the run. Decide it from the verdict and the pool cap:
+
+- **Offload loses, or no measurable difference** → keep it off: it costs the tier's host memory for no measured gain.
+- **Offload wins on a capped pool** → keep it off on the node the run used. The default deployment runs the pool uncapped, and a tier smaller than that pool adds no reuse there (Step 2). Say what would change it: a node whose RAM fits a tier larger than the uncapped pool, and a re-run of the A/B there.
+- **Offload wins on an uncapped pool** → turn it on for workloads like this run's, weighed against the host-memory cost.
+- **Mixed** → keep it off, and name the rungs where it lost.
+
+Done when every shared rung has a separation or inconclusive call per metric, the verdict follows from them, and the SLO attribution, mechanism check, cost comparison, host-memory cost, and recommendation are stated.
 
 ## Step 4 — Write the report
 
@@ -101,12 +119,13 @@ With no `kv-ab-plot` artifact, run only the `mkdir` and `rm -f` lines. A missing
 
 Write `reports/kv-cache-ab-<run_id>/RECOMMENDATION.md` with these sections, in order:
 
-1. **Run** — the `run_id`, what each arm is (on: KV cache offload to LMCache's CPU tier enabled; off: GPU prefix cache only), the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm`, the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, and the GPU pool cap (`kv_cache_memory_bytes`, in bytes and tokens) with why it is capped (Step 2), plus the three image refs from the config artifact, with the AWS account ID in an ECR registry host replaced by `<account>` (`<account>.dkr.ecr.<region>.amazonaws.com/...`).
+1. **Run** — the `run_id`, what each arm is (on: KV cache offload to LMCache's CPU tier enabled; off: GPU prefix cache only), the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm` and their interleaved order (off-r1, on-r1, off-r2, …; each run a redeploy, warmup, then the ladder), the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, the CPU tier (GiB and chunk size, Step 2), and the GPU pool cap (`kv_cache_memory_bytes`, in bytes and tokens) with why it is capped (Step 2), plus the three image refs from the config artifact, with the AWS account ID in an ECR registry host replaced by `<account>` (`<account>.dkr.ecr.<region>.amazonaws.com/...`).
 2. **Verdict** — one line: the verdict, naming LMCache KV cache offload, the rungs it rests on, and the workload it holds for.
-3. **Evidence** — a table per rung: off and on `median [range]` for `goodput_fraction`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`, and a column naming the judged metrics that separate. Under it, the SLO attribution. State the permutation p for this run's `n`.
-4. **Mechanism** — both hit rates per arm and the CPU tier's share, with the mechanism check's conclusion.
-5. **Ceilings and cost** — the ceilings table and the cost comparison from Step 3.
-6. **Chart** — the downloaded PNG embedded by relative path (`![KV cache A/B by max_concurrency](kv-ab-by-max-concurrency.png)`) with one line on what it shows, or the reason it is absent.
-7. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, pending the g5.2xlarge quota (Step 2). The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on the uncapped g5.xlarge, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
+3. **Evidence** — a table per rung: off and on `median [range]` for `goodput_fraction`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`, and a column naming the judged metrics that separate, with an **inconclusive** row naming every metric whose ranges overlap (`none` when none do). Under it, the SLO attribution. State the permutation p for this run's `n`.
+4. **Mechanism** — both hit rates per arm as `median [min–max]`, the CPU tier's share (on's combined median minus its GPU median; the spreads table does not pair values by run, so it has no range), and the mechanism check's conclusion.
+5. **Ceilings and cost** — the ceilings table, the cost comparison from Step 3, and the host-memory cost beside it.
+6. **Recommendation** — whether to turn offload on by default, with the reasoning from Step 3.
+7. **Chart** — the downloaded PNG embedded by relative path (`![KV cache A/B by max_concurrency](kv-ab-by-max-concurrency.png)`) with one line on what it shows, or the reason it is absent.
+8. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, pending the g5.2xlarge quota (Step 2). The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on the uncapped g5.xlarge, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
 
-Done when `RECOMMENDATION.md` has all seven sections, the verdict traces to named rungs and metrics, and `reports/kv-cache-ab-<run_id>/` holds exactly the chart it embeds, with no `.part` file left.
+Done when `RECOMMENDATION.md` has all eight sections, the verdict traces to named rungs and metrics, and `reports/kv-cache-ab-<run_id>/` holds exactly the chart it embeds, with no `.part` file left.
