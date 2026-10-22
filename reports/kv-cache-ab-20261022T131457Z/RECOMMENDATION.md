@@ -9,7 +9,7 @@
 - **Rungs (`max_concurrency`):** 1, 2, 4 (warmup at 1, unrecorded)
 - **Workload:** agent workload, `prefix_share` 90%, `num_prefixes` 8, `total_len` 3584, `output_len` 128, `num_prompts` 128, `align_blocks` 256, `request_rate` inf. Each prompt carries a 3072-token shared prefix; the 8 prefixes make a 24,576-token working set.
 - **Engine point:** `max_num_seqs` 64, `kv_cache_dtype` fp8
-- **CPU tier (on arm):** 4 GiB of pinned host memory (`LMCACHE_MAX_LOCAL_CPU_SIZE` 4.0) in 256-token chunks, about 58,254 fp8 tokens. This workload's prompts fill 28,672 tokens of it.
+- **CPU tier (on arm):** 4 GiB of pinned host memory (`LMCACHE_MAX_LOCAL_CPU_SIZE` 4.0) in 256-token chunks, about 58,254 fp8 tokens. The workload's 8 prefixes (24,576 tokens) fit in it.
 - **GPU KV pool cap:** `kv_cache_memory_bytes` 1207959552 (16,384 tokens); the working set is 1.5× the pool. The pool is capped because the g5.xlarge's host RAM (14.4 GiB allocatable) cannot hold a CPU tier larger than the uncapped GPU pool (185,696 tokens). The LMCache tier here is about 58k tokens. With a tier smaller than the pool, offload adds no reuse, because reachable reuse is max(GPU, CPU), not their sum. A larger tier needs a g5.2xlarge (32 GiB), and the G-instance vCPU quota increase it needs has not been approved yet. Capping the pool below the tier measures the same mechanism now, at a smaller scale (ADR-0023).
 - **Images:**
   - vLLM: `vllm/vllm-openai:v0.29.0`
@@ -22,7 +22,7 @@
 
 ## Evidence
 
-Values are `median [min–max]` across 3 runs per arm. "Separates" lists the judged metrics (`goodput_fraction`, `p95_ttft_ms`, `output_throughput`) whose arm ranges do not overlap. Every separation favours on. "Inconclusive" lists the metrics whose off and on ranges overlap, so the run cannot tell the arms apart on them at that rung.
+Values are `median [min–max]` across 3 runs per arm. "Separates" lists the judged metrics (`goodput_fraction`, `p95_ttft_ms`, `output_throughput`) whose arm ranges do not overlap. Every separation favours on. "Inconclusive" lists the metrics whose off and on ranges overlap, so the run cannot tell the arms apart on them at that rung. `p95_tpot_ms` is not a judged metric; its ranges separate in on's favour at rungs 2 and 4.
 
 ### max_concurrency = 1
 
@@ -113,7 +113,7 @@ The 3.70× gain costs host RAM, not GPU memory:
 
 - **CPU tier:** 4 GiB of pinned host memory, about 58,254 tokens.
 - **Pod memory limit:** 12Gi with offload on, against 8Gi off. That is +4Gi, 50% more.
-- **Node headroom:** the on pod's limit takes 12 of the g5.xlarge's 14.4 GiB allocatable, against 8 off. #325's smoke run measured the on pod at 9.6 GiB idle (ADR-0023).
+- **Node headroom:** the on pod's limit takes 12 of the g5.xlarge's 14.4 GiB allocatable, against 8 off, leaving 2.4 GiB for everything else on the node. #325's smoke run measured the on pod at 9.6 GiB idle (ADR-0023).
 
 ## Recommendation
 
