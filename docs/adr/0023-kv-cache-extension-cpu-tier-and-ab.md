@@ -145,7 +145,7 @@ with arm and run, and its report has its own skill, `analyze-kv-ab` (ADR-0021).
 Alternatives considered:
 
 - **An offload axis in the knob-sweep grid.** It would change every point slug, cache key
-  and config digest, and analyze-bench's parsing (ADR-0022). The grid also has no notion of
+  and config digest, and analyze-knob-sweep's parsing (ADR-0022). The grid also has no notion of
   repeated, interleaved runs, a warmup, an eviction-sized workload or the connector's hit
   counters, which this comparison needs and the knob sweep does not.
 
@@ -226,7 +226,7 @@ Alternatives considered:
   uncapped rig. On the committed g5.xlarge, offload adds no reuse, because the tier is
   smaller than the uncapped pool. A win there needs a tier larger than the pool, such as
   the g5.2xlarge.
-- The A/B leaves the knob-sweep grid, its slugs, cache key and analyze-bench's parsing
+- The A/B leaves the knob-sweep grid, its slugs, cache key and analyze-knob-sweep's parsing
   alone. The GPU KV pool cap is an engine arg in every cell's digest, uncapped for the
   knob sweep.
 - L4 inherits a known-good setup: the stock image, `LMCacheConnectorV1` in `kv_both` role,

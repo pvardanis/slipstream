@@ -1,10 +1,10 @@
 ---
-name: analyze-bench
+name: analyze-knob-sweep
 description: Recommend the best vLLM engine config from a knob-sweep benchmark. Use when the user gives a knob-sweep run_id or `run=` tag and wants the best server configuration for that run's SLO, or a report analysing a sweep's ceiling/goodput results.
 ---
 <!-- Reads a completed knob-sweep Prefect flow run over the REST API and writes a server-config recommendation report for the run's own SLO. Prose-only: no repo code, no S3 sync, no report CLI. -->
 
-# analyze-bench
+# analyze-knob-sweep
 
 Given a knob-sweep `run_id`, read its completed Prefect flow run and write a recommendation: which vLLM engine config to deploy for the SLO the sweep was run under, and why. The run already carries every number and plot (ADR-0018); this skill reads them and reasons — it does not re-run the sweep, sync S3, or call the report CLI.
 
