@@ -192,10 +192,11 @@ the SLO. It measures the mechanism on the capped pool, not a gain on the uncappe
 full verdict is in
 [`reports/kv-cache-ab-20261022T131457Z/`](reports/kv-cache-ab-20261022T131457Z/RECOMMENDATION.md).
 
-### Analysing a run
+## Skills
 
-Two Claude Code skills read a completed run's artifacts from the Prefect API and write a
-report, with the run's charts, under `reports/`. Neither one re-runs anything.
+Two Claude Code skills analyse a finished run. Each reads the run's artifacts from the
+Prefect API and writes a report, with the run's charts, under `reports/`. Neither one
+re-runs anything.
 
 | Skill | Run | Writes |
 | --- | --- | --- |
