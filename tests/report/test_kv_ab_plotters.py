@@ -88,6 +88,29 @@ def test_each_runs_dot_is_nudged_alike_at_every_rung_of_the_log_axis() -> None:
         plt.close(figure)
 
 
+@pytest.mark.parametrize("ladder", [(4,), (1, 2, 4)])
+def test_the_axis_spans_the_ladder_and_half_an_octave_either_side(
+    ladder: tuple[int, ...],
+) -> None:
+    # A one-rung ladder gives matplotlib no span to fit but the dots' own nudge, so
+    # without fixed limits the panel zooms onto that nudge and pushes the runs to its
+    # edges. Half an octave either side keeps a lone rung's dots as close as a ladder's.
+    rungs = [
+        build_rung(arm, run, cap)
+        for arm in ("off", "on")
+        for run in (1, 2)
+        for cap in ladder
+    ]
+    figure = _plot_kv_ab(rungs)
+    try:
+        for ax in figure.axes:
+            low, high = np.log2(ax.get_xlim())
+            assert low == pytest.approx(np.log2(ladder[0]) - 0.5)
+            assert high == pytest.approx(np.log2(ladder[-1]) + 0.5)
+    finally:
+        plt.close(figure)
+
+
 def test_each_arms_line_runs_through_its_runs_median_not_their_mean() -> None:
     # One skewed run per arm pulls the mean well off the median: off 600/610/900 has
     # median 610 (mean 703.3), on 300/310/500 has median 310 (mean 370).
