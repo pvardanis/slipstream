@@ -3,7 +3,7 @@
 ## Run
 
 - **run_id:** `20261022T131457Z` (Prefect flow run `happy-tench`, `b61fa378-6ab4-4b65-bff6-aa5b22dda38f`, Completed)
-- **Arms:** **on** is vLLM with KV cache offload to LMCache's CPU tier enabled (`--kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'`, pod memory 12Gi for the tier). **off** is vLLM with no KV connector (8Gi). Both keep vLLM's GPU prefix cache. "Offload" below always means KV cache offload to LMCache.
+- **Arms:** **on** is vLLM with KV cache offload to LMCache's CPU tier enabled (`--kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'`, pod memory limit 12Gi: the engine's 8Gi plus the 4 GiB tier). **off** is vLLM with no KV connector (pod memory limit 8Gi). Both keep vLLM's GPU prefix cache. "Offload" below always means KV cache offload to LMCache.
 - **SLO:** `ttft:1000`, `tpot:50` (ms); goodput floor `0.95`
 - **runs_per_arm:** 3, interleaved off-r1, on-r1, off-r2, on-r2, off-r3, on-r3. Each run redeploys the pod, runs the warmup, then the ladder.
 - **Rungs (`max_concurrency`):** 1, 2, 4 (warmup at 1, unrecorded)
@@ -82,7 +82,7 @@ The combined hit rates separate in on's favour at every rung. The GPU hit rates 
 The mechanism check passes.
 
 - **Off:** combined hit rate equals GPU hit rate at every rung, including the ranges, so no off rung reached a connector.
-- **On:** the CPU tier served about 0.45 of prefix lookups, more than the GPU pool served on its own. On's combined hit rate of 0.86 matches the workload's prefix fraction (3072 / 3584 = 0.857), so with offload on, almost every shared-prefix token is a hit.
+- **On:** the CPU tier served about 0.45 of prefix lookups, about as much as the GPU pool served on its own (~0.41). On's combined hit rate of 0.86 matches the workload's prefix fraction (3072 / 3584 = 0.857), so with offload on, almost every shared-prefix token is a hit.
 
 The GPU hit rate is the same in both arms (~0.41). The capped pool keeps only part of the 1.5×-oversized working set resident, and offload does not change that. Offload recovers the evicted remainder from CPU.
 
@@ -117,7 +117,7 @@ The 3.70× gain costs host RAM, not GPU memory:
 
 ## Recommendation
 
-**Keep offload off by default on the g5.xlarge.** The win above was measured on a GPU pool capped to 16,384 tokens. The default deployment runs the pool uncapped at 185,696 tokens, and the 4 GiB tier the g5.xlarge can hold (~58k tokens) is smaller than that. LMCache copies every prefill to the tier, so the tier holds a subset of what the GPU pool already holds, and reachable reuse is max(GPU, CPU), not their sum. On the default deployment, offload would therefore cost the 4 GiB tier and the +4Gi pod limit and add no prefix reuse.
+**Keep offload off by default on the g5.xlarge.** The win above was measured on a GPU pool capped to 16,384 tokens. The default deployment runs the pool uncapped at 185,696 tokens, and the 4 GiB tier the g5.xlarge can hold (~58k tokens) is smaller than that. LMCache copies every prefill to the tier and both tiers evict least recently used first, so any prefix the GPU pool has dropped is already gone from the tier (ADR-0023), and reachable reuse is max(GPU, CPU), not their sum. On the default deployment, offload would therefore cost the 4 GiB tier and the +4Gi pod limit and add no prefix reuse.
 
 **Revisit on the g5.2xlarge.** Its 32 GiB of host RAM fits a ~16 GiB tier (~233k tokens), which is larger than the uncapped GPU pool (ADR-0023). Once the G-instance vCPU quota is approved, re-run this A/B there, uncapped, with a working set larger than the GPU pool. Turn offload on by default if that run shows a win, as this one does, for a workload like this run's.
 
