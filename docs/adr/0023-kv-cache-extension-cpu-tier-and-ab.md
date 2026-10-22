@@ -41,7 +41,8 @@ On a g5.xlarge with vLLM 0.29.0, LMCache 0.5.4-g3e11b8ed, Qwen3-8B-AWQ, fp8 KV, 
 | memlock in the pod | unlimited |
 | LMCache in the stock image | 0.5.4 |
 
-Three behaviours the smoke run showed also shape the design:
+Two behaviours the smoke run showed, and one counter semantic #326 read from the sources,
+also shape the design:
 
 - LMCache copies each prefill's KV to the CPU tier when the prefill runs, not when the GPU
   evicts it. A tail shorter than one chunk is not stored (`save_unfull_chunk: False`).
@@ -70,7 +71,7 @@ Alternatives considered:
   12.8 GiB) does not fit.
 - **A g5.2xlarge (32 GiB host RAM).** It would fit a ~16 GiB tier (~233k tokens) under a
   ~24Gi limit, which exceeds the uncapped GPU pool. It needs a G-instance vCPU quota
-  increase to 8 in eu-west-1, which has been requested. Moving to it is a follow-up; the
+  increase to 8 in eu-west-1. Moving to it is a follow-up; the
   flow reads the tier size from the manifest, so its code does not change when the rig does.
 
 ### LMCache loads through vLLM's V1 KV connector
@@ -113,8 +114,9 @@ engine the stock image already is. It can be revisited if a later need outgrows 
 
 ### One switch, off by default
 
-`KV_CACHE_OFFLOAD` is `off` unless set to `on`. `just _render-gpu-manifest` and the worker's
-per-point render both read it, and any other value fails the render. On, it renders the
+`just _render-gpu-manifest` reads `KV_CACHE_OFFLOAD`, which is `off` unless set to `on`; any
+other value fails the render. The worker's render takes the same switch as a boolean: the
+knob sweep passes off, and the A/B passes each arm's value. On, a render sets the
 connector config and the 12Gi limit together, so a half-configured offload cannot be
 deployed. Off, it renders `--kv-transfer-config None`, which vLLM parses as no connector, and
 the 8Gi limit. The `LMCACHE_*` env is in the manifest either way; nothing reads it unless
@@ -157,7 +159,8 @@ So each arm caps the GPU pool with `--kv-cache-memory-bytes 1207959552`, which i
 tokens. That puts the pool below the tier. A plain `gpu-deploy` and the knob sweep stay
 uncapped. vLLM's `prefix_repetition` dataset then runs workloads whose distinct prefixes
 overflow the pool but whose prompts fit the tier. Each workload has 3584 prompt tokens and
-128 output tokens, aligned to 256-token chunks, on a `[1, 2, 4]` concurrency ladder:
+128 output tokens on a `[1, 2, 4]` concurrency ladder. Each prefix is its share of the
+prompt floored to whole 256-token chunks, so the agent's 90% share is a 3072-token prefix:
 
 | Workload | Prefix share | Prefixes × length | Working set | Tier demand |
 |---|---|---|---|---|
@@ -220,9 +223,9 @@ Alternatives considered:
   uncapped rig. On the committed g5.xlarge, offload adds no reuse, because the tier is
   smaller than the uncapped pool. A win there needs a tier larger than the pool, such as
   the g5.2xlarge.
-- The knob-sweep grid, its slugs, cache key and analyze-bench's parsing are unchanged. The
-  GPU KV pool cap is one more engine arg in every cell's digest, so the finished cells of a
-  knob sweep resumed across that change were re-measured once.
+- The A/B leaves the knob-sweep grid, its slugs, cache key and analyze-bench's parsing
+  alone. The GPU KV pool cap is an engine arg in every cell's digest, uncapped for the
+  knob sweep.
 - L4 inherits a known-good setup: the stock image, `LMCacheConnectorV1` in `kv_both` role,
   and the `LMCACHE_*` tier env.
 - Startup with offload on logs three harmless lines. vLLM turns off its hybrid KV cache
