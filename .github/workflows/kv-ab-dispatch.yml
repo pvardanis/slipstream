@@ -1,0 +1,51 @@
+# Manual CI trigger for the KV cache offload A/B (#326), the knob sweep's sweep-dispatch
+# counterpart (ADR-0015 'CI later' arm): a workflow_dispatch that registers the
+# kv-cache-extension-ab deployment and fires a run of it against an already-live stack,
+# from the GitHub UI without a workstation's kubectl. The body is flow-dispatch.yml,
+# shared with the knob sweep's trigger; see it for what each step does and what it leaves
+# to the operator.
+# Dispatch it from main: the OIDC role trusts only main-branch runs.
+name: kv-ab-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_id:
+        description: >-
+          Bench host instance id the run drives over SSM. Leave blank to resolve it
+          from the running bench host's tags; set it only to override that (e.g. to
+          target a specific host when more than one is running).
+        required: false
+        type: string
+        default: ""
+      run_id:
+        description: >-
+          Run id to tag this run's results under in S3. Leave blank to generate a
+          UTC timestamp (the same default the manual `just bench` arm uses).
+        required: false
+        type: string
+        default: ""
+
+# Least privilege at the top: only read. The trigger job raises id-token for the OIDC
+# exchange the called workflow makes; a called workflow gets no more than its caller grants.
+permissions:
+  contents: read
+
+# The sweep pool is concurrency 1 server-side, so a second run queues behind a live one
+# rather than preempting it. This guard only stops two dispatches racing the same
+# trigger; never cancel an in-flight trigger, so a dispatch mid-port-forward is not torn
+# down.
+concurrency:
+  group: kv-ab-dispatch
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    permissions:
+      contents: read
+      id-token: write # the OIDC exchange for the sweep-dispatch role
+    uses: ./.github/workflows/flow-dispatch.yml
+    with:
+      flow: kv-ab
+      instance_id: ${{ inputs.instance_id }}
+      run_id: ${{ inputs.run_id }}
