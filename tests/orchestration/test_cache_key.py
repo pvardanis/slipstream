@@ -35,7 +35,7 @@ def test_cells_of_different_runs_have_different_keys() -> None:
 
 
 def test_get_cell_cache_key_reads_the_parts_off_the_call_parameters() -> None:
-    parameters = {**_PARTS, "result_uri": "s3://bucket/sweeps/run/cell.json"}
+    parameters = {**_PARTS, "result_uri": "s3://bucket/knob-sweep/run/cell.json"}
 
     assert (
         get_cell_cache_key(None, parameters)

@@ -3,7 +3,7 @@
 ADR-0012 §Amendment: each cell is one ``docker run`` on the bench host over SSM. The
 flow renders a ``CellConfig`` to the YAML ``load-cell`` reads (the CLI-injected keys
 excluded, so ``load_cell_config`` re-injecting them round-trips), addresses the cell's
-result object under ``sweeps/<run_id>/<basename>``, and builds the ``execute_func`` the
+result object under ``<run_id>/<basename>``, and builds the ``execute_func`` the
 cell task runs: send ``bench-sweep.sh`` over SSM, then download the result JSON the
 validity gate reads. The transport and S3 clients are faked so the wiring is covered
 without AWS.
@@ -69,13 +69,13 @@ def test_render_cell_config_omits_the_cli_injected_keys() -> None:
 def test_cell_result_uri_addresses_the_run_prefix() -> None:
     cell = _first_cell()
 
-    uri = get_cell_result_uri("bench-bucket", "20260101T000000Z/mns64", cell)
+    uri = get_cell_result_uri("bench-bucket", "knob-sweep/20260101T000000Z/mns64", cell)
 
     assert uri == (
-        f"s3://bench-bucket/sweeps/20260101T000000Z/mns64/{get_cell_basename(cell)}"
+        f"s3://bench-bucket/knob-sweep/20260101T000000Z/mns64/{get_cell_basename(cell)}"
     )
-    assert get_cell_s3_key("20260101T000000Z/mns64", cell) == (
-        f"sweeps/20260101T000000Z/mns64/{get_cell_basename(cell)}"
+    assert get_cell_s3_key("knob-sweep/20260101T000000Z/mns64", cell) == (
+        f"knob-sweep/20260101T000000Z/mns64/{get_cell_basename(cell)}"
     )
 
 

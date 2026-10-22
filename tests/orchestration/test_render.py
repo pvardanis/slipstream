@@ -201,7 +201,7 @@ def _fakes(
         if store_raises or name == store_raises_name:
             raise RuntimeError("s3 upload failed")
         stored.append((name, data))
-        return f"sweeps/run1/charts/{name}"
+        return f"knob-sweep/run1/charts/{name}"
 
     images: list[tuple[str, str, str, str]] = []
 
@@ -303,7 +303,7 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
     assert fakes.images == [
         (
             "knob-sweep-goodput-cliff-plot",
-            "sweeps/run1/charts/goodput-by-max-concurrency.png",
+            "knob-sweep/run1/charts/goodput-by-max-concurrency.png",
             "## goodput cliff — plot",
             (
                 "Each facet an engine point, a line per prefix-share: goodput fraction against "
@@ -312,7 +312,7 @@ def test_folds_the_whole_run_then_publishes_tables_then_plots(tmp_path: Path) ->
         ),
         (
             "knob-sweep-ceiling-plot",
-            "sweeps/run1/charts/ceiling-by-max-num-seqs.png",
+            "knob-sweep/run1/charts/ceiling-by-max-num-seqs.png",
             "## concurrency ceiling — plot",
             (
                 "Each facet a caching/prefix-share condition, a line per `kv_cache_dtype`: the "
@@ -424,7 +424,7 @@ def test_a_ceiling_plot_render_failure_leaves_the_tables_and_cliff_plot_publishe
 def _materialize_keys(s3: Any) -> list[str]:
     with materialize_run(
         grid=_grid(),
-        run_prefix="run1",
+        run_prefix="knob-sweep/run1",
         bucket="bench-bucket",
         s3_client=s3,
         model=_MODEL,
@@ -446,12 +446,12 @@ def test_materialize_downloads_every_cell_into_the_per_point_layout() -> None:
     assert len(keys) == 6
     assert sorted(keys) == sorted(
         [
-            "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json",
-            "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc128.json",
-            "sweeps/run1/mns64_kvfp8_pcon/pshare50_burst1.0_mc64.json",
-            "sweeps/run1/mns64_kvfp8_pcon/pshare50_burst1.0_mc128.json",
-            "sweeps/run1/mns64_kvfp8_pcoff/pshare0_burst1.0_mc64.json",
-            "sweeps/run1/mns64_kvfp8_pcoff/pshare0_burst1.0_mc128.json",
+            "knob-sweep/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json",
+            "knob-sweep/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc128.json",
+            "knob-sweep/run1/mns64_kvfp8_pcon/pshare50_burst1.0_mc64.json",
+            "knob-sweep/run1/mns64_kvfp8_pcon/pshare50_burst1.0_mc128.json",
+            "knob-sweep/run1/mns64_kvfp8_pcoff/pshare0_burst1.0_mc64.json",
+            "knob-sweep/run1/mns64_kvfp8_pcoff/pshare0_burst1.0_mc128.json",
         ]
     )
 
@@ -461,7 +461,7 @@ def test_materialize_folds_into_the_grids_ceilings() -> None:
 
     with materialize_run(
         grid=_grid(),
-        run_prefix="run1",
+        run_prefix="knob-sweep/run1",
         bucket="bench-bucket",
         s3_client=s3,
         model=_MODEL,
@@ -480,7 +480,7 @@ def test_materialize_folds_into_the_grids_rungs() -> None:
 
     with materialize_run(
         grid=_grid(),
-        run_prefix="run1",
+        run_prefix="knob-sweep/run1",
         bucket="bench-bucket",
         s3_client=s3,
         model=_MODEL,
@@ -516,7 +516,7 @@ def test_materialize_propagates_a_missing_cell() -> None:
         pytest.raises(ClientError),
         materialize_run(
             grid=_grid(),
-            run_prefix="run1",
+            run_prefix="knob-sweep/run1",
             bucket="bench-bucket",
             s3_client=s3,
             model=_MODEL,
@@ -546,7 +546,7 @@ def test_upload_plot_puts_the_png_under_the_runs_charts_prefix() -> None:
     s3 = _CapturingS3()
 
     key = upload_plot(
-        run_prefix="run1",
+        run_prefix="knob-sweep/run1",
         bucket="bench-bucket",
         s3_client=s3,
         name="ceiling-by-max-num-seqs.png",
@@ -556,11 +556,11 @@ def test_upload_plot_puts_the_png_under_the_runs_charts_prefix() -> None:
     # The plot lands beside the run's cells, under its own charts prefix, as the durable copy
     # behind the inline preview — the object key the presigned fallback would presign if it is
     # ever wired onto the publish seam.
-    assert key == "sweeps/run1/charts/ceiling-by-max-num-seqs.png"
+    assert key == "knob-sweep/run1/charts/ceiling-by-max-num-seqs.png"
     assert s3.puts == [
         {
             "Bucket": "bench-bucket",
-            "Key": "sweeps/run1/charts/ceiling-by-max-num-seqs.png",
+            "Key": "knob-sweep/run1/charts/ceiling-by-max-num-seqs.png",
             "Body": b"CEILING-PNG",
             "ContentType": "image/png",
         }
@@ -578,7 +578,7 @@ def test_publish_image_plot_points_an_image_artifact_at_the_public_s3_url() -> N
 
     publish_image_plot(
         key="knob-sweep-ceiling-plot",
-        s3_key="sweeps/run1/charts/ceiling-by-max-num-seqs.png",
+        s3_key="knob-sweep/run1/charts/ceiling-by-max-num-seqs.png",
         heading="## concurrency ceiling — plot",
         blurb="The ceiling per engine config.",
         bucket="slipstream-bench-endpoint-results-abc123",
@@ -593,7 +593,7 @@ def test_publish_image_plot_points_an_image_artifact_at_the_public_s3_url() -> N
         {
             "image_url": (
                 "https://slipstream-bench-endpoint-results-abc123.s3.eu-west-1."
-                "amazonaws.com/sweeps/run1/charts/ceiling-by-max-num-seqs.png"
+                "amazonaws.com/knob-sweep/run1/charts/ceiling-by-max-num-seqs.png"
             ),
             "key": "knob-sweep-ceiling-plot",
             "description": (

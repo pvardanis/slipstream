@@ -37,6 +37,8 @@ from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
     build_cell_execution,
     build_s3_client,
+    get_cell_result_uri,
+    get_cell_s3_key,
     start_bench_proxy,
 )
 from slipstream_bench.orchestration.cluster import (
@@ -59,9 +61,9 @@ from slipstream_bench.orchestration.kv_ab_cell import (
     fetch_metrics,
     get_kv_ab_cell,
     get_kv_ab_cell_digest,
-    get_kv_ab_record_key,
+    get_kv_ab_label_key,
     get_kv_ab_run_id,
-    write_kv_ab_record,
+    write_kv_ab_labels,
 )
 from slipstream_bench.orchestration.kv_ab_config import (
     KvAbConfig,
@@ -191,7 +193,7 @@ class KvAbInputs:
     :param manifest_text: the raw ``k8s/vllm-gpu.yaml`` text each redeploy renders.
     :param rig: the rig capacities read off that manifest, which every rung's digest
         folds in.
-    :param run: the A/B's run id, which every arm run's cells and records nest under.
+    :param run: the A/B's run id, which every arm run's cells and labels nest under.
     :param serving: the model and vLLM serving image every rung's digest folds in.
     :param instance_id: the bench host the cells run on.
     :param image_ref: the bench-client image the cells run.
@@ -240,7 +242,7 @@ def kv_ab_flow(
     metrics_url: str = ENGINE_METRICS_URL,
     retries: int = 0,
 ) -> list[str]:
-    """Run the KV cache offload A/B as one Prefect flow and return its record pointers.
+    """Run the KV cache offload A/B as one Prefect flow and return its labels pointers.
 
     The composition root the deployment registers: it reads the workload, the rig, and
     the run-wide digest inputs, binds the driver's collaborators to the live transports,
@@ -250,7 +252,7 @@ def kv_ab_flow(
     parameters are all serializable; the three paths name in-image files read on the
     worker. The run is tagged ``run=<run-id>``.
 
-    :param run_id: the A/B's run id, which its cells and records nest under.
+    :param run_id: the A/B's run id, which its cells and labels nest under.
     :param instance_id: the bench host the cells run on.
     :param region: the AWS region of the host and bucket.
     :param bucket: the results bucket (RESULTS_BUCKET).
@@ -262,7 +264,7 @@ def kv_ab_flow(
         capacities.
     :param metrics_url: the GPU engine's /metrics URL, reachable from the worker.
     :param retries: opt-in cell retries for a transient transport fault.
-    :return: the record pointer of every ladder rung, in run order.
+    :return: the labels pointer of every ladder rung, in run order.
     """
     logger = get_run_logger()
     enable_milestone_logging()
@@ -307,9 +309,9 @@ def kv_ab_flow(
         read_metrics=partial(fetch_metrics, metrics_url),
     )
     result = drive_kv_ab(config, inputs.rig, collaborators)
-    # Every rung's record is in S3; fold them into the tables and chart on this run page as
-    # a terminal task, so a render failure leaves the records intact and a re-run resumes
-    # every cached run and re-renders.
+    # Every rung's raw result and labels are in S3; fold them into the tables and chart on
+    # this run page as a terminal task, so a render failure leaves them intact and a re-run
+    # resumes every cached run and re-renders.
     render_kv_ab_results(
         pointers=result.pointers,
         run_id=run_id,
@@ -396,15 +398,15 @@ def build_kv_ab_collaborators(
     The redeploy renders the A/B's engine args and the run's offload switch into the
     manifest; the pool scrape reads the engine's startup log. The warmup brings the bench
     proxy up and runs one cell at the warmup concurrency under the bench-host run id
-    ``kv-ab/<run>/<arm>-r<n>/warmup``, gated but neither cached nor recorded (its raw
-    result still lands under ``sweeps/``). Each rung runs through the kv-ab cell task,
-    keyed by the run's ``kv-ab/<run>/<arm>-r<n>`` run id and ``<arm>-r<n>`` slug, and the
-    pending gate reads that task's cache for every rung of the run.
+    ``kv-offload-ab/<run>/<arm>-r<n>/warmup``, gated but neither cached nor labelled (its
+    raw result still lands under that prefix). Each rung runs through the kv-ab cell task,
+    keyed by the run's ``kv-offload-ab/<run>/<arm>-r<n>`` run id and ``<arm>-r<n>`` slug,
+    and the pending gate reads that task's cache for every rung of the run.
 
     :param inputs: the per-A/B inputs every arm run shares.
     :param kubectl: the transport the redeploy and pool scrape are issued through.
     :param ssm_client: the boto3 SSM client the proxy and cells are sent through.
-    :param s3_client: the boto3 S3 client results are downloaded and records written with.
+    :param s3_client: the boto3 S3 client results are downloaded and labels written with.
     :param task: the kv-ab cell task each rung is cached and measured with.
     :param read_metrics: reads the serving engine's /metrics around each rung.
     :return: the collaborators :func:`drive_kv_ab` sequences.
@@ -499,12 +501,12 @@ def _run_rung(
     task: Task[..., str],
     read_metrics: MetricsReader,
 ) -> str:
-    """Run one rung through the kv-ab cell task and return its record's pointer."""
+    """Run one rung through the kv-ab cell task and return its labels' pointer."""
     rung = _get_rung(inputs, arm_run, concurrency)
     context = _get_execution_context(inputs, rung.run_id, ssm_client, s3_client)
-    record_key = get_kv_ab_record_key(inputs.run, arm_run.slug(), rung.cell)
-    # The download is read only by the validity gate and the record; the durable copies
-    # stay in S3, and the worker's root filesystem is read-only, so it lands in /tmp.
+    result_key = get_cell_s3_key(rung.run_id, rung.cell)
+    # The download is read only by the validity gate and the cell's artifact; the durable
+    # copies stay in S3, and the worker's root filesystem is read-only, so it lands in /tmp.
     with TemporaryDirectory() as scratch:
         dest = Path(scratch) / rung.cell_name
         return task.with_options(refresh_cache=refresh)(
@@ -518,11 +520,12 @@ def _run_rung(
             arm=arm_run.arm,
             run=arm_run.run,
             model=inputs.model,
-            write_record=partial(
-                write_kv_ab_record,
+            result_uri=get_cell_result_uri(inputs.bucket, rung.run_id, rung.cell),
+            write_labels=partial(
+                write_kv_ab_labels,
                 s3_client=s3_client,
                 bucket=inputs.bucket,
-                key=record_key,
+                key=get_kv_ab_label_key(result_key),
             ),
         )
 

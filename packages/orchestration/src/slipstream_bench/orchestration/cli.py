@@ -48,7 +48,10 @@ app = typer.Typer(
 def point_sweep(
     *,
     run_id: Annotated[
-        str, typer.Option(help="Point-nested bucket prefix (<run>/<point-slug>).")
+        str,
+        typer.Option(
+            help="Point-nested run id (<run>/<point-slug>), stored under knob-sweep/."
+        ),
     ],
     point_slug: Annotated[str, typer.Option(help="Engine point's cache-key slug.")],
     instance_id: Annotated[str, typer.Option(help="Bench host instance id.")],
@@ -354,7 +357,8 @@ def build_sweep_context(
     and the dry-run flag (:func:`~slipstream_bench.orchestration.flows.point_sweep.get_cell_digest`),
     so a change to any of them invalidates the cells it affects.
 
-    :param run_id: the point-nested bucket prefix (``<run>/<point-slug>``).
+    :param run_id: the point-nested run id (``<run>/<point-slug>``), whose cells land
+        under ``knob-sweep/<run>/<point-slug>/``.
     :param point_slug: the engine point's cache-key part.
     :param instance_id: the bench host the cells run on.
     :param image_ref: the bench-client image the cells run.

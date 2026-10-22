@@ -1,16 +1,17 @@
 """The kv-cache-extension-ab cell task: one ladder rung measured over its prefix-cache window.
 
 A rung reads vLLM's /metrics just before and just after its cell, so the prefix-cache hit
-rates it records are the counters' advance over the cell's own traffic rather than the
+rates it labels are the counters' advance over the cell's own traffic rather than the
 engine's lifetime ratio, which the warmup and earlier rungs pollute. It gates the result
-through :func:`validate_cell`, labels it with the arm, run, and window
-(:func:`build_kv_ab_record`), writes that record, and returns the record's S3 pointer. An
-invalid cell or an unreadable window raises before the record is written, so the task
-caches nothing and the next run re-measures the rung.
+through :func:`validate_cell`, labels the cell with the arm, run, and window
+(:func:`build_kv_ab_labels`), writes those labels beside the raw result the bench host
+stored, and returns the labels' S3 pointer. An invalid cell or an unreadable window raises
+before the labels are written, so the task caches nothing and the next run re-measures
+the rung.
 
 The task is the knob sweep's cell task around this body: the same S3 storage blocks and
 the same ``run-id:digest:point-slug:cell-name`` key, whose run id nests the A/B under
-``kv-ab/`` and whose point slug names the arm run (``<arm>-r<n>``).
+``kv-offload-ab/`` and whose point slug names the arm run (``<arm>-r<n>``).
 """
 
 import logging
@@ -21,8 +22,7 @@ from typing import Any
 from prefect import Task
 from prefect.artifacts import create_markdown_artifact
 
-from slipstream_bench.contract import read_result
-from slipstream_bench.contract.kv_ab_record import Arm, build_kv_ab_record
+from slipstream_bench.contract.kv_ab_record import Arm, build_kv_ab_labels
 from slipstream_bench.contract.prefix_cache_window import get_prefix_cache_window
 from slipstream_bench.orchestration.kv_ab_cell import MetricsError
 from slipstream_bench.orchestration.tasks.cell import (
@@ -37,8 +37,8 @@ from slipstream_bench.orchestration.validity import validate_cell
 # Reads the serving engine's Prometheus /metrics exposition text.
 MetricsReader = Callable[[], str]
 
-# Writes a rung's labelled record and returns its S3 pointer.
-RecordWriter = Callable[[Mapping[str, Any]], str]
+# Writes a rung's labels and returns their S3 pointer.
+LabelsWriter = Callable[[Mapping[str, Any]], str]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,10 +82,11 @@ def run_kv_ab_cell(
     arm: Arm,
     run: int,
     model: str,
-    write_record: RecordWriter,
+    result_uri: str,
+    write_labels: LabelsWriter,
     publish: ArtifactPublisher,
 ) -> str:
-    """Measure one rung over its prefix-cache window and write its labelled record.
+    """Measure one rung over its prefix-cache window and write its labels.
 
     :param execute_func: runs the single cell, raising on process failure.
     :param read_metrics: reads the serving engine's /metrics, before and after the cell.
@@ -93,9 +94,10 @@ def run_kv_ab_cell(
     :param arm: the arm the rung is measured in.
     :param run: the run's 1-based repetition within its arm.
     :param model: the served model id, the ``model_name`` label the counters carry.
-    :param write_record: writes the labelled record and returns its S3 pointer.
+    :param result_uri: the raw result's ``s3://`` pointer, which the cell's artifact links.
+    :param write_labels: writes the labels and returns their S3 pointer.
     :param publish: the markdown-artifact publisher for the rung's metrics artifact.
-    :return: the record's S3 pointer.
+    :return: the labels' S3 pointer.
     :raise InvalidCellError: when the result is not a measurement.
     :raise PrefixCacheError: when the snapshots yield no window, e.g. counters that went
         backwards because the engine restarted mid-cell.
@@ -111,7 +113,7 @@ def run_kv_ab_cell(
     except MetricsError as error:
         raise MetricsError(
             f"cell {result_path.name} ran but the /metrics read after it failed, so "
-            f"it has no window and no record; the next run re-measures it: {error}"
+            f"it has no window and no labels; the next run re-measures it: {error}"
         ) from error
     validate_cell(result_path)
     window = get_prefix_cache_window(
@@ -123,18 +125,15 @@ def run_kv_ab_cell(
             f"/metrics after {result_path.name}",
         ),
     )
-    record = build_kv_ab_record(
-        read_result(result_path), arm=arm, run=run, window=window
-    )
-    record_uri = write_record(record)
+    labels_uri = write_labels(build_kv_ab_labels(arm=arm, run=run, window=window))
     _LOGGER.info(
         "cell %s prefix cache: hit rate %.3f, combined %.3f",
-        record_uri,
+        labels_uri,
         window.hit_rate,
         window.combined_hit_rate,
     )
-    report_cell(publish, result_path=result_path, result_uri=record_uri)
-    return record_uri
+    report_cell(publish, result_path=result_path, result_uri=result_uri)
+    return labels_uri
 
 
 def _kv_ab_cell(
@@ -149,15 +148,16 @@ def _kv_ab_cell(
     arm: Arm,
     run: int,
     model: str,
-    write_record: RecordWriter,
+    result_uri: str,
+    write_labels: LabelsWriter,
 ) -> str:
-    """Measure one rung and return its record's pointer — the function Prefect wraps.
+    """Measure one rung and return its labels' pointer — the function Prefect wraps.
 
     ``run_id``, ``digest``, ``point_slug``, and ``cell_name`` are unread: they reach the
     cache key only as call parameters (see
     :func:`slipstream_bench.orchestration.tasks.cell._bench_cell`).
 
-    :return: the record's S3 pointer.
+    :return: the labels' S3 pointer.
     """
     return run_kv_ab_cell(
         execute_func,
@@ -166,6 +166,7 @@ def _kv_ab_cell(
         arm=arm,
         run=run,
         model=model,
-        write_record=write_record,
+        result_uri=result_uri,
+        write_labels=write_labels,
         publish=create_markdown_artifact,
     )

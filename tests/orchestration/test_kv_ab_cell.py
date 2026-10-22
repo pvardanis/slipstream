@@ -1,10 +1,10 @@
 """Tests for a kv-ab ladder rung's cell, its S3 addresses, and its config digest.
 
 Each rung of a run is one cell of the workload's load knobs at the rung's concurrency.
-The bench host copies the raw result under ``sweeps/<run-id>/``, so a run's cells run
-under ``kv-ab/<run>/<arm>-r<n>`` and their raw results land apart from the knob sweep's,
-while the labelled record lands under ``kv-ab/``. The digest names what a cached rung
-was measured with, so a change to the engine or the cell re-measures it.
+The bench host copies the raw result under ``<run-id>/``, so a run's cells run under
+``kv-offload-ab/<run>/<arm>-r<n>`` and their raw results land apart from the knob sweep's,
+with each rung's labels beside its raw result. The digest names what a cached rung was
+measured with, so a change to the engine or the cell re-measures it.
 """
 
 import threading
@@ -23,7 +23,8 @@ from slipstream_bench.orchestration.kv_ab_cell import (
     fetch_metrics,
     get_kv_ab_cell,
     get_kv_ab_cell_digest,
-    get_kv_ab_record_key,
+    get_kv_ab_label_key,
+    get_kv_ab_result_key,
     get_kv_ab_run_id,
 )
 from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
@@ -67,22 +68,38 @@ def test_a_rung_cell_runs_the_workload_load_at_its_concurrency() -> None:
     assert cell.model == _MODEL
 
 
-def test_a_runs_raw_results_land_apart_from_the_knob_sweeps() -> None:
+def test_a_runs_raw_results_land_under_the_kv_offload_ab_prefix() -> None:
     cell = get_kv_ab_cell(_CONFIG, 4, model=_MODEL)
 
     run_id = get_kv_ab_run_id("ab1", "on-r2")
 
     assert get_cell_s3_key(run_id, cell) == (
-        "sweeps/kv-ab/ab1/on-r2/pshare90_burst1.0_mc4.json"
+        "kv-offload-ab/ab1/on-r2/pshare90_burst1.0_mc4.json"
     )
 
 
-def test_a_rungs_record_lands_under_the_kv_ab_prefix() -> None:
-    cell = get_kv_ab_cell(_CONFIG, 2, model=_MODEL)
+def test_a_rungs_labels_land_beside_its_raw_result() -> None:
+    result_key = "kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc2.json"
 
-    key = get_kv_ab_record_key("ab1", "off-r1", cell)
+    assert get_kv_ab_label_key(result_key) == (
+        "kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc2.kv_ab.json"
+    )
 
-    assert key == "kv-ab/ab1/off-r1/pshare90_burst1.0_mc2.json"
+
+def test_a_rungs_raw_result_is_addressed_from_its_labels() -> None:
+    result_key = "kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc2.json"
+
+    assert get_kv_ab_result_key(get_kv_ab_label_key(result_key)) == result_key
+
+
+def test_a_result_key_that_is_not_json_has_no_labels_key() -> None:
+    with pytest.raises(ValueError, match="not a .json"):
+        get_kv_ab_label_key("kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc2")
+
+
+def test_a_key_that_is_not_a_labels_key_has_no_result_key() -> None:
+    with pytest.raises(ValueError, match="not a .kv_ab.json"):
+        get_kv_ab_result_key("kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc2.json")
 
 
 def test_a_rungs_digest_changes_with_its_concurrency() -> None:

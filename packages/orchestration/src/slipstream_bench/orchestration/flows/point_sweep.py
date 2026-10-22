@@ -35,6 +35,7 @@ from slipstream_bench.contract import (
     get_cell_basename,
     load_grid,
 )
+from slipstream_bench.orchestration.cell_objects import get_knob_sweep_prefix
 from slipstream_bench.orchestration.cell_run import (
     BENCH_PROXY_SCRIPT,
     PLACEHOLDER_BASE_URL,
@@ -59,9 +60,10 @@ from slipstream_bench.orchestration.validity import DEFAULT_MAX_ERROR_RATE
 class SweepContext:
     """The per-run context one point sweep runs against.
 
-    ``run_id`` is the point-nested bucket prefix (``<run>/<point-slug>``) the cell JSON
-    lands under, matching ``bench-sweep.sh``'s ``s3://<bucket>/sweeps/<run_id>/`` copy;
-    ``point_slug`` is the engine point's cache-key part; ``serving`` is the run-wide model
+    ``run_id`` is the point-nested run id (``<run>/<point-slug>``), the cells' cache-key
+    part; the cell JSON lands under its rooted :attr:`results_prefix`, matching
+    ``bench-sweep.sh``'s ``s3://<bucket>/<RUN_ID>/`` copy; ``point_slug`` is the engine
+    point's cache-key part; ``serving`` is the run-wide model
     and vLLM image each cell's config digest folds in (:func:`get_cell_digest`).
     """
 
@@ -117,6 +119,11 @@ class SweepContext:
         whole sweep — all its engine points — as one group.
         """
         return self.run_id.rsplit("/", 1)[0]
+
+    @property
+    def results_prefix(self) -> str:
+        """The bucket prefix the point's cells land under: ``knob-sweep/<run>/<point-slug>``."""
+        return get_knob_sweep_prefix(self.run_id)
 
 
 def run_point_sweep(
@@ -201,7 +208,7 @@ def _drive_point_sweep(
         image_ref=context.image_ref,
         bucket=context.bucket,
         model=context.model,
-        run_id=context.run_id,
+        run_id=context.results_prefix,
         sweep_args_b64=context.sweep_args_b64,
         timeout_s=context.cell_timeout_s,
         poll_interval_s=poll_interval_s,
@@ -229,7 +236,7 @@ def _drive_point_sweep(
                     execute_func=execute,
                     result_path=dest,
                     result_uri=get_cell_result_uri(
-                        context.bucket, context.run_id, cell
+                        context.bucket, context.results_prefix, cell
                     ),
                 )
             )

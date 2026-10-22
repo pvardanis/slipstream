@@ -59,7 +59,7 @@ class _FakeCluster:
 
     def _run_cell(self, arm_run: ArmRun, concurrency: int, refresh: bool) -> str:
         self.calls.append(f"cell {arm_run.slug()} c{concurrency} refresh={refresh}")
-        return f"s3://bucket/kv-ab/run/{arm_run.slug()}/c{concurrency}.json"
+        return f"s3://bucket/kv-offload-ab/run/{arm_run.slug()}/c{concurrency}.json"
 
     def _has_pending_cells(self, arm_run: ArmRun) -> bool:
         return arm_run.slug() not in self.cached_runs
@@ -149,10 +149,10 @@ def test_the_result_carries_every_cell_pointer_in_run_order() -> None:
 
     assert len(result.pointers) == 18
     assert result.pointers[:2] == (
-        "s3://bucket/kv-ab/run/off-r1/c1.json",
-        "s3://bucket/kv-ab/run/off-r1/c2.json",
+        "s3://bucket/kv-offload-ab/run/off-r1/c1.json",
+        "s3://bucket/kv-offload-ab/run/off-r1/c2.json",
     )
-    assert result.pointers[-1] == "s3://bucket/kv-ab/run/on-r3/c4.json"
+    assert result.pointers[-1] == "s3://bucket/kv-offload-ab/run/on-r3/c4.json"
 
 
 def test_a_later_run_whose_pool_holds_the_working_set_stops_before_its_cells() -> None:

@@ -4,7 +4,7 @@ ADR-0012 §Amendment: the per-cell loop lives here, and each cell is one ``docke
 on the bench host. This module renders a cell to the YAML ``load-cell`` reads (the
 CLI-injected keys excluded, so ``bench-sweep.sh`` supplies ``--base-url``/``--model``/
 ``--out-dir`` as flags), addresses the cell's result object under
-``sweeps/<run_id>/<basename>``, and builds the :data:`CellExecution` closure the cell
+``<run_id>/<basename>``, and builds the :data:`CellExecution` closure the cell
 task wraps: send ``bench-sweep.sh`` over SSM, then download the result JSON so the
 validity gate reads it locally. The transport (:mod:`slipstream_bench.orchestration.ssm`)
 and the S3 download client are passed in, so this stays a thin composition over them.
@@ -78,16 +78,18 @@ def get_cell_knobs(cell: CellConfig) -> dict[str, Any]:
 
 
 def get_cell_s3_key(run_id: str, cell: CellConfig) -> str:
-    """Address a cell's result object under the run's sweep prefix.
+    """Address a cell's result object under the run's bucket prefix.
 
-    ``bench-sweep.sh`` copies the cell JSON to ``s3://<bucket>/sweeps/<run_id>/``;
-    ``run_id`` already nests the engine point (``<run>/<point-slug>``) for a knob sweep.
+    ``bench-sweep.sh`` copies the cell JSON to ``s3://<bucket>/<run_id>/``; ``run_id``
+    already roots the run under its experiment's prefix and nests the engine point
+    (``knob-sweep/<run>/<point-slug>``) or the A/B's arm run
+    (``kv-offload-ab/<run>/<arm>-r<n>``).
 
-    :param run_id: the run's bucket prefix, point-nested by the caller.
+    :param run_id: the run's bucket prefix, rooted and nested by the caller.
     :param cell: the cell whose object is addressed.
     :return: the object key, without the bucket.
     """
-    return f"sweeps/{run_id}/{get_cell_basename(cell)}"
+    return f"{run_id}/{get_cell_basename(cell)}"
 
 
 def get_cell_result_uri(bucket: str, run_id: str, cell: CellConfig) -> str:

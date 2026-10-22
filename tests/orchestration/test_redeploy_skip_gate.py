@@ -336,7 +336,7 @@ def test_a_new_run_id_re_measures_every_cell_under_its_own_prefix(
     assert outcome.cells_resumed == 0
     assert len(outcome.pointers) == 2
     assert all(
-        pointer.startswith("s3://bench-bucket/sweeps/run2/")
+        pointer.startswith("s3://bench-bucket/knob-sweep/run2/")
         for pointer in outcome.pointers
     )
 

@@ -1,16 +1,17 @@
-"""Label a kv-cache-extension-ab cell's result with its arm, run, and prefix-cache window.
+"""Label a kv-cache-extension-ab cell with its arm, run, and prefix-cache window.
 
-The KV cache offload A/B (#326) records each ladder cell as the raw ``vllm bench serve``
-result plus a ``kv_ab`` block: the arm and run the cell was measured in, the four
-prefix-cache counters' advance over the cell, the GPU hit rate, and the combined GPU plus
-KV connector hit rate. The raw result keys stay at the top level, so the record still
-parses as a load cell. The off arm deploys without the LMCache connector, so its
-external counters must not advance. The on arm deploys with it, and vLLM asks the
-connector for every admitted request's GPU-missed tokens (the GPU never serves a whole
-prompt), so its external queries must advance. A record that says otherwise is refused.
+The KV cache offload A/B (#326) labels each ladder cell with the arm and run the cell was
+measured in, the four prefix-cache counters' advance over the cell, the GPU hit rate, and
+the combined GPU plus KV connector hit rate. The labels are stored apart from the cell's
+raw ``vllm bench serve`` result, and the record joins the two: the raw result keys at the
+top level, so the record still parses as a load cell, and the labels in a ``kv_ab``
+block. The off arm deploys without the LMCache connector, so its external counters must
+not advance. The on arm deploys with it, and vLLM asks the connector for every admitted
+request's GPU-missed tokens (the GPU never serves a whole prompt), so its external
+queries must advance. Labels that say otherwise are refused.
 
 Like the prefix-cache window it reads, the module is kept out of the kernel's package
-surface: only the A/B's /metrics readers need it.
+surface: only the A/B's /metrics readers and its render need it.
 """
 
 from collections.abc import Mapping
@@ -29,34 +30,41 @@ class KvAbRecordError(Exception):
     """A kv-ab cell whose labels contradict its arm."""
 
 
-def build_kv_ab_record(
-    result: Mapping[str, Any], *, arm: Arm, run: int, window: PrefixCacheWindow
+def build_kv_ab_labels(
+    *, arm: Arm, run: int, window: PrefixCacheWindow
 ) -> dict[str, Any]:
-    """Label a cell's raw result with its arm, run, and prefix-cache window.
+    """Label a cell with its arm, run, and prefix-cache window.
 
-    :param result: the cell's ``vllm bench serve`` result record.
     :param arm: the arm the cell was measured in.
     :param run: the run's 1-based repetition within its arm.
     :param window: the prefix-cache counters' advance over the cell.
-    :return: the result with a ``kv_ab`` block of the labels, the four counter deltas,
-        and the two hit rates.
+    :return: the labels, the four counter deltas, and the two hit rates.
     :raise KvAbRecordError: when an off-arm cell's external counters advanced, or an
         on-arm cell's external queries did not.
     """
     _reject_counters_contradicting_arm(arm, run, window)
     return {
-        **result,
-        LABELS_KEY: {
-            "arm": arm,
-            "run": run,
-            "prefix_cache_queries": window.queries,
-            "prefix_cache_hits": window.hits,
-            "external_prefix_cache_queries": window.external_queries,
-            "external_prefix_cache_hits": window.external_hits,
-            "hit_rate": window.hit_rate,
-            "combined_hit_rate": window.combined_hit_rate,
-        },
+        "arm": arm,
+        "run": run,
+        "prefix_cache_queries": window.queries,
+        "prefix_cache_hits": window.hits,
+        "external_prefix_cache_queries": window.external_queries,
+        "external_prefix_cache_hits": window.external_hits,
+        "hit_rate": window.hit_rate,
+        "combined_hit_rate": window.combined_hit_rate,
     }
+
+
+def build_kv_ab_record(
+    result: Mapping[str, Any], labels: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Join a cell's raw result and its labels into the record the report folds.
+
+    :param result: the cell's ``vllm bench serve`` result record.
+    :param labels: the cell's labels (:func:`build_kv_ab_labels`).
+    :return: the result with the labels in a ``kv_ab`` block.
+    """
+    return {**result, LABELS_KEY: dict(labels)}
 
 
 def _reject_counters_contradicting_arm(

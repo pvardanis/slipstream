@@ -163,9 +163,9 @@ def is_cell_cached(
 
     :param task: the cell task (from :func:`cell_task` or :func:`build_cell_task`)
         whose cache is consulted.
-    :param run_id: the run's bucket prefix the cell's pointer lies under
-        (``<run>/<point-slug>``, or ``kv-ab/<run>/<arm>-r<n>`` for an A/B), a
-        cache-key part.
+    :param run_id: the cell's run id (``<run>/<point-slug>``, its pointer under
+        ``knob-sweep/``, or ``kv-offload-ab/<run>/<arm>-r<n>`` for an A/B), a cache-key
+        part.
     :param digest: the deep config digest, a cache-key part.
     :param point_slug: the engine-knob point slug, or the A/B's arm-run slug, a
         cache-key part.

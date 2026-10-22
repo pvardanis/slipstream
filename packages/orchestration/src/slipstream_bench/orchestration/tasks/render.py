@@ -260,8 +260,8 @@ def materialize_run(
     commercial sweep, not reading a finished run's results.
 
     :param grid: the validated grid the run's points and cells are enumerated from.
-    :param run_prefix: the knob sweep's shared run id (cells nest under
-        ``<run_prefix>/<point-slug>``).
+    :param run_prefix: the knob sweep's rooted run prefix, ``knob-sweep/<run>`` (cells nest
+        under ``<run_prefix>/<point-slug>``).
     :param bucket: the results bucket the cell objects live in.
     :param s3_client: the boto3 S3 client (or stand-in) objects are downloaded with.
     :param model: the served model id (folded into each point's sweep config).
@@ -291,12 +291,12 @@ def upload_plot(
 ) -> str:
     """Upload a plot's PNG to the run's charts prefix as its durable copy, and return its key.
 
-    The PNG lands at ``sweeps/<run_prefix>/charts/<name>``, beside the run's cells, under the
+    The PNG lands at ``<run_prefix>/charts/<name>``, beside the run's cells, under the
     world-readable charts prefix the image artifact points at by public URL (ADR-0018 Amendment).
     ``ContentType`` is ``image/png`` so a browser renders it inline rather than downloading it.
 
-    :param run_prefix: the run id the charts nest under: the knob sweep's shared run id, or
-        an A/B's ``kv-ab/<run>``.
+    :param run_prefix: the run's rooted bucket prefix the charts nest under: a knob sweep's
+        ``knob-sweep/<run>``, or an A/B's ``kv-offload-ab/<run>``.
     :param bucket: the results bucket the plot is uploaded to.
     :param s3_client: the boto3 S3 client (or stand-in) the PNG is put with.
     :param name: the plot's object name within the run's charts prefix.
@@ -305,7 +305,7 @@ def upload_plot(
     :raise ClientError: on any S3 upload failure — the render fails loud, leaving the tables
         already published, and a re-run re-renders off S3.
     """
-    key = f"sweeps/{run_prefix}/charts/{name}"
+    key = f"{run_prefix}/charts/{name}"
     s3_client.put_object(Bucket=bucket, Key=key, Body=data, ContentType="image/png")
     return key
 
@@ -370,7 +370,8 @@ def render_results(
     terminal and idempotent off S3, so there is nothing to cache regardless.
 
     :param grid: the validated grid the run's points and cells are enumerated from.
-    :param run_prefix: the knob sweep's shared run id the cells nest under.
+    :param run_prefix: the knob sweep's rooted run prefix, ``knob-sweep/<run>``, the cells
+        and charts nest under.
     :param bucket: the results bucket the cell objects live in.
     :param region: the bucket's region, named in each plot's public image-artifact URL.
     :param s3_client: the boto3 S3 client the cells are materialized with and the plots uploaded with.

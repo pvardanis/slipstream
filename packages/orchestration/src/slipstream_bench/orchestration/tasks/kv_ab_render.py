@@ -1,13 +1,14 @@
 """The kv-ab flow's terminal render: fold the A/B's records and publish its tables and chart.
 
-After the A/B's arm runs have written every rung's labelled record to S3, one terminal
-``@task`` reads those records back off the pointers the flow returns, folds them with the
+After the A/B's arm runs have written every rung's labels to S3 beside the raw result the
+bench host stored, one terminal ``@task`` reads each rung's record back off the labels
+pointers the flow returns — its labels joined to the raw result — folds them with the
 report member's kv-ab fold, and publishes two markdown tables — each arm's rung as the median
 and range across its runs, and each arm run's ceiling — and the three-panel chart, uploaded to
 S3 as its durable copy and embedded inline on the flow run page. Reading the flow's own
 pointers, rather than listing the run's prefix, folds exactly the rungs this run measured or
-resumed. A failure fails only the render: the records are already in S3, so a re-run of the
-flow resumes every cached run and re-renders.
+resumed. A failure fails only the render: the labels and raw results are already in S3, so
+a re-run of the flow resumes every cached run and re-renders.
 
 :func:`drive_kv_ab_render` is the transport-free core: it calls the report fold, tables, and
 plotter directly, and takes only its record reads, publishes, and plot upload injected; :func:`read_kv_ab_record` is the S3 record reader; and
@@ -28,8 +29,11 @@ from prefect import task
 from prefect.cache_policies import NO_CACHE
 
 from slipstream_bench.contract import SweepAggregationError
-from slipstream_bench.contract.kv_ab_record import Arm
-from slipstream_bench.orchestration.kv_ab_cell import get_kv_ab_run_prefix
+from slipstream_bench.contract.kv_ab_record import Arm, build_kv_ab_record
+from slipstream_bench.orchestration.kv_ab_cell import (
+    get_kv_ab_result_key,
+    get_kv_ab_run_prefix,
+)
 from slipstream_bench.orchestration.tasks.render import (
     ArtifactPublisher,
     PlotPublisher,
@@ -50,8 +54,8 @@ from slipstream_bench.report.kv_ab_plotters import plot_kv_ab_png
 
 _LOGGER = logging.getLogger(__name__)
 
-# Reads a rung's labelled record off its ``s3://`` pointer. Injected so the driver stays
-# S3-free; in production the task binds :func:`read_kv_ab_record`.
+# Reads a rung's labelled record off its labels' ``s3://`` pointer. Injected so the driver
+# stays S3-free; in production the task binds :func:`read_kv_ab_record`.
 RecordReader = Callable[[str], dict[str, object]]
 
 # Keyed so Prefect keeps a cross-run history of each artifact.
@@ -94,7 +98,7 @@ def drive_kv_ab_render(
     The tables publish before the chart, so a plot or upload failure leaves them on the run
     page. Any raise propagates, so the render task fails loud.
 
-    :param pointers: every rung record's ``s3://`` pointer, as the flow returns them.
+    :param pointers: every rung labels' ``s3://`` pointer, as the flow returns them.
     :param read_record: reads a record off its pointer.
     :param publish_artifact: the markdown-artifact publisher, called with ``key`` and
         ``markdown``.
@@ -132,38 +136,52 @@ def drive_kv_ab_render(
 
 
 def read_kv_ab_record(pointer: str, *, s3_client: Any) -> dict[str, object]:
-    """Read a rung's labelled record off its ``s3://`` pointer.
+    """Read a rung's record off its labels' ``s3://`` pointer: the labels and raw result joined.
 
-    :param pointer: the record's ``s3://<bucket>/<key>`` pointer.
-    :param s3_client: the boto3 S3 client (or stand-in) the record is read with.
-    :return: the parsed record.
-    :raise ValueError: when the pointer is not an ``s3://`` pointer.
-    :raise SweepAggregationError: when the object is not valid UTF-8 JSON or not a JSON
-        object.
+    :param pointer: the labels' ``s3://<bucket>/<key>.kv_ab.json`` pointer.
+    :param s3_client: the boto3 S3 client (or stand-in) the objects are read with.
+    :return: the rung's raw result with its labels in a ``kv_ab`` block.
+    :raise ValueError: when the pointer is not an ``s3://`` pointer to a rung's labels.
+    :raise SweepAggregationError: when either object is not valid UTF-8 JSON or not a
+        JSON object.
     :raise ClientError: on any S3 read failure, an absent object among them, noted with
-        the pointer.
+        the object's pointer.
     """
     parts = urllib.parse.urlsplit(pointer)
     if parts.scheme != "s3" or not parts.netloc or not parts.path.strip("/"):
         raise ValueError(f"record pointer {pointer} is not an s3:// pointer")
 
+    bucket, labels_key = parts.netloc, parts.path.lstrip("/")
+    result_key = get_kv_ab_result_key(labels_key)
+    labels = _read_json_object(s3_client, bucket=bucket, key=labels_key, what="labels")
+    result = _read_json_object(
+        s3_client, bucket=bucket, key=result_key, what="raw result"
+    )
+    return build_kv_ab_record(result, labels)
+
+
+def _read_json_object(
+    s3_client: Any, *, bucket: str, key: str, what: str
+) -> dict[str, object]:
+    """Read one kv-ab object as a JSON object, naming it as ``what`` on any failure."""
+    pointer = f"s3://{bucket}/{key}"
     try:
-        body = s3_client.get_object(Bucket=parts.netloc, Key=parts.path.lstrip("/"))
+        body = s3_client.get_object(Bucket=bucket, Key=key)
     except Exception as error:
-        # The read error names neither bucket nor key: note the record that failed.
-        error.add_note(f"reading kv-ab record {pointer}")
+        # The read error names neither bucket nor key: note the object that failed.
+        error.add_note(f"reading kv-ab {what} {pointer}")
         raise
 
     try:
-        record = json.loads(body["Body"].read())
+        parsed = json.loads(body["Body"].read())
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise SweepAggregationError(
-            f"record {pointer} is not valid JSON: {error}"
+            f"kv-ab {what} {pointer} is not valid JSON: {error}"
         ) from error
 
-    if not isinstance(record, dict):
-        raise SweepAggregationError(f"record {pointer} is not a JSON object")
-    return record
+    if not isinstance(parsed, dict):
+        raise SweepAggregationError(f"kv-ab {what} {pointer} is not a JSON object")
+    return parsed
 
 
 @task(name="render-kv-ab-results", cache_policy=NO_CACHE)
@@ -179,14 +197,14 @@ def render_kv_ab_results(
 ) -> None:
     """Render the A/B's tables and chart to the flow run page — the terminal task.
 
-    The chart uploads under ``sweeps/kv-ab/<run>/charts/``, the world-readable charts
+    The chart uploads under ``kv-offload-ab/<run>/charts/``, the world-readable charts
     prefix its image artifact points at (ADR-0018 Amendment). Caching is off: the task takes
     the live S3 client and publish functions, which the default inputs-hashing policy cannot
     hash, and the render is terminal and idempotent off S3 regardless.
 
-    :param pointers: every rung record's ``s3://`` pointer, as the flow returns them.
+    :param pointers: every rung labels' ``s3://`` pointer, as the flow returns them.
     :param run_id: the A/B's run id, which its chart nests under.
-    :param bucket: the results bucket the records and chart live in.
+    :param bucket: the results bucket the labels, raw results, and chart live in.
     :param region: the bucket's region, named in the chart's public image URL.
     :param s3_client: the boto3 S3 client the records are read and the chart uploaded with.
     :param publish_artifact: the markdown-artifact publisher (create_markdown_artifact in

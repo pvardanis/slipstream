@@ -3,7 +3,7 @@
 :func:`build_kv_ab_collaborators` binds the redeploy, the GPU KV pool scrape, the warmup,
 the ladder rungs, and the pending-run gate to kubectl, SSM, S3, and the engine's /metrics.
 These tests drive :func:`drive_kv_ab` over them, with real Prefect tasks whose storage is a
-tmp local filesystem, and assert what each arm run deploys, runs, and records. The flow is
+tmp local filesystem, and assert what each arm run deploys, runs, and labels. The flow is
 run once with its transport builders swapped for the same fakes.
 """
 
@@ -142,8 +142,9 @@ class _Ssm:
 class _S3:
     """Serve each cell a valid result at its rung, or a failed one under a marked key.
 
-    Records each object written, and serves each record written back; the chart upload
-    raises ``chart_error`` when set.
+    Serves each cell's raw result as the bench host stored it, both to the worker's
+    download and back to the render's read, records each object the worker writes, and
+    serves each one written back; the chart upload raises ``chart_error`` when set.
     """
 
     def __init__(
@@ -155,13 +156,7 @@ class _S3:
         self._chart_error = chart_error
 
     def download_file(self, _bucket: str, key: str, dest: str) -> None:
-        failed = any(marker in key for marker in self._failing)
-        result = _FAILED_RESULT if failed else _VALID_RESULT
-        # Each rung's result reports the concurrency its cell basename names.
-        rung = re.search(r"_mc(\d+)\.json$", key)
-        assert rung, key
-        result = {**result, "max_concurrency": int(rung[1])}
-        Path(dest).write_text(json.dumps(result), encoding="utf-8")
+        Path(dest).write_text(json.dumps(self._raw_result(key)), encoding="utf-8")
 
     def put_object(
         self, *, Bucket: str, Key: str, Body: bytes, ContentType: str
@@ -177,7 +172,17 @@ class _S3:
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
         assert Bucket == "bench"
-        return {"Body": io.BytesIO(json.dumps(self.puts[Key]).encode())}
+        body = self.puts[Key] if Key in self.puts else self._raw_result(Key)
+        return {"Body": io.BytesIO(json.dumps(body).encode())}
+
+    def _raw_result(self, key: str) -> dict[str, Any]:
+        """The raw result the bench host stored at ``key``."""
+        failed = any(marker in key for marker in self._failing)
+        result = _FAILED_RESULT if failed else _VALID_RESULT
+        # Each rung's result reports the concurrency its cell basename names.
+        rung = re.search(r"_mc(\d+)\.json$", key)
+        assert rung, key
+        return {**result, "max_concurrency": int(rung[1])}
 
 
 class _Metrics:
@@ -291,32 +296,36 @@ def test_each_run_starts_the_proxy_warms_up_unrecorded_then_runs_its_ladder(
 
     assert ab.ssm.script_runs() == [
         "proxy",
-        "kv-ab/ab1/off-r1/warmup@mc1",
-        "kv-ab/ab1/off-r1@mc1",
-        "kv-ab/ab1/off-r1@mc2",
-        "kv-ab/ab1/off-r1@mc4",
+        "kv-offload-ab/ab1/off-r1/warmup@mc1",
+        "kv-offload-ab/ab1/off-r1@mc1",
+        "kv-offload-ab/ab1/off-r1@mc2",
+        "kv-offload-ab/ab1/off-r1@mc4",
         "proxy",
-        "kv-ab/ab1/on-r1/warmup@mc1",
-        "kv-ab/ab1/on-r1@mc1",
-        "kv-ab/ab1/on-r1@mc2",
-        "kv-ab/ab1/on-r1@mc4",
+        "kv-offload-ab/ab1/on-r1/warmup@mc1",
+        "kv-offload-ab/ab1/on-r1@mc1",
+        "kv-offload-ab/ab1/on-r1@mc2",
+        "kv-offload-ab/ab1/on-r1@mc4",
     ]
     assert not any("warmup" in key for key in ab.s3.puts)
 
 
-def test_every_rung_records_its_labelled_window_under_kv_ab(tmp_path: Path) -> None:
+def test_every_rung_writes_only_its_labelled_window_beside_its_raw_result(
+    tmp_path: Path,
+) -> None:
     ab = _Ab(_isolated_task(tmp_path))
 
     result = ab.drive()
 
     keys = [
-        f"kv-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.json"
+        f"kv-offload-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.kv_ab.json"
         for run in ("off-r1", "on-r1")
         for cap in (1, 2, 4)
     ]
+    # The worker writes the labels alone: the raw result stays the host's single copy.
     assert list(ab.s3.puts) == keys
     assert result.pointers == tuple(f"s3://bench/{key}" for key in keys)
-    labels = ab.s3.puts["kv-ab/ab1/on-r1/pshare90_burst1.0_mc4.json"]["kv_ab"]
+    labels = ab.s3.puts["kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc4.kv_ab.json"]
+    assert not set(labels) & set(_VALID_RESULT)
     # The cell's own 600/1,000, not the engine's lifetime ratio.
     assert (labels["arm"], labels["run"], labels["hit_rate"]) == ("on", 1, 0.6)
     assert labels["combined_hit_rate"] == 0.9
@@ -341,7 +350,7 @@ def test_a_failed_warmup_stops_the_run_before_its_ladder(tmp_path: Path) -> None
     with pytest.raises(InvalidCellError):
         ab.drive()
 
-    assert ab.ssm.script_runs() == ["proxy", "kv-ab/ab1/off-r1/warmup@mc1"]
+    assert ab.ssm.script_runs() == ["proxy", "kv-offload-ab/ab1/off-r1/warmup@mc1"]
     assert ab.s3.puts == {}
 
 
@@ -360,12 +369,14 @@ def test_a_partly_cached_run_is_redeployed_and_re_measured_whole(
     # The redeploy cleared the cached rung's tiers, so it is measured again on this deploy.
     assert resumed.ssm.script_runs()[:5] == [
         "proxy",
-        "kv-ab/ab1/off-r1/warmup@mc1",
-        "kv-ab/ab1/off-r1@mc1",
-        "kv-ab/ab1/off-r1@mc2",
-        "kv-ab/ab1/off-r1@mc4",
+        "kv-offload-ab/ab1/off-r1/warmup@mc1",
+        "kv-offload-ab/ab1/off-r1@mc1",
+        "kv-offload-ab/ab1/off-r1@mc2",
+        "kv-offload-ab/ab1/off-r1@mc4",
     ]
-    assert "kv-ab/ab1/off-r1/pshare90_burst1.0_mc1.json" in resumed.s3.puts
+    assert (
+        "kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc1.kv_ab.json" in resumed.s3.puts
+    )
 
 
 def test_redeploying_the_same_arm_run_rolls_a_fresh_engine(tmp_path: Path) -> None:
@@ -426,28 +437,28 @@ def _drive_flow(
     return pointers, metrics_urls
 
 
-# The six rungs' record keys a one-run-per-arm A/B writes over the agent workload's ladder.
-_RECORD_KEYS = [
-    f"kv-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.json"
+# The six rungs' labels keys a one-run-per-arm A/B writes over the agent workload's ladder.
+_LABELS_KEYS = [
+    f"kv-offload-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.kv_ab.json"
     for run in ("off-r1", "on-r1")
     for cap in (1, 2, 4)
 ]
 
 
-def test_the_flow_drives_its_workload_renders_it_and_returns_the_record_pointers(
+def test_the_flow_drives_its_workload_renders_it_and_returns_the_labels_pointers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     s3 = _S3()
 
     pointers, metrics_urls = _drive_flow(tmp_path, monkeypatch, s3)
 
-    assert pointers == [f"s3://bench/{key}" for key in _RECORD_KEYS]
+    assert pointers == [f"s3://bench/{key}" for key in _LABELS_KEYS]
     assert set(metrics_urls) == {"http://engine:8000/metrics"}
     # The terminal render folds the records and uploads the chart under the run's charts.
-    assert list(s3.charts) == ["sweeps/kv-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
+    assert list(s3.charts) == ["kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
 
 
-def test_a_failed_render_fails_the_flow_with_every_record_already_written(
+def test_a_failed_render_fails_the_flow_with_every_rungs_labels_already_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     s3 = _S3(chart_error=OSError("chart upload failed"))
@@ -455,8 +466,8 @@ def test_a_failed_render_fails_the_flow_with_every_record_already_written(
     with pytest.raises(OSError, match="chart upload failed"):
         _drive_flow(tmp_path, monkeypatch, s3)
 
-    # The records are in S3, so a re-run resumes every run and re-renders.
-    assert sorted(s3.puts) == sorted(_RECORD_KEYS)
+    # The labels are in S3, so a re-run resumes every run and re-renders.
+    assert sorted(s3.puts) == sorted(_LABELS_KEYS)
 
 
 def test_the_flow_publishes_the_ab_config_it_ran_on_the_run_page(

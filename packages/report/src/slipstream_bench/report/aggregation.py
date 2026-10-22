@@ -107,7 +107,7 @@ def _get_point_dirs(run_dir: Path) -> list[tuple[EnginePoint, Path]]:
     only the mns/kv/pc subdirs are points, so anything else is skipped rather than
     read as a cell source.
 
-    :param run_dir: the ``bench/results/sweeps/<run_id>`` directory the sweep wrote.
+    :param run_dir: the ``bench/results/knob-sweep/<run_id>`` directory the sweep wrote.
     :return: the (point, subdir) pairs, sorted by point key.
     """
     found = [
@@ -218,7 +218,7 @@ def _get_point_row(point: EnginePoint, share: int, cells: list[LoadCell]) -> Cei
 def aggregate_ceilings(run_dir: Path) -> list[CeilingRow]:
     """Fold a knob-sweep run into ceiling rows, one per point and prefix-share.
 
-    :param run_dir: the ``bench/results/sweeps/<run_id>`` directory the sweep wrote, one
+    :param run_dir: the ``bench/results/knob-sweep/<run_id>`` directory the sweep wrote, one
         subdir per engine-knob point.
     :return: the ceiling rows, sorted by point key then prefix-share.
     :raise SweepAggregationError: when the directory holds no point subdirs, or a point
@@ -241,7 +241,7 @@ def aggregate_rungs(run_dir: Path) -> list[RungRow]:
     this keeps every rung — the goodput fraction at each offered ``--max-concurrency`` —
     so the diagnostic chart plots the cliff the ceiling was read off (ADR-0009).
 
-    :param run_dir: the ``bench/results/sweeps/<run_id>`` directory the sweep wrote, one
+    :param run_dir: the ``bench/results/knob-sweep/<run_id>`` directory the sweep wrote, one
         subdir per engine-knob point.
     :return: the rung rows, sorted by point key, then prefix-share, then offered
         concurrency.
@@ -259,7 +259,7 @@ def aggregate_rungs(run_dir: Path) -> list[RungRow]:
 def _require_point_dirs(run_dir: Path) -> list[tuple[EnginePoint, Path]]:
     """Find a run's engine-knob point subdirs, failing fast when it holds none.
 
-    :param run_dir: the ``bench/results/sweeps/<run_id>`` directory the sweep wrote.
+    :param run_dir: the ``bench/results/knob-sweep/<run_id>`` directory the sweep wrote.
     :return: the (point, subdir) pairs, sorted by point key.
     :raise SweepAggregationError: when the directory holds no point subdirs — an empty
         run measured nothing and must not report zero rows as a clean result.

@@ -1,7 +1,8 @@
-"""Tests for the kv-ab cell task: a measured rung, its windowed record, and its cache.
+"""Tests for the kv-ab cell task: a measured rung, its windowed labels, and its cache.
 
 A rung reads vLLM's /metrics before and after its cell, gates the result, and writes the
-result labelled with the arm, run, and the prefix-cache counters' advance over the cell.
+cell's labels — the arm, run, and the prefix-cache counters' advance over the cell —
+apart from the raw result the bench host already stored.
 The Prefect-free :func:`run_kv_ab_cell` is tested against fakes; the task's caching and
 refresh are exercised under Prefect's test harness.
 """
@@ -27,7 +28,8 @@ from slipstream_bench.orchestration.tasks.kv_ab_cell import (
 from slipstream_bench.orchestration.validity import InvalidCellError
 
 _MODEL = "Qwen/Qwen3-8B-AWQ"
-_RECORD_URI = "s3://bench/kv-ab/ab1/on-r1/pshare90_burst1.0_mc4.json"
+_LABELS_URI = "s3://bench/kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc4.kv_ab.json"
+_RESULT_URI = "s3://bench/kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc4.json"
 
 _VALID = {
     "max_concurrency": 4,
@@ -67,7 +69,7 @@ _AFTER = _exposition(11_000, 9_500, 1_500, 1_200)
 
 
 class _Rung:
-    """One rung's fakes: the /metrics reads, the cell run, and the record write, in order."""
+    """One rung's fakes: the /metrics reads, the cell run, and the labels write, in order."""
 
     def __init__(
         self,
@@ -81,7 +83,8 @@ class _Rung:
         self._snapshots = iter(snapshots)
         self._arm: Arm = arm
         self.calls: list[str] = []
-        self.records: list[Mapping[str, Any]] = []
+        self.labels: list[Mapping[str, Any]] = []
+        self.artifacts: list[str] = []
 
     def read_metrics(self) -> str:
         self.calls.append("metrics")
@@ -94,10 +97,10 @@ class _Rung:
         self.calls.append("cell")
         self._result_path.write_text(json.dumps(self._result), encoding="utf-8")
 
-    def write_record(self, record: Mapping[str, Any]) -> str:
-        self.calls.append("record")
-        self.records.append(record)
-        return _RECORD_URI
+    def write_labels(self, labels: Mapping[str, Any]) -> str:
+        self.calls.append("labels")
+        self.labels.append(labels)
+        return _LABELS_URI
 
     def run(self) -> str:
         return run_kv_ab_cell(
@@ -107,13 +110,13 @@ class _Rung:
             arm=self._arm,
             run=1,
             model=_MODEL,
-            write_record=self.write_record,
-            publish=_discard,
+            result_uri=_RESULT_URI,
+            write_labels=self.write_labels,
+            publish=self.publish,
         )
 
-
-def _discard(**_: object) -> None:
-    """A publish stand-in for the artifact the record's rung draws."""
+    def publish(self, *, key: str | None, markdown: str) -> None:
+        self.artifacts.append(markdown)
 
 
 def test_the_hit_rate_is_the_cells_window_not_the_lifetime_ratio(
@@ -123,34 +126,54 @@ def test_the_hit_rate_is_the_cells_window_not_the_lifetime_ratio(
 
     rung.run()
 
-    (record,) = rung.records
+    (labels,) = rung.labels
     # 500/1,000 over the cell, where the after snapshot's lifetime ratio is 9,500/11,000.
-    assert record["kv_ab"]["hit_rate"] == 0.5
-    assert record["kv_ab"]["combined_hit_rate"] == 0.8
-    assert record["completed"] == 128
+    assert labels["hit_rate"] == 0.5
+    assert labels["combined_hit_rate"] == 0.8
 
 
-def test_the_metrics_reads_bracket_the_cell_and_the_record_follows(
+def test_the_labels_carry_no_copy_of_the_raw_result(tmp_path: Path) -> None:
+    rung = _Rung(tmp_path / "cell.json")
+
+    rung.run()
+
+    (labels,) = rung.labels
+    assert labels["arm"] == "on"
+    assert labels["run"] == 1
+    assert not set(labels) & set(_VALID)
+
+
+def test_the_cell_artifact_links_the_raw_result_not_the_labels(tmp_path: Path) -> None:
+    rung = _Rung(tmp_path / "cell.json")
+
+    rung.run()
+
+    (markdown,) = rung.artifacts
+    assert _RESULT_URI in markdown
+    assert _LABELS_URI not in markdown
+
+
+def test_the_metrics_reads_bracket_the_cell_and_the_labels_follow(
     tmp_path: Path,
 ) -> None:
     rung = _Rung(tmp_path / "cell.json")
 
     uri = rung.run()
 
-    assert rung.calls == ["metrics", "cell", "metrics", "record"]
-    assert uri == _RECORD_URI
+    assert rung.calls == ["metrics", "cell", "metrics", "labels"]
+    assert uri == _LABELS_URI
 
 
-def test_an_invalid_cell_writes_no_record(tmp_path: Path) -> None:
+def test_an_invalid_cell_writes_no_labels(tmp_path: Path) -> None:
     rung = _Rung(tmp_path / "cell.json", result=_DEGENERATE)
 
     with pytest.raises(InvalidCellError):
         rung.run()
 
-    assert rung.records == []
+    assert rung.labels == []
 
 
-def test_a_cell_whose_counters_went_backwards_writes_no_record(
+def test_a_cell_whose_counters_went_backwards_writes_no_labels(
     tmp_path: Path,
 ) -> None:
     # The engine restarted mid-cell, so the counters reset and the delta is meaningless.
@@ -159,10 +182,10 @@ def test_a_cell_whose_counters_went_backwards_writes_no_record(
     with pytest.raises(PrefixCacheError, match="backwards"):
         rung.run()
 
-    assert rung.records == []
+    assert rung.labels == []
 
 
-def test_an_off_arm_cell_that_advanced_the_connector_writes_no_record(
+def test_an_off_arm_cell_that_advanced_the_connector_writes_no_labels(
     tmp_path: Path,
 ) -> None:
     # _BEFORE to _AFTER advances the external counters, which an off arm never loads.
@@ -171,7 +194,7 @@ def test_an_off_arm_cell_that_advanced_the_connector_writes_no_record(
     with pytest.raises(KvAbRecordError, match="off arm"):
         rung.run()
 
-    assert rung.records == []
+    assert rung.labels == []
 
 
 def test_an_unreadable_after_snapshot_names_the_cell_that_ran(tmp_path: Path) -> None:
@@ -184,7 +207,7 @@ def test_an_unreadable_after_snapshot_names_the_cell_that_ran(tmp_path: Path) ->
         rung.run()
 
     assert isinstance(raised.value.__cause__, MetricsError)
-    assert rung.records == []
+    assert rung.labels == []
 
 
 @pytest.fixture(scope="module")
@@ -205,7 +228,7 @@ def _call(task: Task[..., str], rung: _Rung, result_path: Path) -> Callable[[], 
     @flow
     def _one_rung() -> str:
         return task(
-            run_id="kv-ab/ab1/on-r1",
+            run_id="kv-offload-ab/ab1/on-r1",
             digest="d" * 64,
             point_slug="on-r1",
             cell_name="pshare90_burst1.0_mc4.json",
@@ -215,7 +238,8 @@ def _call(task: Task[..., str], rung: _Rung, result_path: Path) -> Callable[[], 
             arm="on",
             run=1,
             model=_MODEL,
-            write_record=rung.write_record,
+            result_uri=_RESULT_URI,
+            write_labels=rung.write_labels,
         )
 
     return _one_rung
@@ -227,8 +251,8 @@ def test_a_measured_rung_is_cached_and_not_re_measured(tmp_path: Path) -> None:
     first = _Rung(tmp_path / "a.json")
     second = _Rung(tmp_path / "b.json")
 
-    assert _call(task, first, tmp_path / "a.json")() == _RECORD_URI
-    assert _call(task, second, tmp_path / "b.json")() == _RECORD_URI
+    assert _call(task, first, tmp_path / "a.json")() == _LABELS_URI
+    assert _call(task, second, tmp_path / "b.json")() == _LABELS_URI
 
     assert second.calls == []
 
@@ -241,4 +265,4 @@ def test_a_refreshing_task_re_measures_a_cached_rung(tmp_path: Path) -> None:
 
     _call(task.with_options(refresh_cache=True), again, tmp_path / "b.json")()
 
-    assert again.calls == ["metrics", "cell", "metrics", "record"]
+    assert again.calls == ["metrics", "cell", "metrics", "labels"]
