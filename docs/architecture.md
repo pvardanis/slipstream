@@ -97,9 +97,9 @@ flowchart TB
     pw -- "Tier 1:<br/>kubectl redeploy<br/>per engine point or A/B arm run" --> vllm
     pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
-    host -- "result JSON<br/>sweeps/run-id/point-slug/,<br/>sweeps/kv-ab/run-id/" --> s3
-    pw -- "charts<br/>sweeps/run-id/charts/,<br/>sweeps/kv-ab/run-id/charts/" --> s3
-    pw -- "A/B rung records<br/>kv-ab/run-id/arm-rN/" --> s3
+    host -- "result JSON<br/>knob-sweep/run-id/point-slug/,<br/>kv-offload-ab/run-id/arm-rN/" --> s3
+    pw -- "charts<br/>knob-sweep/run-id/charts/,<br/>kv-offload-ab/run-id/charts/" --> s3
+    pw -- "A/B rung labels<br/>kv-offload-ab/run-id/arm-rN/*.kv_ab.json" --> s3
     pw -- "Prefect results + cache keys<br/>prefect/results/, prefect/cache-keys/" --> s3
     pw -- ceiling and spread tables<br/>as run artifacts --> ps
 ```

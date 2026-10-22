@@ -50,15 +50,15 @@ The run aborts before its first redeploy if it cannot write and read back the re
 bucket's `prefect/cache-keys` prefix; the error names the bucket.
 
 **Results** land in the results bucket: each cell's JSON under
-`sweeps/<run-id>/<point-slug>/` and the plots under `sweeps/<run-id>/charts/`. The
+`knob-sweep/<run-id>/<point-slug>/` and the plots under `knob-sweep/<run-id>/charts/`. The
 resume state (Prefect task results and cache records) lives beside them under
 `prefect/results/` and `prefect/cache-keys/`. `stack-down` deletes the whole bucket.
 Pull the results first, then build the artifacts locally:
 
 ```sh
 just bench-results-sync
-uv run slipstream-bench aggregate-sweep --run-dir bench/results/sweeps/<run-id>   # ceiling table
-uv run slipstream-bench chart --run-dir bench/results/sweeps/<run-id>             # tables + plots
+uv run slipstream-bench aggregate-sweep --run-dir bench/results/knob-sweep/<run-id>   # ceiling table
+uv run slipstream-bench chart --run-dir bench/results/knob-sweep/<run-id>             # tables + plots
 ```
 
 ## KV cache A/B
@@ -120,17 +120,16 @@ Either refusal fails the run with no record written for that rung.
 clears both cache tiers, so an arm run whose every rung is cached is skipped, and any
 other is redeployed and re-measured whole. A new `run_id` re-measures everything.
 
-**Results** land in the results bucket. Each rung's labelled record (the raw result plus
-its arm, run, and prefix-cache hit rates) is under `kv-ab/<run-id>/<arm>-r<n>/`; the
-bench host's raw results are under `sweeps/kv-ab/<run-id>/` and the chart under
-`sweeps/kv-ab/<run-id>/charts/`. Each arm run's warmup cell lands beside its rungs under
-`<arm>-r<n>/warmup/`; leave it out when folding raw results by hand. `just
-bench-results-sync` pulls the raw results into `bench/results/sweeps/kv-ab/` and the
-labelled records into `bench/results/kv-ab/`.
+**Results** land in the results bucket under `kv-offload-ab/<run-id>/`. Each rung's raw
+result is under `<arm>-r<n>/<cell>.json`, and its labels (arm, run, and prefix-cache hit
+rates) beside it as `<arm>-r<n>/<cell>.kv_ab.json`; the chart is under `charts/`. Each arm
+run's warmup cell lands beside its rungs under `<arm>-r<n>/warmup/`, unlabelled; leave it
+out when folding raw results by hand. `just bench-results-sync` pulls the run into
+`bench/results/kv-offload-ab/`.
 
 The chart is public, like the knob sweep's: the bucket serves any `charts/` path under
-`sweeps/` anonymously. So never use `charts` as a run id or a run id segment, or that
-run's raw results become public too.
+`kv-offload-ab/` anonymously. So never use `charts` as a run id or a run id segment, or
+that run's raw results become public too.
 
 ## One point, prefix cache
 

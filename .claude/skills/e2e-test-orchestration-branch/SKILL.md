@@ -80,7 +80,7 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-swe
 
 - Each scenario gets a fresh `run_id`: a rejected cell's JSON stays under its run's S3 prefix and clutters the next look.
 - A resume is a new trigger with the same `run_id`, not a UI Retry.
-- Read a surprising result from its cell before theorising: `aws s3 cp s3://<bucket>/sweeps/<run-id>/<point-slug>/<cell>.json -` and compare `completed` against `num_prompts`, `failed`, `request_goodput` against `request_throughput`, and the p99 TTFT/TPOT across runs of the same config.
+- Read a surprising result from its cell before theorising: `aws s3 cp s3://<bucket>/knob-sweep/<run-id>/<point-slug>/<cell>.json -` and compare `completed` against `num_prompts`, `failed`, `request_goodput` against `request_throughput`, and the p99 TTFT/TPOT across runs of the same config.
 
 Separate what the scenario tests from what the rig did: a slow engine or a render failure on a fresh measurement is a finding to file, not a failed scenario. Done when every scenario has a confirmed outcome from the user.
 
