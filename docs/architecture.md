@@ -1,8 +1,8 @@
 # Architecture
 
-Two views of the running system: how code reaches AWS, and how a knob sweep measures
-the GPU replica. The target architecture (routing, autoscaling, P/D split) is in
-[`spec.md`](spec.md) §9.
+Two views of the running system: how code reaches AWS, and how the knob sweep and the
+KV cache A/B measure the GPU replica. The target architecture (routing, autoscaling, P/D
+split) is in [`spec.md`](spec.md) §9.
 
 ## CI/CD
 
@@ -15,13 +15,15 @@ config:
 flowchart LR
     pr[Pull request] --> ci
     main[Push to main] --> ci & bimg & oimg
-    op([Operator]) -- workflow_dispatch<br/>on main --> disp
+    op([Operator]) -- workflow_dispatch<br/>on main --> sdisp & kdisp
 
     subgraph gha[GitHub Actions]
         ci[ci.yml<br/>prek, pytest, terraform test,<br/>shell tests, no-push image builds]
         bimg[bench-image.yml]
         oimg[orchestration-image.yml]
-        disp[sweep-dispatch.yml]
+        sdisp[sweep-dispatch.yml]
+        kdisp[kv-ab-dispatch.yml]
+        disp[flow-dispatch.yml<br/>reusable body]
     end
 
     subgraph aws[AWS]
@@ -36,12 +38,13 @@ flowchart LR
         end
     end
 
+    sdisp & kdisp -- workflow_call --> disp
     bimg -- OIDC --> brole --> ecr
     oimg -- OIDC --> orole --> ecr
     disp -- OIDC --> drole
     ekslogo ~~~ ps
     drole -- port-forward --> ps
-    disp -- register + run<br/>knob-sweep --> ps
+    disp -- register + run<br/>knob-sweep or<br/>kv-cache-extension-ab --> ps
 ```
 
 - **No long-lived keys.** Every AWS call assumes an OIDC role created by
@@ -53,7 +56,12 @@ flowchart LR
   orchestration image), which only `main` CI publishes
   (`just bench-image` pushes a content tag from a workstation). Pull requests get a
   no-push build in `ci.yml` ([ADR-0008](adr/0008-ci-built-bench-image-and-model-definition.md)).
-- **Sweep dispatch is least-privilege.** The role can describe the cluster and bench
+- **One dispatch body, two triggers.** `sweep-dispatch` and `kv-ab-dispatch` each call
+  `flow-dispatch.yml`, which looks up the flow's deployment and config parameter in one
+  table, registers the deployment, and starts a run. A called workflow runs in its
+  caller's context and mints the caller's OIDC token, so both triggers assume the same
+  role under the same `main`-only trust.
+- **Flow dispatch is least-privilege.** The role can describe the cluster and bench
   host and list buckets. An EKS access entry maps it to a Kubernetes group that can only
   read and port-forward within the Prefect namespace (`terraform/eks`).
 - **Repo variables** (`just gh-vars`, from the bootstrap outputs): `AWS_REGION`,
@@ -75,7 +83,7 @@ flowchart TB
         ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
         ebs@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ebs-gp3-volume.svg", label: "EBS", pos: "b", w: 48, h: 48, constraint: "on" }
         pw[Prefect worker<br/>Pod Identity: S3 + SSM]
-        vllm[vLLM replica<br/>g5.xlarge via Karpenter]
+        vllm[vLLM replica<br/>g5.xlarge via Karpenter<br/>LMCache CPU tier when offload is on]
     end
 
     subgraph endpoint[bench-endpoint stack]
@@ -86,13 +94,14 @@ flowchart TB
 
     ps -- SQLite --> ebs
     ps -- flow run --> pw
-    pw -- "Tier 1:<br/>kubectl redeploy<br/>per engine point" --> vllm
+    pw -- "Tier 1:<br/>kubectl redeploy<br/>per engine point or A/B arm run" --> vllm
     pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
-    host -- "result JSON<br/>sweeps/run-id/point-slug/" --> s3
-    pw -- "charts<br/>sweeps/run-id/charts/" --> s3
+    host -- "result JSON<br/>sweeps/run-id/point-slug/,<br/>sweeps/kv-ab/run-id/" --> s3
+    pw -- "charts<br/>sweeps/run-id/charts/,<br/>sweeps/kv-ab/run-id/charts/" --> s3
+    pw -- "A/B rung records<br/>kv-ab/run-id/arm-rN/" --> s3
     pw -- "Prefect results + cache keys<br/>prefect/results/, prefect/cache-keys/" --> s3
-    pw -- ceiling tables<br/>as run artifacts --> ps
+    pw -- ceiling and spread tables<br/>as run artifacts --> ps
 ```
 
 - **External vantage.** The bench host sits outside the cluster and reaches vLLM
@@ -111,6 +120,18 @@ flowchart TB
   reads the same records, so a point redeploys only when one of its cells will run
   ([ADR-0012](adr/0012-sweep-resumability-and-orchestrator-choice.md),
   [ADR-0022](adr/0022-run-id-scoped-resume-on-prefects-cache.md)).
+
+- **KV cache A/B.** A second flow, `kv-cache-extension-ab`, on the same worker and pool
+  (concurrency 1, so it queues behind a sweep). It measures KV cache offload off against
+  on at one engine point, with prefix caching on in both arms, and caps the GPU KV pool
+  with `--kv-cache-memory-bytes` so the workload's working set overflows it. Arm runs are
+  interleaved (off, on, off, on). Each arm run that has a rung to measure redeploys the
+  replica, which clears both cache tiers, runs an unrecorded warmup, then the concurrency
+  ladder. Every rung checks
+  the KV connector's counters (`vllm:external_prefix_cache_*`) against its arm, and its
+  record carries the GPU and combined prefix-cache hit rates. Resume is per whole arm run.
+  The workload is [`bench/configs/kv-cache-extension-ab.yaml`](../bench/configs/kv-cache-extension-ab.yaml);
+  the refusals and results are in [`operations.md`](operations.md#kv-cache-ab).
 
 ## Terraform stacks
 

@@ -78,7 +78,15 @@ and publish the orchestration image (a push to `main` publishes it; for a branch
 `--param kv_ab_config=/tmp/<file>` at trigger. The pod's `/tmp` does not survive a worker
 restart.
 
-**From a workstation** (there is no dispatch workflow):
+**From CI** — Actions → `kv-ab-dispatch` → Run workflow, **on `main`**. It takes the
+same optional inputs as `sweep-dispatch` and runs the same steps: both call
+`.github/workflows/flow-dispatch.yml`. Each dispatch re-registers the deployment with
+defaults from the live stack and the `-main` bench image, so it overwrites any override a
+manual `just prefect-register-kv-ab` set, and runs the workload baked into the running
+worker image. That image is pinned at `cluster-up`, so it can lag `main`; the job summary
+warns when its workload differs from `main`'s.
+
+**From a workstation:**
 
 ```sh
 just prefect-register-kv-ab   # register the deployment on the worker's pool
@@ -148,9 +156,8 @@ just bench_image_tag="$(bench/image-tag.sh sha-tag)" prefect-register-sweep   # 
 just bench_image_tag="$(bench/image-tag.sh sha-tag)" prefect-register-kv-ab   # for a KV cache A/B
 ```
 
-A `sweep-dispatch` run re-registers with the `-main` image, so trigger a pinned knob
-sweep from a workstation. The KV cache A/B has no dispatch workflow; it is always
-triggered from a workstation.
+A `sweep-dispatch` or `kv-ab-dispatch` run re-registers with the `-main` image, so
+trigger a pinned run from a workstation.
 
 ## Cloud verify
 
