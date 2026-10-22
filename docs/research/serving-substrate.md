@@ -59,7 +59,7 @@ Notes on maturity that matter:
 
 - vLLM — Disaggregated Prefilling (experimental): https://docs.vllm.ai/en/stable/features/disagg_prefill/
 - vLLM — LMCache example / KV offload: https://docs.vllm.ai/en/v0.10.1/examples/others/lmcache.html
-- vLLM — LMCache examples (in-process connector, MP server, `--kv-offloading-backend` shortcut): https://docs.vllm.ai/en/stable/examples/disaggregated/lmcache/
+- vLLM — LMCache examples (in-process connector, MP server, `--kv-offloading-backend` shortcut): https://docs.vllm.ai/en/v0.29.0/examples/disaggregated/lmcache/
 - vLLM — disaggregated prefilling & KV transfer roadmap (RFC #10818): https://github.com/vllm-project/vllm/issues/10818
 - Ray Serve LLM — Serving LLMs (index): https://docs.ray.io/en/latest/serve/llm/index.html
 - Ray Serve LLM — core components / vLLM integration: https://docs.ray.io/en/latest/serve/llm/architecture/core.html
