@@ -72,12 +72,15 @@ If a `$/hr` was supplied, also compute `$/1M-tokens = ($/hr) / (output_throughpu
 
 The report is a trimmed slice of the tables plus the sweep's two plots, copied beside it. The results bucket is deleted on `stack-down` and the Prefect run ages out, so the report directory keeps its own copy of the plots and is committed to the repo.
 
+The report directory is `reports/sweep-grid-<stamp>/`, where `<stamp>` is the `run_id` with any leading `sweep-full-` dropped (`sweep-full-20261008T130350Z` → `reports/sweep-grid-20261008T130350Z/`).
+
 Fetch each plot to a `.part` file and keep it only if it is a whole PNG, so a timeout, a redirect body, or a dropped connection never leaves a corrupt image where git would commit it:
 
 ```bash
-mkdir -p "reports/<run_id>"
-fetch_plot() {  # $1 = plot URL, $2 = file name in reports/<run_id>/
-  out="reports/<run_id>/$2"
+dir="reports/sweep-grid-<stamp>"
+mkdir -p "$dir"
+fetch_plot() {  # $1 = plot URL, $2 = file name in $dir/
+  out="$dir/$2"
   rm -f "$out"
   if curl -fsS -m 30 -o "$out.part" "$1" \
     && [ "$(head -c 8 "$out.part" | xxd -p)" = "89504e470d0a1a0a" ]; then
@@ -94,7 +97,7 @@ fetch_plot "<cliff-plot-url>" goodput-by-max-concurrency.png
 
 The URLs are the image artifacts' `data` field. For a plot whose artifact was missing (Step 2), still remove any copy a previous run left (`rm -f` its file) and skip the fetch. A failed fetch is the same degradation as a missing artifact: the ranking does not depend on the plots, so continue and say in the report which plot is absent and the error `fetch_plot` printed.
 
-Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
+Write `reports/sweep-grid-<stamp>/RECOMMENDATION.md` with these sections, in order:
 
 1. **Run** — the `run_id` and the SLO honored (`ttft`/`tpot` thresholds, `0.95` floor).
 2. **Pick** — one line: the recommended `(max_num_seqs, kv_cache_dtype, prefix_caching)` and the workload it is for.
@@ -104,7 +107,7 @@ Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 6. **Plots** — the two downloaded plots embedded by relative path (`![Concurrency ceiling by max_num_seqs](ceiling-by-max-num-seqs.png)`, `![Goodput cliff by max_concurrency](goodput-by-max-concurrency.png)`), with one line each on what they show. If a plot's artifact was missing (Step 2) or its fetch failed, say which and why instead of embedding.
 7. **Caveats** — fixed single GPU (ranking is cost-exact only on this hardware), the SLO is the run's own, `0.95` floor.
 
-Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up, and `reports/<run_id>/` holds exactly the plots it embeds, with no `.part` file left.
+Done when `RECOMMENDATION.md` exists with all seven sections and a pick justified against a named runner-up, and `reports/sweep-grid-<stamp>/` holds exactly the plots it embeds, with no `.part` file left.
 
 ## Out of scope
 

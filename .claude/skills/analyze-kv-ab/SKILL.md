@@ -83,7 +83,7 @@ Done when every shared rung has a separation call per metric, the verdict follow
 The report outlives the results bucket and the Prefect run, so it keeps its own copy of the chart. Fetch it to a `.part` file and keep it only if it is a whole PNG:
 
 ```bash
-dir="reports/<run_id>"; out="$dir/kv-ab-by-max-concurrency.png"
+dir="reports/kv-cache-ab-<run_id>"; out="$dir/kv-ab-by-max-concurrency.png"
 mkdir -p "$dir"; rm -f "$out"
 if curl -fsS -m 30 -o "$out.part" "<kv-ab-plot data URL>" \
   && [ "$(head -c 8 "$out.part" | xxd -p)" = "89504e470d0a1a0a" ]; then
@@ -95,7 +95,7 @@ fi
 
 With no `kv-ab-plot` artifact, run only the `mkdir` and `rm -f` lines. A missing artifact or failed fetch degrades the report as in Step 2.
 
-Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
+Write `reports/kv-cache-ab-<run_id>/RECOMMENDATION.md` with these sections, in order:
 
 1. **Run** — the `run_id`, the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm`, the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, and the GPU pool cap (`kv_cache_memory_bytes`), plus the three image refs from the config artifact.
 2. **Verdict** — one line: the verdict, the rungs it rests on, and the workload it holds for.
@@ -105,4 +105,4 @@ Write `reports/<run_id>/RECOMMENDATION.md` with these sections, in order:
 6. **Chart** — the downloaded PNG embedded by relative path (`![KV cache A/B by max_concurrency](kv-ab-by-max-concurrency.png)`) with one line on what it shows, or the reason it is absent.
 7. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; the run capped the GPU KV pool at `kv_cache_memory_bytes`, and the flow refuses a pool that holds the working set, so the win describes a working set larger than the GPU pool, not an uncapped engine; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
 
-Done when `RECOMMENDATION.md` has all seven sections, the verdict traces to named rungs and metrics, and `reports/<run_id>/` holds exactly the chart it embeds, with no `.part` file left.
+Done when `RECOMMENDATION.md` has all seven sections, the verdict traces to named rungs and metrics, and `reports/kv-cache-ab-<run_id>/` holds exactly the chart it embeds, with no `.part` file left.

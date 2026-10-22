@@ -35,11 +35,12 @@ kubeconfig
 # Benchmark result JSON (raw client output, regenerated per run)
 bench/results/
 
-# analyze-bench recommendation reports are tracked (trimmed tables plus the sweep's two
+# analyze-bench and analyze-kv-ab reports are tracked (trimmed tables plus the run's
 # plots, copied beside the report). Keep any other binary out.
 reports/**/*.png
 !reports/**/ceiling-by-max-num-seqs.png
 !reports/**/goodput-by-max-concurrency.png
+!reports/**/kv-ab-by-max-concurrency.png
 reports/**/*.jpg
 reports/**/*.jpeg
 
