@@ -10,6 +10,8 @@ Given a KV cache A/B `run_id`, read its completed Prefect flow run and write a v
 
 Input: a `run_id` (e.g. `kv-ab-agent-20261023T090000Z`).
 
+The two arms: **on** is vLLM with KV cache offload to LMCache's CPU tier enabled (`--kv-transfer-config` loads `LMCacheConnectorV1` in `kv_both` role, `packages/orchestration/src/slipstream_bench/orchestration/cluster.py:87`); **off** is vLLM with no KV connector. Both keep vLLM's GPU prefix cache. "Offload" in this skill and in the report always means KV cache offload to LMCache.
+
 ## Preconditions
 
 Resolve the API base and check it the way `analyze-bench` does (its "Preconditions"): `API="${PREFECT_API_URL:-http://127.0.0.1:4200/api}"`, a `200` from `$API/health`, else stop and tell the user to run `just prefect-ui`. Every call uses `curl -fsS` with a timeout; any transport or HTTP error stops the skill and is reported as that error, never read as an empty result.
@@ -41,6 +43,8 @@ curl -fsS -m 10 -X POST "$API/artifacts/filter" -H 'Content-Type: application/js
 Expect four keys:
 
 - `kv-ab-config` — the images, `model.yaml`, the workload YAML, and the vLLM args. Read from the workload YAML: the SLO (`load.goodput`, e.g. `["ttft:1000", "tpot:50"]`), `runs_per_arm`, `max_concurrency`, `prefix_share` (a percentage), `load.num_prefixes`, `load.total_len`, `load.output_len`, and `engine` (`max_num_seqs`, `kv_cache_dtype`, `kv_cache_memory_bytes`). **This is the SLO and workload you report for; never ask for or infer them.**
+
+  **Why the GPU pool is capped.** When `engine.kv_cache_memory_bytes` is set in `kv-cache-extension-ab.yaml`, the run capped the GPU KV pool below the CPU tier on purpose (ADR-0023, "An eviction-sized workload on a capped GPU KV pool"). The g5.xlarge's host RAM cannot hold a CPU tier larger than the uncapped GPU pool. Without that, offload adds no reuse, because reachable reuse is max(GPU, CPU), not their sum. A larger tier needs the g5.2xlarge, which waits on a G-instance vCPU quota increase that has not been approved. Take the capped pool's token count from the YAML's comment on that key. When the key is absent, the pool was uncapped; say so, and drop the cap from the report.
 - `kv-ab-rung-spreads` — one row per `(arm, max_concurrency)`: `runs`, then `goodput_fraction`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`, `gpu_hit_rate`, `combined_hit_rate`, each as `median [min–max]` across the arm's runs. This is the evidence.
 - `kv-ab-ceilings` — one row per arm: each run's ceiling (`r1`, `r2`, …; `none` when no rung held the floor) and the median (blank when any run is `none`).
 - `kv-ab-plot` — an image artifact whose `data` is a public `https` URL to the chart PNG.
@@ -97,12 +101,12 @@ With no `kv-ab-plot` artifact, run only the `mkdir` and `rm -f` lines. A missing
 
 Write `reports/kv-cache-ab-<run_id>/RECOMMENDATION.md` with these sections, in order:
 
-1. **Run** — the `run_id`, the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm`, the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, and the GPU pool cap (`kv_cache_memory_bytes`), plus the three image refs from the config artifact.
-2. **Verdict** — one line: the verdict, the rungs it rests on, and the workload it holds for.
+1. **Run** — the `run_id`, what each arm is (on: KV cache offload to LMCache's CPU tier enabled; off: GPU prefix cache only), the SLO (`ttft`/`tpot`, `0.95` floor), `runs_per_arm`, the rungs, the workload (`prefix_share`, `num_prefixes`, `total_len`, `output_len`), the engine point, and the GPU pool cap (`kv_cache_memory_bytes`, in bytes and tokens) with why it is capped (Step 2), plus the three image refs from the config artifact.
+2. **Verdict** — one line: the verdict, naming LMCache KV cache offload, the rungs it rests on, and the workload it holds for.
 3. **Evidence** — a table per rung: off and on `median [range]` for `goodput_fraction`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`, and a column naming the judged metrics that separate. Under it, the SLO attribution. State the permutation p for this run's `n`.
 4. **Mechanism** — both hit rates per arm and the CPU tier's share, with the mechanism check's conclusion.
 5. **Ceilings and cost** — the ceilings table and the cost comparison from Step 3.
 6. **Chart** — the downloaded PNG embedded by relative path (`![KV cache A/B by max_concurrency](kv-ab-by-max-concurrency.png)`) with one line on what it shows, or the reason it is absent.
-7. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; the run capped the GPU KV pool at `kv_cache_memory_bytes`, and the flow refuses a pool that holds the working set, so the win describes a working set larger than the GPU pool, not an uncapped engine; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
+7. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, pending the g5.2xlarge quota (Step 2). The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on the uncapped g5.xlarge, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
 
 Done when `RECOMMENDATION.md` has all seven sections, the verdict traces to named rungs and metrics, and `reports/kv-cache-ab-<run_id>/` holds exactly the chart it embeds, with no `.part` file left.
