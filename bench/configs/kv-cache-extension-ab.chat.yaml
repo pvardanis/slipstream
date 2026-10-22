@@ -1,0 +1,36 @@
+# The kv-cache-extension-ab chat workload (#326): what both arms of the KV cache offload
+# A/B run for multi-turn chat, where production traces show prefix reuse around 40-50%.
+# Each run redeploys the GPU with the arm's offload switch, runs one unrecorded warmup
+# cell at warmup_concurrency, then the max_concurrency ladder. The working set —
+# num_prefixes distinct prefixes of prefix_share of total_len, floored to whole
+# align_blocks — must exceed the GPU KV pool while the pool holds the top rung's requests,
+# and the prompts' chunks must fit the CPU tier, or the A/B is refused; the tier size, its
+# chunk size, and max-model-len are read off k8s/vllm-gpu.yaml.
+engine:
+  # The knob sweep's best engine config. The ladder below never reaches it.
+  max_num_seqs: 64
+  kv_cache_dtype: fp8
+  # A 16,384-token GPU KV pool (16,384 x 73,728 fp8 bytes): it holds the top rung's 4
+  # requests of 3712 tokens, and the working set overflows it.
+  kv_cache_memory_bytes: 1207959552
+
+runs_per_arm: 3
+# 3584 prompt tokens at 50% are a 1792-token prefix, 7 whole 256-token LMCache chunks: 12
+# prefixes make a 21,504-token working set, 1.3x the GPU pool; their prompts fill 43,008
+# tokens of the manifest's 58,254-token CPU tier.
+prefix_share: 50
+max_concurrency: [1, 2, 4]
+warmup_concurrency: 1
+
+# Fixed client-load knobs, the knob sweep's LoadKnobs. total_len plus output_len must fit
+# the manifest's max-model-len; align_blocks is LMCache's chunk, which is a whole number
+# of vLLM's 16-token blocks.
+load:
+  total_len: 3584
+  num_prompts: 128
+  num_prefixes: 12
+  output_len: 128
+  align_blocks: 256
+  request_rate: .inf
+  seed: 0
+  goodput: ["ttft:1000", "tpot:50"]

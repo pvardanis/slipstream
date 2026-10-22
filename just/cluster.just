@@ -18,14 +18,12 @@ cluster-up: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    # enable_prefect_worker (default false) gates the worker layer: false stands the
-    # cluster up before the orchestration image exists; true deploys the worker and
-    # requires the image published — the eks stack reads the bootstrap orchestration ECR
-    # repo URL (via the remote state in state_bucket) and resolves the image's content-sha
-    # tag, failing loudly if :main is absent or its manifest carries no single content tag.
-    terraform -chdir={{ eks_dir }} apply -auto-approve \
-      -var="enable_prefect_worker={{ enable_prefect_worker }}" \
-      -var="state_bucket=${bucket}"
+    # The worker layer requires the orchestration image published: the eks stack reads the
+    # bootstrap orchestration ECR repo URL (via the remote state in state_bucket) and
+    # resolves the image's content-sha tag, failing loudly if its manifest carries no
+    # single content tag. The check first fails a missing :main with the publish step.
+    {{ justfile_directory() }}/bench/orchestration-image-check.sh {{ bootstrap_dir }}
+    terraform -chdir={{ eks_dir }} apply -auto-approve -var="state_bucket=${bucket}"
     name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     aws eks update-kubeconfig --name "${name}" --region "${region}"
@@ -41,10 +39,14 @@ cluster-plan: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    # Mirror cluster-up's worker gate so the plan reflects what an apply would do.
-    terraform -chdir={{ eks_dir }} plan \
-      -var="enable_prefect_worker={{ enable_prefect_worker }}" \
-      -var="state_bucket=${bucket}"
+    {{ justfile_directory() }}/bench/orchestration-image-check.sh {{ bootstrap_dir }}
+    terraform -chdir={{ eks_dir }} plan -var="state_bucket=${bucket}"
+
+# Needs `gh` authenticated and the bootstrap stack applied (`just bootstrap`).
+# Set the GitHub repo variables the CI workflows read from the bootstrap outputs.
+[group('cluster')]
+gh-vars: _bootstrap-init
+    {{ justfile_directory() }}/bench/gh-vars.sh {{ bootstrap_dir }}
 
 # Apply the GPU node pool (NodePool + EC2NodeClass) and the NVIDIA device plugin.
 # Karpenter provisions no node until a pod tolerates the GPU taint and requests
@@ -103,7 +105,10 @@ cluster-down: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    terraform -chdir={{ eks_dir }} destroy -auto-approve
+    # -refresh=false destroys from the recorded state without reading the bootstrap remote
+    # state or the orchestration image, so a missing image or unreadable bootstrap state
+    # cannot leave the cluster up and billing.
+    terraform -chdir={{ eks_dir }} destroy -auto-approve -refresh=false -var="state_bucket=${bucket}"
 
 # Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
 # state bucket already exists (state lives in it, see backend.tf). A brand-new

@@ -1,0 +1,36 @@
+# Trivy vulnerability waivers for the orchestration content image.
+#
+# kubectl (usr/local/bin/kubectl, orchestration/Dockerfile) is flagged for CVEs in the
+# Go code it is compiled against, not in kubectl's own code. The first two are in the
+# Go stdlib: no kubectl release built on a patched Go (1.26.9 / 1.27.2) exists yet —
+# v1.36.5 (the EKS-pinned minor) and v1.37.1 (latest) both ship go1.26.8 — so there is
+# nothing to bump to. Both are denial-of-service on server-side surfaces the worker's
+# kubectl never exposes: it is a client talking only to the AWS-managed EKS API, never an
+# HTTP or TLS server.
+#
+# CVE-2026-78669 (golang.org/x/net http2 and the stdlib's bundled copy) differs: a
+# malicious HTTP/2 peer can burn CPU in a client as well as a server, so the worker's
+# kubectl is in reach. Its one peer is the AWS-managed EKS API endpoint, reached over TLS
+# verified against the cluster CA, so exploiting it needs a compromised control plane or
+# a broken TLS chain, and the impact is CPU exhaustion of the worker pod. Its fixes
+# (x/net 0.60.0, Go 1.26.9 / 1.27.2) are in no kubectl release yet either.
+#
+# CVE-2026-56851 (golang.org/x/text, fixed in 0.41.0) is a panic in the precis Nickname
+# profile. v1.36.5 ships x/text v0.39.0 but does not link golang.org/x/text/secure/precis:
+# the binary's function-name table holds x/text packages (language, cases, encoding,
+# runes, unicode/norm, secure/bidirule, ...) but no secure/precis symbol, so the flagged
+# code is not in the image. v1.36.5 is still the latest patch on the EKS-pinned minor.
+#
+# CVE-2026-111943 (GO-2026-6809, Go stdlib crypto/x509, fixed in Go 1.26.10 / 1.27.3)
+# adds compromised public intermediates to x509's denylist. The worker's kubectl never
+# builds a chain from the system roots: it runs on the pod's service-account config,
+# whose only root is the cluster CA, so a public intermediate cannot sign for the EKS API
+# it talks to. v1.36.5 and v1.37.1 (latest) are both built on go1.26.8.
+#
+# Drop each line once upstream kubectl rebuilds on the patched Go or x/text. The exp date
+# forces the scan to fail again and this file to be revisited rather than rot silently.
+CVE-2026-78667 exp:2026-11-08
+CVE-2026-97031 exp:2026-11-08
+CVE-2026-78669 exp:2026-11-08
+CVE-2026-56851 exp:2026-11-08
+CVE-2026-111943 exp:2026-11-08

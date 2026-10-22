@@ -38,3 +38,18 @@ output "orchestration_image_push_role_arn" {
   description = "ARN of the IAM role the orchestration-image GitHub Actions workflow assumes via OIDC to push to ECR; set as the role-to-assume in that workflow."
   value       = aws_iam_role.orchestration_image_push.arn
 }
+
+output "sweep_dispatch_role_arn" {
+  description = "ARN of the IAM role the flow-dispatch GitHub Actions workflow assumes via OIDC; set as the AWS_SWEEP_DISPATCH_ROLE_ARN repo variable, and read by the eks stack to grant it Kubernetes access."
+  value       = aws_iam_role.sweep_dispatch.arn
+}
+
+output "cluster_name" {
+  description = "Name of the EKS cluster the flow-dispatch workflow targets; set as the EKS_CLUSTER_NAME repo variable."
+  value       = var.cluster_name
+}
+
+output "prefect_namespace" {
+  description = "Namespace of the Prefect server the flow-dispatch workflow port-forwards into; set as the PREFECT_NAMESPACE repo variable."
+  value       = var.prefect_namespace
+}

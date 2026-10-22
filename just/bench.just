@@ -36,7 +36,7 @@ bench-image: _bootstrap-init
     {{ build_image_tool }} "${repo}:${sha_tag}"
     docker push "${repo}:${sha_tag}"
 
-# Run one engine point's Tier-2 client-load ladder — the cells bench/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by the deep config digest, so a re-run skips cells that already hold a valid measurement (ADR-0012). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
+# Run one engine point's Tier-2 client-load ladder — the cells bench/configs/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by its run id and config digest, so a re-run under the same BENCH_RUN_ID skips cells that already hold a cache record (ADR-0022). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
 bench point_slug *args:
     #!/usr/bin/env bash
@@ -88,7 +88,7 @@ bench point_slug *args:
       --bucket "${bucket}" \
       --image-ref "${image}" \
       --model-yaml model.yaml \
-      --sweep-grid bench/sweep-grid.yaml \
+      --sweep-grid bench/configs/sweep-grid.yaml \
       --vllm-manifest {{ gpu_manifests }} \
       --sweep-args-b64 "${args_b64}" || rc=$?
 
@@ -96,9 +96,10 @@ bench point_slug *args:
     # re-downloaded locally, and a partially-failed point (a permanent cell fault raises
     # through the flow after earlier cells landed) still leaves valid cells worth pulling
     # into the per-run subdir. Surface the sweep's status only after the copy is complete.
-    mkdir -p "bench/results/${run_id}"
-    aws s3 sync "s3://${bucket}/sweeps/${run_id}" "bench/results/${run_id}" --region "${region}"
-    echo "results synced to bench/results/${run_id}/"
+    out="knob-sweep/${run_id}"
+    mkdir -p "bench/results/${out}"
+    aws s3 sync "s3://${bucket}/${out}" "bench/results/${out}" --region "${region}"
+    echo "results synced to bench/results/${out}/"
     # A standalone point sweep that ended non-zero left cells unmeasured; surface the id
     # to resume it. A nested run (BENCH_RUN_ID set, standalone=0) leaves the resume hint
     # to its caller, so the two never print conflicting resume commands.
@@ -108,17 +109,18 @@ bench point_slug *args:
     fi
     exit "${rc}"
 
-# Sync every sweep and prefix-cache run's results from the bench endpoint results bucket to bench/results for local reporting; use to pull runs made from another machine.
+# Sync every knob sweep, prefix-cache, and KV cache A/B run's results from the bench endpoint results bucket to bench/results for local reporting, one subdir per bucket prefix (knob-sweep, prefix-cache, kv-offload-ab); use to pull runs made from another machine.
 [group('bench')]
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    mkdir -p bench/results/prefix-cache
-    aws s3 sync "s3://${bucket}/sweeps" bench/results --region "${region}"
-    aws s3 sync "s3://${bucket}/prefix-cache" bench/results/prefix-cache --region "${region}"
-    echo "synced sweep and prefix-cache results to bench/results/"
+    for prefix in knob-sweep prefix-cache kv-offload-ab; do
+      mkdir -p "bench/results/${prefix}"
+      aws s3 sync "s3://${bucket}/${prefix}" "bench/results/${prefix}" --region "${region}"
+    done
+    echo "synced knob-sweep, prefix-cache, and kv-offload-ab results to bench/results/"
 
 # Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
@@ -153,7 +155,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     run_on_host "proxy-up" "/usr/local/bin/bench-proxy-up.sh" 240
 
     # Compose the cold/warm cell's experiment config: the base definition from
-    # bench/load-sweep.yaml, narrowed to this one cell — a single prefix share and
+    # bench/configs/load-sweep.yaml, narrowed to this one cell — a single prefix share and
     # burstiness, no concurrency ladder — with the residency-isolating overrides. A seed
     # unique to this invocation makes the cold run emit prefixes the server has never
     # cached, so it genuinely misses; the cold and warm runs share it, so the warm run
@@ -171,7 +173,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     prefix_config="${out}/sweep-config.yaml"
     SHARE="[{{ prefix_share }}]" BURST="[{{ burstiness }}]" SEED="${seed}" \
       yq '.prefix_shares = env(SHARE) | .burstiness_values = env(BURST) | .max_concurrency_values = [] | .align_blocks = 16 | .num_prefixes = 16 | .seed = env(SEED)' \
-      bench/load-sweep.yaml >"${prefix_config}"
+      bench/configs/load-sweep.yaml >"${prefix_config}"
 
     # Pass the per-run values as environment prefixed to the host command. The plain
     # values carry no shell-special characters, so single-quoting suffices; the config

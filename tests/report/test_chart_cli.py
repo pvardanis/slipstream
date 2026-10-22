@@ -22,6 +22,9 @@ def _write_rung(point_dir: Path, *, share: int, cap: int, fraction: float) -> No
         "prefix_share": share,
         "request_goodput": fraction,
         "request_throughput": 1.0,
+        "p95_ttft_ms": 850.0,
+        "p95_tpot_ms": 42.0,
+        "output_throughput": 1234.5,
         "errors": [""],
     }
     (point_dir / f"pshare{share}_burst1.0_mc{cap}.json").write_text(json.dumps(record))

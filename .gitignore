@@ -12,7 +12,6 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
-.terraform.lock.hcl
 
 # Python
 __pycache__/
@@ -36,6 +35,14 @@ kubeconfig
 # Benchmark result JSON (raw client output, regenerated per run)
 bench/results/
 
+# analyze-bench recommendation reports are tracked (trimmed tables plus the sweep's two
+# plots, copied beside the report). Keep any other binary out.
+reports/**/*.png
+!reports/**/ceiling-by-max-num-seqs.png
+!reports/**/goodput-by-max-concurrency.png
+reports/**/*.jpg
+reports/**/*.jpeg
+
 # macOS
 .DS_Store
 
@@ -47,10 +54,11 @@ bench/results/
 .scratch/
 
 # Claude Code local state (agent worktrees, local settings). The shared PR-review
-# guard is tracked; everything else under .claude/ stays local.
+# guard and the team skills are tracked; everything else under .claude/ stays local.
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+!.claude/skills/
 
 # MLSD review scorecard (local artifact, not tracked)
 mlsd-scorecard-slipstream.md

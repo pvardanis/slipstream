@@ -58,14 +58,17 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         # The terminal render task calls report's plotters to draw the run's ceiling and
         # cliff plots and embed them on the parent run page (ADR-0018), so orchestration
         # pulls report's plotting stack (pandas/seaborn/matplotlib) through that one task —
-        # the worker image ships it for this reason. No root is forbidden: the executor's
-        # distinctive root (prometheus_client) cannot guard the no-orchestration->executor
-        # edge here, since Prefect pulls it transitively; that edge is held instead by the
+        # the worker image ships it for this reason. No root is forbidden: the root the
+        # executor's prefix-cache scraper pulls (prometheus_client, through the kernel's
+        # window module) cannot guard the no-orchestration->executor edge here, since
+        # Prefect pulls it transitively; that edge is held instead by the
         # lockfile and the image build — the executor is not an orchestration dependency, so
         # --package orchestration never installs its source. orchestration shares the
         # slipstream_bench namespace with its siblings, so that root cannot be forbidden;
         # allowed holds the AST guard to the closed set orchestration legitimately imports —
-        # Prefect, boto3, the report sibling, and the contract kernel.
+        # Prefect, boto3, the report sibling, the contract kernel, and pydantic, which
+        # validates the worker's own workload configs and which the kernel and Prefect
+        # already install.
         forbidden=frozenset(),
         allowed=frozenset(sys.stdlib_module_names)
         | {
@@ -73,6 +76,7 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "boto3",
             "botocore",
             "prefect",
+            "pydantic",
             "prefect_aws",
             "yaml",
             "typer",
@@ -109,7 +113,6 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "pydantic",
             "yaml",
             "typer",
-            "prometheus_client",
         },
         probe=(
             "import slipstream_bench.executor.cli as cli\n"
@@ -123,7 +126,8 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         # kernel alone (ADR-0017): never Prefect, never the executor, never orchestration.
         # forbidden names the roots the subprocess probe blocks — prefect catches a stray
         # orchestration import (it pulls prefect transitively) and prometheus_client a
-        # stray executor import (its distinctive root); report imports neither itself, so
+        # stray executor import (its prefix-cache scraper pulls it through the kernel's
+        # window module) or a stray read of /metrics; report imports neither itself, so
         # blocking them cannot break report's own load. pandas/seaborn/matplotlib are
         # report's own stack, so they stay off forbidden and on allowed. report shares the
         # slipstream_bench namespace with its siblings, so that root cannot be forbidden;
@@ -153,12 +157,15 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
     BoundaryRule(
         package="slipstream_bench.contract",
         # The kernel imports no framework and no other workspace member: it holds pure
-        # data and parse on pydantic/PyYAML/stdlib alone (ADR-0017). forbidden names the
-        # frameworks the subprocess probe blocks; allowed is the closed set the AST guard
-        # holds the source to, so a new stray dep (numpy, requests) fails even though it is
-        # on no denylist. The kernel shares the slipstream_bench namespace with the other
-        # members, so that root cannot be forbidden; allowed admitting only its own
-        # slipstream_bench.contract subtree keeps the kernel from reaching a sibling.
+        # data and parse on pydantic/PyYAML/stdlib, plus prometheus_client's exposition
+        # parser for the prefix-cache window — a module kept off the kernel's package
+        # surface so a member that never reads /metrics never loads it (ADR-0017).
+        # forbidden names the frameworks the subprocess probe blocks; allowed is the
+        # closed set the AST guard holds the source to, so a new stray dep (numpy,
+        # requests) fails even though it is on no denylist. The kernel shares the
+        # slipstream_bench namespace with the other members, so that root cannot be
+        # forbidden; allowed admitting only its own slipstream_bench.contract subtree
+        # keeps the kernel from reaching a sibling.
         forbidden=frozenset(
             {
                 "prefect",
@@ -170,7 +177,7 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             }
         ),
         allowed=frozenset(sys.stdlib_module_names)
-        | {"slipstream_bench", "pydantic", "yaml"},
+        | {"slipstream_bench", "pydantic", "yaml", "prometheus_client"},
         probe=(
             "import slipstream_bench.contract as contract\n"
             "assert contract.CellConfig is not None\n"

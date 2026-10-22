@@ -1,13 +1,13 @@
 """The knob-sweep composition root: wire the four collaborators, drive the parent flow.
 
 Exercises ``build_knob_sweep_collaborators`` — the factory that binds the injected
-callables the parent flow sequences — against a fake kubectl and a faked point sweep and
-redeploy-skip gate: no cluster, no AWS. Asserts the deploy applies the point's Deployment
-and waits its rollout, the scrape logs the predicted ceiling and raises loud on an empty
-one, each point sweep runs under its own results subdir and the sweep's nested run id, and
-the pending gate is the negation of ``point_is_complete``. The ``knob-sweep`` command runs
-the real ``knob_sweep_flow`` against an ephemeral Prefect server with the transports and
-the sequencing driver faked, so the command->flow->driver wiring is covered without a
+callables the parent flow sequences — against a fake kubectl and a faked point sweep: no
+cluster, no AWS. Asserts the deploy applies the point's Deployment and waits its rollout, the scrape logs the predicted ceiling and raises loud on an empty
+one, and each point sweep runs under its own results subdir and the sweep's nested run
+id (the gate itself is covered against real cache storage in
+``test_redeploy_skip_gate``). The ``knob-sweep`` command runs the real
+``knob_sweep_flow`` against an ephemeral Prefect server with the transports (the gate's
+cache lookup among them) and the sequencing driver faked, so the command->flow->driver wiring is covered without a
 cluster; ``register-knob-sweep`` is driven with ``deploy`` faked, asserting the deployment
 is registered as a module-path entrypoint on the process pool with no image build.
 """
@@ -15,29 +15,34 @@ is registered as a module-path entrypoint on the process pool with no image buil
 import logging
 import re
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 import yaml
-from botocore.exceptions import ClientError
-from prefect import Task
+from prefect import Task, flow
+from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 from typer.testing import CliRunner
 
 from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration import cli as cli_module
+from slipstream_bench.orchestration import storage as storage_module
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
+from slipstream_bench.orchestration.digest import DigestError, ServingConfig
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
-    _point_has_pending_cells,
+    SweepOutcome,
     _scrape_and_log_ceiling,
     _sweep_one_point,
     build_knob_sweep_collaborators,
     knob_sweep_flow,
 )
+from slipstream_bench.orchestration.storage import StorageError
+from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from tests.orchestration.cell_object_fakes import ServingCellS3
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
@@ -116,9 +121,16 @@ spec:
           args:
             - --kv-cache-dtype
             - "${KV_CACHE_DTYPE}"
+            - --kv-cache-memory-bytes
+            - "${KV_CACHE_MEMORY_BYTES}"
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
+            - --kv-transfer-config
+            - '${KV_TRANSFER_CONFIG}'
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
 """
 
 _CEILING_LOG = "Maximum concurrency for 4,096 tokens per request: 12.50x"
@@ -152,7 +164,7 @@ def _inputs(manifest_dir: Path) -> KnobSweepInputs:
         grid_path=Path("sweep-grid.yaml"),
         manifest_path=manifest_path,
         run="run1",
-        digest="deadbeef",
+        serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
         instance_id="i-1",
         image_ref="repo:tag",
         bucket="bench-bucket",
@@ -173,15 +185,26 @@ def _collaborators(
 
 
 def test_deploy_fn_applies_the_points_deployment_then_waits_the_rollout(
-    tmp_path: Path,
+    tmp_path: Path, _harness: None, caplog: pytest.LogCaptureFixture
 ) -> None:
+    # The deploy runs under a flow-run context (its milestones go to the run page through
+    # get_run_logger, ADR-0020), so it is driven inside the harness here; the ~20-minute
+    # redeploy is bracketed by a start and a finish line naming the point.
     kubectl = _FakeKubectl()
     deploy_fn, _scrape, _sweep, _pending = _collaborators(tmp_path, kubectl=kubectl)
 
-    deploy_fn(_POINT)
+    @flow
+    def _drive() -> None:
+        deploy_fn(_POINT)
+
+    with caplog.at_level(logging.INFO):
+        _drive()
 
     assert kubectl.calls[0][0] == ["apply", "-n", "slipstream", "-f", "-"]
     assert kubectl.calls[1][0][:2] == ["rollout", "status"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(_POINT.slug() in m and "redeploy starting" in m for m in messages)
+    assert any(_POINT.slug() in m and "redeploy finished" in m for m in messages)
 
 
 def test_scrape_logs_the_predicted_ceiling(
@@ -235,34 +258,6 @@ def test_sweep_one_point_runs_under_the_points_nested_run_id(
     assert calls[1]["context"].run_id == f"run1/{_OTHER_POINT.slug()}"
 
 
-def test_has_pending_cells_is_the_negation_of_point_is_complete(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    inputs = _inputs(tmp_path)
-
-    # A complete point has no pending cells; an incomplete one does.
-    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *a, **k: True)
-    assert _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object()) is False
-    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *a, **k: False)
-    assert _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object()) is True
-
-
-def test_has_pending_cells_propagates_an_unfixable_probe_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The gate negates point_is_complete, which raises on an S3 error re-running cannot
-    # fix (a 403, a wrong bucket). The negation must not turn that raise into "pending":
-    # a misconfigured unattended sweep aborts at the first probe, it does not loop.
-    def _raising(*_a: Any, **_k: Any) -> bool:
-        raise ClientError({"Error": {"Code": "403"}}, "HeadObject")
-
-    monkeypatch.setattr(knob_sweep_module, "point_is_complete", _raising)
-    inputs = _inputs(tmp_path)
-
-    with pytest.raises(ClientError):
-        _point_has_pending_cells(_POINT, inputs=inputs, s3_client=object())
-
-
 def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     model_yaml = tmp_path / "model.yaml"
     grid_yaml = tmp_path / "sweep-grid.yaml"
@@ -275,17 +270,17 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return model_yaml, grid_yaml, manifest
 
 
-@pytest.mark.parametrize("field", ["run", "digest", "bucket", "model"])
+@pytest.mark.parametrize("field", ["run", "image_ref", "bucket", "model"])
 def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
     # An empty keying field would address cells under a broken key; rejecting it on
     # construction fails the sweep before its first ~20-minute GPU redeploy, not at the
-    # S3 probe or silently.
+    # first cache lookup or silently.
     kwargs: dict[str, Any] = {
         "grid": _grid(),
         "grid_path": Path("sweep-grid.yaml"),
         "manifest_path": Path("vllm-gpu.yaml"),
         "run": "run1",
-        "digest": "deadbeef",
+        "serving": ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
         "instance_id": "i-1",
         "image_ref": "repo:tag",
         "bucket": "bench-bucket",
@@ -295,6 +290,15 @@ def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
 
     with pytest.raises(ValueError, match=field):
         KnobSweepInputs(**kwargs)
+
+
+def test_unreadable_sweep_args_are_rejected_before_the_redeploy(
+    tmp_path: Path,
+) -> None:
+    # Every cell's digest folds the sweep flags in, so flags the digest cannot read fail
+    # the sweep on construction, before the first GPU redeploy.
+    with pytest.raises(DigestError, match="base64"):
+        replace(_inputs(tmp_path), sweep_args_b64="not base64!")
 
 
 def test_knob_sweep_command_is_registered() -> None:
@@ -317,16 +321,21 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     test asserts the flow threads ``bucket``/``retries``/``region`` from its parameters into
     the transports rather than dropping or hardcoding them.
     """
-    captures: dict[str, Any] = {"task_args": {}, "artifacts": []}
+    captures: dict[str, Any] = {"task_args": {}, "artifacts": [], "images": []}
 
     def _fake_cell_task(bucket: str, *, retries: int = 0) -> object:
         captures["task_args"] = {"bucket": bucket, "retries": retries}
         return object()
 
     def _fake_publish(*, key: str, markdown: str) -> None:
-        # The terminal render task publishes the ceiling and cliff tables and the two inline
-        # plots through this; recorded so a test asserts all four land off the render wiring.
+        # The terminal render task publishes the ceiling and cliff tables through this; recorded
+        # so a test asserts both tables land off the render wiring.
         captures["artifacts"].append((key, markdown))
+
+    def _fake_publish_image(*, image_url: str, key: str, description: str) -> None:
+        # The render task publishes the two plots as image artifacts through this, each pointing
+        # at its public S3 URL; recorded so a test asserts both plots land off the render wiring.
+        captures["images"].append((key, image_url))
 
     def _fake_ssm(region: str) -> object:
         captures["ssm_region"] = region
@@ -341,11 +350,14 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captures["s3"] = s3
         return s3
 
+    # Every cell reads as cached, so a real driver skips each point's redeploy and scrape.
+    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
     monkeypatch.setattr(knob_sweep_module, "build_ssm_client", _fake_ssm)
     monkeypatch.setattr(knob_sweep_module, "build_s3_client", _fake_s3)
     monkeypatch.setattr(knob_sweep_module, "cell_task", _fake_cell_task)
     monkeypatch.setattr(knob_sweep_module, "create_markdown_artifact", _fake_publish)
+    monkeypatch.setattr(knob_sweep_module, "create_image_artifact", _fake_publish_image)
     return captures
 
 
@@ -356,11 +368,15 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     captures = _stub_transports(monkeypatch)
     captured: dict[str, Any] = {}
 
-    def _fake_drive(**kwargs: Any) -> list[str]:
+    def _fake_drive(**kwargs: Any) -> SweepOutcome:
         captured.update(kwargs)
-        return [
-            "s3://bench-bucket/sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
-        ]
+        return SweepOutcome(
+            pointers=(
+                "s3://bench-bucket/knob-sweep/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json",
+            ),
+            cells_run=1,
+            cells_resumed=0,
+        )
 
     monkeypatch.setattr(knob_sweep_module, "drive_knob_sweep", _fake_drive)
 
@@ -424,23 +440,44 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
     # After the loop the terminal render task materialized the whole run off the flow-built
     # S3 client, under the run's prefix — so the flow->render wiring reaches S3 (ADR-0018).
     assert (
-        "sweeps/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
+        "knob-sweep/run1/mns64_kvfp8_pcon/pshare10_burst1.0_mc64.json"
         in captures["s3"].keys
     )
-    # ...and published the two tables then the two inline plots to the parent run page, tables
+    # ...and published the two tables as markdown artifacts to the parent run page, ceiling
     # first, after the config artifact the flow publishes before the loop — so a broken or
     # dropped publish at the real render task's seam fails, not just a broken materialize.
-    assert [key for key, _ in captures["artifacts"]][-4:] == [
+    assert [key for key, _ in captures["artifacts"]][-2:] == [
         "knob-sweep-ceiling-table",
         "knob-sweep-goodput-cliff",
-        "knob-sweep-ceiling-plot",
-        "knob-sweep-goodput-cliff-plot",
+    ]
+    # The config artifact keeps the knob sweep's own key, so its cross-run history in the
+    # Prefect UI stays apart from the kv-ab config's.
+    assert captures["artifacts"][0][0] == "knob-sweep-config"
+    # ...and the two plots as image artifacts, each pointing at its public, virtual-hosted S3
+    # URL in the run's region — the cliff plot first, so a no-ceiling run keeps its diagnostic
+    # before the ceiling plot raises — so a dropped image publish or a mis-built URL at the
+    # render seam fails (ADR-0018 Amendment).
+    assert captures["images"] == [
+        (
+            "knob-sweep-goodput-cliff-plot",
+            (
+                "https://bench-bucket.s3.us-east-1.amazonaws.com/"
+                "knob-sweep/run1/charts/goodput-by-max-concurrency.png"
+            ),
+        ),
+        (
+            "knob-sweep-ceiling-plot",
+            (
+                "https://bench-bucket.s3.us-east-1.amazonaws.com/"
+                "knob-sweep/run1/charts/ceiling-by-max-num-seqs.png"
+            ),
+        ),
     ]
     # Each plot's PNG uploaded to S3 as its durable copy, under the run's charts prefix — so
-    # the render's plot upload reached the flow-built client, not just the inline publish.
+    # the render's plot upload reached the flow-built client, the object the image URL points at.
     assert captures["s3"].uploads == [
-        ("sweeps/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
-        ("sweeps/run1/charts/goodput-by-max-concurrency.png", "image/png"),
+        ("knob-sweep/run1/charts/goodput-by-max-concurrency.png", "image/png"),
+        ("knob-sweep/run1/charts/ceiling-by-max-num-seqs.png", "image/png"),
     ]
 
 
@@ -487,10 +524,10 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     model_yaml, _grid_yaml, manifest = _write_inputs(tmp_path)
     grid_yaml = tmp_path / "sweep-grid.yaml"
     grid_yaml.write_text(_MULTI_GRID, encoding="utf-8")
+    # The stubbed transports cache every cell, so each point skips its redeploy and
+    # scrape and the real driver runs only the point sweeps — isolating the lineage
+    # assertion from the fake kubectl's empty scrape.
     _stub_transports(monkeypatch)
-    # A complete point skips its redeploy and scrape, so the real driver runs only the
-    # point sweeps — isolating the lineage assertion from the fake kubectl's empty scrape.
-    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
     seen: list[tuple[str | None, Any]] = []
 
     def _recording_point_sweep(**kwargs: Any) -> list[str]:
@@ -519,6 +556,97 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
     assert len(pointers) == 2
 
 
+def test_knob_sweep_flow_logs_run_start_render_published_and_final_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _harness: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The flow's own run-page milestones (ADR-0020): a start line naming the run and its
+    # engine-point count, a render-published line once the terminal task draws the run's
+    # tables, and a final summary filed under run=<run-id> carrying the cell split. All
+    # three go through get_run_logger, so they are asserted under the harness.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+
+    with caplog.at_level(logging.INFO):
+        knob_sweep_flow(
+            run_id="run1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench-bucket",
+            image_ref="repo:tag",
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("run1" in m and "starting" in m for m in messages)
+    assert any("render" in m and "published" in m for m in messages)
+    assert any("run=run1" in m and "complete" in m for m in messages)
+
+
+def test_knob_sweep_flow_logs_when_the_orchestration_image_ref_is_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _harness: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A local or test build bakes no ORCH_IMAGE_REF, so the config artifact records the
+    # orchestration image as "unknown". Log that fallback, so a cluster run whose env should
+    # carry the ref but doesn't leaves a trace rather than silently reading "unknown".
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+    monkeypatch.delenv("ORCH_IMAGE_REF", raising=False)
+
+    with caplog.at_level(logging.INFO):
+        knob_sweep_flow(
+            run_id="run1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench-bucket",
+            image_ref="repo:tag",
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("ORCH_IMAGE_REF" in m and "unknown" in m for m in messages)
+
+
+def test_knob_sweep_flow_does_not_log_the_fallback_when_the_image_ref_is_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _harness: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A real image bakes ORCH_IMAGE_REF, so the fallback line must stay silent — it fires
+    # only when the ref is genuinely missing, not on every run.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+    monkeypatch.setenv("ORCH_IMAGE_REF", "registry/repo:sha256-abc")
+
+    with caplog.at_level(logging.INFO):
+        knob_sweep_flow(
+            run_id="run1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench-bucket",
+            image_ref="repo:tag",
+            model_yaml=model_yaml,
+            sweep_grid=grid_yaml,
+            vllm_manifest=manifest,
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert not any("ORCH_IMAGE_REF" in m for m in messages)
+
+
 def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
@@ -526,7 +654,6 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     # group under, so the UI filters the whole sweep — parent and points — as one run.
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     _stub_transports(monkeypatch)
-    monkeypatch.setattr(knob_sweep_module, "point_is_complete", lambda *_a, **_k: True)
     captured: dict[str, Any] = {}
 
     def _recording_point_sweep(**_kwargs: Any) -> list[str]:
@@ -553,6 +680,89 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     with get_client(sync_client=True) as client:
         run = client.read_flow_run(captured["parent_id"])
     assert "run=run1" in run.tags
+
+
+def _sweep_on_local_cache_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cache_key_root: Path,
+    deployed: list[str],
+) -> None:
+    """Run the real flow with its cell storage on local disk, recording each redeploy.
+
+    The real ``cell_task`` registers both storage blocks and runs the preflight, with the
+    two S3 builders swapped for local filesystems so ``cache_key_root`` decides whether
+    the probe can land. The real cache gate reads that storage, which starts empty, so
+    every point is pending and a sweep that gets past the preflight redeploys each
+    point; each redeploy appends its slug to ``deployed`` rather than run.
+    """
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "cell_task", cell_task)
+    monkeypatch.setattr(knob_sweep_module, "is_cell_cached", is_cell_cached)
+    monkeypatch.setattr(
+        storage_module,
+        "result_storage",
+        lambda _bucket: LocalFileSystem(basepath=str(tmp_path / "results")),
+    )
+    monkeypatch.setattr(
+        storage_module,
+        "cache_key_storage",
+        lambda _bucket: LocalFileSystem(basepath=str(cache_key_root)),
+    )
+    monkeypatch.setattr(
+        knob_sweep_module,
+        "deploy_gpu_point",
+        lambda point, **_k: deployed.append(point.slug()),
+    )
+    monkeypatch.setattr(knob_sweep_module, "scrape_ceiling", lambda *_a, **_k: 12.5)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+
+    knob_sweep_flow(
+        run_id="run1",
+        instance_id="i-1",
+        region="us-east-1",
+        bucket="bench-bucket",
+        image_ref="repo:tag",
+        model_yaml=model_yaml,
+        sweep_grid=grid_yaml,
+        vllm_manifest=manifest,
+    )
+
+
+def test_knob_sweep_proceeds_to_redeploy_on_writable_cache_key_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    deployed: list[str] = []
+
+    _sweep_on_local_cache_storage(
+        tmp_path,
+        monkeypatch,
+        cache_key_root=tmp_path / "cache-keys",
+        deployed=deployed,
+    )
+
+    assert deployed == [_POINT.slug()]
+
+
+def test_knob_sweep_aborts_before_any_redeploy_on_unwritable_cache_key_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    # Prefect's cache existence check reads any storage error as "not cached", so a bad
+    # bucket would look pending and pay a ~20-minute redeploy; the preflight aborts first.
+    # A regular file where the storage root should be stands in for a missing bucket or
+    # a denied IAM grant: the probe write cannot land.
+    blocked_root = tmp_path / "not-a-dir"
+    blocked_root.write_text("", encoding="utf-8")
+    deployed: list[str] = []
+
+    with pytest.raises(StorageError, match="s3://bench-bucket/prefect/cache-keys"):
+        _sweep_on_local_cache_storage(
+            tmp_path, monkeypatch, cache_key_root=blocked_root, deployed=deployed
+        )
+
+    assert deployed == []
 
 
 def test_register_knob_sweep_registers_a_module_path_deployment(
@@ -599,7 +809,7 @@ def test_register_knob_sweep_registers_a_module_path_deployment(
         "bucket": "bench-bucket",
         "image_ref": "repo:tag",
         "model_yaml": "/app/model.yaml",
-        "sweep_grid": "/app/bench/sweep-grid.yaml",
+        "sweep_grid": "/app/bench/configs/sweep-grid.yaml",
         "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
         "retries": 0,
         "commercial": False,
@@ -778,7 +988,7 @@ def test_register_knob_sweep_creates_a_real_deployment(_harness: None) -> None:
         "bucket": "bench-bucket",
         "image_ref": "repo:tag",
         "model_yaml": "/app/model.yaml",
-        "sweep_grid": "/app/bench/sweep-grid.yaml",
+        "sweep_grid": "/app/bench/configs/sweep-grid.yaml",
         "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
         "retries": 0,
         "commercial": False,

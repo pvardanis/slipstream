@@ -1,16 +1,17 @@
-"""The orchestration entrypoint: drive the knob sweep, or one point's Tier-2 sweep.
+"""The orchestration entrypoint: drive the knob sweep or one point's Tier-2 sweep, register flows.
 
-Three commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
+Four commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
 sweep as one parent flow: it enumerates the grid's engine points and, per point,
 redeploys the GPU (Tier-1), scrapes the concurrency ceiling, and runs the point's Tier-2
 ladder, skipping a point whose cells already hold valid measurements. ``point-sweep``
 (ADR-0012 §Amendment) drives a single engine point's resumable Tier-2 ladder — the unit
 ``knob-sweep`` runs per point, kept its own command for driving one point by hand.
 ``register-knob-sweep`` registers ``knob-sweep`` as a Prefect deployment on the process
-work pool, the entrypoint the EKS worker runs unattended.
+work pool, the entrypoint the EKS worker runs unattended; ``register-kv-ab`` registers the
+KV cache offload A/B (#326) the same way.
 
-The two sweep commands read the point context, fold the deep config digest, and wire the
-S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
+The two sweep commands read the point context and the run-wide config digest inputs, and
+wire the S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
 console script (not on the Prefect-free ``slipstream-bench`` app) because its whole job
 needs Prefect and boto3, present only in the orchestration extra.
 """
@@ -24,8 +25,9 @@ from prefect.deployments.runner import EntrypointType
 from prefect.exceptions import ObjectNotFound
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
-from slipstream_bench.orchestration.digest import DigestInputs
+from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
+from slipstream_bench.orchestration.flows.kv_ab import ENGINE_METRICS_URL, kv_ab_flow
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -46,7 +48,10 @@ app = typer.Typer(
 def point_sweep(
     *,
     run_id: Annotated[
-        str, typer.Option(help="Point-nested bucket prefix (<run>/<point-slug>).")
+        str,
+        typer.Option(
+            help="Point-nested run id (<run>/<point-slug>), stored under knob-sweep/."
+        ),
     ],
     point_slug: Annotated[str, typer.Option(help="Engine point's cache-key slug.")],
     instance_id: Annotated[str, typer.Option(help="Bench host instance id.")],
@@ -87,8 +92,8 @@ def point_sweep(
 ) -> None:
     """Run one engine point's Tier-2 cells resumably, printing each cell's S3 pointer.
 
-    Registers the S3 result and cache-key storage blocks, computes the point's digest,
-    and drives the flow. An interrupted run re-invoked with the same inputs skips the
+    Registers the S3 result and cache-key storage blocks, reads the run-wide config digest
+    inputs, and drives the flow. An interrupted run re-invoked with the same inputs skips the
     cells that already hold a valid measurement and re-attempts the rest.
     """
     context = build_sweep_context(
@@ -98,11 +103,7 @@ def point_sweep(
         image_ref=image_ref,
         bucket=bucket,
         model=read_model_id(model_yaml),
-        digest_inputs=DigestInputs(
-            model_yaml=model_yaml,
-            sweep_grid=sweep_grid,
-            vllm_manifest=vllm_manifest,
-        ),
+        serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )
@@ -199,7 +200,7 @@ def register_knob_sweep(
     ] = Path("/app/model.yaml"),
     sweep_grid: Annotated[
         Path, typer.Option(help="In-image path to sweep-grid.yaml, read on the worker.")
-    ] = Path("/app/bench/sweep-grid.yaml"),
+    ] = Path("/app/bench/configs/sweep-grid.yaml"),
     vllm_manifest: Annotated[
         Path,
         typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
@@ -224,7 +225,8 @@ def register_knob_sweep(
     in-process from its baked image). The cluster-stable inputs become the deployment's
     default parameters; ``run_id`` and ``instance_id`` are supplied per run at trigger time.
 
-    Run over a port-forward to the in-cluster Prefect API (see ``just prefect-register``).
+    Run over a port-forward to the in-cluster Prefect API (see
+    ``just prefect-register-sweep``).
 
     The cluster-stable inputs are rejected here if empty: ``run_id`` and ``instance_id``
     are the only parameters ``prefect deployment run`` supplies per run, so an empty
@@ -244,17 +246,9 @@ def register_knob_sweep(
     :param commercial: run the commercial arm (needs a tokenizer).
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
     """
-    for name, value in (
-        ("region", region),
-        ("bucket", bucket),
-        ("image-ref", image_ref),
-        ("work-pool", work_pool),
-    ):
-        if not value.strip():
-            raise typer.BadParameter(
-                "must be a non-empty string", param_hint=f"--{name}"
-            )
-    _require_work_pool(work_pool)
+    _require_cluster_inputs(
+        region=region, bucket=bucket, image_ref=image_ref, work_pool=work_pool
+    )
     deployment_id = knob_sweep_flow.deploy(
         name="knob-sweep",
         work_pool_name=work_pool,
@@ -276,6 +270,74 @@ def register_knob_sweep(
     typer.echo(f"registered knob-sweep deployment {deployment_id}")
 
 
+@app.command("register-kv-ab")
+def register_kv_ab(
+    *,
+    region: Annotated[str, typer.Option(help="AWS region of the host and bucket.")],
+    bucket: Annotated[str, typer.Option(help="Results bucket (RESULTS_BUCKET).")],
+    image_ref: Annotated[str, typer.Option(help="Bench-client image reference.")],
+    work_pool: Annotated[
+        str, typer.Option(help="Process work pool the sweep worker polls.")
+    ] = "sweep-pool",
+    model_yaml: Annotated[
+        Path, typer.Option(help="In-image path to model.yaml, read on the worker.")
+    ] = Path("/app/model.yaml"),
+    kv_ab_config: Annotated[
+        Path,
+        typer.Option(help="In-image path to the A/B workload, read on the worker."),
+    ] = Path("/app/bench/configs/kv-cache-extension-ab.yaml"),
+    vllm_manifest: Annotated[
+        Path,
+        typer.Option(help="In-image path to k8s/vllm-gpu.yaml, read on the worker."),
+    ] = Path("/app/k8s/vllm-gpu.yaml"),
+    metrics_url: Annotated[
+        str, typer.Option(help="The GPU engine's /metrics URL, read from the worker.")
+    ] = ENGINE_METRICS_URL,
+    retries: Annotated[
+        int, typer.Option(help="Opt-in cell retries for a transient transport fault.")
+    ] = 0,
+) -> None:
+    """Register the kv-cache-extension-ab deployment on the process work pool (#326).
+
+    Creates the deployment a run triggers with the run id and the bench host; the
+    workload config is the in-image default. Registered as ``register-knob-sweep``
+    registers the knob sweep: a module-path entrypoint, no image build, the
+    cluster-stable inputs as default parameters. Region, bucket, and image ref are
+    checked non-empty and the work pool present first.
+
+    :param region: AWS region of the host and bucket.
+    :param bucket: results bucket (RESULTS_BUCKET).
+    :param image_ref: bench-client image reference the cells run.
+    :param work_pool: process work pool the sweep worker polls.
+    :param model_yaml: in-image path to model.yaml, read on the worker at run time.
+    :param kv_ab_config: in-image path to the default A/B workload.
+    :param vllm_manifest: in-image path to k8s/vllm-gpu.yaml, read on the worker.
+    :param metrics_url: the GPU engine's /metrics URL, read from the worker.
+    :param retries: opt-in cell retries for a transient transport fault.
+    """
+    _require_cluster_inputs(
+        region=region, bucket=bucket, image_ref=image_ref, work_pool=work_pool
+    )
+    deployment_id = kv_ab_flow.deploy(
+        name="kv-cache-extension-ab",
+        work_pool_name=work_pool,
+        entrypoint_type=EntrypointType.MODULE_PATH,
+        build=False,
+        push=False,
+        parameters={
+            "region": region,
+            "bucket": bucket,
+            "image_ref": image_ref,
+            "model_yaml": str(model_yaml),
+            "kv_ab_config": str(kv_ab_config),
+            "vllm_manifest": str(vllm_manifest),
+            "metrics_url": metrics_url,
+            "retries": retries,
+        },
+    )
+    typer.echo(f"registered kv-cache-extension-ab deployment {deployment_id}")
+
+
 def build_sweep_context(
     *,
     run_id: str,
@@ -284,23 +346,25 @@ def build_sweep_context(
     image_ref: str,
     bucket: str,
     model: str,
-    digest_inputs: DigestInputs,
+    serving: ServingConfig,
     commercial: bool = False,
     sweep_args_b64: str = "",
 ) -> SweepContext:
-    """Assemble the point's context, folding the deep config digest from its inputs.
+    """Assemble the point's context, carrying the run-wide config digest inputs.
 
-    The digest is ``sha256(model.yaml + sweep-grid.yaml + vLLM image ref)`` (ADR-0012):
-    the raw bytes of the two files and the serving image ref read from the vLLM
-    manifest, so a model, grid, or image change invalidates the point's cached cells.
+    Each cell's config digest folds the serving config (``model.yaml``'s bytes and the vLLM
+    image ref) in with the point's knobs, the cell's parameters, the bench-client image,
+    and the dry-run flag (:func:`~slipstream_bench.orchestration.flows.point_sweep.get_cell_digest`),
+    so a change to any of them invalidates the cells it affects.
 
-    :param run_id: the point-nested bucket prefix (``<run>/<point-slug>``).
+    :param run_id: the point-nested run id (``<run>/<point-slug>``), whose cells land
+        under ``knob-sweep/<run>/<point-slug>/``.
     :param point_slug: the engine point's cache-key part.
     :param instance_id: the bench host the cells run on.
     :param image_ref: the bench-client image the cells run.
     :param bucket: the results bucket.
     :param model: the served model id.
-    :param digest_inputs: the three files the deep config digest is folded from.
+    :param serving: the model bytes and vLLM image ref every cell's digest folds in.
     :param commercial: whether this is the commercial arm.
     :param sweep_args_b64: optional extra ``load-cell`` flags, base64-encoded.
     :return: the fully-populated :class:`SweepContext`.
@@ -308,7 +372,7 @@ def build_sweep_context(
     return SweepContext(
         run_id=run_id,
         point_slug=point_slug,
-        digest=digest_inputs.digest(),
+        serving=serving,
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
@@ -316,6 +380,26 @@ def build_sweep_context(
         commercial=commercial,
         sweep_args_b64=sweep_args_b64,
     )
+
+
+def _require_cluster_inputs(
+    *, region: str, bucket: str, image_ref: str, work_pool: str
+) -> None:
+    """Reject an empty cluster-stable input, then check the work pool is present.
+
+    :raise typer.BadParameter: when an input is blank or the work pool is absent.
+    """
+    for name, value in (
+        ("region", region),
+        ("bucket", bucket),
+        ("image-ref", image_ref),
+        ("work-pool", work_pool),
+    ):
+        if not value.strip():
+            raise typer.BadParameter(
+                "must be a non-empty string", param_hint=f"--{name}"
+            )
+    _require_work_pool(work_pool)
 
 
 def _require_work_pool(work_pool: str) -> None:

@@ -1,389 +1,225 @@
-# slipstream
+<div align="center">
 
-A self-hosted LLM inference platform on AWS EKS: open models served on spot GPUs,
-with the cluster-level machinery around the model as the focus — autoscaling on
-inference signals, spot-eviction survival mid-stream, cold-start elimination on
-large weight loads, inference-aware routing, and prefill/decode disaggregation.
-`just cluster-up` / `just cluster-down` conjures and destroys GPU capacity. It runs
-cost-competitive against commercial APIs and proves it on a live scoreboard.
+<img src="docs/logo.svg" alt="slipstream" width="400">
+<br><br>
 
-The name carries the platform's job: a slipstream is the low-drag wake behind a
-fast-moving object. Every layer here reduces drag — prefix caching, KV-cache
-offload, cold-start removal, prefill/decode split — so more tokens travel per
-dollar. Token streaming and speculative decoding (a draft model riding the big
-model's slipstream) sit literally inside the word.
+[![ci](https://github.com/pvardanis/slipstream/actions/workflows/ci.yml/badge.svg)](https://github.com/pvardanis/slipstream/actions/workflows/ci.yml)
+[![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![ruff](https://img.shields.io/badge/ruff-0.16.7-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
+[![ty](https://img.shields.io/badge/ty-0.0.84-261230)](https://github.com/astral-sh/ty)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![terraform](https://img.shields.io/badge/terraform-%E2%89%A51.11-7B42BC?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
+[![vLLM](https://img.shields.io/badge/vLLM-0.29.0-30A2FF)](https://github.com/vllm-project/vllm)
+[![platform](https://img.shields.io/badge/platform-AWS%20EKS-FF9900)](#architecture)
 
-The build spec is [`docs/spec.md`](docs/spec.md); the decision log at its end
-traces every choice back to its ticket.
+</div>
 
-## Provisioning
+A self-hosted LLM inference platform on AWS EKS. Today it serves an AWQ-quantized open
+model with vLLM on a Karpenter-provisioned `g5` GPU node and benchmarks it from outside
+the cluster. An unattended two-tier knob sweep (engine knobs × client concurrency)
+finds each configuration's sustained concurrency ceiling at an SLO, and a KV cache A/B
+measures what offloading KV cache to a CPU tier (LMCache) adds on top of the GPU prefix
+cache. `just stack-up` / `just stack-down` conjure and destroy the whole rig. Like the
+low-drag wake it is named after, every layer exists to move more tokens per dollar.
 
-All infrastructure is Terraform; the AWS console is never touched. A `justfile`
-drives it. Credentials come from your `AWS_PROFILE` — Terraform never handles them.
-Run `just` (or `just --list`) to see the recipes. Each lives in a file under
-`just/` named for its lifecycle concern, and `just --list` sections them under that
-concern's heading:
+The build spec is [`docs/spec.md`](docs/spec.md); decisions are recorded in
+[`docs/adr/`](docs/adr/) and terms in [`CONTEXT.md`](CONTEXT.md).
 
-| Concern | Key recipes | Covers |
-| --- | --- | --- |
-| `cluster` | `bootstrap`, `cluster-up` / `cluster-down`, `gpu-pool-up` | Remote-state bootstrap, EKS create/plan/destroy, the GPU node pool. |
-| `serve` | `gpu-deploy`, `gpu-up` / `gpu-down` | The vLLM api-key Secret, the GPU replica, its scale and completion smokes. |
-| `bench` | `bench-image`, `bench`, `prefix-cache` | The bench-client image, the per-point client-load sweep, prefix-cache measurement, results sync, the ephemeral mTLS bench endpoint. |
-| `obs` | `obs-up` / `obs-down`, `obs-pivot` | The OTel Collector spine stub — deploy, teardown, trace pivot. |
-| `test` | `cli-test` | Local smokes: the Python suite and the shell tests for the OTel spine and bench image (no cluster). |
-| `orchestrate` | `stack-up` / `stack-down`, `cloud-verify` | Whole-stack up/down, the one-shot cloud verification, the zero-leak spend sweep. |
+## Architecture
 
-The sections are display-only: `just` imports the six files into one flat
-namespace, so any recipe calls any other unqualified (`just stack-up` chains
-`cluster-up gpu-pool-up gpu-deploy bench-endpoint-up`) regardless of concern. The
-`[group()]` attribute only tells `--list` where to file each recipe. The split and
-the flat-namespace choice are recorded in
-[`docs/adr/0013`](docs/adr/0013-justfile-imported-lifecycle-modules.md).
+```mermaid
+---
+config:
+  elk:
+    nodePlacementAlignment: LEFTUP
+---
+flowchart TB
+    op([Operator])
 
-Prerequisites: `terraform` (>= 1.11), `just`, `kubectl`, and the AWS CLI, with an
-`AWS_PROFILE` that can create VPC/EKS resources (see [AWS access](#aws-access)).
-The benchmark recipes also need `docker` (to build the bench-client image); the
-bench host is driven over SSM, so no SSH client is required. Optional inspection
-tools: `k9s`, `stern`, `kubens`.
+    subgraph gha[GitHub Actions]
+        ci[ci.yml<br/>lint, tests, no-push builds]
+        img[bench-image /<br/>orchestration-image]
+        disp[sweep-dispatch /<br/>kv-ab-dispatch]
+    end
 
-```sh
-just bootstrap       # one-time: create the S3 remote-state bucket
-just cluster-up      # create the cluster, then `kubectl get nodes`
-just gpu-pool-up     # apply the GPU node pool + NVIDIA device plugin
-just gpu-deploy      # roll out the GPU vLLM replica (Karpenter brings up the g5)
-just gpu-completion  # port-forward the service and curl a completion out of it
-just cluster-down    # destroy the cluster; spend returns to zero
+    subgraph aws[AWS]
+        awslogo@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/aws-cloud.svg", label: "", pos: "b", w: 32, h: 32, constraint: "on" }
+        ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
+        subgraph eks[EKS]
+            ekslogo@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 32, h: 32, constraint: "on" }
+            vllm[vLLM on g5<br/>Karpenter,<br/>optional LMCache CPU tier]
+            ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
+            pw[Prefect worker]
+        end
+        alb@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/alb.svg", label: "mTLS ALB", pos: "b", w: 48, h: 48, constraint: "on" }
+        host@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ec2-instance.svg", label: "Bench host", pos: "b", w: 48, h: 48, constraint: "on" }
+        s3@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/s3-bucket.svg", label: "S3 results", pos: "b", w: 48, h: 48, constraint: "on" }
+    end
+
+    op -- push / PR --> ci
+    op -- merge to main --> img
+    op -- workflow_dispatch --> disp
+    op -- just stack-up / down --> eks
+    img -- OIDC push --> ecr
+    disp -- OIDC + port-forward:<br/>register + run --> ps
+    ps --> pw
+    pw -- redeploy per point<br/>or arm run --> vllm
+    pw -- SSM: one docker run per cell --> host
+    ecr -. image .-> host & pw
+    host -- load --> alb --> vllm
+    host -- result JSON --> s3
+    pw -- "charts, A/B records,<br/>Prefect results + cache keys" --> s3
 ```
 
-`just bootstrap` runs once; its own state lives in the S3 bucket it creates (the
-bucket name is a literal in its backend, since bootstrap is the root of the state
-chain — see ADR-0005). After that, `just cluster-up` / `just cluster-down` are the
-cluster lifecycle. The task-runner and
-state-bootstrap choices are recorded in
-[`docs/adr/0001`](docs/adr/0001-task-runner-and-state-bootstrap.md).
+The CI/CD pipeline and the benchmark data path are detailed in
+[`docs/architecture.md`](docs/architecture.md).
 
-`just gpu-pool-up` applies the GPU node pool (NodePool + EC2NodeClass) and the
-NVIDIA device plugin; `just gpu-deploy` applies [`k8s/vllm-gpu.yaml`](k8s/vllm-gpu.yaml):
-a single vLLM replica serving the AWQ-quantized model from
-[`model.yaml`](model.yaml) over the OpenAI API. Karpenter provisions a `g5.xlarge`
-on demand once the pod requests a GPU, so `gpu-deploy` covers node bring-up, the
-~10 GB image pull, and the weight load. The service is `ClusterIP` only — no public
-endpoint, no cloud load balancer — so `just gpu-completion` reaches it through
-`kubectl port-forward`. `just gpu-down` scales the replica to zero and Karpenter
-reaps the `g5` (ADR-0006); `just cluster-down` tears the cluster down with nothing
-left behind.
+## Prerequisites
+
+| Tool | Version | Used for |
+| --- | --- | --- |
+| `terraform` | >= 1.11 | all infrastructure |
+| `just`, `kubectl`, `aws` CLI | — | recipes, cluster access, SSM |
+| `uv` | >= 0.5 | Python workspace, `prefect` CLI |
+| `docker` | — | local bench-image builds |
+| `prek`, `tflint` | — | git hooks |
+| `gh` | — | setting repo variables (`just gh-vars`) |
+
+On macOS (Homebrew core ships a frozen terraform 1.5.7, so use HashiCorp's tap):
+
+```sh
+brew install hashicorp/tap/terraform just tflint awscli kubectl uv prek gh   # + Docker Desktop
+```
+
+Optional: `k9s`, `stern`, `kubens` for inspecting the `slipstream` namespace.
+
+## Setup
+
+### Local environment
+
+```sh
+uv sync          # workspace members + dev tools (pytest, ruff, ty)
+prek install     # git hooks: ruff, terraform fmt/tflint, shellcheck, shfmt, actionlint
+just cli-test    # local suite, no cluster
+```
 
 ### AWS access
 
-Work from a **dedicated IAM user, not the account root**. Root can't be granted
-an EKS access entry, so the console's EKS **Resources** tab shows `Unauthorized`
-for root and the cluster only trusts whoever ran `just cluster-up`.
+Work from a dedicated IAM user, not the account root: root cannot hold an EKS access
+entry. Create the user (VPC/EKS permissions, console access + MFA), give it an access
+key, and sign in to the console as that user to inspect EKS there. Then:
 
-1. As root (one time), create an IAM user (e.g. `slipstream-admin`) with the
-   permissions to manage VPC/EKS, and enable **console access** + MFA for it.
-2. Give it an **access key**, then configure a local profile:
+```sh
+aws configure --profile slipstream-admin   # access key + region (eu-west-1)
+export AWS_PROFILE=slipstream-admin        # the only variable you set by hand
+```
+
+`just cluster-up` grants cluster-admin to the caller, so `kubectl` works immediately.
+The recipes read the region from Terraform outputs; a profile pointing at another region
+will not find the resources.
+
+### New environment or fork
+
+Once per AWS account / repository. The image workflows need the repo variables, and
+`just cluster-up` deploys the Prefect worker from the published orchestration image,
+hence the order:
+
+1. In a fork or renamed repo, set `github_oidc_sub_prefix` in `terraform/bootstrap` to
+   the repo's OIDC subject prefix, otherwise every workflow fails with
+   `Not authorized to perform sts:AssumeRoleWithWebIdentity`:
    ```sh
-   aws configure --profile slipstream-admin   # paste the access key + region (eu-west-1)
-   export AWS_PROFILE=slipstream-admin         # the profile just/terraform/kubectl use
+   gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
    ```
-3. Sign in to the AWS console **as that user** (not root) at
-   `https://<account-id>.signin.aws.amazon.com/console` to inspect EKS there.
+2. `just bootstrap` — remote-state bucket, ECR repositories, GitHub OIDC roles.
+3. `just gh-vars` — sets the eight repo variables the workflows read from the
+   bootstrap outputs.
+4. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
+   ECR keeps them across `just stack-down`, so this is once per environment.
 
-`just cluster-up` grants cluster-admin to this caller automatically
-(`enable_cluster_creator_admin_permissions`), so `kubectl` works immediately.
-
-### Inspecting the cluster
-
-The workload lives in the `slipstream` namespace (created by `just gpu-deploy`).
+## Quickstart
 
 ```sh
-kubens slipstream                     # set the default namespace (no more -n flags)
-k9s                                   # live TUI: pods, logs (l), describe (d), events
-stern vllm -n slipstream --tail 50    # tail vLLM logs, follows pod restarts
+just stack-up             # cluster + Prefect + GPU pool + vLLM + bench endpoint
+# trigger a knob sweep: Actions → sweep-dispatch → Run workflow (on main)
+# or a KV cache A/B:    Actions → kv-ab-dispatch → Run workflow (on main)
+just bench-results-sync   # pull results into bench/results/ — before stack-down
+just stack-down           # tear down, then zero-leak sweep (spend → 0)
 ```
 
-`k9s` is the fastest way to see pod status and events; `stern` beats
-`kubectl logs` during a crash loop because it re-attaches to each new pod.
+The bench endpoint is public and every node bills while up: **run `just stack-down`
+when done.** Only the state bucket and ECR repositories survive it; the results bucket
+is deleted with its contents, so sync first. `stack-down` exits non-zero if a tagged
+instance or volume survived, and skips `cluster-down` (leaving the cluster billing) if
+the endpoint teardown failed: fix that and rerun. Running a sweep locally, single
+points, pinned images and the cloud-verify check are in
+[`docs/operations.md`](docs/operations.md); `uv run slipstream-bench --help` lists the
+bench CLI.
 
-## Benchmark harness
+## Recipes
 
-The L0 benchmark harness ships as `slipstream-bench`, a Python package managed by
-[`uv`](https://docs.astral.sh/uv/). Its `typer` CLI dispatches the benchmark
-subcommands below (plus `zero-leak`, the teardown sweep `just cloud-verify`
-classifies with). The rewrite from bash is recorded in
-[`docs/adr/0003`](docs/adr/0003-l0-bench-harness-in-python.md).
+`just` (or `just --list`) lists every recipe, grouped by concern
+([ADR-0013](docs/adr/0013-justfile-imported-lifecycle-modules.md)):
 
-- **`load-sweep`** — fire `vllm bench serve` across a prefix-share × burstiness
-  grid, writing one result JSON per cell. The grid axes (`prefix-share` default
-  `10 50 90`, `burstiness` default `0.2 1.0`, where `1.0` is Poisson and lower is
-  burstier), the per-cell lengths and prompt counts, and the `seed` that fixes
-  prompt synthesis so runs replay identically all come from the experiment YAML
-  passed as `--config` (default `bench/load-sweep.yaml`); `--base-url`, `--model`,
-  `--out-dir` and `--api-key-env` set the execution context, and `--dry-run`
-  prints the `vllm` commands without running them. This is the recipe `just bench`
-  drives on the bench host.
-- **`load-cell`** — run one `vllm bench serve` cell: its coordinate (`share`,
-  `burstiness`, and an optional `max_concurrency` cap) and the shared knobs
-  (lengths, SLO, seed) both come from a cell YAML passed as `--config` (default
-  `bench/load-cell.yaml`), and one result JSON is written. The orchestrator renders one
-  such cell per grid point from a `load-sweep` config; this is the grain the
-  bench-client container executes now that the per-cell loop lives in the
-  orchestration layer ([`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)
-  §Amendment).
-- **`aggregate-sweep`** — fold a finished `knob-sweep` run's per-point result JSON
-  into the concurrency-ceiling table, the durable artifact of the sweep.
-- **`cost`** — price result JSON files (path arguments) into $/1M input and output
-  tokens from a `--config` provenance YAML: the instance price/hr and output:input
-  ratio, tagged with the weight checksum, vLLM version and quantization recipe that
-  produced the run.
-- **`commercial-cost`** — price the same tokens at a commercial API's quoted $/1M
-  input and output rates, read from a `--config` provenance YAML pinning the api,
-  model and quote date; the comparison arm for the scoreboard.
-- **`prefix-cache`** — compute one run's prefix-cache hit-rate from the `/metrics`
-  snapshots bracketing it and the cell JSON, tagged by `--cache-state cold|warm`
-  (which regime the run measured). This is the join `just prefix-cache` runs locally
-  for each regime after the host produces the snapshots.
-- **`report`** — join the three arms (latency, cost, commercial) into the baseline
-  $/1M-at-SLO report, emitted as JSON or a Markdown table (`--format`).
-- **`chart`** — chart a finished `knob-sweep` run: write the ceiling and goodput-cliff
-  tables (Markdown + JSON, the durable artifacts) and their plots under
-  `<run-dir>/charts` (ADR-0009).
+| Group | Covers |
+| --- | --- |
+| `cluster` | Remote-state bootstrap, EKS up/plan/down, GPU node pool, repo variables |
+| `prefect` | Work pool, deployment registration, UI port-forward (`prefect-ui`), storage drain |
+| `serve` | vLLM api-key Secret, GPU replica deploy/scale, completion smokes |
+| `bench` | Bench-client image, one point's ladder, prefix-cache, results sync, mTLS endpoint |
+| `obs` | OTel Collector spine stub |
+| `test` | Python suite and shell unit tests (no cluster) |
+| `orchestrate` | Whole-stack up/down, cloud verification |
 
-Prerequisites: `uv` (>= 0.5). `uv run` provisions the virtualenv from
-`uv.lock` on first use — no manual `venv` or `pip install`. Every subcommand takes
-`--help` for its full option list.
+## Roadmap
 
-```sh
-uv run slipstream-bench --help              # list the subcommands
-uv run slipstream-bench load-sweep --help   # options for one subcommand
-just cli-test                               # run the package test suite (uv run pytest)
-```
+Planned in [`docs/spec.md`](docs/spec.md) §4, not yet built:
 
-Runtime dependencies are `typer` (CLI), `pydantic` + `pyyaml` (validate the
-`--config` YAMLs), `prometheus-client` (parse `/metrics`), `pandas` + `seaborn`
-(the `chart` tables and plots), and `prefect` + `prefect-aws` (the sweep cache/retry
-layer, [`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md));
-`pytest` and `ruff` are dev-only, and the repo's
-pre-commit `ruff` / `ruff-format` hooks lint the package. The tools
-run inside a baked bench-client image on an external EC2 bench host, which drives
-them against vLLM through an ephemeral public mutual-TLS load balancer, so the
-latency recorded is what an off-cluster client sees. That measurement path is
-recorded in [`docs/adr/0004`](docs/adr/0004-bench-vantage-external-path.md).
+- **L2a** — autoscaling on inference signals and cold-start elimination
+- **L2b** — spot-eviction survival mid-stream
+- **L3** — inference-aware routing
+- **L4** — prefill/decode disaggregation
 
-Prefect's result and cache-key storage point at S3, not its local
-`~/.prefect/storage/` default: `slipstream_bench.orchestration.storage` builds two
-`S3Bucket` blocks under distinct prefixes (`prefect/results`, `prefect/cache-keys`)
-of the same `RESULTS_BUCKET` the sweep already writes to, with AWS credentials from
-the ambient default chain. Resume survives a server or laptop death only with both
-on S3 — the hinge recorded in
-[`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md).
+## Deliberate trade-offs
 
-The bench-client image (`bench/Dockerfile`) layers the package and the model
-tokenizer onto the same pinned vLLM engine build the server runs, so the two
-tokenize identically. The tokenizer is baked from the `bench_model` var — the GPU
-rig's model from `model.yaml` — which `bench` and `prefix-cache` also send as the
-sweep model, so the image tokenizer and the sweep never diverge:
+The rig is one GPU on a duty-cycle budget, and most of what it does not do follows
+from that:
 
-```sh
-just bench-image   # docker build + push the bench-client image to ECR
-```
-
-### Bench image CI
-
-`just bench-image` is for a local, pinned build; merges to `main` publish the
-image. The [`bench-image`](.github/workflows/bench-image.yml) workflow
-authenticates to ECR via GitHub OIDC (no long-lived keys), and its build is
-content-hash idempotent: it computes the image's content tag, checks ECR, and
-builds and pushes only when that tag is absent. It publishes two tags — the
-immutable `<slug>-<sha>` content tag and the floating `<slug>-main` pointer — and
-is the sole publisher of `-main`. A pull request instead gets a build-only,
-no-push Dockerfile check in [`ci.yml`](.github/workflows/ci.yml), so a broken
-Dockerfile fails the no-cloud gate without any credentials. The scheme is
-recorded in [`docs/adr/0008`](docs/adr/0008-ci-built-bench-image-and-model-definition.md).
-
-One-time setup: the workflow reads the push role's ARN, the target ECR
-repository name, and the region from repository variables, all fed from the
-bootstrap stack's outputs so they track the infrastructure terraform created.
-After `just bootstrap` has applied the OIDC role and repository (see #101), set
-them once — they are repo-global, not per-branch:
-
-```sh
-gh variable set AWS_BENCH_IMAGE_PUSH_ROLE_ARN \
-  --body "$(terraform -chdir=terraform/bootstrap output -raw bench_image_push_role_arn)"
-gh variable set ECR_REPOSITORY \
-  --body "$(terraform -chdir=terraform/bootstrap output -raw bench_image_repo_url | cut -d/ -f2-)"
-gh variable set AWS_REGION \
-  --body "$(terraform -chdir=terraform/bootstrap output -raw region)"
-```
-
-The [`orchestration-image`](.github/workflows/orchestration-image.yml) workflow —
-the same OIDC, idempotent, sole-`main`-publisher scheme for the Prefect-worker
-image — reads its own push role and ECR repository from a second pair of
-variables (`AWS_REGION` is shared), fed from the bootstrap stack's orchestration
-outputs:
-
-```sh
-gh variable set AWS_ORCHESTRATION_IMAGE_PUSH_ROLE_ARN \
-  --body "$(terraform -chdir=terraform/bootstrap output -raw orchestration_image_push_role_arn)"
-gh variable set ORCHESTRATION_ECR_REPOSITORY \
-  --body "$(terraform -chdir=terraform/bootstrap output -raw orchestration_image_repo_url | cut -d/ -f2-)"
-```
-
-Bootstrapping under a different repo (a fork, a rename, or a new owner) also
-needs the OIDC trust to match that repo. The trust subject uses GitHub's
-immutable owner/repo IDs, so set `github_oidc_sub_prefix` in
-`terraform/bootstrap` to the repo's own value before applying — the default is
-this repo's IDs, and a mismatch fails the workflow's role assumption with
-`Not authorized to perform sts:AssumeRoleWithWebIdentity`:
-
-```sh
-gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
-# -> repo:<owner>@<owner_id>/<repo>@<repo_id>, the value for github_oidc_sub_prefix
-```
-
-To benchmark an unmerged branch's image: pull requests never publish, so first
-push the branch's content image locally, then pin the endpoint to that immutable
-tag rather than the `-main` default (which tracks the last `main` publish, not
-your branch):
-
-```sh
-just bench-image   # build + push this checkout's qwen3-8b-awq-<sha> content tag
-terraform -chdir=terraform/bench-endpoint apply \
-  -var bench_image_tag="$(bench/image-tag.sh sha-tag)"
-```
-
-### Benchmark runbook
-
-A benchmark run stands up an ephemeral, internet-facing endpoint and an EC2 host,
-then tears them down. The sequence, from a cold checkout:
-
-```sh
-just bootstrap        # once per environment: ECR repo + shared state (see ADR-0005)
-just cluster-up       # create the cluster, point kubectl at it
-just gpu-pool-up      # apply the GPU node pool + NVIDIA device plugin
-just gpu-deploy       # roll out the GPU vLLM replica (Karpenter brings up the g5)
-just bench-image      # build + push the bench-client image to ECR
-
-just bench-endpoint-up      # stand up the mutual-TLS load balancer + bench host
-just bench                             # sweep the prefix-share x burstiness grid
-just prefix-cache 90 1.0               # cold/warm hit-rate for one cell
-just bench-endpoint-down    # tear down the endpoint, host, certs and client secret
-```
-
-`just bench-endpoint-up` reads the operator's public IP from `checkip.amazonaws.com` and
-pins the load balancer's security group to that `/32`; mutual TLS is the real gate,
-the `/32` a second lock. `just bench` and `just prefix-cache` drive the host over
-SSM Run Command — the host has no inbound access — and sync each run's results under
-`bench/results/` (`bench/results/<run-id>/` for `just bench`,
-`bench/results/prefix-cache/<run-id>/` for `just prefix-cache`; pull runs made from
-another machine with `just bench-results-sync`). Both recipes require a live bench endpoint.
-
-The endpoint is public and billed while up: **run `just bench-endpoint-down` as soon as a
-run finishes.** `bench-endpoint-down` leaves the cluster and vLLM running; `just cluster-down`
-destroys the cluster. Neither touches the bootstrap state bucket or the ECR repo.
-
-Region is not a per-run flag: the benchmark recipes read it from the Terraform
-outputs (`terraform output -raw region`), so the cluster, the bench endpoint stack and
-the AWS CLI all act in one region. Set it once via `AWS_PROFILE` / `aws configure`; a
-profile pointing at a different region than the state was created in will not find
-these resources.
-
-The whole stack — cluster, GPU pool, GPU replica, bench endpoint — comes up with one
-recipe and tears down with another, for when you want it live to run sweeps against
-through the day:
-
-```sh
-just stack-up         # cluster-up + gpu-pool-up + gpu-deploy + bench-endpoint-up
-just bench                             # run sweeps against the live rig, any time
-just stack-down       # bench-endpoint-down + gpu-down + gpu-pool-down + cluster-down, then leak sweep (spend → 0)
-```
-
-`stack-down` returns all GPU and cluster spend to zero, then runs the same
-zero-leak sweep as `cloud-verify` (below) to confirm no `Project=slipstream`
-instance or volume — including a Karpenter g5 the destroy raced — is still
-billing; it exits non-zero if one survived. Only the bootstrap state bucket and
-ECR repo survive. `cluster-down` is gated on `bench-endpoint-down` succeeding:
-the endpoint's load balancer and host sit in the cluster VPC, so tearing the VPC
-down under a live endpoint would wedge on a dependency violation and orphan a
-billing load balancer — a failed endpoint teardown stops the run before that.
-
-### Knob sweep runbook
-
-The knob sweep is the two-tier engine-knob sweep (ADR-0009), run unattended by the
-in-cluster Prefect worker (ADR-0015). Every swept value lives in
-[`bench/sweep-grid.yaml`](bench/sweep-grid.yaml), validated against the `SweepGrid`
-model before the first deploy — nothing is hard-coded in the worker.
-
-- **Tier 1 — engine knobs**, one GPU redeploy per point: `max-num-seqs` ×
-  KV-cache dtype (`fp8`/`fp16`) × prefix caching (on/off). The knobs live in the
-  vLLM launch args, so each combination needs a fresh GPU redeploy, which the worker
-  drives in-cluster over `kubectl`.
-- **Tier 2 — client load ladder**, no redeploy: against each running Tier-1 point,
-  the worker walks the concurrency ladder to find the highest rung that holds
-  goodput at the SLO — that point's sustained concurrency ceiling.
-
-It runs against a live stack. Bring the rig up, register the deployment on the
-worker's pool, then trigger a run:
-
-```sh
-just stack-up          # cluster + GPU pool + GPU replica + bench endpoint
-just prefect-register  # register the knob-sweep deployment on the worker's pool
-prefect deployment run knob-sweep/knob-sweep \
-  --param run_id=<run-id> --param instance_id=<bench-host-instance-id>
-just stack-down        # tear the rig down; spend → 0
-```
-
-Each point's ladder JSON lands under `bench/results/<run-id>/<point>/`, with the
-per-point predicted ceilings tabulated alongside. A point that fails to deploy or
-whose ladder reports failures is recorded and the sweep continues, exiting non-zero
-at the end (its resumability and orchestrator choice are recorded in
-[`docs/adr/0012`](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)).
-Turn a finished run into artifacts locally — no cluster needed:
-
-```sh
-uv run slipstream-bench aggregate-sweep --run-dir bench/results/<run-id>   # ceiling table
-uv run slipstream-bench chart --run-dir bench/results/<run-id>             # tables + plots
-```
-
-### Cloud verify runbook
-
-`just cloud-verify` is the money-safety backstop for the GPU path (ADR-0002 item 4):
-one hand-triggered, real-GPU-spend end-to-end check that the rig serves and that
-teardown returns spend to zero. It costs real money, so a human triggers it — there
-is no automatic cloud run (ADR-0002).
-
-It expects a clean slate: it aborts if the eks stack already holds any resource,
-since running against a live cluster turns `cluster-up` into a multi-minute
-node-group roll and would tear down a cluster you did not stand up here. Run
-`just stack-down` first, then rerun.
-
-```sh
-just cloud-verify     # cluster-up → gpu-pool-up → gpu-deploy → smoke → teardown → sweep
-```
-
-It runs the full path and asserts two things:
-
-1. **Harness green** — the GPU replica answers `/v1/completions` with HTTP 200 and a
-   well-formed, non-empty completion (`just gpu-completion`). This proves the deploy
-   → service → engine → token path; it does not judge answer quality (spec §5).
-2. **Zero-leak** — after tearing the path down (`gpu-down` → `gpu-pool-down` →
-   `cluster-down`), it sweeps EC2 for any `Project=slipstream` instance or volume still in a
-   billing state and asserts none remain. Karpenter's `g5` and its `gp3` root live
-   outside Terraform state, so `just cluster-down` never sees them; the `EC2NodeClass` tags
-   them with the same `Project` tag the Terraform stacks carry so the sweep
-   (`test/zero-leak-sweep.sh`, classified by `slipstream-bench zero-leak`) can find
-   a leaked node the destroy missed. The sweep covers EC2 instances and EBS volumes
-   only — the Karpenter g5 and its gp3 root are the resources that live outside
-   Terraform state; `cluster-down` (`terraform destroy`) owns everything else. A
-   future out-of-state resource of another kind would need adding to the sweep.
-
-Teardown and the sweep run **even if the smoke fails**, so a failed check never
-leaves a live `g5` billing. The recipe exits non-zero if the smoke failed, a
-teardown step failed, or a tagged resource survived — a green exit means the rig
-served and spend is back at zero.
+- **One long-lived worker, not a pod per run.** The sweep runs on a single Prefect
+  process worker (one replica, work-pool concurrency 1) that lives as long as the
+  cluster. A Kubernetes Job per flow run buys isolation, per-run resources, and parallel
+  autoscale, none of which help a serial sweep on one static GPU node. A GPU fleet that
+  makes engine points truly parallel is the trigger to switch to a kubernetes pool
+  ([ADR-0015](docs/adr/0015-unattended-sweep-cloud-server-and-parent-flow.md)).
+- **On-demand GPU, not spot.** [`docs/spec.md`](docs/spec.md) plans for spot, but the
+  node pool is on-demand only and capped at one GPU: allowing spot cost ~15 min of
+  launch thrash in a spot-starved region, where on-demand launches in ~90s
+  ([`k8s/gpu-node-pool.yaml`](k8s/gpu-node-pool.yaml)).
+- **No always-on control plane.** Prefect Cloud's Starter tier (~$100/mo, the cheapest
+  that allows an own-compute worker) or a standing self-hosted stack would add an idle
+  cost floor. The Prefect server is self-hosted on SQLite inside
+  the cluster and is torn down with it; S3 holds the results and resume state.
+- **A duty cycle, not 24/7.** The GPU budget is ~$100–250/mo, while the cheapest 24 GB
+  card run continuously is ~$365/mo, so `just stack-down` returns spend to zero between
+  sweeps.
+- **One sample per cell.** Each knob-sweep cell is measured once; re-sampling is a
+  deliberate new `run_id`, never an average taken by default
+  ([ADR-0012](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)). The KV cache
+  A/B is the exception: it compares two arms, so each arm is run `runs_per_arm` times,
+  interleaved, and reported as median and range.
+- **No apply/destroy infra tests per push.** CI runs policy checks and offline
+  `terraform test` against mocked providers; the real-spend check, `just cloud-verify`,
+  runs by hand ([ADR-0002](docs/adr/0002-infrastructure-testing-strategy.md)).
+- **No high availability.** One CPU node, one Karpenter controller, and one Prefect
+  server: HA needs a second node, and SQLite on a single-attach EBS volume allows one
+  writer. A dead pod fails the in-flight run: Kubernetes restarts the pod, not the run,
+  and running it again with the same `run_id` resumes from the cells already measured.
+- **No standing endpoint, no laptop runs.** The mutual-TLS load balancer and bench host
+  exist only for a run, and recorded numbers never come from a laptop, whose Wi-Fi
+  jitter would inflate the p95/p99 tail
+  ([ADR-0004](docs/adr/0004-bench-vantage-external-path.md)).
 
 ## Non-goals
 
 No fine-tuning or LLM training, no RAG / vector DBs / embeddings, no agent
-frameworks, no Ray Train (Ray Serve is in scope), no multi-cloud or portability
-abstractions, not a real product — this is a platform demonstrator.
+frameworks, no Ray Train (Ray Serve is in scope), no multi-cloud or portability abstractions, not a real product — this is a
+platform demonstrator.

@@ -6,6 +6,7 @@ version = "0.1.0"
 description = "The pure-data contract kernel every slipstream member depends inward on: config, grid, result, and value-object types with their parse."
 requires-python = ">=3.11"
 dependencies = [
+    "prometheus-client>=0.26.0",
     "pydantic>=2",
     "pyyaml>=6",
 ]

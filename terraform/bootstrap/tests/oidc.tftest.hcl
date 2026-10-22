@@ -1,10 +1,19 @@
-# Plan-level tests for the GitHub OIDC push role on the bootstrap stack. They run
-# offline: the aws provider is mocked, so the assertions check the trust and
-# permission shape — that only main-branch workflows of this repo can assume the
-# role, and that the role can push to the bench-client repo and nothing else —
-# without creating a real IAM provider or role. The real end-to-end proof (a
-# workflow actually assumes the role and pushes) is the cloud tier.
-mock_provider "aws" {}
+# Plan-level tests for the GitHub OIDC roles on the bootstrap stack: the bench-client
+# and orchestration image-push roles and the sweep-dispatch role. They run offline: the
+# aws provider is mocked, so the assertions check the trust and permission shape — that
+# only main-branch workflows of this repo can assume each role, and that each role can do
+# its one job and nothing else — without creating a real IAM provider or role. The real
+# end-to-end proof (a workflow actually assumes a role and uses it) is the cloud tier.
+mock_provider "aws" {
+  # A fixed account id so the sweep-dispatch policy's cluster ARN is known at plan and
+  # assertable exactly.
+  mock_data "aws_caller_identity" {
+    defaults = {
+      account_id = "111122223333"
+      arn        = "arn:aws:iam::111122223333:user/test"
+    }
+  }
+}
 mock_provider "random" {}
 
 run "github_oidc_trust_and_permissions" {
@@ -51,10 +60,11 @@ run "github_oidc_trust_and_permissions" {
     condition     = local.bench_push_permissions_policy.Statement[0].Resource == "*"
     error_message = "GetAuthorizationToken has no resource scope and must be granted on *."
   }
-  # A docker push needs the full layer-upload sequence plus PutImage; dropping any
-  # one silently breaks the push at runtime, so assert the whole set rather than a
-  # single action. DescribeImages sits on its own statement and backs the workflow's
-  # content-hash existence check.
+  # A docker push needs the full layer-upload sequence plus PutImage, and BatchGetImage
+  # for the manifest HEAD Docker 29 makes after the layers; dropping any one silently
+  # breaks the push at runtime, so assert the whole set rather than a single action.
+  # DescribeImages sits on its own statement and backs the workflow's content-hash
+  # existence check.
   assert {
     condition = alltrue([
       for action in [
@@ -63,6 +73,7 @@ run "github_oidc_trust_and_permissions" {
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
         "ecr:PutImage",
+        "ecr:BatchGetImage",
       ] : contains(local.bench_push_permissions_policy.Statement[1].Action, action)
     ])
     error_message = "Push statement must grant the full docker-push action set."
@@ -96,6 +107,7 @@ run "orchestration_push_permissions" {
         "ecr:UploadLayerPart",
         "ecr:CompleteLayerUpload",
         "ecr:PutImage",
+        "ecr:BatchGetImage",
       ] : contains(local.orchestration_push_permissions_policy.Statement[1].Action, action)
     ])
     error_message = "Push statement must grant the full docker-push action set."
@@ -103,5 +115,70 @@ run "orchestration_push_permissions" {
   assert {
     condition     = local.orchestration_push_permissions_policy.Statement[2].Action == "ecr:DescribeImages"
     error_message = "A separate statement must grant DescribeImages for the content-hash existence check."
+  }
+}
+
+# The sweep-dispatch role shares the repo-main trust, so only a main-branch run of this
+# repo's sweep-dispatch workflow can assume it. Its permissions are the three reads the
+# workflow makes before the port-forward: DescribeCluster for `aws eks update-kubeconfig`,
+# scoped to this one cluster, DescribeInstances to resolve the bench host from its tags,
+# and ListAllMyBuckets to resolve the results bucket the deployment is registered
+# against. Kubernetes access (the port-forward itself) is not IAM — it is the eks stack's
+# access entry + namespaced RBAC.
+run "sweep_dispatch_permissions" {
+  command = plan
+
+  # A fixed provider ARN so the role's rendered trust policy is known at plan and can be
+  # compared against the shared main-branch trust.
+  override_resource {
+    target          = aws_iam_openid_connect_provider.github
+    override_during = plan
+    values = {
+      arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+    }
+  }
+
+  assert {
+    condition     = aws_iam_role.sweep_dispatch.name == "slipstream-sweep-dispatch"
+    error_message = "The sweep-dispatch role must be named slipstream-sweep-dispatch."
+  }
+
+  # The role's own trust document, not just the shared local, is the main-scoped OIDC
+  # trust — so pointing the role at a looser document fails here.
+  assert {
+    condition     = jsondecode(aws_iam_role.sweep_dispatch.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:pvardanis@37624791/slipstream@1357264197:ref:refs/heads/main"
+    error_message = "The sweep-dispatch role must trust only this repo's main branch."
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.sweep_dispatch.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    error_message = "The sweep-dispatch role must require the sts.amazonaws.com audience claim."
+  }
+  assert {
+    condition     = length(jsondecode(aws_iam_role.sweep_dispatch.assume_role_policy).Statement) == 1
+    error_message = "The sweep-dispatch trust policy must carry only the main-branch OIDC statement."
+  }
+
+  # The assertions read the policy attached to the role, so swapping the attachment to a
+  # broader document fails them. Exactly three statements, so no grant beyond the three
+  # reads slips in alongside them.
+  assert {
+    condition     = length(jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement) == 3
+    error_message = "The sweep-dispatch policy must carry exactly the DescribeCluster, DescribeInstances and ListAllMyBuckets statements."
+  }
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "DescribeCluster" && s.Action == "eks:DescribeCluster" && s.Resource == "arn:aws:eks:eu-west-1:111122223333:cluster/slipstream"]) == 1
+    error_message = "eks:DescribeCluster must be scoped to the slipstream cluster ARN."
+  }
+  # Describe actions take no resource scope, so the grant is on "*" and narrowed to the
+  # stack's region by condition instead.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "DescribeInstances" && s.Action == "ec2:DescribeInstances" && s.Resource == "*" && try(s.Condition.StringEquals["aws:RequestedRegion"], null) == "eu-west-1"]) == 1
+    error_message = "ec2:DescribeInstances must be granted on * and limited to the stack's region."
+  }
+  # ListAllMyBuckets is account-wide and takes no bucket scope, so the grant is on "*";
+  # it lists bucket names only and reads no object.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.sweep_dispatch.policy).Statement : s if s.Sid == "ListAllMyBuckets" && s.Action == "s3:ListAllMyBuckets" && s.Resource == "*"]) == 1
+    error_message = "s3:ListAllMyBuckets must be granted on *, the only resource it takes."
   }
 }

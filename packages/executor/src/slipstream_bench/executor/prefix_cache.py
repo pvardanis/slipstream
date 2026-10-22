@@ -5,8 +5,9 @@ vllm:prefix_cache_queries and vllm:prefix_cache_hits, both counters over the who
 server life, so their bare ratio is polluted by every prior request. A run's true
 rate is the delta over the run window: the caller curls /metrics before and after
 the run into two snapshots and hands them here with the run's client JSON. This
-computes (hits_after - hits_before) / (queries_after - queries_before), guards a
-zero or backwards window (counter restart), and joins the rate onto the client
+reads the contract kernel's prefix-cache window over them — (hits_after -
+hits_before) / (queries_after - queries_before), guarded against a zero or
+backwards window (counter restart) — and joins the rate onto the client
 record with a cold/warm label (ADR-0003) so the two cache regimes are told apart.
 The run's SLO numbers ride on the record too, so a reader can weigh cold against
 warm at the SLO from the record alone, without reopening the client JSON. The
@@ -16,16 +17,15 @@ Cold vs warm is the caller's doing: reset the prefix cache before the cold run,
 reuse the warmed cache for the warm run, and pass the matching cache_state.
 """
 
-import math
 from enum import StrEnum
 from pathlib import Path
 
-from prometheus_client.parser import text_string_to_metric_families
-
 from slipstream_bench.contract import read_result
+from slipstream_bench.contract.prefix_cache_window import (
+    PrefixCacheError,
+    get_prefix_cache_window,
+)
 
-_QUERIES_METRIC = "vllm:prefix_cache_queries"
-_HITS_METRIC = "vllm:prefix_cache_hits"
 _SLO_METRICS = (
     "request_throughput",
     "request_goodput",
@@ -34,10 +34,6 @@ _SLO_METRICS = (
     "p95_tpot_ms",
     "p99_tpot_ms",
 )
-
-
-class PrefixCacheError(Exception):
-    """A prefix-cache input that cannot produce a meaningful hit rate."""
 
 
 class CacheState(StrEnum):
@@ -67,82 +63,6 @@ def _read_metrics_snapshot(path: Path) -> str:
         raise PrefixCacheError(
             f"cannot read metrics snapshot {path}: {error}"
         ) from error
-
-
-def _sum_counter(exposition: str, source: Path, metric: str, model: str) -> float:
-    """Sum a counter's value across the series carrying the run's model_name.
-
-    prometheus_client renders a counter with a _total suffix in the exposition
-    (vllm:prefix_cache_queries_total) while vLLM's PromQL name omits it, so match
-    either sample name. Summing only the run's model_name series keeps a
-    multi-model server's other series out of the count.
-
-    :param exposition: the parsed /metrics text.
-    :param source: the snapshot file, for the error message.
-    :param metric: the counter's PromQL name (no _total suffix).
-    :param model: the model_name label value to select.
-    :return: the summed counter value across the matching series.
-    :raise PrefixCacheError: when no matching series is present — prefix caching
-        disabled or the model never emitted — a nothing-to-join error, not a zero.
-    """
-    names = (metric, f"{metric}_total")
-    total = None
-    try:
-        families = text_string_to_metric_families(exposition)
-        for family in families:
-            for sample in family.samples:
-                if sample.name in names and sample.labels.get("model_name") == model:
-                    total = (total or 0.0) + sample.value
-    except ValueError as error:
-        raise PrefixCacheError(
-            f"cannot parse metrics snapshot {source}: {error}"
-        ) from error
-    if total is None:
-        raise PrefixCacheError(
-            f"metric {metric} not found in {source} for model {model!r} "
-            f"(is prefix caching enabled on the server?)"
-        )
-    # NaN and infinities in the exposition parse to floats and would produce a
-    # non-finite (NaN or inf) hit rate the window guards do not reliably catch, so
-    # reject a non-finite counter here, before the delta.
-    if not math.isfinite(total):
-        raise PrefixCacheError(
-            f"metric {metric} has a non-finite value in {source} for model {model!r}"
-        )
-    return total
-
-
-def _get_window_delta(
-    before: str,
-    after: str,
-    sources: tuple[Path, Path],
-    metric: str,
-    model: str,
-) -> float:
-    """Return a counter's advance over the run window, before subtracted from after.
-
-    :param before: the exposition text captured before the run.
-    :param after: the exposition text captured after the run.
-    :param sources: the (before, after) snapshot files, for error messages.
-    :param metric: the counter's PromQL name (no _total suffix).
-    :param model: the model_name label value to select.
-    :return: the after-minus-before delta across the matching series.
-    :raise PrefixCacheError: when either snapshot lacks the metric (see
-        :func:`_sum_counter`).
-    """
-    before_source, after_source = sources
-    return _sum_counter(after, after_source, metric, model) - _sum_counter(
-        before, before_source, metric, model
-    )
-
-
-def _as_count(value: float) -> int | float:
-    """Render a whole counter value as an int, leaving a fractional one a float.
-
-    :param value: a counter delta.
-    :return: the value as an int when it is whole, else unchanged.
-    """
-    return int(value) if float(value).is_integer() else value
 
 
 def scrape_prefix_cache(
@@ -216,34 +136,12 @@ def scrape_prefix_cache(
             f"is not a usable string and no model given"
         )
 
-    before = _read_metrics_snapshot(metrics_before)
-    after = _read_metrics_snapshot(metrics_after)
-    sources = (metrics_before, metrics_after)
-    queries = _get_window_delta(before, after, sources, _QUERIES_METRIC, selected_model)
-    hits = _get_window_delta(before, after, sources, _HITS_METRIC, selected_model)
-
-    # A counter that shrank over the window means the server restarted (or the cache
-    # was reset) mid-run; the delta is meaningless and the rate would be a lie.
-    if queries < 0 or hits < 0:
-        raise PrefixCacheError(
-            "prefix cache counters went backwards between snapshots "
-            "(server restart mid-run?)"
-        )
-    # No queries in the window is a 0/0 rate: there is no run to measure.
-    if queries == 0:
-        raise PrefixCacheError(
-            "no prefix cache queries between the snapshots (nothing to measure)"
-        )
-    # Hits are a subset of queries on a single model, so a hits delta above the
-    # queries delta is impossible for a healthy series: a mid-run counter reset that
-    # touched one series and not the other, or a selector that folded in a foreign
-    # series. Either way the > 1.0 rate would be a lie, so reject it.
-    if hits > queries:
-        raise PrefixCacheError(
-            f"prefix cache hits ({_as_count(hits)}) exceed queries "
-            f"({_as_count(queries)}) over the window for model {selected_model!r} "
-            f"(counter reset mid-run or wrong model selected?)"
-        )
+    window = get_prefix_cache_window(
+        _read_metrics_snapshot(metrics_before),
+        _read_metrics_snapshot(metrics_after),
+        model=selected_model,
+        sources=(str(metrics_before), str(metrics_after)),
+    )
 
     return {
         "source": str(result),
@@ -255,10 +153,10 @@ def scrape_prefix_cache(
         "request_rate": record.get("request_rate"),
         "prefix_share": record.get("prefix_share"),
         "completed": record.get("completed"),
-        "prefix_cache_queries": _as_count(queries),
-        "prefix_cache_hits": _as_count(hits),
+        "prefix_cache_queries": window.queries,
+        "prefix_cache_hits": window.hits,
         # The run's hit rate: the fraction of this window's prefix-cache queries
         # that hit, the whole point of the scrape.
-        "prefix_cache_hit_rate": hits / queries,
+        "prefix_cache_hit_rate": window.hit_rate,
         "client_metrics": {name: record.get(name) for name in _SLO_METRICS},
     }

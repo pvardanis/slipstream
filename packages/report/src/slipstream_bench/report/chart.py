@@ -1,4 +1,5 @@
-"""Render a knob-sweep run's aggregated rows to Markdown and JSON tables.
+"""Render a knob-sweep run's aggregated rows to Markdown and JSON tables, and lay any printed
+cells out as a Markdown table.
 
 The tables are the durable artifacts (ADR-0009): Markdown the human-readable view, JSON the
 structured table later layers re-read. These renderers are pure and import no plotting
@@ -8,6 +9,7 @@ seaborn/matplotlib plotters that draw them live beside this in
 """
 
 import json
+from collections.abc import Sequence
 
 from slipstream_bench.report.aggregation import CeilingRow, RungRow
 
@@ -17,14 +19,18 @@ _TABLE_COLUMNS = (
     "prefix_caching",
     "prefix_share",
     "ceiling",
+    "p95_ttft_ms",
+    "p95_tpot_ms",
+    "output_throughput",
     "timeout",
     "other",
     "oom",
     "num_preemptions",
 )
 
-# The diagnostic table's columns: the engine point, the rung's offered concurrency, and
-# its goodput fraction — the cliff before aggregate_ceilings folds it to one number.
+# The diagnostic table's columns: the engine point, the rung's offered concurrency, its
+# goodput fraction, the two p95 gates the fraction folds (ttft prefill-bound, tpot
+# decode-bound), and its token rate — the cliff before aggregate_ceilings folds it.
 _RUNG_TABLE_COLUMNS = (
     "max_num_seqs",
     "kv_cache_dtype",
@@ -32,6 +38,9 @@ _RUNG_TABLE_COLUMNS = (
     "prefix_share",
     "max_concurrency",
     "goodput_fraction",
+    "p95_ttft_ms",
+    "p95_tpot_ms",
+    "output_throughput",
 )
 
 
@@ -45,9 +54,19 @@ def rows_to_markdown(rows: list[CeilingRow]) -> str:
         emitted, already sorted by point then prefix-share.
     :return: the table as one string: header, separator, one row per ceiling row.
     """
-    header = "| " + " | ".join(_TABLE_COLUMNS) + " |"
-    separator = "| " + " | ".join("---" for _ in _TABLE_COLUMNS) + " |"
-    body = ["| " + " | ".join(_row_cells(row)) + " |" for row in rows]
+    return to_markdown_table(_TABLE_COLUMNS, [_row_cells(row) for row in rows])
+
+
+def to_markdown_table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """Lay printed cells out as a GitHub-flavored Markdown table.
+
+    :param columns: the header's column names.
+    :param rows: each row's printed cells, in column order.
+    :return: the table as one string: header, separator, one line per row.
+    """
+    header = "| " + " | ".join(columns) + " |"
+    separator = "| " + " | ".join("---" for _ in columns) + " |"
+    body = ["| " + " | ".join(cells) + " |" for cells in rows]
     return "\n".join([header, separator, *body])
 
 
@@ -76,10 +95,7 @@ def rungs_to_markdown(rungs: list[RungRow]) -> str:
         emitted, already sorted by point, then prefix-share, then offered concurrency.
     :return: the table as one string: header, separator, one row per rung.
     """
-    header = "| " + " | ".join(_RUNG_TABLE_COLUMNS) + " |"
-    separator = "| " + " | ".join("---" for _ in _RUNG_TABLE_COLUMNS) + " |"
-    body = ["| " + " | ".join(_rung_cells(rung)) + " |" for rung in rungs]
-    return "\n".join([header, separator, *body])
+    return to_markdown_table(_RUNG_TABLE_COLUMNS, [_rung_cells(rung) for rung in rungs])
 
 
 def rungs_to_json(rungs: list[RungRow]) -> str:
@@ -100,6 +116,17 @@ def _cell(value: object) -> str:
     return "" if value is None else str(value)
 
 
+def _ms(value: float | None) -> str:
+    """A p95 gate in whole milliseconds, blank when not captured — sub-ms noise is
+    meaningless at the SLO scale the gates are set in."""
+    return "" if value is None else f"{value:.0f}"
+
+
+def _rate(value: float | None) -> str:
+    """An output token rate to one decimal, blank when not captured."""
+    return "" if value is None else f"{value:.1f}"
+
+
 def _row_cells(row: CeilingRow) -> list[str]:
     """Flatten one ceiling row into its cells, :data:`_TABLE_COLUMNS` order."""
     failures = row["failures"]
@@ -109,6 +136,9 @@ def _row_cells(row: CeilingRow) -> list[str]:
         _cell(row["prefix_caching"]),
         _cell(row["prefix_share"]),
         _cell(row["ceiling"]),
+        _ms(row["p95_ttft_ms"]),
+        _ms(row["p95_tpot_ms"]),
+        _rate(row["output_throughput"]),
         _cell(failures["timeout"]),
         _cell(failures["other"]),
         _cell(failures["oom"]),
@@ -121,6 +151,7 @@ def _rung_cells(rung: RungRow) -> list[str]:
 
     The goodput fraction rounds to three decimals for the human view — the messy
     goodput/throughput ratio reads cleanly here, its full precision kept in the JSON.
+    The gates read in whole milliseconds and the token rate to one decimal.
     """
     return [
         _cell(rung["max_num_seqs"]),
@@ -129,4 +160,7 @@ def _rung_cells(rung: RungRow) -> list[str]:
         _cell(rung["prefix_share"]),
         _cell(rung["max_concurrency"]),
         f"{rung['goodput_fraction']:.3f}",
+        _ms(rung["p95_ttft_ms"]),
+        _ms(rung["p95_tpot_ms"]),
+        _rate(rung["output_throughput"]),
     ]

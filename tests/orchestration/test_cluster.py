@@ -1,13 +1,19 @@
-"""The knob sweep's in-cluster collaborators: GPU redeploy and ceiling scrape.
+"""The in-cluster collaborators: GPU redeploy, ceiling scrape, and GPU KV pool scrape.
 
-Exercises deploy_gpu_point and scrape_ceiling against a fake kubectl that records the
-argv and stdin issued, and render/extract as pure functions — no cluster. Asserts the
-redeploy applies only the Deployment document (the worker's RBAC grants get/patch on
-deploy/vllm-gpu, not the manifest's Namespace or Service), renders the point's knobs,
-then waits the rollout; and that the scrape returns the last ceiling line or raises.
+Exercises deploy_gpu, deploy_gpu_point, scrape_ceiling, and scrape_gpu_kv_pool against
+a fake kubectl that records the argv and stdin issued, and render/extract as pure
+functions — no cluster. Asserts the redeploy applies only the Deployment document (the
+worker's RBAC grants get/patch on deploy/vllm-gpu, not the manifest's Namespace or
+Service), renders the point's knobs, then waits the rollout; and that each scrape returns
+the last matching line or raises.
 """
 
+import json
+import re
 from collections.abc import Sequence
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -16,13 +22,20 @@ from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration.cluster import (
     CeilingScrapeError,
     KubectlError,
+    KvPoolScrapeError,
     build_kubectl,
+    deploy_gpu,
     deploy_gpu_point,
     extract_deployment_doc,
     render_gpu_manifest,
     scrape_ceiling,
+    scrape_gpu_kv_pool,
 )
 from slipstream_bench.orchestration.grid import get_engine_args
+from slipstream_bench.orchestration.kv_ab_config import (
+    get_kv_ab_engine_args,
+    load_kv_ab_config,
+)
 
 _GRID = """
 tier1:
@@ -49,8 +62,9 @@ load:
   goodput: ["ttft:1000", "tpot:50"]
 """
 
-# A manifest with the three swept placeholders plus the Namespace and Service the
-# operator applied at stack-up — the redeploy must apply only the Deployment.
+# A manifest with the three swept placeholders, the GPU KV pool cap, and the two KV cache
+# offload ones, plus the Namespace and Service the operator applied at stack-up — the
+# redeploy must apply only the Deployment.
 _MANIFEST = """\
 apiVersion: v1
 kind: Namespace
@@ -70,9 +84,18 @@ spec:
           args:
             - --kv-cache-dtype
             - "${KV_CACHE_DTYPE}"
+            - --kv-cache-memory-bytes
+            - "${KV_CACHE_MEMORY_BYTES}"
             - --max-num-seqs
             - "${MAX_NUM_SEQS}"
             - ${PREFIX_CACHING_FLAG}
+            - --kv-transfer-config
+            - '${KV_TRANSFER_CONFIG}'
+          resources:
+            requests:
+              memory: ${MEMORY_LIMIT}
+            limits:
+              memory: ${MEMORY_LIMIT}
 ---
 apiVersion: v1
 kind: Service
@@ -80,6 +103,8 @@ metadata:
   name: vllm-gpu
   namespace: slipstream
 """
+
+_COMMITTED_MANIFEST = Path(__file__).resolve().parents[2] / "k8s" / "vllm-gpu.yaml"
 
 _POINT = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _FP16_OFF = EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False)
@@ -105,10 +130,12 @@ def load_grid_from_text(text: str) -> SweepGrid:
     return SweepGrid.model_validate(yaml.safe_load(text))
 
 
-def test_render_substitutes_the_three_swept_knobs() -> None:
+def test_render_substitutes_the_swept_knobs() -> None:
     engine_args = get_engine_args(_grid(), _POINT)
 
-    rendered = render_gpu_manifest(_MANIFEST, engine_args=engine_args)
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=engine_args, kv_cache_offload=False
+    )
 
     assert "${" not in rendered
     assert '"64"' in rendered
@@ -116,15 +143,235 @@ def test_render_substitutes_the_three_swept_knobs() -> None:
     assert "--enable-prefix-caching" in rendered
 
 
+def _kv_cache_memory_bytes(container: dict[str, Any]) -> str:
+    """The value the container passes to vLLM's --kv-cache-memory-bytes."""
+    args = container["args"]
+    return args[args.index("--kv-cache-memory-bytes") + 1]
+
+
+def test_render_caps_the_gpu_kv_pool_at_the_engine_args_bytes() -> None:
+    engine_args = replace(
+        get_engine_args(_grid(), _POINT), kv_cache_memory_bytes=1_207_959_552
+    )
+
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=engine_args, kv_cache_offload=False
+    )
+
+    assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "1207959552"
+
+
+def test_render_leaves_a_sweep_point_s_gpu_kv_pool_uncapped() -> None:
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=get_engine_args(_grid(), _POINT), kv_cache_offload=False
+    )
+
+    # vLLM parses the literal "None" as no cap: gpu-memory-utilization sizes the pool.
+    assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "None"
+
+
 def test_render_maps_the_fp16_label_and_caching_off_flag() -> None:
     engine_args = get_engine_args(_grid(), _FP16_OFF)
 
-    rendered = render_gpu_manifest(_MANIFEST, engine_args=engine_args)
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=engine_args, kv_cache_offload=False
+    )
 
     # fp16 -> the engine token float16; the off arm's flag renders as the bare list item.
     assert '"float16"' in rendered
     assert "--no-enable-prefix-caching" in rendered
     assert '"128"' in rendered
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "${MAX_NUM_SEQS}",
+        "${KV_CACHE_DTYPE}",
+        "${KV_CACHE_MEMORY_BYTES}",
+        "${PREFIX_CACHING_FLAG}",
+        "${KV_TRANSFER_CONFIG}",
+        "${MEMORY_LIMIT}",
+    ],
+)
+def test_render_rejects_a_manifest_missing_a_placeholder(placeholder: str) -> None:
+    # A misspelled or dropped placeholder would otherwise render silently: the knob
+    # never reaches vLLM, or a literal ${...} crashloops the pod after apply.
+    manifest = _MANIFEST.replace(placeholder, "${MISSPELLED}")
+
+    with pytest.raises(ValueError, match=re.escape(placeholder)):
+        render_gpu_manifest(
+            manifest,
+            engine_args=get_engine_args(_grid(), _POINT),
+            kv_cache_offload=False,
+        )
+
+
+def _vllm_container(rendered: str) -> dict[str, Any]:
+    """The vllm container of the rendered manifest's Deployment."""
+    deployment = yaml.safe_load(extract_deployment_doc(rendered))
+    return deployment["spec"]["template"]["spec"]["containers"][0]
+
+
+def _kv_transfer_config(container: dict[str, Any]) -> str:
+    """The value the container passes to vLLM's --kv-transfer-config."""
+    args = container["args"]
+    return args[args.index("--kv-transfer-config") + 1]
+
+
+def _render_committed_manifest(*, kv_cache_offload: bool) -> str:
+    """Render the committed k8s/vllm-gpu.yaml for the rig point."""
+    return render_gpu_manifest(
+        _COMMITTED_MANIFEST.read_text(encoding="utf-8"),
+        engine_args=get_engine_args(_grid(), _POINT),
+        kv_cache_offload=kv_cache_offload,
+    )
+
+
+def test_render_with_kv_cache_offload_wires_the_lmcache_connector_and_memory() -> None:
+    engine_args = get_engine_args(_grid(), _POINT)
+
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=engine_args, kv_cache_offload=True
+    )
+
+    container = _vllm_container(rendered)
+    assert json.loads(_kv_transfer_config(container)) == {
+        "kv_connector": "LMCacheConnectorV1",
+        "kv_role": "kv_both",
+    }
+    assert container["resources"]["requests"]["memory"] == "12Gi"
+    assert container["resources"]["limits"]["memory"] == "12Gi"
+
+
+def test_render_without_kv_cache_offload_keeps_no_connector_and_the_default_memory() -> (
+    None
+):
+    engine_args = get_engine_args(_grid(), _POINT)
+
+    rendered = render_gpu_manifest(
+        _MANIFEST, engine_args=engine_args, kv_cache_offload=False
+    )
+
+    # vLLM parses the literal "None" as no connector, its default.
+    container = _vllm_container(rendered)
+    assert _kv_transfer_config(container) == "None"
+    assert "LMCacheConnectorV1" not in rendered
+    assert container["resources"]["requests"]["memory"] == "8Gi"
+    assert container["resources"]["limits"]["memory"] == "8Gi"
+
+
+@pytest.mark.parametrize("kv_cache_offload", [False, True])
+def test_the_committed_manifest_renders_every_placeholder(
+    kv_cache_offload: bool,
+) -> None:
+    rendered = _render_committed_manifest(kv_cache_offload=kv_cache_offload)
+
+    assert "${" not in rendered
+
+
+def test_the_committed_manifest_renders_no_connector_with_offload_off() -> None:
+    rendered = _render_committed_manifest(kv_cache_offload=False)
+
+    container = _vllm_container(rendered)
+    assert _kv_transfer_config(container) == "None"
+    assert "LMCacheConnectorV1" not in rendered
+    assert container["resources"]["limits"]["memory"] == "8Gi"
+
+
+def test_the_committed_manifest_renders_the_connector_with_offload_on() -> None:
+    container = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
+
+    assert json.loads(_kv_transfer_config(container)) == {
+        "kv_connector": "LMCacheConnectorV1",
+        "kv_role": "kv_both",
+    }
+    assert container["resources"]["limits"]["memory"] == "12Gi"
+
+
+def _gibibytes(quantity: str) -> float:
+    """A Kubernetes ``<n>Gi`` memory quantity in GiB."""
+    assert quantity.endswith("Gi"), quantity
+    return float(quantity.removesuffix("Gi"))
+
+
+def test_the_committed_manifest_fits_lmcaches_cpu_tier_inside_the_offload_memory() -> (
+    None
+):
+    off = _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    on = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
+
+    env = {var["name"]: var.get("value") for var in on["env"]}
+    assert env["LMCACHE_LOCAL_CPU"] == "True"
+    assert env["LMCACHE_CHUNK_SIZE"] == "256"
+    # The pinned tier sits on top of what the engine runs in with offload off.
+    tier = float(env["LMCACHE_MAX_LOCAL_CPU_SIZE"])
+    engine = _gibibytes(off["resources"]["limits"]["memory"])
+    assert tier > 0
+    assert engine + tier <= _gibibytes(on["resources"]["limits"]["memory"])
+
+
+def test_the_recipe_renders_the_same_offload_values_as_the_worker() -> None:
+    # `just _render-gpu-manifest` and render_gpu_manifest each spell the two states
+    # out; an operator's gpu-deploy must match what the worker renders.
+    recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
+        encoding="utf-8"
+    )
+    off = _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    on = _vllm_container(_render_committed_manifest(kv_cache_offload=True))
+
+    assert f"kv_transfer_config={_kv_transfer_config(off)}\n" in recipe
+    assert f"kv_transfer_config='{_kv_transfer_config(on)}'\n" in recipe
+    assert f"memory_limit={off['resources']['limits']['memory']}\n" in recipe
+    assert f"memory_limit={on['resources']['limits']['memory']}\n" in recipe
+
+
+@pytest.mark.parametrize("workload", ["agent", "chat"])
+def test_the_committed_manifest_caps_the_pool_at_the_kv_ab_workload_s_bytes(
+    workload: str,
+) -> None:
+    config = load_kv_ab_config(
+        _COMMITTED_MANIFEST.parents[1]
+        / "bench"
+        / "configs"
+        / f"kv-cache-extension-ab.{workload}.yaml"
+    )
+
+    rendered = render_gpu_manifest(
+        _COMMITTED_MANIFEST.read_text(encoding="utf-8"),
+        engine_args=get_kv_ab_engine_args(config.engine),
+        kv_cache_offload=True,
+    )
+
+    # 16,384 tokens of fp8 KV at 73,728 bytes each.
+    assert _kv_cache_memory_bytes(_vllm_container(rendered)) == "1207959552"
+
+
+def test_the_recipe_substitutes_every_placeholder_in_the_committed_manifest() -> None:
+    # envsubst leaves a placeholder off its allow-list as a literal ${...}, which parses
+    # as YAML and then crashloops the pod a plain `just gpu-deploy` rolls out.
+    recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
+        encoding="utf-8"
+    )
+    allow_list = re.search(r"envsubst '([^']*)'", recipe)
+    placeholders = set(
+        re.findall(r"\$\{[A-Z_]+\}", _COMMITTED_MANIFEST.read_text(encoding="utf-8"))
+    )
+
+    assert allow_list is not None
+    assert placeholders == set(allow_list.group(1).split())
+
+
+def test_the_recipe_leaves_the_gpu_kv_pool_uncapped_as_the_sweep_does() -> None:
+    # A plain `just gpu-deploy` must size the pool as a sweep point's redeploy does.
+    recipe = (_COMMITTED_MANIFEST.parents[1] / "just" / "serve.just").read_text(
+        encoding="utf-8"
+    )
+    uncapped = _kv_cache_memory_bytes(
+        _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    )
+
+    assert f'kv_cache_memory_bytes="${{KV_CACHE_MEMORY_BYTES:-{uncapped}}}"' in recipe
 
 
 def test_get_engine_args_rejects_a_point_absent_from_the_grid() -> None:
@@ -190,6 +437,76 @@ def test_deploy_renders_the_points_knobs_into_the_applied_deployment() -> None:
     assert "${MAX_NUM_SEQS}" not in args
 
 
+def _applied_container(kubectl: _FakeKubectl) -> dict[str, Any]:
+    """The vllm container of the Deployment the fake kubectl was asked to apply."""
+    applied = kubectl.calls[0][1]
+    assert applied is not None
+    return _vllm_container(applied)
+
+
+def test_deploy_renders_without_kv_cache_offload() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu_point(_POINT, grid=_grid(), manifest_text=_MANIFEST, kubectl=kubectl)
+
+    container = _applied_container(kubectl)
+    assert _kv_transfer_config(container) == "None"
+    assert container["resources"]["limits"]["memory"] == "8Gi"
+
+
+def test_deploy_gpu_with_kv_cache_offload_applies_the_lmcache_connector() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu(
+        get_engine_args(_grid(), _POINT),
+        kv_cache_offload=True,
+        manifest_text=_MANIFEST,
+        kubectl=kubectl,
+    )
+
+    container = _applied_container(kubectl)
+    assert json.loads(_kv_transfer_config(container)) == {
+        "kv_connector": "LMCacheConnectorV1",
+        "kv_role": "kv_both",
+    }
+    assert container["resources"]["limits"]["memory"] == "12Gi"
+    assert kubectl.calls[1][0][:2] == ["rollout", "status"]
+
+
+def _applied_pod_annotations(kubectl: _FakeKubectl) -> dict[str, str] | None:
+    """The pod-template annotations of the Deployment the fake kubectl applied."""
+    applied = kubectl.calls[0][1]
+    assert applied is not None
+    template = next(iter(yaml.safe_load_all(applied)))["spec"]["template"]
+    return template.get("metadata", {}).get("annotations")
+
+
+def test_deploy_gpu_stamps_a_restart_time_on_the_pod_template() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu(
+        get_engine_args(_grid(), _POINT),
+        kv_cache_offload=True,
+        manifest_text=_MANIFEST,
+        kubectl=kubectl,
+        restarted_at="2026-10-21T16:39:12Z",
+    )
+
+    # The annotation `kubectl rollout restart` sets: a changed pod template is what makes
+    # Kubernetes roll a new pod when the engine args and offload switch are unchanged.
+    assert _applied_pod_annotations(kubectl) == {
+        "kubectl.kubernetes.io/restartedAt": "2026-10-21T16:39:12Z"
+    }
+
+
+def test_deploy_gpu_point_applies_the_pod_template_unstamped() -> None:
+    kubectl = _FakeKubectl()
+
+    deploy_gpu_point(_POINT, grid=_grid(), manifest_text=_MANIFEST, kubectl=kubectl)
+
+    assert _applied_pod_annotations(kubectl) is None
+
+
 def test_deploy_raises_when_kubectl_fails() -> None:
     def failing(_args: Sequence[str], _stdin: str | None = None) -> str:
         raise KubectlError("boom")
@@ -222,6 +539,45 @@ def test_scrape_raises_when_the_log_carries_no_ceiling() -> None:
 
     with pytest.raises(CeilingScrapeError, match=_POINT.slug()):
         scrape_ceiling(_POINT, kubectl=kubectl)
+
+
+_KV_POOL_LOG = """\
+INFO startup begins
+INFO GPU KV cache size: 9,999 tokens, Maximum concurrency for 4,096 tokens per request: 2.44x
+INFO restarted
+INFO GPU KV cache size: 185,696 tokens, Maximum concurrency for 4,096 tokens per request: 45.34x
+INFO serving
+"""
+
+
+def test_scrape_gpu_kv_pool_reads_the_last_token_count_off_the_startup_log() -> None:
+    kubectl = _FakeKubectl(logs=_KV_POOL_LOG)
+
+    assert scrape_gpu_kv_pool(kubectl=kubectl) == 185_696
+    assert kubectl.calls[0][0] == ["logs", "-n", "slipstream", "deployment/vllm-gpu"]
+
+
+@pytest.mark.parametrize(
+    "logs",
+    [
+        "INFO startup\nINFO serving, no pool line\n",
+        "INFO GPU KV cache size: , tokens, Maximum ...\n",
+    ],
+)
+def test_scrape_gpu_kv_pool_raises_when_the_log_carries_no_pool_size(
+    logs: str,
+) -> None:
+    kubectl = _FakeKubectl(logs=logs)
+
+    with pytest.raises(KvPoolScrapeError, match="deployment/vllm-gpu"):
+        scrape_gpu_kv_pool(kubectl=kubectl)
+
+
+def test_scrape_gpu_kv_pool_raises_on_an_empty_pool() -> None:
+    kubectl = _FakeKubectl(logs="INFO GPU KV cache size: 0 tokens, Maximum ...\n")
+
+    with pytest.raises(KvPoolScrapeError, match="empty"):
+        scrape_gpu_kv_pool(kubectl=kubectl)
 
 
 def test_build_kubectl_returns_stdout_and_passes_stdin() -> None:

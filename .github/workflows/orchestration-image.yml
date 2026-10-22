@@ -8,9 +8,9 @@
 name: orchestration-image
 
 on:
-  # Build and scan on any PR that touches an image input, so a CVE or broken build is
-  # caught before merge rather than on the post-merge publish run. This trigger runs the
-  # no-cloud `scan` job only.
+  # Build and scan on any PR that touches an image input or a scan waiver
+  # (.trivyignore), so a CVE or broken build is caught before merge rather than on the
+  # post-merge publish run. This trigger runs the no-cloud `scan` job only.
   pull_request:
     paths:
       - packages/**
@@ -19,15 +19,22 @@ on:
       - orchestration/Dockerfile
       - .dockerignore
       - model.yaml
-      - bench/sweep-grid.yaml
+      - bench/configs/sweep-grid.yaml
+      - bench/configs/kv-cache-extension-ab.yaml
       - k8s/vllm-gpu.yaml
+      - .trivyignore
       - .github/workflows/orchestration-image.yml
+  # Rescan main weekly so a new CVE or an expired .trivyignore waiver fails here on
+  # schedule, not on whichever PR next touches an image input. Runs the `scan` job only.
+  schedule:
+    - cron: '0 6 * * 1'
   push:
     branches: [main]
   workflow_dispatch:
 
 # Least privilege at the top: only read. The publish job raises id-token for the OIDC
-# exchange itself, so pull_request runs — which never publish — are never granted a token.
+# exchange itself, so pull_request and schedule runs — which never publish — are never
+# granted a token.
 permissions:
   contents: read
 
@@ -41,9 +48,9 @@ env:
 
 jobs:
   scan:
-    name: build & scan (pull request)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    name: build & scan (no push)
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -60,15 +67,15 @@ jobs:
       - name: Build the content image
         run: |
           set -euo pipefail
-          # Build for the amd64 worker nodes, tagged locally only — the PR gate never
+          # Build for the amd64 worker nodes, tagged locally only — this job never
           # pushes. The scan below reads this image from the local docker store.
           docker build --platform linux/amd64 \
             -f orchestration/Dockerfile \
             -t orchestration-image:pr-scan \
             .
 
-      # Same gate as the publish job's scan, run pre-merge: fail on fixable high/critical
-      # CVEs so a vulnerable image is caught on the PR, not on the post-merge publish.
+      # Same gate as the publish job's scan: fail on fixable high/critical CVEs so a
+      # vulnerable image is caught on the PR or the weekly rescan, not on the publish.
       - name: Scan the content image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -80,9 +87,9 @@ jobs:
 
   publish:
     name: build, scan & push (content-hash idempotent)
-    # Publish only on push/dispatch; the pull_request event runs the scan job alone.
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    # Publish only on push/dispatch; pull_request and schedule run the scan job alone.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -108,23 +115,24 @@ jobs:
           # configure-aws-credentials as a vague error (mirrors the ECR_REPOSITORY guard
           # in the probe step below).
           : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
-          # The immutable content tag is the short hash of the last commit that touched
-          # any image input — the package source, the whole packages/ tree (the
-          # slipstream-bench-contract workspace member it installs; only installed members belong
-          # there, so the tree needs no per-member list), its locked dependency set, the
-          # build definition, and the three deep-config files the image bakes for the worker
-          # (model.yaml, the sweep grid, the vLLM redeploy manifest). A change to any of
-          # these is what a new content tag must capture; a change elsewhere (docs,
-          # terraform) leaves the image identical, so the probe below finds the tag present
-          # and skips the rebuild. Assign before writing: a failing substitution inside an
-          # echo argument does not trip `set -e`, so a bare assignment is what makes an error
-          # here fail the job rather than write an empty tag to GITHUB_OUTPUT. The width is
-          # pinned with --abbrev so the immutable tag for a commit stays constant: git's
-          # default short hash grows with history, which would otherwise re-tag the same
-          # content and defeat the presence probe below.
+          # The immutable content tag is the short hash of the last commit that touched any
+          # image input — the package source, the whole packages/ tree (the
+          # slipstream-bench-contract workspace member it installs; only installed members
+          # belong there, so the tree needs no per-member list), its locked dependency set,
+          # the build definition, and the deep-config files the image bakes for the worker
+          # (model.yaml, the sweep grid, the kv-ab workload, the vLLM redeploy manifest). A
+          # change to any of these is what a new content tag must capture; a change elsewhere
+          # (docs, terraform) leaves the image identical, so the probe below finds the tag
+          # present and skips the rebuild. Assign before writing: a failing substitution
+          # inside an echo argument does not trip `set -e`, so a bare assignment is what
+          # makes an error here fail the job rather than write an empty tag to GITHUB_OUTPUT.
+          # The width is pinned with --abbrev so the immutable tag for a commit stays
+          # constant: git's default short hash grows with history, which would otherwise
+          # re-tag the same content and defeat the presence probe below.
           sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
             packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
-            model.yaml bench/sweep-grid.yaml k8s/vllm-gpu.yaml)"
+            model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
+            k8s/vllm-gpu.yaml)"
           if [[ -z "${sha_tag}" ]]; then
             echo "::error::could not derive a content tag — no commit touches the image inputs"
             exit 1

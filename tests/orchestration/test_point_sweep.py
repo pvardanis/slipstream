@@ -2,14 +2,16 @@
 
 ADR-0012 §Amendment: the flow drives one engine point's Tier-2 cells. It starts the
 loopback proxy once, enumerates the point's cells, and runs each as a cell task keyed
-``digest:point-slug:cell-name`` so a re-run skips the cells that already hold a valid
-measurement. This exercises that against faked SSM/S3 clients and a tmp-dir-backed
-cell task: a first run executes every cell, a second run — same digest — hits the
-cache and re-executes none, while the proxy still comes up once per invocation.
+``run-id:digest:point-slug:cell-name`` so a re-run skips the cells that already hold
+a valid measurement. This exercises that against faked SSM/S3 clients and a
+tmp-dir-backed cell task: a first run executes every cell, a second run — same run id
+and digest — hits the cache and re-executes none, a second run under a new run id
+re-executes every cell, and the proxy comes up once per invocation.
 """
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,6 +20,7 @@ from prefect import Task
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
+from slipstream_bench.orchestration.digest import DigestError, ServingConfig
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
     run_point_sweep,
@@ -35,6 +38,9 @@ _VALID_RESULT = {
     "completed": 99,
     "request_goodput": 90.0,
     "request_throughput": 95.0,
+    "p95_ttft_ms": 850.0,
+    "p95_tpot_ms": 42.0,
+    "output_throughput": 1234.5,
     "errors": [""] * 99 + ["Timeout"],
 }
 
@@ -118,6 +124,17 @@ class _UnhealthyOnceS3:
             Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
 
 
+class _KeyRecordingS3:
+    """Record each downloaded key, serving every cell a valid result."""
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        self.keys.append(key)
+        Path(dest).write_text(json.dumps(_VALID_RESULT), encoding="utf-8")
+
+
 class _DestRecordingS3:
     """Record each download destination, serving every cell a valid result."""
 
@@ -137,16 +154,23 @@ def _isolated_task(tmp_path: Path):
     )
 
 
-def _context() -> SweepContext:
+def _context(run_id: str = "run1/mns64_kvfp8_pcon") -> SweepContext:
     return SweepContext(
-        run_id="run1/mns64_kvfp8_pcon",
+        run_id=run_id,
         point_slug="mns64_kvfp8_pcon",
-        digest="digest-abc",
+        serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
         instance_id="i-1",
         image_ref="repo:tag",
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
     )
+
+
+def test_unreadable_sweep_args_are_rejected_before_the_proxy_comes_up() -> None:
+    # Every cell's digest folds the sweep flags in, so flags the digest cannot read fail
+    # on construction, before any SSM command reaches the bench host.
+    with pytest.raises(DigestError, match="base64"):
+        replace(_context(), sweep_args_b64="not base64!")
 
 
 def _grid(tmp_path: Path) -> Path:
@@ -155,10 +179,16 @@ def _grid(tmp_path: Path) -> Path:
     return path
 
 
-def _drive(tmp_path: Path, ssm: _FakeSsm, task, s3=None) -> list[str]:
+def _drive(
+    tmp_path: Path,
+    ssm: _FakeSsm,
+    task,
+    s3=None,
+    run_id: str = "run1/mns64_kvfp8_pcon",
+) -> list[str]:
     return run_point_sweep(
         grid_path=_grid(tmp_path),
-        context=_context(),
+        context=_context(run_id),
         ssm_client=ssm,
         s3_client=s3 or _FakeS3(),
         task=task,
@@ -175,7 +205,7 @@ def test_first_run_executes_every_cell(tmp_path: Path) -> None:
 
     # 2 prefix_shares x 1 burstiness x 2 concurrency rungs = 4 cells.
     assert len(pointers) == 4
-    assert all(p.startswith("s3://bench-bucket/sweeps/run1/") for p in pointers)
+    assert all(p.startswith("s3://bench-bucket/knob-sweep/run1/") for p in pointers)
     assert ssm.proxy_ups() == 1
     assert ssm.cell_runs() == 4
 
@@ -236,6 +266,51 @@ def test_second_run_resumes_and_re_executes_no_cell(tmp_path: Path) -> None:
     assert first == second
     assert second_ssm.proxy_ups() == 1  # the proxy still comes up once per flow
     assert second_ssm.cell_runs() == 0  # every cell hit the cache
+
+
+def test_the_host_writes_and_the_worker_reads_each_cell_under_the_knob_sweep_prefix(
+    tmp_path: Path,
+) -> None:
+    ssm = _FakeSsm()
+    s3 = _KeyRecordingS3()
+
+    pointers = _drive(tmp_path, ssm, _isolated_task(tmp_path), s3=s3)
+
+    cell_commands = [c for c in ssm.commands if _CELL in c]
+    assert all("RUN_ID='knob-sweep/run1/mns64_kvfp8_pcon'" in c for c in cell_commands)
+    assert pointers == [f"s3://bench-bucket/{key}" for key in s3.keys]
+    assert all(key.startswith("knob-sweep/run1/mns64_kvfp8_pcon/") for key in s3.keys)
+
+
+def test_a_new_run_id_re_executes_every_cell_under_its_own_prefix(
+    tmp_path: Path,
+) -> None:
+    task = _isolated_task(tmp_path)
+    _drive(tmp_path, _FakeSsm(), task, run_id="run1/mns64_kvfp8_pcon")
+
+    second_ssm = _FakeSsm()
+    second = _drive(tmp_path, second_ssm, task, run_id="run2/mns64_kvfp8_pcon")
+
+    assert second_ssm.cell_runs() == 4  # no cell is served from run1's cache
+    assert all(p.startswith("s3://bench-bucket/knob-sweep/run2/") for p in second)
+
+
+def test_run_ids_sharing_a_parent_re_execute_under_their_own_prefix(
+    tmp_path: Path,
+) -> None:
+    # A single-point run id need only nest the slug, so two can share their leading
+    # segment yet write cells under different prefixes: neither may reuse the other's.
+    task = _isolated_task(tmp_path)
+    _drive(tmp_path, _FakeSsm(), task, run_id="run1/a-mns64_kvfp8_pcon")
+
+    second_ssm = _FakeSsm()
+    second = _drive(tmp_path, second_ssm, task, run_id="run1/b-mns64_kvfp8_pcon")
+
+    assert second_ssm.cell_runs() == 4
+    assert all(
+        p.startswith("s3://bench-bucket/knob-sweep/run1/b-mns64_kvfp8_pcon/")
+        for p in second
+    )
 
 
 def test_a_failed_cell_re_runs_while_valid_cells_stay_cached(tmp_path: Path) -> None:

@@ -140,6 +140,13 @@ run "bench_host_invariants" {
     condition     = strcontains(local.bench_user_data, local.bench_sweep_script)
     error_message = "Boot script must embed the rendered bench sweep script the SSM command runs."
   }
+  # The sweep script copies each cell under s3://<bucket>/<RUN_ID>/ and adds no prefix of
+  # its own: the run id carries the experiment root (knob-sweep/ or kv-offload-ab/) the
+  # worker reads the cell back from (ADR-0024).
+  assert {
+    condition     = strcontains(local.bench_sweep_script, "\"s3://$${RESULTS_BUCKET}/$${RUN_ID}/\"") && !strcontains(local.bench_sweep_script, "sweeps/")
+    error_message = "The sweep script must copy each cell to s3://<bucket>/<RUN_ID>/ with no fixed prefix of its own."
+  }
   # The sweep script runs the secret field reader by path to pull the api-key; the boot
   # script must embed its rendered content so the host has the file when the sweep runs.
   assert {
@@ -273,11 +280,22 @@ run "bench_host_invariants" {
     error_message = "Bench host must attach the SSM managed instance core policy for keyless access."
   }
 
-  # The results bucket blocks all public access; it holds measurement JSON, not
-  # anything meant to be reachable from the internet.
+  # The results bucket keeps ACLs blocked but allows a bucket policy to open one prefix:
+  # the render task serves its chart PNGs as public image artifacts (ADR-0018 Amendment),
+  # so the two *policy* flags are off while the two ACL flags stay on. Access comes from the
+  # scoped bucket policy below, never object ACLs.
   assert {
-    condition     = aws_s3_bucket_public_access_block.results.block_public_acls && aws_s3_bucket_public_access_block.results.block_public_policy && aws_s3_bucket_public_access_block.results.ignore_public_acls && aws_s3_bucket_public_access_block.results.restrict_public_buckets
-    error_message = "Results bucket must block all public access."
+    condition     = aws_s3_bucket_public_access_block.results.block_public_acls && aws_s3_bucket_public_access_block.results.ignore_public_acls && !aws_s3_bucket_public_access_block.results.block_public_policy && !aws_s3_bucket_public_access_block.results.restrict_public_buckets
+    error_message = "Results bucket must block public ACLs but allow a scoped public bucket policy for the chart prefix."
+  }
+
+  # The only public grant is anonymous s3:GetObject on the two charts patterns — the chart
+  # PNGs the image artifacts link to, under knob-sweep/<run>/charts/ and
+  # kv-offload-ab/<run>/charts/. It must never widen to the bare bucket or the sibling
+  # cell-result JSONs under knob-sweep/<run>/<point>/ and kv-offload-ab/<run>/<arm>-r<n>/.
+  assert {
+    condition     = length(jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement) == 1 && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Effect == "Allow" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Principal == "*" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Action == "s3:GetObject" && toset(try(tolist(jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Resource), [jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Resource])) == toset(["${aws_s3_bucket.results.arn}/knob-sweep/*/charts/*", "${aws_s3_bucket.results.arn}/kv-offload-ab/*/charts/*"])
+    error_message = "Results bucket policy must grant anonymous s3:GetObject on exactly the knob-sweep/*/charts/* and kv-offload-ab/*/charts/* prefixes, nothing wider."
   }
 
   # The results bucket is force-destroyed so bench-endpoint-down removes it (and the
@@ -285,6 +303,14 @@ run "bench_host_invariants" {
   assert {
     condition     = aws_s3_bucket.results.force_destroy == true
     error_message = "Results bucket must be force-destroyed so bench-endpoint-down can remove it."
+  }
+
+  # The flow-dispatch workflow finds the results bucket by listing this prefix
+  # (<cluster_name>-bench-endpoint-results-), since the suffix changes whenever the
+  # bucket is recreated. Renaming it breaks the dispatch's bucket lookup.
+  assert {
+    condition     = aws_s3_bucket.results.bucket_prefix == "slipstream-bench-endpoint-results-"
+    error_message = "Results bucket prefix must be <cluster_name>-bench-endpoint-results-, the prefix flow-dispatch lists by."
   }
 }
 
@@ -340,6 +366,20 @@ run "bench_proxy_config" {
   assert {
     condition     = strcontains(local.bench_proxy_conf, "stream {")
     error_message = "Proxy must be an L4 stream proxy so it does not buffer the token stream."
+  }
+  # Each proxied request holds two connections (client to proxy, proxy to ALB), so the
+  # worker connection cap must sit well above twice the grid's top max_concurrency rung;
+  # the nginx 512 default caps the proxy at ~256 streams and the 256 rung exhausts it.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "worker_connections 4096")
+    error_message = "Proxy must raise worker_connections above the 512 default so a max_concurrency 256 rung does not exhaust the connection pool."
+  }
+  # nginx caps worker_connections at the worker's file-descriptor limit, so the 4096 cap
+  # is only real if the fd limit is raised to match; without this the cap silently reverts
+  # to the host's default ulimit.
+  assert {
+    condition     = strcontains(local.bench_proxy_conf, "worker_rlimit_nofile 8192")
+    error_message = "Proxy must raise worker_rlimit_nofile above the worker_connections cap or nginx bounds connections at the host's default fd limit."
   }
   # It forwards to the ALB DNS name on 443, terminating mutual TLS upstream.
   assert {

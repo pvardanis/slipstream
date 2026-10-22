@@ -1,0 +1,31 @@
+# One-point knob grid for an end-to-end check of the CI sweep trigger (#180): one engine
+# point and one Tier-2 cell with a small request count, so the benchmark itself finishes
+# in seconds. The engine point's GPU redeploy and ceiling scrape still run. The full grid
+# is parked in bench/configs/sweep-grid.full.yaml. The orchestration worker reads this
+# file through the contract's load_grid, which validates it against the SweepGrid
+# pydantic model (ADR-0009, ADR-0015).
+tier1:
+  max_num_seqs: [16]
+  kv_cache_dtype: [fp8]
+  # The keys are quoted so YAML keeps them as the strings "on"/"off", not booleans.
+  prefix_caching:
+    "on":
+      flag: --enable-prefix-caching
+      prefix_share: [50]
+
+tier2:
+  max_concurrency: [8]
+  # Inert under the closed-loop ceiling method (request_rate: inf, below).
+  burstiness: 1.0
+
+# Fixed client-load knobs, as in the full grid except the request count and output
+# length, which are cut so the single cell completes in seconds.
+load:
+  total_len: 1000
+  num_prompts: 32
+  num_prefixes: 5
+  output_len: 32
+  align_blocks: 16
+  request_rate: .inf
+  seed: 0
+  goodput: ["ttft:1000", "tpot:50"]

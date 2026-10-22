@@ -10,7 +10,31 @@ import matplotlib.pyplot as plt
 import pytest
 
 from slipstream_bench.report.aggregation import CeilingRow, RungRow
-from slipstream_bench.report.plotters import plot_ceilings_png, plot_cliffs_png
+from slipstream_bench.report.plotters import (
+    _plot_ceilings,
+    _plot_cliffs,
+    plot_ceilings_png,
+    plot_cliffs_png,
+)
+
+
+# grid is a seaborn FacetGrid, which ships no type stub, so the parameter is untyped.
+def _title_overlaps_facets(grid) -> bool:  # type: ignore[no-untyped-def]
+    # Draw once so every text has a laid-out window extent, then test the figure
+    # suptitle against each facet title: a real pixel overlap is the symptom a reserved
+    # title band removes, on a grid of any row count. get_suptitle() returns only the
+    # string, so reaching the Text artist for its window extent needs the private
+    # figure._suptitle: an undocumented attribute that an AttributeError here would point at.
+    figure = grid.figure
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    suptitle_box = figure._suptitle.get_window_extent(renderer)
+    return any(
+        suptitle_box.overlaps(ax.title.get_window_extent(renderer))
+        for ax in grid.axes.flat
+        if ax.get_title()
+    )
+
 
 # A PNG file leads with this 8-byte signature; asserting it pins the bytes are a real PNG, not
 # an empty buffer or a stray format.
@@ -24,6 +48,9 @@ def _row(
     prefix_caching: bool = True,
     prefix_share: int = 50,
     ceiling: int | None = 32,
+    p95_ttft_ms: float | None = 850.0,
+    p95_tpot_ms: float | None = 42.0,
+    output_throughput: float | None = 1234.5,
 ) -> CeilingRow:
     return {
         "max_num_seqs": max_num_seqs,
@@ -31,6 +58,9 @@ def _row(
         "prefix_caching": prefix_caching,
         "prefix_share": prefix_share,
         "ceiling": ceiling,
+        "p95_ttft_ms": p95_ttft_ms,
+        "p95_tpot_ms": p95_tpot_ms,
+        "output_throughput": output_throughput,
         "failures": {"timeout": 0, "other": 0, "oom": None},
         "num_preemptions": None,
     }
@@ -44,6 +74,9 @@ def _rung(
     prefix_share: int = 50,
     max_concurrency: int = 32,
     goodput_fraction: float = 0.98,
+    p95_ttft_ms: float = 850.0,
+    p95_tpot_ms: float = 42.0,
+    output_throughput: float = 1234.5,
 ) -> RungRow:
     return {
         "max_num_seqs": max_num_seqs,
@@ -52,6 +85,9 @@ def _rung(
         "prefix_share": prefix_share,
         "max_concurrency": max_concurrency,
         "goodput_fraction": goodput_fraction,
+        "p95_ttft_ms": p95_ttft_ms,
+        "p95_tpot_ms": p95_tpot_ms,
+        "output_throughput": output_throughput,
     }
 
 
@@ -68,7 +104,7 @@ def test_plot_cliffs_png_renders_a_png() -> None:
 
 
 def test_rendering_a_plot_leaves_no_open_figure() -> None:
-    # _figure_png closes each grid's figure after encoding, so a long-lived worker that renders
+    # _get_figure_png_bytes closes each grid's figure after encoding, so a long-lived worker that renders
     # every run does not leak a matplotlib figure per plot.
     plt.close("all")
 
@@ -85,6 +121,87 @@ def test_plot_ceilings_png_rejects_an_empty_table() -> None:
         plot_ceilings_png([])
 
 
+def test_plot_ceilings_png_renders_when_some_points_held_no_ceiling() -> None:
+    # A point whose every rung fell below the SLO carries a null ceiling: it plots as a
+    # gap, not a zero. The chart still renders off the points that did hold a ceiling —
+    # a null-ceiling row must not drop the whole y-column and crash the render.
+    png = plot_ceilings_png([_row(ceiling=32), _row(prefix_share=10, ceiling=None)])
+
+    assert png.startswith(_PNG_MAGIC)
+
+
+def test_plot_ceilings_png_rejects_a_table_with_no_ceiling_anywhere() -> None:
+    # When no point in the run held a ceiling, there is nothing to draw, so it raises
+    # rather than rendering a blank figure — a sibling of the empty-table guard, naming
+    # the all-null cause. Match that message, not the shared prefix, to pin this branch.
+    with pytest.raises(ValueError, match="no point held a ceiling"):
+        plot_ceilings_png([_row(ceiling=None), _row(prefix_share=10, ceiling=None)])
+
+
 def test_plot_cliffs_png_rejects_an_empty_table() -> None:
     with pytest.raises(ValueError, match="empty cliff"):
         plot_cliffs_png([])
+
+
+def test_cliff_facets_carry_no_metric_annotations() -> None:
+    # The per-rung SLO gates and token rate live in the goodput-cliff table and each
+    # cell's own artifact, not stamped on the plot: the facets stay clean so the cliff
+    # shape reads at a glance. No marker carries ttft / tpot / token-rate text.
+    grid = _plot_cliffs(
+        [
+            _rung(max_concurrency=8, goodput_fraction=0.98),
+            _rung(max_concurrency=16, goodput_fraction=0.50),
+        ]
+    )
+    labels = [text.get_text() for ax in grid.axes.flat for text in ax.texts]
+    plt.close(grid.figure)
+
+    assert labels == []
+
+
+def test_cliff_title_is_a_single_line() -> None:
+    # The title names the run's fixed conditions on one line, so it does not wrap down
+    # over the top row of facet titles. The title carries no marker-label legend.
+    grid = _plot_cliffs([_rung()])
+    title = grid.figure.get_suptitle()
+    plt.close(grid.figure)
+
+    assert "\n" not in title
+    assert "marker labels" not in title
+
+
+def test_ceiling_title_clears_the_facets_on_a_multi_row_grid() -> None:
+    # The ceiling plot reserves the same title band as the cliff: on a grid wide enough
+    # to wrap into five rows (one facet per caching/share condition) the suptitle would
+    # otherwise land on the top row's facet titles. Twenty distinct shares → twenty
+    # condition facets → five rows at col_wrap=4.
+    rows = [_row(prefix_share=share, ceiling=32) for share in range(1, 21)]
+    grid = _plot_ceilings(rows)
+    overlaps = _title_overlaps_facets(grid)
+    plt.close(grid.figure)
+
+    assert not overlaps
+
+
+def test_cliff_title_clears_the_facets_on_a_multi_row_grid() -> None:
+    # tight_layout reserves no room for a figure suptitle, so on a full grid's facets (one
+    # per engine point, wrapped into five rows) the title lands on the top row's facet
+    # titles. The layout reserves a band above the axes for it, so the title clears them.
+    rungs = [
+        _rung(
+            max_num_seqs=m,
+            kv_cache_dtype=kv,
+            prefix_caching=caching,
+            prefix_share=50 if caching else 0,
+            max_concurrency=mc,
+        )
+        for m in (16, 32, 64, 128, 256)
+        for kv in ("fp8", "fp16")
+        for caching in (True, False)
+        for mc in (8, 256)
+    ]
+    grid = _plot_cliffs(rungs)
+    overlaps = _title_overlaps_facets(grid)
+    plt.close(grid.figure)
+
+    assert not overlaps

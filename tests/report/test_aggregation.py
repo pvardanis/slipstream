@@ -35,6 +35,9 @@ def _write_cell(tmp_path: Path, name: str = "cell.json", **extra: object) -> Pat
         "prefix_share": 50,
         "request_goodput": 7.5,
         "request_throughput": 8.0,
+        "p95_ttft_ms": 850.0,
+        "p95_tpot_ms": 42.0,
+        "output_throughput": 1234.5,
         "errors": ["", "", ""],
     }
     record.update(extra)
@@ -48,6 +51,9 @@ def _cell(max_concurrency: int, fraction: float, *, prefix_share: int = 50) -> L
         max_concurrency=max_concurrency,
         prefix_share=prefix_share,
         goodput_fraction=fraction,
+        p95_ttft_ms=850.0,
+        p95_tpot_ms=42.0,
+        output_throughput=1234.5,
         failures={"timeout": 0, "other": 0, "oom": None},
     )
 
@@ -58,6 +64,9 @@ def _write_rung(
     share: int,
     cap: int,
     fraction: float,
+    ttft: float = 850.0,
+    tpot: float = 42.0,
+    throughput: float = 1234.5,
     errors: list[str] | None = None,
 ) -> None:
     """Lay down one ladder-rung JSON under a point subdir, as the recipe would."""
@@ -67,6 +76,9 @@ def _write_rung(
         "prefix_share": share,
         "request_goodput": fraction,
         "request_throughput": 1.0,
+        "p95_ttft_ms": ttft,
+        "p95_tpot_ms": tpot,
+        "output_throughput": throughput,
         "errors": errors if errors is not None else [""],
     }
     (point_dir / f"pshare{share}_burst1.0_mc{cap}.json").write_text(json.dumps(record))
@@ -237,7 +249,7 @@ def test_a_non_string_errors_entry_is_rejected() -> None:
 
 
 def test_ceiling_is_the_highest_rung_above_the_floor() -> None:
-    """Goodput holds through 32 then falls at 64, so the ceiling is 32."""
+    """Goodput holds through 32 then falls at 64, so the ceiling is the 32 rung."""
     cells = [
         _cell(8, 0.99),
         _cell(16, 0.97),
@@ -245,12 +257,23 @@ def test_ceiling_is_the_highest_rung_above_the_floor() -> None:
         _cell(64, 0.80),
         _cell(128, 0.50),
     ]
-    assert get_ceiling(cells) == 32
+    ceiling = get_ceiling(cells)
+    assert ceiling is not None
+    assert ceiling.max_concurrency == 32
+
+
+def test_ceiling_is_the_winning_cell_itself_not_just_its_cap() -> None:
+    """The ceiling rung carries its own measurement, so the fold can read the gates
+    at the capacity edge, not re-scan the ladder."""
+    winner = _cell(32, 0.96)
+    assert get_ceiling([_cell(8, 0.99), winner, _cell(64, 0.80)]) == winner
 
 
 def test_a_rung_exactly_at_the_floor_holds() -> None:
     """95% is meeting the SLO, not missing it, so a 0.95 rung counts."""
-    assert get_ceiling([_cell(8, 0.95), _cell(16, 0.94)]) == 8
+    ceiling = get_ceiling([_cell(8, 0.95), _cell(16, 0.94)])
+    assert ceiling is not None
+    assert ceiling.max_concurrency == 8
 
 
 def test_no_rung_meets_the_floor_is_no_ceiling() -> None:
@@ -261,7 +284,9 @@ def test_no_rung_meets_the_floor_is_no_ceiling() -> None:
 def test_takes_the_highest_passing_rung_even_past_a_dip() -> None:
     """The definition is the highest rung above the floor, robust to a noisy dip."""
     cells = [_cell(8, 0.99), _cell(16, 0.90), _cell(32, 0.96)]
-    assert get_ceiling(cells) == 32
+    ceiling = get_ceiling(cells)
+    assert ceiling is not None
+    assert ceiling.max_concurrency == 32
 
 
 def test_no_cells_is_no_ceiling() -> None:
@@ -279,6 +304,23 @@ def test_reads_the_rung_share_goodput_and_cohorts(tmp_path: Path) -> None:
     assert cell.prefix_share == 50
     assert cell.goodput_fraction == pytest.approx(0.9375)
     assert cell.failures == {"timeout": 0, "other": 0, "oom": None}
+
+
+def test_reads_the_rung_slo_gates_and_throughput(tmp_path: Path) -> None:
+    """A cell carries the two SLO gates (p95 ttft/tpot) and its output token rate —
+    the diagnostic that tells prefill-bound (ttft) from decode-bound (tpot)."""
+    cell = read_cell(_write_cell(tmp_path))
+    assert cell.p95_ttft_ms == pytest.approx(850.0)
+    assert cell.p95_tpot_ms == pytest.approx(42.0)
+    assert cell.output_throughput == pytest.approx(1234.5)
+
+
+@pytest.mark.parametrize("key", ["p95_ttft_ms", "p95_tpot_ms", "output_throughput"])
+def test_rejects_a_missing_or_null_slo_metric(tmp_path: Path, key: str) -> None:
+    """A gate or throughput absent or null cannot be read — fail fast with context."""
+    path = _write_cell(tmp_path, **{key: None})  # ty: ignore[invalid-argument-type]  # null metric on purpose to assert the guard rejects it
+    with pytest.raises(SweepAggregationError, match=key):
+        read_cell(path)
 
 
 @pytest.mark.parametrize("key", ["max_concurrency", "prefix_share"])
@@ -308,10 +350,21 @@ def test_an_unreadable_file_raises_result_error(tmp_path: Path) -> None:
 
 
 def test_one_row_per_point_and_share_with_the_ceiling(tmp_path: Path) -> None:
-    """Each (point, share) group's highest holding rung becomes its ceiling."""
+    """Each (point, share) group's highest holding rung becomes its ceiling, and the
+    gates and token rate on that row are the winning rung's own — not a losing rung's."""
     point = tmp_path / "mns64_kvfp8_pcon"
-    _write_rung(point, share=50, cap=32, fraction=0.98)
-    _write_rung(point, share=50, cap=64, fraction=0.80)
+    _write_rung(
+        point, share=50, cap=32, fraction=0.98, ttft=500.0, tpot=30.0, throughput=2000.0
+    )
+    _write_rung(
+        point,
+        share=50,
+        cap=64,
+        fraction=0.80,
+        ttft=1200.0,
+        tpot=70.0,
+        throughput=1500.0,
+    )
     _write_rung(point, share=90, cap=32, fraction=0.99)
 
     rows = aggregate_ceilings(tmp_path)
@@ -323,6 +376,9 @@ def test_one_row_per_point_and_share_with_the_ceiling(tmp_path: Path) -> None:
             "prefix_caching": True,
             "prefix_share": 50,
             "ceiling": 32,
+            "p95_ttft_ms": pytest.approx(500.0),
+            "p95_tpot_ms": pytest.approx(30.0),
+            "output_throughput": pytest.approx(2000.0),
             "failures": {"timeout": 0, "other": 0, "oom": None},
             "num_preemptions": None,
         },
@@ -332,10 +388,28 @@ def test_one_row_per_point_and_share_with_the_ceiling(tmp_path: Path) -> None:
             "prefix_caching": True,
             "prefix_share": 90,
             "ceiling": 32,
+            "p95_ttft_ms": pytest.approx(850.0),
+            "p95_tpot_ms": pytest.approx(42.0),
+            "output_throughput": pytest.approx(1234.5),
             "failures": {"timeout": 0, "other": 0, "oom": None},
             "num_preemptions": None,
         },
     ]
+
+
+def test_a_group_with_no_ceiling_reports_no_gates(tmp_path: Path) -> None:
+    """When no rung held the floor there is no winning measurement, so the gates and
+    token rate are not-captured (None), distinct from a measured zero."""
+    point = tmp_path / "mns64_kvfp8_pcon"
+    _write_rung(point, share=50, cap=8, fraction=0.80)
+    _write_rung(point, share=50, cap=16, fraction=0.50)
+
+    (row,) = aggregate_ceilings(tmp_path)
+
+    assert row["ceiling"] is None
+    assert row["p95_ttft_ms"] is None
+    assert row["p95_tpot_ms"] is None
+    assert row["output_throughput"] is None
 
 
 def test_sums_failure_cohorts_across_a_group_ladder(tmp_path: Path) -> None:
@@ -392,10 +466,21 @@ def test_a_point_subdir_with_no_rungs_is_rejected(tmp_path: Path) -> None:
 def test_one_row_per_rung_carrying_the_point_share_cap_and_goodput(
     tmp_path: Path,
 ) -> None:
-    """Each ladder rung keeps its own goodput at its cap — the cliff, not the fold."""
+    """Each ladder rung keeps its own goodput, gates, and token rate at its cap —
+    the cliff, not the fold. Distinct gate values per rung prove no cross-talk."""
     point = tmp_path / "mns64_kvfp8_pcon"
-    _write_rung(point, share=50, cap=32, fraction=0.98)
-    _write_rung(point, share=50, cap=64, fraction=0.80)
+    _write_rung(
+        point, share=50, cap=32, fraction=0.98, ttft=500.0, tpot=30.0, throughput=2000.0
+    )
+    _write_rung(
+        point,
+        share=50,
+        cap=64,
+        fraction=0.80,
+        ttft=1200.0,
+        tpot=70.0,
+        throughput=1500.0,
+    )
 
     rungs = aggregate_rungs(tmp_path)
 
@@ -407,6 +492,9 @@ def test_one_row_per_rung_carrying_the_point_share_cap_and_goodput(
             "prefix_share": 50,
             "max_concurrency": 32,
             "goodput_fraction": pytest.approx(0.98),
+            "p95_ttft_ms": pytest.approx(500.0),
+            "p95_tpot_ms": pytest.approx(30.0),
+            "output_throughput": pytest.approx(2000.0),
         },
         {
             "max_num_seqs": 64,
@@ -415,6 +503,9 @@ def test_one_row_per_rung_carrying_the_point_share_cap_and_goodput(
             "prefix_share": 50,
             "max_concurrency": 64,
             "goodput_fraction": pytest.approx(0.80),
+            "p95_ttft_ms": pytest.approx(1200.0),
+            "p95_tpot_ms": pytest.approx(70.0),
+            "output_throughput": pytest.approx(1500.0),
         },
     ]
 

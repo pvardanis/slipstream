@@ -17,13 +17,12 @@
 prefect-up:
     #!/usr/bin/env bash
     set -euo pipefail
-    namespace="$(terraform -chdir={{ eks_dir }} output -raw prefect_namespace)"
-    [[ -n "${namespace}" ]] || { echo "eks output prefect_namespace is empty" >&2; exit 1; }
+    source bench/prefect-portforward.sh
+    namespace="$(prefect_namespace {{ eks_dir }})"
     kubectl -n "${namespace}" rollout status deploy/prefect-server --timeout=120s
     # Reach the API over a transient port-forward (reaped on exit), so pool creation
     # needs no public endpoint.
-    source bench/prefect-portforward.sh
-    prefect_api_portforward {{ eks_dir }} {{ prefect_port }}
+    prefect_api_portforward "${namespace}" {{ prefect_port }}
     uv run prefect work-pool create {{ prefect_work_pool }} --type process --overwrite
     uv run prefect work-pool set-concurrency-limit {{ prefect_work_pool }} 1
 
@@ -44,7 +43,10 @@ prefect-down:
     # remove — cluster-down reaps the server regardless. Reach it over a transient
     # port-forward, skipping quietly (exit 0) if that fails.
     source bench/prefect-portforward.sh
-    prefect_api_portforward {{ eks_dir }} {{ prefect_port }} || { echo "prefect-down: Prefect API not reachable; nothing to remove" >&2; exit 0; }
+    if ! namespace="$(prefect_namespace {{ eks_dir }})" || ! prefect_api_portforward "${namespace}" {{ prefect_port }}; then
+      echo "prefect-down: Prefect API not reachable; nothing to remove" >&2
+      exit 0
+    fi
     uv run prefect work-pool delete {{ prefect_work_pool }} || echo "prefect-down: work-pool delete failed; the pool rides cluster-down regardless" >&2
 
 # Drain the server's SQLite PVC ahead of `cluster-down`, so the EBS CSI driver reaps the
@@ -105,18 +107,31 @@ prefect-storage-down:
       fi
     done
 
-# Register the knob-sweep deployment on the process work pool, so a sweep is triggered
-# with `prefect deployment run knob-sweep/knob-sweep --param run_id=... --param
-# instance_id=...` and picked up by the in-cluster worker (ADR-0015). The worker runs the
-# baked orchestration image, so the deployment stores a module-path entrypoint resolved by
-# import — no source is fetched and no image is built for the process pool. Registration
-# hits the in-cluster Prefect API over a transient port-forward (reaped on exit), the same
-# way `prefect-up` creates the pool; run it after `prefect-up`. The cluster-stable inputs
-# become the deployment's default parameters: region and results bucket are read from
-# terraform, the bench-client image from `_bench-image-ref`; run_id and instance_id are
-# supplied per run at trigger.
+# A sweep is then triggered with `prefect deployment run knob-sweep/knob-sweep --param
+# run_id=... --param instance_id=...` and picked up by the in-cluster worker
+# (ADR-0015). Run it after `prefect-up`; `_prefect-register` holds what registration
+# stores.
+# Register the knob-sweep deployment on the process work pool.
 [group('prefect')]
-prefect-register:
+prefect-register-sweep: (_prefect-register "knob-sweep")
+
+# An A/B is then triggered with `prefect deployment run
+# kv-cache-extension-ab/kv-cache-extension-ab --param run_id=... --param instance_id=...`
+# and picked up by the in-cluster worker. Run it after `prefect-up`; `_prefect-register`
+# holds what registration stores.
+# Register the kv-cache-extension-ab deployment on the process work pool.
+[group('prefect')]
+prefect-register-kv-ab: (_prefect-register "kv-ab")
+
+# Register one deployment with `slipstream-orchestrate register-<deployment>`. The
+# worker runs the baked orchestration image, so the deployment stores a module-path
+# entrypoint resolved by import — no source is fetched and no image is built for the
+# process pool. Registration hits the in-cluster Prefect API over a transient
+# port-forward (reaped on exit), the same way `prefect-up` creates the pool. The
+# cluster-stable inputs become the deployment's default parameters: region and results
+# bucket are read from terraform, the bench-client image from `_bench-image-ref`; run_id
+# and instance_id are supplied per run at trigger.
+_prefect-register deployment:
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed output lookup aborts; the non-empty checks then catch
@@ -134,8 +149,9 @@ prefect-register:
     # Reach the API over a transient port-forward (reaped on exit), so registration needs
     # no public endpoint.
     source bench/prefect-portforward.sh
-    prefect_api_portforward {{ eks_dir }} {{ prefect_port }}
-    uv run slipstream-orchestrate register-knob-sweep \
+    namespace="$(prefect_namespace {{ eks_dir }})"
+    prefect_api_portforward "${namespace}" {{ prefect_port }}
+    uv run slipstream-orchestrate register-{{ deployment }} \
       --region "${region}" \
       --bucket "${bucket}" \
       --image-ref "${image}" \

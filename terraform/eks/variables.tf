@@ -53,16 +53,14 @@ variable "prefect_worker_chart_version" {
   default     = "2026.9.26234203"
 }
 
-variable "enable_prefect_worker" {
-  description = "Whether to create the Prefect worker layer — a lean image (Prefect + the sweep flow code, the orchestration extra) whose repository comes from the bootstrap ECR output and whose tag is the content-sha resolved from that image's :main pointer. False leaves the worker uncreated so the cluster stands up before the orchestration image exists; true brings the worker up and requires the image published (`just bootstrap` + the orchestration-image workflow)."
-  type        = bool
-  default     = false
-}
-
 variable "state_bucket" {
-  description = "Name of the S3 bucket holding the bootstrap stack's remote state, read for the orchestration image repository URL. Supplied by `just cluster-up` from the bootstrap state_bucket_name output; the backend itself is configured separately at init (backend.tf)."
+  description = "Name of the S3 bucket holding the bootstrap stack's remote state, read for the orchestration image repository URL, the sweep-dispatch role ARN, and the cluster name and Prefect namespace the sweep-dispatch preconditions check. Supplied by `just cluster-up` from the bootstrap state_bucket_name output; the backend itself is configured separately at init (backend.tf)."
   type        = string
-  default     = ""
+
+  validation {
+    condition     = length(var.state_bucket) > 0
+    error_message = "state_bucket must be non-empty; a failed bootstrap output lookup would otherwise read state from an empty bucket name."
+  }
 }
 
 variable "prefect_work_pool" {

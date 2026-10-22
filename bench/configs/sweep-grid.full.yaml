@@ -1,7 +1,9 @@
-# Swept knob grid for the unattended knob sweep (ADR-0009, ADR-0015). The orchestration
-# worker reads this file through the contract's load_grid, which validates it against the
-# SweepGrid pydantic model; every value the sweep varies lives here, nothing is hard-coded
-# in the worker.
+# The full knob grid for the unattended knob sweep (ADR-0009, ADR-0015), parked while
+# bench/configs/sweep-grid.yaml holds a one-point grid for an end-to-end check of the CI
+# sweep trigger (#180). Not baked into the orchestration image; the worker reads only
+# bench/configs/sweep-grid.yaml. tests/contract/test_grid.py validates this file against
+# the SweepGrid pydantic model, so moving it back to bench/configs/sweep-grid.yaml
+# restores the full sweep unchanged.
 tier1:
   max_num_seqs: [16, 32, 64, 128, 256]
 

@@ -42,22 +42,53 @@ undeploy:
     kubectl delete -f {{ manifests }} --ignore-not-found
 
 # Render the GPU manifest's swept engine knobs from the environment, defaulting to
-# the committed rig config (max-num-seqs 16, FP8 KV, prefix caching on) so a plain
+# the committed rig config (max-num-seqs 64, FP8 KV, prefix caching on) so a plain
 # `just gpu-deploy` deploys the committed rig config. Setting MAX_NUM_SEQS /
 # KV_CACHE_DTYPE / PREFIX_CACHING_FLAG overrides them for a manual per-point deploy
 # (#33, ADR-0009); the unattended knob sweep renders the same knobs in-cluster from the
 # worker (slipstream_bench.orchestration.cluster), not through this recipe.
-# Only these three placeholders are substituted, so nothing else in the manifest
+# KV_CACHE_OFFLOAD=on turns on LMCache KV cache offload (#34, #325): the LMCache KV connector
+# and the 12Gi memory limit that holds its pinned CPU tier. It defaults to off, which
+# renders no connector and the 8Gi limit.
+# KV_CACHE_MEMORY_BYTES caps the GPU KV pool at that many bytes, as the KV cache
+# extension A/B (#326) runs it. It defaults to None, which vLLM parses as no cap, so
+# gpu-memory-utilization sizes the pool; any other value than a positive byte count fails.
+# Only these six placeholders are substituted, so nothing else in the manifest
 # (an image tag, a shell-like token) is touched. Prints to stdout — pipe to
 # `kubectl apply -f -` (or `kubectl diff -f -` to preview before applying).
 _render-gpu-manifest:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v envsubst >/dev/null || { echo "envsubst required (brew install gettext)" >&2; exit 1; }
-    MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}" \
+    case "${KV_CACHE_OFFLOAD:-off}" in
+      on)
+        kv_transfer_config='{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'
+        memory_limit=12Gi
+        ;;
+      off)
+        kv_transfer_config=None
+        memory_limit=8Gi
+        ;;
+      *)
+        echo "KV_CACHE_OFFLOAD must be on or off, got '${KV_CACHE_OFFLOAD}'" >&2
+        exit 1
+        ;;
+    esac
+    echo "KV cache offload: ${KV_CACHE_OFFLOAD:-off}" >&2
+    kv_cache_memory_bytes="${KV_CACHE_MEMORY_BYTES:-None}"
+    if [[ ! "${kv_cache_memory_bytes}" =~ ^(None|[1-9][0-9]*)$ ]]; then
+      echo "KV_CACHE_MEMORY_BYTES must be a positive byte count or None, got '${kv_cache_memory_bytes}'" >&2
+      exit 1
+    fi
+    echo "GPU KV pool cap: ${kv_cache_memory_bytes}" >&2
+    # shellcheck disable=SC2016 # envsubst takes the literal ${...} allow-list, unexpanded.
+    MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}" \
     KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8}" \
     PREFIX_CACHING_FLAG="${PREFIX_CACHING_FLAG:---enable-prefix-caching}" \
-      envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG}' <{{ gpu_manifests }}
+    KV_CACHE_MEMORY_BYTES="${kv_cache_memory_bytes}" \
+    KV_TRANSFER_CONFIG="${kv_transfer_config}" \
+    MEMORY_LIMIT="${memory_limit}" \
+      envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG} ${KV_CACHE_MEMORY_BYTES} ${KV_TRANSFER_CONFIG} ${MEMORY_LIMIT}' <{{ gpu_manifests }}
 
 # Deploy the GPU vLLM replica and wait for it to serve. Karpenter provisions the
 # g5 on demand once the pod requests a GPU, so the wait covers node bring-up, the
@@ -65,7 +96,9 @@ _render-gpu-manifest:
 # vllm-api-key Secret (_ensure-api-key), the same key the CPU replica uses. The
 # manifest is rendered (see `_render-gpu-manifest`) so the swept engine knobs
 # default to the committed rig unless the MAX_NUM_SEQS / KV_CACHE_DTYPE /
-# PREFIX_CACHING_FLAG env vars override them.
+# PREFIX_CACHING_FLAG env vars override them, KV cache offload stays off unless
+# KV_CACHE_OFFLOAD=on, and the GPU KV pool stays uncapped unless KV_CACHE_MEMORY_BYTES
+# is set.
 [group('serve')]
 gpu-deploy: _ensure-api-key
     #!/usr/bin/env bash

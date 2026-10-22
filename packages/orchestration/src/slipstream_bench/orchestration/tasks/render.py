@@ -12,15 +12,15 @@ Three layers mirror the sweep driver (:mod:`slipstream_bench.orchestration.flows
 :func:`drive_render` is the transport-free core: it opens a materialized run directory, folds it
 with the two injected aggregators while it is live, publishes the two tables with the injected
 pure renderers, then draws each plot off the same rows, uploads it to S3 as its durable copy,
-and embeds it inline on the run page — collaborators injected, so it is tested with fakes and no
-Prefect server, no S3, no plotting-to-disk. :func:`materialize_run` is the S3 collaborator: it
-downloads every cell of every point into the per-point layout the aggregators read, reusing the
-cell-object enumeration the redeploy-skip gate reads
+and publishes it as an inline image artifact on the run page — collaborators injected, so it is
+tested with fakes and no Prefect server, no S3, no plotting-to-disk. :func:`materialize_run` is
+the S3 collaborator: it downloads every cell of every point into the per-point layout the
+aggregators read, reusing the cell-object enumeration the redeploy-skip gate reads
 (:mod:`slipstream_bench.orchestration.cell_objects`). :func:`upload_plot` uploads a plot's PNG
-as the run's durable copy; :func:`publish_data_uri_plot` embeds it inline as a base64 data-URI.
-:func:`render_results` is the ``@task`` the flow runs once after the loop, binding the live
-S3 client and run inputs onto the S3 collaborators with :func:`functools.partial` and calling the
-driver with the real report-member collaborators.
+as the run's durable copy; :func:`publish_image_plot` publishes an image artifact pointing at
+that PNG's public S3 URL. :func:`render_results` is the ``@task`` the flow runs once after the
+loop, binding the live S3 client and run inputs onto the S3 collaborators with
+:func:`functools.partial` and calling the driver with the real report-member collaborators.
 
 The pure table renderers (:mod:`slipstream_bench.report.chart`), the aggregators
 (:mod:`slipstream_bench.report.aggregation`), and the matplotlib plotters
@@ -28,10 +28,11 @@ The pure table renderers (:mod:`slipstream_bench.report.chart`), the aggregators
 exercises the report member's plotting path and the worker image's matplotlib stack (ADR-0018).
 """
 
-import base64
+import logging
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ from slipstream_bench.report.aggregation import (
 )
 from slipstream_bench.report.chart import rows_to_markdown, rungs_to_markdown
 from slipstream_bench.report.plotters import plot_ceilings_png, plot_cliffs_png
+
+_LOGGER = logging.getLogger(__name__)
 
 # The run directory a materialize collaborator opens for the fold: a context manager so the
 # downloaded cells live only for the aggregation and are released before the publish.
@@ -77,9 +80,52 @@ RungPlotter = Callable[[list[RungRow]], bytes]
 # the driver stays S3-free; in production the task binds :func:`upload_plot`.
 PlotStore = Callable[..., str]
 
-# Embeds a plot inline on the run page. Injected so the driver stays prefect-free; in production
-# the task binds :func:`publish_data_uri_plot`.
+# Publishes a plot as an inline image artifact on the run page. Injected so the driver stays
+# prefect-free; in production the task binds :func:`publish_image_plot`.
 PlotPublisher = Callable[..., None]
+
+
+@dataclass(frozen=True, kw_only=True)
+class RunFold:
+    """The collaborators that open the materialized run and fold it into ceiling and rung rows.
+
+    The render's first stage: ``materialize`` opens the run directory as a context manager so
+    the downloaded cells live only for the fold, and the two aggregators read that live
+    directory into the ceiling and per-rung rows the later stages publish.
+    """
+
+    materialize: Materialize
+    aggregate_ceilings: CeilingAggregator
+    aggregate_rungs: RungAggregator
+
+
+@dataclass(frozen=True, kw_only=True)
+class TablePublish:
+    """The collaborators that render the folded rows into the two markdown table artifacts.
+
+    The render's table stage: the two pure renderers turn the ceiling and rung rows into
+    markdown bodies, and ``publish`` emits each as its own keyed markdown artifact.
+    """
+
+    render_ceiling: CeilingRenderer
+    render_cliff: RungRenderer
+    publish: ArtifactPublisher
+
+
+@dataclass(frozen=True, kw_only=True)
+class PlotPublish:
+    """The collaborators that draw each plot, upload it to S3, and publish it inline.
+
+    The render's plot stage: the two plotters draw the same folded rows to PNG bytes,
+    ``store`` uploads each as the run's durable copy and returns its S3 key, and ``publish``
+    embeds it as an inline image artifact pointing at that key's public URL.
+    """
+
+    render_ceiling: CeilingPlotter
+    render_cliff: RungPlotter
+    store: PlotStore
+    publish: PlotPublisher
+
 
 # Keyed so Prefect keeps a cross-run history/timeline of each table artifact.
 _CEILING_ARTIFACT_KEY = "knob-sweep-ceiling-table"
@@ -129,74 +175,64 @@ _CLIFF_PLOT_BLURB = (
 
 def drive_render(
     *,
-    materialize: Materialize,
-    aggregate_ceilings: CeilingAggregator,
-    aggregate_rungs: RungAggregator,
-    render_ceiling_table: CeilingRenderer,
-    render_cliff_table: RungRenderer,
-    publish: ArtifactPublisher,
-    render_ceiling_plot: CeilingPlotter,
-    render_cliff_plot: RungPlotter,
-    store_plot: PlotStore,
-    publish_plot: PlotPublisher,
+    fold: RunFold,
+    tables: TablePublish,
+    plots: PlotPublish,
 ) -> None:
     """Fold the materialized run and publish its ceiling and cliff tables and plots as artifacts.
 
     The transport-free render core: it opens the materialized run directory, folds it with both
     aggregators while the directory is live, then — after the directory is released — publishes
     each fold as a markdown table (ceiling first) and then, off the same rows, draws each plot,
-    uploads it to S3 as its durable copy, and embeds it inline on the run page (ceiling plot
-    first). The tables publish before the plots, so a plot or upload failure leaves the tables on
-    the run page. Any raise (a materialize, aggregate, publish, plot, or upload failure)
-    propagates, so the render task fails loud and a re-run re-renders off S3. The publishes are
-    sequential, not atomic: a later failure can leave the earlier artifacts published and the
-    rest absent, but the artifacts are keyed, so a re-run overwrites and restores the set.
+    uploads it to S3 as its durable copy, and publishes it as an inline image artifact on the run
+    page. The tables publish before the plots, so a plot or upload failure leaves the tables on
+    the run page. The cliff plot draws before the ceiling plot: the cliff renders off any run that
+    held a rung, while the ceiling plot has nothing to draw when no point reached a ceiling and
+    raises — so a no-ceiling run still publishes its diagnostic cliff plot before that raise. Any
+    raise (a materialize, aggregate, publish, plot, or upload failure) propagates, so the render
+    task fails loud and a re-run re-renders off S3. The publishes are sequential, not atomic: a
+    later failure can leave the earlier artifacts published and the rest absent, but the artifacts
+    are keyed, so a re-run overwrites and restores the set.
 
-    :param materialize: opens the run directory the aggregators fold, as a context manager
-        so the downloaded cells are released once both folds are read.
-    :param aggregate_ceilings: folds the run directory into ceiling rows, one per
-        point-and-share.
-    :param aggregate_rungs: unfolds the run directory into per-rung rows, the goodput cliff.
-    :param render_ceiling_table: renders the ceiling rows as a markdown table body.
-    :param render_cliff_table: renders the rung rows as a markdown table body.
-    :param publish: the markdown-artifact publisher (create_markdown_artifact in production),
-        called with ``key`` and ``markdown`` per table.
-    :param render_ceiling_plot: draws the ceiling rows straight to PNG bytes.
-    :param render_cliff_plot: draws the rung rows straight to PNG bytes.
-    :param store_plot: uploads a plot's PNG as the run's durable copy, called with ``name`` and
-        ``data`` and returning the S3 object key.
-    :param publish_plot: embeds a plot inline on the run page, called with ``key``, ``data``,
-        the plot's ``s3_key``, and its ``heading`` and ``blurb``.
+    The collaborators are grouped by render stage: :class:`RunFold` opens and folds the run,
+    :class:`TablePublish` renders and publishes the two tables, and :class:`PlotPublish` draws,
+    uploads, and embeds the two plots.
+
+    :param fold: opens the run directory and folds it into ceiling and rung rows.
+    :param tables: renders the two folds as markdown tables and publishes each as an artifact.
+    :param plots: draws each fold to PNG, uploads it as the durable copy, and embeds it inline.
     """
-    with materialize() as run_dir:
-        ceilings = aggregate_ceilings(run_dir)
-        rungs = aggregate_rungs(run_dir)
-    publish(
+    _LOGGER.info(
+        "render starting: folding the run into its ceiling and cliff tables and plots"
+    )
+    with fold.materialize() as run_dir:
+        ceilings = fold.aggregate_ceilings(run_dir)
+        rungs = fold.aggregate_rungs(run_dir)
+    tables.publish(
         key=_CEILING_ARTIFACT_KEY,
-        markdown=f"{_CEILING_HEADING}\n\n{_CEILING_BLURB}\n\n{render_ceiling_table(ceilings)}\n",
+        markdown=f"{_CEILING_HEADING}\n\n{_CEILING_BLURB}\n\n{tables.render_ceiling(ceilings)}\n",
     )
-    publish(
+    tables.publish(
         key=_CLIFF_ARTIFACT_KEY,
-        markdown=f"{_CLIFF_HEADING}\n\n{_CLIFF_BLURB}\n\n{render_cliff_table(rungs)}\n",
+        markdown=f"{_CLIFF_HEADING}\n\n{_CLIFF_BLURB}\n\n{tables.render_cliff(rungs)}\n",
     )
-    ceiling_png = render_ceiling_plot(ceilings)
-    ceiling_object = store_plot(name=_CEILING_PNG_NAME, data=ceiling_png)
-    publish_plot(
-        key=_CEILING_PLOT_KEY,
-        data=ceiling_png,
-        s3_key=ceiling_object,
-        heading=_CEILING_PLOT_HEADING,
-        blurb=_CEILING_PLOT_BLURB,
-    )
-    cliff_png = render_cliff_plot(rungs)
-    cliff_object = store_plot(name=_CLIFF_PNG_NAME, data=cliff_png)
-    publish_plot(
+    cliff_png = plots.render_cliff(rungs)
+    cliff_object = plots.store(name=_CLIFF_PNG_NAME, data=cliff_png)
+    plots.publish(
         key=_CLIFF_PLOT_KEY,
-        data=cliff_png,
         s3_key=cliff_object,
         heading=_CLIFF_PLOT_HEADING,
         blurb=_CLIFF_PLOT_BLURB,
     )
+    ceiling_png = plots.render_ceiling(ceilings)
+    ceiling_object = plots.store(name=_CEILING_PNG_NAME, data=ceiling_png)
+    plots.publish(
+        key=_CEILING_PLOT_KEY,
+        s3_key=ceiling_object,
+        heading=_CEILING_PLOT_HEADING,
+        blurb=_CEILING_PLOT_BLURB,
+    )
+    _LOGGER.info("render published: ceiling and cliff tables and plots to the run page")
 
 
 @contextmanager
@@ -224,8 +260,8 @@ def materialize_run(
     commercial sweep, not reading a finished run's results.
 
     :param grid: the validated grid the run's points and cells are enumerated from.
-    :param run_prefix: the knob sweep's shared run id (cells nest under
-        ``<run_prefix>/<point-slug>``).
+    :param run_prefix: the knob sweep's rooted run prefix, ``knob-sweep/<run>`` (cells nest
+        under ``<run_prefix>/<point-slug>``).
     :param bucket: the results bucket the cell objects live in.
     :param s3_client: the boto3 S3 client (or stand-in) objects are downloaded with.
     :param model: the served model id (folded into each point's sweep config).
@@ -255,11 +291,12 @@ def upload_plot(
 ) -> str:
     """Upload a plot's PNG to the run's charts prefix as its durable copy, and return its key.
 
-    The PNG lands at ``sweeps/<run_prefix>/charts/<name>``, beside the run's cells, so the
-    durable copy outlives the inline preview on the run page — an expired preview loses the
-    inline image, not the plot.
+    The PNG lands at ``<run_prefix>/charts/<name>``, beside the run's cells, under the
+    world-readable charts prefix the image artifact points at by public URL (ADR-0018 Amendment).
+    ``ContentType`` is ``image/png`` so a browser renders it inline rather than downloading it.
 
-    :param run_prefix: the knob sweep's shared run id the charts nest under.
+    :param run_prefix: the run's rooted bucket prefix the charts nest under: a knob sweep's
+        ``knob-sweep/<run>``, or an A/B's ``kv-offload-ab/<run>``.
     :param bucket: the results bucket the plot is uploaded to.
     :param s3_client: the boto3 S3 client (or stand-in) the PNG is put with.
     :param name: the plot's object name within the run's charts prefix.
@@ -268,40 +305,39 @@ def upload_plot(
     :raise ClientError: on any S3 upload failure — the render fails loud, leaving the tables
         already published, and a re-run re-renders off S3.
     """
-    key = f"sweeps/{run_prefix}/charts/{name}"
+    key = f"{run_prefix}/charts/{name}"
     s3_client.put_object(Bucket=bucket, Key=key, Body=data, ContentType="image/png")
     return key
 
 
-def publish_data_uri_plot(
+def publish_image_plot(
     *,
     key: str,
-    data: bytes,
     s3_key: str,
     heading: str,
     blurb: str,
+    bucket: str,
+    region: str,
     publish: ArtifactPublisher,
 ) -> None:
-    """Embed a plot inline on the run page as a base64 data-URI under its heading and blurb.
+    """Publish a plot as an inline image artifact pointing at its public S3 URL.
 
-    The PNG is embedded inline with no URL, so the plot renders on the run page without a
-    presigned link to expire; the durable copy is the S3 object at ``s3_key`` (ADR-0018).
+    The artifact references the uploaded PNG by its virtual-hosted S3 URL, so the UI renders
+    the plot inline and zoomable and the link never expires — the charts prefix is world-readable
+    (ADR-0018 Amendment). The heading and blurb ride on the artifact's description, since an image
+    artifact carries no markdown body of its own.
 
     :param key: the plot artifact's key, versioned across runs by Prefect.
-    :param data: the plot's PNG bytes to embed inline.
-    :param s3_key: the plot's durable S3 object key — the lasting copy behind the inline
-        preview. Carried on the seam so the presigned fallback can swap onto it without a
-        signature change; this inline publisher does not read it (ADR-0018).
+    :param s3_key: the plot's S3 object key, the public URL the image artifact points at.
     :param heading: the heading the plot carries on the run page.
     :param blurb: the one-line blurb under the heading.
-    :param publish: the markdown-artifact publisher (create_markdown_artifact in production).
+    :param bucket: the results bucket the public URL addresses.
+    :param region: the bucket's region, named in the virtual-hosted URL.
+    :param publish: the image-artifact publisher (create_image_artifact in production), called
+        with ``image_url``, ``key``, and ``description``.
     """
-    encoded = base64.b64encode(data).decode("ascii")
-    alt = heading.lstrip("#").strip()
-    publish(
-        key=key,
-        markdown=f"{heading}\n\n{blurb}\n\n![{alt}](data:image/png;base64,{encoded})\n",
-    )
+    image_url = f"https://{bucket}.s3.{region}.amazonaws.com/{s3_key}"
+    publish(image_url=image_url, key=key, description=f"{heading}\n\n{blurb}")
 
 
 @task(name="render-results", cache_policy=NO_CACHE)
@@ -310,21 +346,23 @@ def render_results(
     grid: SweepGrid,
     run_prefix: str,
     bucket: str,
+    region: str,
     s3_client: Any,
     model: str,
     publish: ArtifactPublisher,
+    publish_image: ArtifactPublisher,
 ) -> None:
     """Render the run's ceiling and cliff tables and plots to the parent run page — the terminal task.
 
     The ``@task`` the knob-sweep flow runs once after its point loop: it binds the live S3
     client and run inputs onto :func:`materialize_run` and :func:`upload_plot` with
     :func:`functools.partial` and drives the render with the report member's real aggregators,
-    pure table renderers, and matplotlib plotters, embedding each plot inline with
-    :func:`publish_data_uri_plot` over the same ``publish`` the tables use. One task, not split
-    per artifact: both folds come from the one materialized run, so splitting would re-download
-    it. A failure (materialize, publish, plot, or upload) is isolated to this task — the sweep's
-    cells are already persisted — and a re-run re-renders idempotently off S3. The task carries
-    no retry budget, so recovery is a re-run, not an automatic Prefect retry.
+    pure table renderers, and matplotlib plotters, publishing each plot as an image artifact with
+    :func:`publish_image_plot` bound to ``publish_image`` and the bucket's public URL. One
+    task, not split per artifact: both folds come from the one materialized run, so splitting
+    would re-download it. A failure (materialize, publish, plot, or upload) is isolated to this
+    task — the sweep's cells are already persisted — and a re-run re-renders idempotently off S3.
+    The task carries no retry budget, so recovery is a re-run, not an automatic Prefect retry.
 
     Caching is off (``cache_policy=NO_CACHE``): the task takes live, unhashable handles — the
     boto3 S3 client (an SSLContext) and the publish function — which the default inputs-hashing
@@ -332,31 +370,47 @@ def render_results(
     terminal and idempotent off S3, so there is nothing to cache regardless.
 
     :param grid: the validated grid the run's points and cells are enumerated from.
-    :param run_prefix: the knob sweep's shared run id the cells nest under.
+    :param run_prefix: the knob sweep's rooted run prefix, ``knob-sweep/<run>``, the cells
+        and charts nest under.
     :param bucket: the results bucket the cell objects live in.
+    :param region: the bucket's region, named in each plot's public image-artifact URL.
     :param s3_client: the boto3 S3 client the cells are materialized with and the plots uploaded with.
     :param model: the served model id (folded into each point's sweep config).
-    :param publish: the markdown-artifact publisher (create_markdown_artifact in production).
+    :param publish: the markdown-artifact publisher (create_markdown_artifact in production),
+        binding the two tables.
+    :param publish_image: the image-artifact publisher (create_image_artifact in production),
+        binding the two plots to their public S3 URLs.
     """
 
     drive_render(
-        materialize=partial(
-            materialize_run,
-            grid=grid,
-            run_prefix=run_prefix,
-            bucket=bucket,
-            s3_client=s3_client,
-            model=model,
+        fold=RunFold(
+            materialize=partial(
+                materialize_run,
+                grid=grid,
+                run_prefix=run_prefix,
+                bucket=bucket,
+                s3_client=s3_client,
+                model=model,
+            ),
+            aggregate_ceilings=aggregate_ceilings,
+            aggregate_rungs=aggregate_rungs,
         ),
-        aggregate_ceilings=aggregate_ceilings,
-        aggregate_rungs=aggregate_rungs,
-        render_ceiling_table=rows_to_markdown,
-        render_cliff_table=rungs_to_markdown,
-        publish=publish,
-        render_ceiling_plot=plot_ceilings_png,
-        render_cliff_plot=plot_cliffs_png,
-        store_plot=partial(
-            upload_plot, run_prefix=run_prefix, bucket=bucket, s3_client=s3_client
+        tables=TablePublish(
+            render_ceiling=rows_to_markdown,
+            render_cliff=rungs_to_markdown,
+            publish=publish,
         ),
-        publish_plot=partial(publish_data_uri_plot, publish=publish),
+        plots=PlotPublish(
+            render_ceiling=plot_ceilings_png,
+            render_cliff=plot_cliffs_png,
+            store=partial(
+                upload_plot, run_prefix=run_prefix, bucket=bucket, s3_client=s3_client
+            ),
+            publish=partial(
+                publish_image_plot,
+                bucket=bucket,
+                region=region,
+                publish=publish_image,
+            ),
+        ),
     )

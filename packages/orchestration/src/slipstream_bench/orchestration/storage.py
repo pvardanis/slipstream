@@ -4,7 +4,7 @@ ADR-0012: resume survives a server or laptop death only if ``result_storage`` an
 ``key_storage`` live in S3, not Prefect's local ``~/.prefect/storage/`` default. The
 per-cell JSON (the numbers) and Prefect's cache/key index (pointers + metadata) are
 two distinct, non-duplicating prefixes in the same results bucket the sweep already
-writes to (``RESULTS_BUCKET``, ``s3://<bucket>/sweeps/…``). These builders return the
+writes to (``RESULTS_BUCKET``, ``s3://<bucket>/knob-sweep/…``). These builders return the
 S3 blocks the later sweep task binds to ``result_storage`` and a cache policy's
 ``key_storage``; AWS credentials come from the ambient default chain, as the ``aws``
 CLI already uses in ``just bench``.
@@ -12,13 +12,16 @@ CLI already uses in ``just bench``.
 
 from __future__ import annotations
 
-import os
+from typing import Any
 
 from prefect_aws import S3Bucket
 
-_RESULTS_BUCKET_ENV = "RESULTS_BUCKET"
 _RESULT_STORAGE_PREFIX = "prefect/results"
 _CACHE_KEY_STORAGE_PREFIX = "prefect/cache-keys"
+
+# The object the preflight writes and reads back under the cache-key prefix, and its body.
+_PREFLIGHT_PROBE_KEY = "preflight-probe"
+_PREFLIGHT_CONTENT = b"slipstream cache-key storage preflight"
 
 
 class StorageError(Exception):
@@ -29,7 +32,7 @@ def result_storage(bucket: str) -> S3Bucket:
     """Build the S3 block Prefect persists task results into.
 
     :param bucket: the results bucket (``RESULTS_BUCKET``), shared with the sweep's
-        own ``s3://<bucket>/sweeps/…`` output under a separate prefix.
+        own ``s3://<bucket>/knob-sweep/…`` output under a separate prefix.
     :return: an :class:`~prefect_aws.S3Bucket` rooted at the result prefix.
     :raise StorageError: when ``bucket`` is blank.
     """
@@ -53,31 +56,47 @@ def cache_key_storage(bucket: str) -> S3Bucket:
     )
 
 
-def results_bucket_from_env() -> str:
-    """Read the results bucket the sweep runs against from the environment.
+def check_cache_key_storage(cache_keys: Any, *, bucket: str) -> None:
+    """Write a probe object to the cache-key storage and read it back, or fail loud.
 
-    ``just bench`` injects ``RESULTS_BUCKET`` (the terraform ``results_bucket_name``)
-    into the sweep's environment; this is the one place that env var crosses into the
-    storage config.
+    Prefect's cache existence check reads any storage error as "not cached", so a
+    missing bucket or a denied grant would make every cell look pending and trigger a
+    ~20-minute GPU redeploy for nothing. Probing before any cell runs turns that blind
+    spot into an abort before the first redeploy. The probe overwrites one fixed object,
+    so repeated runs leave no litter and cannot collide with a
+    ``run-id:digest:point-slug:cell-name`` key.
 
-    :return: the bucket name.
-    :raise StorageError: when ``RESULTS_BUCKET`` is unset or blank.
+    :param cache_keys: the block Prefect stores cache records into; its
+        ``write_path``/``read_path`` are forced synchronous with ``_sync=True``, since
+        in an async context (an async flow or task, or a running event loop) they would
+        return a coroutine that never runs and the probe would pass unchecked. Any
+        storage block whose ``write_path``/``read_path`` are async-dispatched fits;
+        production passes the S3 block.
+    :param bucket: the results bucket ``cache_keys`` is rooted in, named in the error.
+    :raise StorageError: when the probe cannot be written or read back.
     """
-    bucket = os.environ.get(_RESULTS_BUCKET_ENV, "").strip()
-    if not bucket:
+    location = f"s3://{bucket}/{_CACHE_KEY_STORAGE_PREFIX}"
+    fix = (
+        "check the bucket name and that the worker's IAM role grants read and write "
+        "on that prefix"
+    )
+    try:
+        cache_keys.write_path(_PREFLIGHT_PROBE_KEY, _PREFLIGHT_CONTENT, _sync=True)
+        cache_keys.read_path(_PREFLIGHT_PROBE_KEY, _sync=True)
+    except Exception as exc:  # any S3 or filesystem failure means the cache is unusable
         raise StorageError(
-            f"{_RESULTS_BUCKET_ENV} is unset or blank: Prefect result and cache-key "
-            "storage must point at S3, not the local ~/.prefect/storage/ default; "
-            "set it to the sweep results bucket (terraform results_bucket_name)"
-        )
-    return bucket
+            f"cache-key storage at {location} failed its write/read probe "
+            f"({type(exc).__name__}: {exc}); {fix}"
+        ) from exc
 
 
 def _require_bucket(bucket: str) -> str:
-    """Reject a blank bucket name at any builder entry, not only the env reader.
+    """Reject a blank bucket name at any builder entry.
 
-    The bucket's existence and write permissions are not checked here; those
-    resolve at first write, when Prefect persists a result to S3.
+    The bucket's existence and permissions are not checked here;
+    :func:`check_cache_key_storage` probes the cache-key prefix once the flow has
+    registered the storage blocks, and the result prefix is first exercised when a
+    cell persists.
     """
     name = bucket.strip()
     if not name:

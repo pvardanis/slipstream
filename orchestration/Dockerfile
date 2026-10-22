@@ -65,6 +65,17 @@ RUN apt-get update \
     && apt-get upgrade --yes \
     && rm -rf /var/lib/apt/lists/*
 
+# The base ships its own Prefect and dependencies in the system Python, outside uv.lock and
+# unused here: the venv below is first on PATH, so the worker and its process flow runs both
+# run on the venv's interpreter and packages. Empty that site-packages so the image holds one
+# Python package set, the locked one, and the Trivy scan-gate sees only packages uv.lock pins.
+# The interpreter and stdlib stay; the venv runs on them. The path comes from the base's own
+# interpreter (the venv is not on PATH yet), and `test -d` fails the build rather than letting
+# the glob match nothing if that path ever moves.
+RUN site="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" \
+    && test -d "$site" \
+    && rm -rf "$site"/*
+
 # The worker drives the per-point GPU redeploy and ceiling scrape by shelling out to
 # kubectl (slipstream_bench.orchestration.cluster), so the image must carry the binary.
 # Pinned to the EKS control-plane minor (terraform/eks kubernetes_version 1.36) to hold
@@ -79,21 +90,31 @@ ADD --chmod=0755 \
 
 # The venv built in the builder stage carries the orchestration member's deps and flow code.
 # Prepend its bin so the locked `prefect` and the package's console scripts resolve ahead of the
-# base image's own Prefect. The chart runs the container as an arbitrary uid; the venv is copied
+# base's leftover console scripts in /usr/local/bin. The chart runs the container as an arbitrary uid; the venv is copied
 # world-readable (0755 dirs, 0644 files), so that uid can read and execute it without a chown.
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:${PATH}"
 
-# The three deep-config inputs the registered knob-sweep deployment reads on the worker at run
-# time (register-knob-sweep's in-image default paths, slipstream_bench.orchestration.cli): model.yaml
-# and sweep-grid.yaml are the served model and the sweep's grid, vllm-gpu.yaml is the redeploy template
-# whose serving image ref folds into the deep digest (ADR-0012). The worker has no source tree, so
-# they are baked rather than fetched. Copied low and narrowly so a config edit rebuilds only this
-# layer, never the dependency install above it. These files are image inputs: the content tag in
-# orchestration-image.yml hashes them and the build triggers watch them, so an edit republishes a
-# new image.
+# Capture the sweep's own module loggers into the Prefect run logs. Prefect intercepts only
+# the loggers it is told about, so the stdlib `slipstream_bench.*` milestone lines the
+# Prefect-free sweep core emits (ADR-0020) reach the run page and worker stdout only with this
+# set; the parent `slipstream_bench` name covers every submodule. Baked into the image rather
+# than a work-pool or profile setting so a manual `slipstream-orchestrate knob-sweep` run off
+# this image captures them too, not only the in-cluster worker.
+ENV PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench
+
+# The deep-config inputs the registered knob-sweep and kv-cache-extension-ab deployments read on
+# the worker at run time (register-knob-sweep's and register-kv-ab's in-image default paths,
+# slipstream_bench.orchestration.cli): model.yaml is the served model both read; sweep-grid.yaml
+# is the knob sweep's grid; kv-cache-extension-ab.yaml is the kv-ab workload; vllm-gpu.yaml is
+# the redeploy template both render, whose serving image ref folds into the deep digest
+# (ADR-0012). The worker has no source tree, so they are baked rather than fetched. Copied low
+# and narrowly so a config edit rebuilds only this layer, never the dependency install above it.
+# These files are image inputs: the content tag in orchestration-image.yml hashes them and the
+# build triggers watch them, so an edit republishes a new image.
 COPY model.yaml /app/model.yaml
-COPY bench/sweep-grid.yaml /app/bench/sweep-grid.yaml
+COPY bench/configs/sweep-grid.yaml /app/bench/configs/sweep-grid.yaml
+COPY bench/configs/kv-cache-extension-ab.yaml /app/bench/configs/kv-cache-extension-ab.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
 # This image's own ECR ref (registry/repo:content-tag), passed by orchestration-image.yml at

@@ -60,6 +60,14 @@ resource "aws_lb" "bench_endpoint" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnets
 
+  # idle_timeout bounds a no-byte window, not total request duration. Under a saturated
+  # top rung a request sits queued in vLLM with no response byte while it waits for a
+  # decode slot, and that pre-first-token wait is the only zero-byte window — once tokens
+  # stream they reset the timer. The 60s default severs that wait and the bench client
+  # records a transport drop instead of a slow measurement; 600s covers the queue wait of
+  # the deepest rung with headroom.
+  idle_timeout = 600
+
   tags = local.tags
 }
 

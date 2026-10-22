@@ -1,8 +1,10 @@
 """Write a knob-sweep run's aggregated tables and plot them to two static PNGs.
 
-The tables are the durable artifacts and the PNGs disposable (ADR-0009), so each plot's
-Markdown and JSON are written from the same rows the aggregator emits via the pure
-renderers in :mod:`slipstream_bench.report.chart`. Two charts, a pair: the primary plots
+For the report CLI's on-disk output the tables are the durable artifacts and the PNGs
+disposable (ADR-0009), so each plot's Markdown and JSON are written from the same rows
+the aggregator emits via the pure renderers in :mod:`slipstream_bench.report.chart`. The
+same :func:`plot_ceilings_png`/:func:`plot_cliffs_png` also return PNG bytes for the
+knob-sweep render task's durable image artifacts (ADR-0018 Amendment). Two charts, a pair: the primary plots
 the concurrency ceiling per engine point
 (:func:`slipstream_bench.report.aggregation.aggregate_ceilings`) — x = max-num-seqs,
 series = kv-cache-dtype, faceted by the combined caching/share condition; the diagnostic
@@ -29,6 +31,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from matplotlib.figure import Figure
 
 from slipstream_bench.report.aggregation import _GOODPUT_FLOOR, CeilingRow, RungRow
 from slipstream_bench.report.chart import (
@@ -40,7 +43,7 @@ from slipstream_bench.report.chart import (
 
 # The ceiling axis names its SLO predicate: the KB pairs a goodput/ceiling number with
 # the SLO it was read at, never bare. The ttft/tpot thresholds mirror the harness's
-# default goodput (bench/load-sweep.yaml) and the 95% floor mirrors
+# default goodput (bench/configs/load-sweep.yaml) and the 95% floor mirrors
 # report.aggregation._GOODPUT_FLOOR (ADR-0009). The title also names the pinned
 # burstiness the whole grid ran at — the aggregated rows do not carry it, so it is
 # asserted here from the grid's pin, not read from the data. This label is a manual
@@ -55,11 +58,18 @@ _SLO_TITLE = (
 # report.aggregation._GOODPUT_FLOOR itself (imported, not copied), so the line the cliff
 # crosses always marks the aggregator's true floor. The title's "0.95"/"floor" text and
 # the ttft/tpot thresholds stay hand-mirrored prose — the rung rows carry the goodput
-# fraction, not the SLO it was read at.
+# fraction, not the SLO it was read at. The per-rung gates and token rate read from the
+# goodput-cliff table and each cell's own artifact, not from the plot, so the facets stay
+# clean and the title holds one line.
 _CLIFF_AXIS_LABEL = "goodput fraction (met SLO / completed)"
 _CLIFF_TITLE = (
     "goodput cliff — burstiness 1.0, floor 0.95 (ttft <= 1000ms, tpot <= 50ms)"
 )
+
+# Height of the band _reserve_title_band leaves above the axes for a figure suptitle: a
+# height in inches, not a figure fraction, so the gap stays one title tall whatever the
+# row count.
+_SUPTITLE_BAND_INCHES = 0.6
 
 # Caching-off reuses no prefix KV, so its prefix-share is a definitional n/a rather than
 # a swept value — its own facet, ordered ahead of the swept shares.
@@ -73,21 +83,25 @@ def write_artifacts(
 
     The Markdown and JSON are the durable data artifacts; the PNGs are the disposable
     view of them. The primary chart plots the ceiling per point, the diagnostic the
-    goodput cliff each ceiling was read off. The directory is created on the way out,
-    so the run directory need not pre-hold it.
+    goodput cliff each ceiling was read off. The cliff plot is drawn before the ceiling
+    plot so a run that held no ceiling anywhere — every point fell below the SLO — keeps
+    the cliff diagnostic on disk before the ceiling plot raises on its empty table. The
+    directory is created on the way out, so the run directory need not pre-hold it.
 
     :param rows: the rows :func:`slipstream_bench.report.aggregation.aggregate_ceilings`
         emitted.
     :param rungs: the rows :func:`slipstream_bench.report.aggregation.aggregate_rungs`
         emitted.
-    :param charts_dir: the ``bench/results/<run_id>/charts`` directory to write into.
+    :param charts_dir: the ``bench/results/knob-sweep/<run_id>/charts`` directory to write into.
     :return: the written paths, keyed ``markdown`` / ``json`` / ``png`` for the ceiling
         table and its plot, ``rungs_markdown`` / ``rungs_json`` / ``rungs_png`` for the
         cliff table and its plot.
     :raise ValueError: when ``rows`` or ``rungs`` is empty — an empty run holds neither a
         ceiling nor a cliff and must not be written as a header-only table and a blank
         plot. The two are non-empty together for a run aggregated off one directory, but
-        the parameters are independent, so each is guarded.
+        the parameters are independent, so each is guarded. Also when no row held a
+        ceiling (every point fell below the SLO): the tables and cliff plot are written,
+        then the ceiling plot raises on its empty table.
     :raise OSError: when the directory cannot be made or an artifact cannot be written.
     """
     if not rows:
@@ -112,8 +126,8 @@ def write_artifacts(
     paths["json"].write_text(rows_to_json(rows))
     paths["rungs_markdown"].write_text(rungs_to_markdown(rungs))
     paths["rungs_json"].write_text(rungs_to_json(rungs))
-    _save_figure(_plot_ceilings(rows), paths["png"])
     _save_figure(_plot_cliffs(rungs), paths["rungs_png"])
+    _save_figure(_plot_ceilings(rows), paths["png"])
     return paths
 
 
@@ -133,7 +147,7 @@ def plot_ceilings_png(rows: list[CeilingRow]) -> bytes:
         raise ValueError(
             "cannot chart an empty ceiling table: the run aggregated no rows"
         )
-    return _figure_png(_plot_ceilings(rows))
+    return get_figure_png_bytes(_plot_ceilings(rows).figure)
 
 
 def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
@@ -152,16 +166,19 @@ def plot_cliffs_png(rungs: list[RungRow]) -> bytes:
         raise ValueError(
             "cannot chart an empty cliff table: the run aggregated no rungs"
         )
-    return _figure_png(_plot_cliffs(rungs))
+    return get_figure_png_bytes(_plot_cliffs(rungs).figure)
 
 
-def _figure_png(grid: sns.FacetGrid) -> bytes:
-    """Encode a grid as PNG bytes and close its figure, freeing it even on an encode error."""
+def get_figure_png_bytes(figure: Figure) -> bytes:
+    """Encode a figure as PNG bytes, trimmed to its drawn extent, and close it.
+
+    The figure is freed even on an encode error.
+    """
     buffer = io.BytesIO()
     try:
-        grid.savefig(buffer, format="png")
+        figure.savefig(buffer, format="png", bbox_inches="tight")
     finally:
-        plt.close(grid.figure)
+        plt.close(figure)
     return buffer.getvalue()
 
 
@@ -171,6 +188,19 @@ def _save_figure(grid: sns.FacetGrid, path: Path) -> None:
         grid.savefig(path)
     finally:
         plt.close(grid.figure)
+
+
+def _reserve_title_band(grid: sns.FacetGrid, title: str) -> None:
+    """Lay a grid's axes out below a fixed-height band holding its suptitle.
+
+    matplotlib's tight_layout reserves no room for a figure suptitle, so on a multi-row
+    facet grid the title lands on the top row's facet titles. The axes lay out within a
+    rect that leaves the band at the top, and the title centres in it.
+    """
+    figure = grid.figure
+    top = 1 - _SUPTITLE_BAND_INCHES / figure.get_figheight()
+    grid.tight_layout(rect=(0, 0, 1, top))
+    figure.suptitle(title, y=(top + 1) / 2, va="center")
 
 
 class _ShareRow(TypedDict):
@@ -237,10 +267,21 @@ def _condition_order(frame: pd.DataFrame) -> list[str]:
 def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
     """Draw the primary ceiling chart onto a faceted grid.
 
+    A point whose every rung fell below the SLO carries a null ceiling, kept as a gap in
+    its line rather than a zero. When no point in the run held a ceiling at all the whole
+    y-column is null, which seaborn reads as an absent column — there is nothing to draw,
+    so this raises a sibling empty-ceiling-table error to the one an empty row list trips,
+    naming the all-null cause rather than the no-rows one.
+
     :param rows: the aggregated ceiling rows.
     :return: the seaborn FacetGrid, ready to save — the caller closes its figure.
+    :raise ValueError: when no row held a ceiling, so the chart would be blank.
     """
     frame = _ceiling_frame(rows)
+    if frame["ceiling"].isna().all():
+        raise ValueError(
+            "cannot chart an empty ceiling table: no point held a ceiling within the SLO"
+        )
     grid = sns.relplot(
         data=frame,
         kind="line",
@@ -254,8 +295,7 @@ def _plot_ceilings(rows: list[CeilingRow]) -> sns.FacetGrid:
     )
     grid.set_axis_labels("max-num-seqs", _CEILING_AXIS_LABEL)
     grid.set_titles("{col_name}")
-    grid.figure.suptitle(_SLO_TITLE)
-    grid.tight_layout()
+    _reserve_title_band(grid, _SLO_TITLE)
     return grid
 
 
@@ -316,6 +356,5 @@ def _plot_cliffs(rungs: list[RungRow]) -> sns.FacetGrid:
         ax.set_xscale("log", base=2)
     grid.set_axis_labels("--max-concurrency", _CLIFF_AXIS_LABEL)
     grid.set_titles("{col_name}")
-    grid.figure.suptitle(_CLIFF_TITLE)
-    grid.tight_layout()
+    _reserve_title_band(grid, _CLIFF_TITLE)
     return grid

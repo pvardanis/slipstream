@@ -21,7 +21,6 @@ filter its point sweeps group under.
 """
 
 import logging
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -29,16 +28,17 @@ from pathlib import Path
 from typing import Any
 
 from prefect import Task, flow
-from prefect.artifacts import create_markdown_artifact
-from prefect.client.orchestration import get_client
-from prefect.runtime import flow_run
+from prefect.artifacts import create_image_artifact, create_markdown_artifact
+from prefect.logging import get_run_logger
 
 from slipstream_bench.contract import (
     EnginePoint,
     SweepGrid,
+    get_cell_basename,
     list_engine_points,
     load_grid,
 )
+from slipstream_bench.orchestration.cell_objects import get_knob_sweep_prefix
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
@@ -46,19 +46,29 @@ from slipstream_bench.orchestration.cluster import (
     deploy_gpu_point,
     scrape_ceiling,
 )
-from slipstream_bench.orchestration.completion import point_is_complete
 from slipstream_bench.orchestration.config_artifact import (
     ImageRefs,
     publish_config_artifact,
+    read_orch_image_ref,
 )
-from slipstream_bench.orchestration.digest import DigestInputs
+from slipstream_bench.orchestration.digest import (
+    ServingConfig,
+    read_serving_config,
+    read_sweep_flags,
+)
 from slipstream_bench.orchestration.flows.point_sweep import (
     SweepContext,
+    get_cell_digest,
+    list_point_cells,
     run_point_sweep,
+)
+from slipstream_bench.orchestration.flows.run_setup import (
+    enable_milestone_logging,
+    tag_run_with_group,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
-from slipstream_bench.orchestration.tasks.cell import cell_task
+from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,20 +93,55 @@ PendingCellsFn = Callable[[EnginePoint], bool]
 
 
 @dataclass(frozen=True)
+class SweepOutcome:
+    """The knob sweep's result: its ordered pointers and the run/resume cell split.
+
+    ``pointers`` is the S3 pointer for each cell of every point, in order — the flow's
+    return value. ``cells_run`` and ``cells_resumed`` split those cells by their point's
+    redeploy gate: every cell of a point that had any pending cell (so it redeployed)
+    counts as run, every cell of a fully-cached point as resumed. The split is
+    point-granular, not a per-cell execution count — a partially-cached point counts all
+    its cells as run, including any that resumed from cache within the point. It is the
+    breakdown the flow's final-summary milestone reports (ADR-0020).
+    """
+
+    pointers: tuple[str, ...]
+    cells_run: int
+    cells_resumed: int
+
+    def __post_init__(self) -> None:
+        """Reject a split that does not account for every pointer.
+
+        Frozen, so validating on construction makes the value valid for its whole life.
+        :func:`build_sweep_summary` presents ``cells_run + cells_resumed`` as the run's
+        cell count and trusts it matches the pointers, so a miscounted split would surface
+        as a wrong operator-facing number rather than a raise — guard it here instead.
+        """
+        if self.cells_run < 0 or self.cells_resumed < 0:
+            raise ValueError("SweepOutcome cell counts must be non-negative")
+        if self.cells_run + self.cells_resumed != len(self.pointers):
+            raise ValueError(
+                "SweepOutcome cells_run + cells_resumed must equal len(pointers): "
+                f"{self.cells_run} + {self.cells_resumed} != {len(self.pointers)}"
+            )
+
+
+@dataclass(frozen=True)
 class KnobSweepInputs:
     """The per-run inputs every engine point of one knob sweep shares (ADR-0015).
 
     The grid and manifest the points are enumerated and redeployed from, the shared run
-    the points nest under, and the deep config digest and addressing every point sweep
-    keys its cells by. A point's own values — its slug, its nested run id — are derived
-    per point from these; nothing here varies point to point.
+    the points nest under, the run-wide model and vLLM image every cell's config digest
+    folds in, and the addressing every point sweep runs its cells with. A point's own
+    values — its slug, its nested run id, its cells' digests — are derived per point from
+    these; nothing here varies point to point.
     """
 
     grid: SweepGrid
     grid_path: Path
     manifest_path: Path
     run: str
-    digest: str
+    serving: ServingConfig
     instance_id: str
     image_ref: str
     bucket: str
@@ -109,14 +154,18 @@ class KnobSweepInputs:
 
         Frozen, so validating on construction makes the value valid for its whole life.
         The keying and addressing fields must be non-empty, so a misconfigured sweep
-        fails here, before its first ~20-minute GPU redeploy, rather than at the S3 probe
-        or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
-        cells under ``sweeps//<slug>/``). The two file paths are checked to exist by the
-        command that reads them.
+        fails here, before its first ~20-minute GPU redeploy, rather than at the first
+        cache lookup or silently (an empty ``run`` would pass ``SweepContext``'s own check yet key
+        cells under ``knob-sweep//<slug>/``). The two file paths are checked to exist by the
+        command that reads them. The extra load-cell flags must be readable, since every
+        cell's digest folds them in.
+
+        :raise DigestError: when the extra load-cell flags cannot be read.
         """
-        for name in ("run", "digest", "instance_id", "image_ref", "bucket", "model"):
+        for name in ("run", "instance_id", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
+        read_sweep_flags(self.sweep_args_b64)
 
 
 @flow(name="knob-sweep")
@@ -164,19 +213,18 @@ def knob_sweep_flow(
     :param sweep_args_b64: extra load-cell flags, base64-encoded.
     :return: the S3 pointer for each cell of every point, in order.
     """
-    _tag_run_with_group(run_id)
+    logger = get_run_logger()
+    enable_milestone_logging()
+    tag_run_with_group(run_id)
     grid = load_grid(sweep_grid)
-    digest_inputs = DigestInputs(
-        model_yaml=model_yaml,
-        sweep_grid=sweep_grid,
-        vllm_manifest=vllm_manifest,
-    )
+    points = list_engine_points(grid)
+    logger.info("knob sweep run=%s starting: %d engine points", run_id, len(points))
     inputs = KnobSweepInputs(
         grid=grid,
         grid_path=sweep_grid,
-        manifest_path=digest_inputs.vllm_manifest,
+        manifest_path=vllm_manifest,
         run=run_id,
-        digest=digest_inputs.digest(),
+        serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
         instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
@@ -185,18 +233,22 @@ def knob_sweep_flow(
         sweep_args_b64=sweep_args_b64,
     )
     # Surface the run's configuration on its Prefect run page: the version anchors (the
-    # bench-client and orchestration image content-sha tags, the deep digest), the two
+    # bench-client and orchestration image content-sha tags), the two
     # verbatim config bodies (model.yaml, sweep-grid.yaml), the manifest's serving image ref,
     # and the vLLM container args verbatim, so an operator inspects exactly what the run
     # executed without the files leaving the image. The orchestration image bakes its own ref
-    # as ORCH_IMAGE_REF; a local or test build bakes none, so it reads as "unknown".
+    # as ORCH_IMAGE_REF; a local or test build bakes none, so it reads as "unknown" — logged
+    # so a cluster run whose env should carry the ref but doesn't leaves a trace.
     publish_config_artifact(
+        flow="knob-sweep",
         run_id=run_id,
         images=ImageRefs(
             bench=image_ref,
-            orch=os.environ.get("ORCH_IMAGE_REF") or "unknown",
+            orch=read_orch_image_ref(logger),
         ),
-        digest_inputs=digest_inputs,
+        model_yaml=model_yaml,
+        workload=sweep_grid,
+        vllm_manifest=vllm_manifest,
         publish=create_markdown_artifact,
     )
     s3_client = build_s3_client(region)
@@ -209,8 +261,8 @@ def knob_sweep_flow(
             task=cell_task(bucket, retries=retries),
         )
     )
-    pointers = drive_knob_sweep(
-        points=list_engine_points(grid),
+    outcome = drive_knob_sweep(
+        points=points,
         deploy_fn=deploy_fn,
         scrape_fn=scrape_fn,
         point_sweep_fn=point_sweep_fn,
@@ -223,13 +275,17 @@ def knob_sweep_flow(
     # only the render, and a re-run re-renders off S3 without re-running a cell (no automatic retry).
     render_results(
         grid=grid,
-        run_prefix=run_id,
+        run_prefix=get_knob_sweep_prefix(run_id),
         bucket=bucket,
+        region=region,
         s3_client=s3_client,
         model=inputs.model,
         publish=create_markdown_artifact,
+        publish_image=create_image_artifact,
     )
-    return pointers
+    logger.info("render published to the run page")
+    logger.info(build_sweep_summary(run_id, outcome))
+    return list(outcome.pointers)
 
 
 def drive_knob_sweep(
@@ -239,13 +295,20 @@ def drive_knob_sweep(
     scrape_fn: ScrapeFn,
     point_sweep_fn: PointSweepFn,
     has_pending_cells: PendingCellsFn,
-) -> list[str]:
+) -> SweepOutcome:
     """Iterate the points, redeploying and scraping each pending one, then sweeping all.
 
     The redeploy and scrape — the ~20-minute GPU rollout and its ceiling read — are gated
     on the point having pending cells, so a resume never re-pays them to run zero cells
     (ADR-0015). The sweep runs for every point regardless: for a fully-cached point it
     hits the cache and re-executes nothing, returning the point's cached pointers.
+
+    Each point ends with a milestone naming it, its cell count, and whether it was swept as
+    a run or resumed from cache, and the pointers are returned alongside the run/resume cell
+    split the flow's final summary reports (ADR-0020). The split is point-granular: it keys
+    off the same pending gate that decides the redeploy — a point with any pending cell is
+    swept as a run and all its cells count as run (including any that resume from cache
+    within the point), a fully-cached point as a resume.
 
     :param points: the grid's engine points, in enumeration order.
     :param deploy_fn: redeploy the GPU for a point's knobs (Tier-1).
@@ -255,18 +318,53 @@ def drive_knob_sweep(
     :param has_pending_cells: whether a point still has cells to run; a point with none
         skips its redeploy and scrape — the two expensive tasks — but still runs its
         resumable sweep, which returns its cached pointers (resume).
-    :return: the S3 pointer for each cell of every point, in order.
+    :return: the outcome — the ordered pointers and the run/resume cell split.
     """
     pointers: list[str] = []
+    cells_run = 0
+    cells_resumed = 0
     for point in points:
-        if has_pending_cells(point):
+        pending = has_pending_cells(point)
+        if pending:
             deploy_fn(point)
             # Scrape for its raise-on-empty side effect: a point whose engine reported no
             # ceiling must fail before its ladder runs (ADR-0015). The grid fixes the
             # ladder shape, so the scraped value is recorded by the task, not threaded here.
             scrape_fn(point)
-        pointers.extend(point_sweep_fn(point))
-    return pointers
+        point_pointers = point_sweep_fn(point)
+        pointers.extend(point_pointers)
+        if pending:
+            cells_run += len(point_pointers)
+        else:
+            cells_resumed += len(point_pointers)
+        _LOGGER.info(
+            "point %s done: %d cells %s",
+            point.slug(),
+            len(point_pointers),
+            "run" if pending else "resumed",
+        )
+    return SweepOutcome(
+        pointers=tuple(pointers), cells_run=cells_run, cells_resumed=cells_resumed
+    )
+
+
+def build_sweep_summary(run_id: str, outcome: SweepOutcome) -> str:
+    """Render the knob sweep's one-line final summary: its run and its cell split.
+
+    The flow emits this as the run's closing milestone, filed under ``run=<run-id>`` — one
+    of the two lines that carry the run id, the run-start line being the other (ADR-0020). A
+    failed cell never reaches here: it raises and aborts the run — Prefect marks the run
+    failed — rather than being folded into this count.
+
+    :param run_id: the shared run the sweep is filed under.
+    :param outcome: the driver's result — the pointers and the run/resume cell split.
+    :return: the summary line, naming the run, its total cells, and the run/resume split.
+    """
+    total = outcome.cells_run + outcome.cells_resumed
+    return (
+        f"knob sweep run={run_id} complete: {total} cells "
+        f"({outcome.cells_run} run, {outcome.cells_resumed} resumed)"
+    )
 
 
 def build_knob_sweep_collaborators(
@@ -285,19 +383,20 @@ def build_knob_sweep_collaborators(
     Deployment; the scrape reads its predicted ceiling and raises loud on an empty one
     (ADR-0015), logging the value it read (the grid fixes the ladder, so the ceiling is
     recorded, not threaded — ADR-0009); the point sweep runs the point's Tier-2 cells
-    under a per-point results subdir and the sweep's nested run id; the pending gate is
-    the negation of the redeploy-skip probe, so a fully-valid point skips its redeploy.
+    under a per-point results subdir and the sweep's nested run id; the pending gate
+    reads the cell task's cache, so a point whose every cell holds a cache record skips
+    its redeploy.
 
     :param inputs: the per-run inputs every point of the sweep shares.
     :param kubectl: the transport the redeploy and ceiling scrape are issued through.
     :param ssm_client: the boto3 SSM client each point sweep sends cells through.
-    :param s3_client: the boto3 S3 client the cell downloads and the pending probe read.
+    :param s3_client: the boto3 S3 client each point sweep downloads its cells with.
     :param task: the cell task each point sweep caches and gates its cells with.
     :return: the (deploy, scrape, point-sweep, has-pending-cells) callables, in the order
         :func:`drive_knob_sweep` takes them.
     """
     deploy_fn: DeployFn = partial(
-        deploy_gpu_point,
+        _deploy_and_log,
         grid=inputs.grid,
         manifest_text=inputs.manifest_path.read_text(encoding="utf-8"),
         kubectl=kubectl,
@@ -311,9 +410,25 @@ def build_knob_sweep_collaborators(
         task=task,
     )
     has_pending_cells: PendingCellsFn = partial(
-        _point_has_pending_cells, inputs=inputs, s3_client=s3_client
+        _point_has_pending_cells, inputs=inputs, task=task
     )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
+
+
+def _deploy_and_log(
+    point: EnginePoint, *, grid: SweepGrid, manifest_text: str, kubectl: Kubectl
+) -> None:
+    """Redeploy the GPU for a point's knobs, bracketing it with run-page milestones.
+
+    The ~20-minute rollout is the sweep's longest silent step; the start and finish lines
+    go to the parent run page through ``get_run_logger`` so an operator sees the point
+    enter and clear its redeploy (ADR-0020). Called inside the flow run, where the bound
+    logger has a run context.
+    """
+    logger = get_run_logger()
+    logger.info("point %s redeploy starting", point.slug())
+    deploy_gpu_point(point, grid=grid, manifest_text=manifest_text, kubectl=kubectl)
+    logger.info("point %s redeploy finished", point.slug())
 
 
 def _scrape_and_log_ceiling(point: EnginePoint, *, kubectl: Kubectl) -> None:
@@ -345,26 +460,39 @@ def _sweep_one_point(
 
 
 def _point_has_pending_cells(
-    point: EnginePoint, *, inputs: KnobSweepInputs, s3_client: Any
+    point: EnginePoint, *, inputs: KnobSweepInputs, task: Task[..., str]
 ) -> bool:
-    """Report whether a point still has cells to run — the redeploy-skip probe negated."""
-    return not point_is_complete(
-        point,
-        grid=inputs.grid,
-        run_prefix=inputs.run,
-        bucket=inputs.bucket,
-        s3_client=s3_client,
-        model=inputs.model,
-        commercial=inputs.commercial,
-    )
+    """Report whether a point still has cells to run — any cell without a cache record.
+
+    Each cell is checked against the cell task's own cache, keyed by the same run id,
+    config digest, point slug, and cell name the point sweep calls the task with — both
+    derive them from the one point context — so a point is skipped only when every one of
+    its cells will be served from cache. The first uncached cell is logged, naming why the
+    point redeploys.
+    """
+    context = _build_point_context(inputs, point)
+    for cell in list_point_cells(inputs.grid, context):
+        cell_name = get_cell_basename(cell)
+        if not is_cell_cached(
+            task,
+            run_id=context.run_id,
+            digest=get_cell_digest(inputs.grid, context, cell),
+            point_slug=context.point_slug,
+            cell_name=cell_name,
+        ):
+            _LOGGER.info(
+                "point %s pending: cell %s has no cache record", point.slug(), cell_name
+            )
+            return True
+    return False
 
 
 def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepContext:
     """Derive one engine point's sweep context, nesting it under the shared run."""
     return SweepContext(
-        run_id=f"{inputs.run}/{point.slug()}",
+        run_id=_get_point_run_id(inputs, point),
         point_slug=point.slug(),
-        digest=inputs.digest,
+        serving=inputs.serving,
         instance_id=inputs.instance_id,
         image_ref=inputs.image_ref,
         bucket=inputs.bucket,
@@ -374,18 +502,10 @@ def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepCo
     )
 
 
-def _tag_run_with_group(run_id: str) -> None:
-    """Tag the running knob-sweep flow run ``run=<run-id>``, matching its point sweeps.
+def _get_point_run_id(inputs: KnobSweepInputs, point: EnginePoint) -> str:
+    """Nest one engine point under the shared run: ``<run>/<point-slug>``.
 
-    The point sweeps tag their own runs through the ``tags`` context manager
-    (:func:`slipstream_bench.orchestration.flows.point_sweep.run_point_sweep`); the parent
-    run is already created when this flow body runs, so that context manager cannot reach it
-    — its run is updated through the API instead. The update overwrites tags rather than
-    merging, so the current set is read and the run tag added to it. A direct call outside a
-    flow run (no runtime id) is a no-op.
+    The point's bucket prefix and its cells' cache-key run id, so the point sweep and the
+    redeploy-skip gate address the same cells.
     """
-    flow_run_id = flow_run.id
-    if flow_run_id is None:
-        return
-    with get_client(sync_client=True) as client:
-        client.update_flow_run(flow_run_id, tags=set(flow_run.tags) | {f"run={run_id}"})
+    return f"{inputs.run}/{point.slug()}"

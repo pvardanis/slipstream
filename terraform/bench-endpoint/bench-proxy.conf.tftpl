@@ -15,7 +15,17 @@
 # Load the stream module (packaged separately as nginx-mod-stream on AL2023).
 include /usr/share/nginx/modules/*.conf;
 
-events {}
+# One proxied sweep request holds two connections at once — the sweep container to this
+# proxy, and this proxy to the ALB — so a max_concurrency-N rung needs 2N connections.
+# The nginx default of 512 caps the proxy at ~256 streams, so the grid's top rung
+# (max_concurrency 256) exhausts it and nginx resets the overflow, which the bench
+# client reads as a disconnected server rather than a measurement. Lift the connection
+# cap and the worker's file-descriptor limit well above twice the grid's top rung.
+worker_rlimit_nofile 8192;
+
+events {
+    worker_connections 4096;
+}
 
 stream {
     server {

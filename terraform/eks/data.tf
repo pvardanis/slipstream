@@ -1,14 +1,13 @@
-# Read-only references the Prefect worker layer (worker.tf) needs: the bootstrap stack's
-# outputs and the orchestration image it holds. The orchestration ECR repository lives in
-# bootstrap because it must outlive `just cluster-down`; the worker reads its URL here and
-# resolves the current content-sha tag from ECR to pin the Deployment to an immutable ref.
+# Read-only references the Prefect worker layer (worker.tf) and the sweep-dispatch access
+# (sweep_dispatch.tf) need: the bootstrap stack's outputs and the orchestration image it
+# holds. The orchestration ECR repository lives in bootstrap because it must outlive
+# `just cluster-down`; the worker reads its URL here and resolves the current content-sha
+# tag from ECR to pin the Deployment to an immutable ref.
 
-# The bootstrap stack's outputs, for the orchestration image repository URL. Read only
-# when the worker is enabled, so a cluster-up that only wants the base layers (karpenter,
-# server) does not depend on bootstrap remote state being readable — and needs no state
-# bucket supplied.
+# The bootstrap stack's outputs: the orchestration image repository URL, the
+# sweep-dispatch role ARN, and the cluster name and Prefect namespace the sweep-dispatch
+# preconditions check.
 data "terraform_remote_state" "bootstrap" {
-  count   = local.worker_enabled ? 1 : 0
   backend = "s3"
   config = {
     bucket = var.state_bucket
@@ -20,10 +19,9 @@ data "terraform_remote_state" "bootstrap" {
 # The orchestration image's :main pointer resolves to one manifest; the stack pins the
 # worker Deployment to that manifest's immutable content-sha tag, never the floating :main
 # (a floating tag + IfNotPresent would silently run a stale cached image across nodes). The
-# :main pointer is read only to discover the current sha. Read only when the worker is
-# enabled — the image need not exist to stand the cluster up.
+# :main pointer is read only to discover the current sha, so the image must be published
+# before `just cluster-up`.
 data "aws_ecr_image" "orchestration" {
-  count           = local.worker_enabled ? 1 : 0
   repository_name = local.orchestration_repo_name
   image_tag       = "main"
 

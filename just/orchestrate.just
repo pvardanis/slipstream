@@ -1,10 +1,10 @@
 # Whole-stack orchestration: bring the benchmark stack up or down, the one-shot cloud verification, and the zero-leak money sweep.
 
-# Bring the whole benchmark stack up and leave it running: cluster, the self-hosted
-# Prefect server's work pool, GPU node pool, GPU replica, and the ephemeral mTLS bench
-# endpoint. Everything `just bench` and `just prefix-cache` need — run them against it
-# as often as you like, then `just stack-down` at the end of the day to return spend to
-# zero. Ordered cluster-up -> prefect-up -> gpu-pool-up: the server (a helm_release in
+# Bring the whole benchmark stack up and leave it running: cluster (with the self-hosted
+# Prefect server and worker), the server's work pool, GPU node pool, GPU replica, and
+# the ephemeral mTLS bench endpoint. Everything `just bench` and `just prefix-cache`
+# need — run them against it as often as you like, then `just stack-down` at the end of
+# the day to return spend to zero. Ordered cluster-up -> prefect-up -> gpu-pool-up: the server (a helm_release in
 # the eks stack) comes up with the cluster, then its work pool is created, then the GPU
 # pool a worker's runs target (ADR-0015 amendment).
 [group('orchestrate')]
@@ -55,6 +55,7 @@ stack-down:
     if ! just _zero-leak-sweep "${region}"; then overall=1; fi
     exit "${overall}"
 
+# Needs the orchestration image published, since `cluster-up` deploys the worker from it.
 # End-to-end cloud verification of the GPU path (ADR-0002 item 4, #92). Real GPU
 # spend, hand-triggered. Brings the cluster and GPU replica up, asserts the engine
 # serves a well-formed completion, then tears everything down and sweeps AWS for a

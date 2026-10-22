@@ -3,17 +3,22 @@
 ADR-0012 makes resume hinge on one fact: ``result_storage`` and ``key_storage``
 must point at S3, not Prefect's ``~/.prefect/storage/`` default, and the two must be
 distinct prefixes so the cell JSON and the cache index never collide. These tests
-pin that fact and the env-var boundary that supplies the bucket.
+pin that fact and the preflight that proves the cache-key storage is writable and
+readable before a sweep trusts it.
 """
 
+import asyncio
+from pathlib import Path
+
 import pytest
+from prefect.filesystems import LocalFileSystem
 from prefect_aws import S3Bucket
 
 from slipstream_bench.orchestration.storage import (
     StorageError,
     cache_key_storage,
+    check_cache_key_storage,
     result_storage,
-    results_bucket_from_env,
 )
 
 _BUCKET = "slipstream-bench-results"
@@ -52,35 +57,58 @@ def test_result_storage_trims_surrounding_whitespace() -> None:
     assert result_storage(f"  {_BUCKET}  ").bucket_name == _BUCKET
 
 
-def test_results_bucket_from_env_reads_the_sweep_bucket(
-    monkeypatch: pytest.MonkeyPatch,
+def test_check_cache_key_storage_passes_on_writable_storage(tmp_path: Path) -> None:
+    root = tmp_path / "cache-keys"
+
+    check_cache_key_storage(LocalFileSystem(basepath=str(root)), bucket=_BUCKET)
+
+    assert (root / "preflight-probe").is_file()
+
+
+class _WriteOnlyStorage:
+    """Cache-key storage whose writes land but whose reads are denied."""
+
+    def write_path(self, path: str, content: bytes, **_: object) -> str:
+        return path
+
+    def read_path(self, path: str, **_: object) -> bytes:
+        raise PermissionError(f"read denied on {path}")
+
+
+def test_check_cache_key_storage_fails_when_the_probe_cannot_be_read_back() -> None:
+    # A write-only grant stores cache records Prefect can never read, so every cell
+    # would look pending; the read-back catches it.
+    with pytest.raises(StorageError, match=f"s3://{_BUCKET}/prefect/cache-keys"):
+        check_cache_key_storage(_WriteOnlyStorage(), bucket=_BUCKET)
+
+
+def test_check_cache_key_storage_names_the_bucket_and_prefix_on_failure(
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("RESULTS_BUCKET", _BUCKET)
+    # A regular file where the storage root should be: the probe write cannot land, as
+    # with a missing bucket or a denied IAM grant on S3.
+    root = tmp_path / "not-a-dir"
+    root.write_text("", encoding="utf-8")
 
-    assert results_bucket_from_env() == _BUCKET
+    with pytest.raises(StorageError) as raised:
+        check_cache_key_storage(LocalFileSystem(basepath=str(root)), bucket=_BUCKET)
+
+    message = str(raised.value)
+    assert f"s3://{_BUCKET}/prefect/cache-keys" in message
+    assert "IAM" in message
+    assert isinstance(raised.value.__cause__, OSError)
 
 
-def test_results_bucket_from_env_trims_surrounding_whitespace(
-    monkeypatch: pytest.MonkeyPatch,
+def test_check_cache_key_storage_probes_from_inside_an_event_loop(
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("RESULTS_BUCKET", f"  {_BUCKET}  ")
+    # Prefect's storage methods return an un-awaited coroutine when called under a running
+    # event loop; the probe must still run, or an unwritable bucket would pass unnoticed.
+    root = tmp_path / "not-a-dir"
+    root.write_text("", encoding="utf-8")
 
-    assert results_bucket_from_env() == _BUCKET
+    async def probe() -> None:
+        check_cache_key_storage(LocalFileSystem(basepath=str(root)), bucket=_BUCKET)
 
-
-def test_results_bucket_from_env_rejects_a_missing_bucket(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("RESULTS_BUCKET", raising=False)
-
-    with pytest.raises(StorageError, match="RESULTS_BUCKET"):
-        results_bucket_from_env()
-
-
-def test_results_bucket_from_env_rejects_a_blank_bucket(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("RESULTS_BUCKET", "   ")
-
-    with pytest.raises(StorageError, match="RESULTS_BUCKET"):
-        results_bucket_from_env()
+    with pytest.raises(StorageError):
+        asyncio.run(probe())

@@ -4,7 +4,7 @@ ADR-0012 §Amendment: the per-cell loop lives here, and each cell is one ``docke
 on the bench host. This module renders a cell to the YAML ``load-cell`` reads (the
 CLI-injected keys excluded, so ``bench-sweep.sh`` supplies ``--base-url``/``--model``/
 ``--out-dir`` as flags), addresses the cell's result object under
-``sweeps/<run_id>/<basename>``, and builds the :data:`CellExecution` closure the cell
+``<run_id>/<basename>``, and builds the :data:`CellExecution` closure the cell
 task wraps: send ``bench-sweep.sh`` over SSM, then download the result JSON so the
 validity gate reads it locally. The transport (:mod:`slipstream_bench.orchestration.ssm`)
 and the S3 download client are passed in, so this stays a thin composition over them.
@@ -30,6 +30,21 @@ from slipstream_bench.orchestration.tasks.cell import CellExecution
 # host). It reads the cell env this module prefixes and runs one docker cell.
 _BENCH_CELL_SCRIPT = "/usr/local/bin/bench-sweep.sh"
 
+# The host script that brings the loopback mTLS proxy up (dropped at boot). Run once
+# before a ladder's cells, so the whole ladder shares one proxy.
+BENCH_PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
+
+# Placeholder base_url: bench-sweep.sh supplies the real --base-url (the loopback
+# proxy) as a flag, and render_cell_config strips it, so the value enumerated here is
+# never sent — it only satisfies the non-empty CellConfig field.
+PLACEHOLDER_BASE_URL = "http://127.0.0.1:0"
+
+# Placeholder out_dir: bench-sweep.sh runs the cell with its own --out-dir /out (the
+# container path it bind-mounts from the host result dir), and render_cell_config strips
+# out_dir, so the value enumerated here is never sent — it only satisfies the non-empty
+# CellConfig field. The worker downloads each result to its own scratch dir, not this.
+PLACEHOLDER_OUT_DIR = "/out"
+
 
 class CellResultError(Exception):
     """A cell that ran over SSM but whose result object could not be downloaded."""
@@ -47,21 +62,34 @@ def render_cell_config(cell: CellConfig) -> str:
     :param cell: the cell to render.
     :return: the YAML text to base64 and ship as ``bench-sweep.sh``'s ``CELL_CONFIG_B64``.
     """
-    knobs = cell.model_dump(exclude=set(RESERVED_KEYS))
-    return yaml.safe_dump(knobs, sort_keys=True)
+    return yaml.safe_dump(get_cell_knobs(cell), sort_keys=True)
+
+
+def get_cell_knobs(cell: CellConfig) -> dict[str, Any]:
+    """Read the knobs a cell ships to the host: its config minus the CLI-injected keys.
+
+    The parameters :func:`render_cell_config` renders, and the cell parameters its config
+    digest folds in, so the digest covers the same knobs the cell config ships.
+
+    :param cell: the cell whose knobs are read.
+    :return: the cell's knobs, keyed by field name.
+    """
+    return cell.model_dump(exclude=set(RESERVED_KEYS))
 
 
 def get_cell_s3_key(run_id: str, cell: CellConfig) -> str:
-    """Address a cell's result object under the run's sweep prefix.
+    """Address a cell's result object under the run's bucket prefix.
 
-    ``bench-sweep.sh`` copies the cell JSON to ``s3://<bucket>/sweeps/<run_id>/``;
-    ``run_id`` already nests the engine point (``<run>/<point-slug>``) for a knob sweep.
+    ``bench-sweep.sh`` copies the cell JSON to ``s3://<bucket>/<run_id>/``; ``run_id``
+    already roots the run under its experiment's prefix and nests the engine point
+    (``knob-sweep/<run>/<point-slug>``) or the A/B's arm run
+    (``kv-offload-ab/<run>/<arm>-r<n>``).
 
-    :param run_id: the run's bucket prefix, point-nested by the caller.
+    :param run_id: the run's bucket prefix, rooted and nested by the caller.
     :param cell: the cell whose object is addressed.
     :return: the object key, without the bucket.
     """
-    return f"sweeps/{run_id}/{get_cell_basename(cell)}"
+    return f"{run_id}/{get_cell_basename(cell)}"
 
 
 def get_cell_result_uri(bucket: str, run_id: str, cell: CellConfig) -> str:
@@ -169,6 +197,35 @@ def build_cell_execution(
         key=get_cell_s3_key(context.run_id, cell),
         dest=dest,
     )
+
+
+def start_bench_proxy(
+    ssm_client: Any,
+    *,
+    instance_id: str,
+    timeout_s: float,
+    command: str = BENCH_PROXY_SCRIPT,
+    poll_interval_s: float = 5.0,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """Bring the bench host's loopback mTLS proxy up, the endpoint every cell targets.
+
+    :param ssm_client: the boto3 SSM client (or stand-in) the command is sent through.
+    :param instance_id: the bench host running the cells.
+    :param timeout_s: the ceiling on the proxy's SSM command.
+    :param command: the host command that brings the proxy up.
+    :param poll_interval_s: the wait between SSM invocation polls.
+    :param sleep: the wait function, injected for tests.
+    """
+    run_kwargs: dict[str, Any] = {
+        "instance_id": instance_id,
+        "command": command,
+        "timeout_s": timeout_s,
+        "poll_interval_s": poll_interval_s,
+    }
+    if sleep is not None:
+        run_kwargs["sleep"] = sleep
+    run_command(ssm_client, **run_kwargs)
 
 
 def build_s3_client(region: str) -> Any:

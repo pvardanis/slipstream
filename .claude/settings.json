@@ -1,5 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(kubectl -n prefect get *)",
+      "Bash(kubectl -n prefect set image deploy/prefect-worker *)",
+      "Bash(kubectl -n prefect rollout status deploy/prefect-worker*)",
+      "Bash(kubectl -n prefect exec *deploy/prefect-worker *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

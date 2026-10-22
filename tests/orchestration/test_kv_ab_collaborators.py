@@ -1,0 +1,549 @@
+"""The kv-ab driver and flow over their production collaborators, with the transports faked.
+
+:func:`build_kv_ab_collaborators` binds the redeploy, the GPU KV pool scrape, the warmup,
+the ladder rungs, and the pending-run gate to kubectl, SSM, S3, and the engine's /metrics.
+These tests drive :func:`drive_kv_ab` over them, with real Prefect tasks whose storage is a
+tmp local filesystem, and assert what each arm run deploys, runs, and labels. The flow is
+run once with its transport builders swapped for the same fakes.
+"""
+
+import base64
+import io
+import json
+import re
+from collections.abc import Iterator, Sequence
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import pytest
+import yaml
+from prefect import Task, flow
+from prefect.filesystems import LocalFileSystem
+from prefect.testing.utilities import prefect_test_harness
+
+from slipstream_bench.orchestration.digest import ServingConfig
+from slipstream_bench.orchestration.flows import kv_ab as kv_ab_module
+from slipstream_bench.orchestration.flows.kv_ab import (
+    KvAbInputs,
+    KvAbResult,
+    build_kv_ab_collaborators,
+    drive_kv_ab,
+    kv_ab_flow,
+)
+from slipstream_bench.orchestration.kv_ab_config import (
+    KvAbConfigError,
+    load_kv_ab_config,
+)
+from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
+from slipstream_bench.orchestration.tasks.kv_ab_cell import build_kv_ab_cell_task
+from slipstream_bench.orchestration.validity import InvalidCellError
+
+_REPO = Path(__file__).parents[2]
+# One run per arm keeps the script short: off-r1, then on-r1.
+_CONFIG = load_kv_ab_config(
+    _REPO / "bench" / "configs" / "kv-cache-extension-ab.agent.yaml"
+).model_copy(update={"runs_per_arm": 1})
+_RIG = KvAbRig(max_model_len=4096, cpu_tier_bytes=4 * 1024**3, chunk_tokens=256)
+_MODEL = "Qwen/Qwen3-8B-AWQ"
+_CELL_SCRIPT = "/usr/local/bin/bench-sweep.sh"
+_PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
+_CONNECTOR = "LMCacheConnectorV1"
+_RUN_ID = re.compile(r"RUN_ID='([^']+)'")
+_CELL_CONFIG = re.compile(r"CELL_CONFIG_B64='([^']+)'")
+
+_INPUTS = KvAbInputs(
+    config=_CONFIG,
+    manifest_text=(_REPO / "k8s" / "vllm-gpu.yaml").read_text(encoding="utf-8"),
+    rig=_RIG,
+    run="ab1",
+    serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v0.29.0"),
+    instance_id="i-1",
+    image_ref="bench:sha",
+    bucket="bench",
+    model=_MODEL,
+)
+
+_VALID_RESULT = {
+    "prefix_share": 90,
+    "max_concurrency": 4,
+    "num_prompts": 128,
+    "completed": 128,
+    "request_goodput": 2.0,
+    "request_throughput": 2.0,
+    "p95_ttft_ms": 850.0,
+    "p95_tpot_ms": 42.0,
+    "output_throughput": 256.0,
+    "errors": [""] * 128,
+}
+
+# Every request refused: a cell that ran but measured nothing.
+_FAILED_RESULT = {
+    **_VALID_RESULT,
+    "completed": 0,
+    "errors": ["Connection refused"] * 128,
+}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _harness() -> Iterator[None]:
+    with prefect_test_harness():
+        yield
+
+
+class _Kubectl:
+    """Record each applied Deployment; report the configured pool in the startup log."""
+
+    def __init__(self) -> None:
+        self.applied: list[str] = []
+
+    def __call__(self, args: Sequence[str], stdin: str | None) -> str:
+        if args[0] == "apply":
+            assert stdin is not None
+            self.applied.append(stdin)
+        if args[0] == "logs":
+            return "INFO GPU KV cache size: 16,384 tokens\n"
+        return ""
+
+
+class _Ssm:
+    """Accept every command, recording the bench host's script runs in order."""
+
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    def send_command(self, **kwargs: Any) -> dict[str, object]:
+        self.commands.append(kwargs["Parameters"]["commands"][0])
+        return {"Command": {"CommandId": "cmd-1"}}
+
+    def get_command_invocation(self, **_kwargs: object) -> dict[str, object]:
+        return {"Status": "Success", "StandardErrorContent": ""}
+
+    def script_runs(self) -> list[str]:
+        """Name each run: ``proxy``, or a cell's ``<RUN_ID>@mc<concurrency>``."""
+        runs = []
+        for command in self.commands:
+            if _PROXY_SCRIPT in command:
+                runs.append("proxy")
+                continue
+            assert _CELL_SCRIPT in command, command
+            run_id = _RUN_ID.search(command)
+            config = _CELL_CONFIG.search(command)
+            assert run_id and config, command
+            cap = re.search(
+                r"max_concurrency: (\d+)", base64.b64decode(config[1]).decode()
+            )
+            assert cap, command
+            runs.append(f"{run_id[1]}@mc{cap[1]}")
+        return runs
+
+
+class _S3:
+    """Serve each cell a valid result at its rung, or a failed one under a marked key.
+
+    Serves each cell's raw result only at the key the bench host stored it under, both to
+    the worker's download and back to the render's read, records each object the worker
+    writes, and serves each one written back; the chart upload raises ``chart_error``
+    when set.
+    """
+
+    def __init__(
+        self, failing: tuple[str, ...] = (), chart_error: Exception | None = None
+    ) -> None:
+        # The bench host whose cell runs write the raw results this bucket serves.
+        self.ssm = _Ssm()
+        self.raw_reads: list[str] = []
+        self.puts: dict[str, dict[str, Any]] = {}
+        self.charts: dict[str, bytes] = {}
+        self._failing = failing
+        self._chart_error = chart_error
+
+    def download_file(self, _bucket: str, key: str, dest: str) -> None:
+        Path(dest).write_text(json.dumps(self._raw_result(key)), encoding="utf-8")
+
+    def put_object(
+        self, *, Bucket: str, Key: str, Body: bytes, ContentType: str
+    ) -> None:
+        assert Bucket == "bench"
+        if ContentType == "image/png":
+            if self._chart_error:
+                raise self._chart_error
+            self.charts[Key] = Body
+            return
+        assert ContentType == "application/json"
+        self.puts[Key] = json.loads(Body)
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        assert Bucket == "bench"
+        if Key in self.puts:
+            body = self.puts[Key]
+        else:
+            self.raw_reads.append(Key)
+            body = self._raw_result(Key)
+        return {"Body": io.BytesIO(json.dumps(body).encode())}
+
+    def _host_keys(self) -> set[str]:
+        """The keys the bench host stored raw results under: ``<RUN_ID>/<cell>.json``.
+
+        Every cell of the agent workload is named ``pshare90_burst1.0_mc<concurrency>``.
+        """
+        keys = set()
+        for run in self.ssm.script_runs():
+            if run != "proxy":
+                run_id, cap = run.split("@mc")
+                keys.add(f"{run_id}/pshare90_burst1.0_mc{cap}.json")
+        return keys
+
+    def _raw_result(self, key: str) -> dict[str, Any]:
+        """The raw result the bench host stored at ``key``."""
+        if key not in self._host_keys():
+            raise KeyError(f"the bench host stored no raw result at {key}")
+        failed = any(marker in key for marker in self._failing)
+        result = _FAILED_RESULT if failed else _VALID_RESULT
+        # Each rung's result reports the concurrency its cell basename names.
+        rung = re.search(r"_mc(\d+)\.json$", key)
+        assert rung, key
+        return {**result, "max_concurrency": int(rung[1])}
+
+
+class _Metrics:
+    """Advance the prefix-cache counters by one cell's traffic at each after-cell read.
+
+    The counters start from a warm engine's totals, so a cell's window (600/1,000 GPU
+    hits) differs from the lifetime ratio. The connector's counters advance only while
+    the last applied Deployment loads LMCache, as vLLM's do.
+    """
+
+    def __init__(self, kubectl: _Kubectl) -> None:
+        self._kubectl = kubectl
+        self._reads = 0
+        self._counters = {
+            "vllm:prefix_cache_queries": 50_000,
+            "vllm:prefix_cache_hits": 10_000,
+            "vllm:external_prefix_cache_queries": 0,
+            "vllm:external_prefix_cache_hits": 0,
+        }
+
+    def __call__(self) -> str:
+        self._reads += 1
+        if self._reads % 2 == 0:
+            self._advance_one_cell()
+        lines = []
+        for metric, value in self._counters.items():
+            lines.append(f"# TYPE {metric} counter")
+            lines.append(f'{metric}_total{{model_name="{_MODEL}"}} {value}')
+        return "\n".join(lines) + "\n"
+
+    def _advance_one_cell(self) -> None:
+        self._counters["vllm:prefix_cache_queries"] += 1000
+        self._counters["vllm:prefix_cache_hits"] += 600
+        if _CONNECTOR in self._kubectl.applied[-1]:
+            self._counters["vllm:external_prefix_cache_queries"] += 400
+            self._counters["vllm:external_prefix_cache_hits"] += 300
+
+
+class _Ab:
+    """One A/B's fakes and production collaborators, over a shared cell task."""
+
+    def __init__(self, task: Task[..., str], failing: tuple[str, ...] = ()) -> None:
+        self.kubectl = _Kubectl()
+        self.s3 = _S3(failing)
+        self.ssm = self.s3.ssm
+        self.collaborators = build_kv_ab_collaborators(
+            _INPUTS,
+            kubectl=self.kubectl,
+            ssm_client=self.ssm,
+            s3_client=self.s3,
+            task=task,
+            read_metrics=_Metrics(self.kubectl),
+        )
+
+    def drive(self) -> KvAbResult:
+        """Drive the A/B inside a flow run, as the deployed flow does."""
+
+        @flow
+        def _ab() -> KvAbResult:
+            return drive_kv_ab(_CONFIG, _RIG, self.collaborators)
+
+        return _ab()
+
+
+def _isolated_task(tmp_path: Path) -> Task[..., str]:
+    results = LocalFileSystem(basepath=str(tmp_path / "results"))
+    results.save(f"results-{uuid4().hex}", overwrite=True)
+    keys = LocalFileSystem(basepath=str(tmp_path / "cache-keys"))
+    keys.save(f"cache-keys-{uuid4().hex}", overwrite=True)
+    return build_kv_ab_cell_task(result_storage=results, key_storage=keys)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("run", " "),
+        ("instance_id", ""),
+        ("image_ref", " "),
+        ("bucket", ""),
+        ("model", " "),
+        ("proxy_timeout_s", 0.0),
+        ("cell_timeout_s", -1.0),
+    ],
+)
+def test_inputs_that_cannot_address_or_bound_a_cell_are_rejected(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValueError, match=f"KvAbInputs.{field}"):
+        replace(_INPUTS, **{field: value})
+
+
+def test_each_arm_run_redeploys_with_its_offload_switch(tmp_path: Path) -> None:
+    ab = _Ab(_isolated_task(tmp_path))
+
+    ab.drive()
+
+    off, on = ab.kubectl.applied
+    assert _CONNECTOR not in off
+    assert _CONNECTOR in on
+    # Both arms pin the GPU pool to the workload's cap, so only the offload differs.
+    cap = str(_CONFIG.engine.kv_cache_memory_bytes)
+    assert all(cap in doc for doc in (off, on))
+
+
+def test_each_run_starts_the_proxy_warms_up_unrecorded_then_runs_its_ladder(
+    tmp_path: Path,
+) -> None:
+    ab = _Ab(_isolated_task(tmp_path))
+
+    ab.drive()
+
+    assert ab.ssm.script_runs() == [
+        "proxy",
+        "kv-offload-ab/ab1/off-r1/warmup@mc1",
+        "kv-offload-ab/ab1/off-r1@mc1",
+        "kv-offload-ab/ab1/off-r1@mc2",
+        "kv-offload-ab/ab1/off-r1@mc4",
+        "proxy",
+        "kv-offload-ab/ab1/on-r1/warmup@mc1",
+        "kv-offload-ab/ab1/on-r1@mc1",
+        "kv-offload-ab/ab1/on-r1@mc2",
+        "kv-offload-ab/ab1/on-r1@mc4",
+    ]
+    assert not any("warmup" in key for key in ab.s3.puts)
+
+
+def test_every_rung_writes_only_its_labelled_window_beside_its_raw_result(
+    tmp_path: Path,
+) -> None:
+    ab = _Ab(_isolated_task(tmp_path))
+
+    result = ab.drive()
+
+    keys = [
+        f"kv-offload-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.kv_ab.json"
+        for run in ("off-r1", "on-r1")
+        for cap in (1, 2, 4)
+    ]
+    # The worker writes the labels alone: the raw result stays the host's single copy.
+    assert list(ab.s3.puts) == keys
+    assert result.pointers == tuple(f"s3://bench/{key}" for key in keys)
+    labels = ab.s3.puts["kv-offload-ab/ab1/on-r1/pshare90_burst1.0_mc4.kv_ab.json"]
+    assert not set(labels) & set(_VALID_RESULT)
+    # The cell's own 600/1,000, not the engine's lifetime ratio.
+    assert (labels["arm"], labels["run"], labels["hit_rate"]) == ("on", 1, 0.6)
+    assert labels["combined_hit_rate"] == 0.9
+
+
+def test_a_completed_ab_resumes_every_run_without_redeploying(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+    first = _Ab(task).drive()
+    resumed = _Ab(task)
+
+    result = resumed.drive()
+
+    assert (result.runs_run, result.runs_resumed) == (0, 2)
+    assert result.pointers == first.pointers
+    assert resumed.kubectl.applied == []
+    assert resumed.ssm.commands == []
+
+
+def test_a_failed_warmup_stops_the_run_before_its_ladder(tmp_path: Path) -> None:
+    ab = _Ab(_isolated_task(tmp_path), failing=("/warmup/",))
+
+    with pytest.raises(InvalidCellError):
+        ab.drive()
+
+    assert ab.ssm.script_runs() == ["proxy", "kv-offload-ab/ab1/off-r1/warmup@mc1"]
+    assert ab.s3.puts == {}
+
+
+def test_a_partly_cached_run_is_redeployed_and_re_measured_whole(
+    tmp_path: Path,
+) -> None:
+    task = _isolated_task(tmp_path)
+    # off-r1's mc1 rung is measured and cached; its mc2 rung fails, failing the A/B.
+    with pytest.raises(InvalidCellError):
+        _Ab(task, failing=("off-r1/pshare90_burst1.0_mc2",)).drive()
+    resumed = _Ab(task)
+
+    result = resumed.drive()
+
+    assert (result.runs_run, result.runs_resumed) == (2, 0)
+    # The redeploy cleared the cached rung's tiers, so it is measured again on this deploy.
+    assert resumed.ssm.script_runs()[:5] == [
+        "proxy",
+        "kv-offload-ab/ab1/off-r1/warmup@mc1",
+        "kv-offload-ab/ab1/off-r1@mc1",
+        "kv-offload-ab/ab1/off-r1@mc2",
+        "kv-offload-ab/ab1/off-r1@mc4",
+    ]
+    assert (
+        "kv-offload-ab/ab1/off-r1/pshare90_burst1.0_mc1.kv_ab.json" in resumed.s3.puts
+    )
+
+
+def test_redeploying_the_same_arm_run_rolls_a_fresh_engine(tmp_path: Path) -> None:
+    task = _isolated_task(tmp_path)
+    failed = _Ab(task, failing=("off-r1/pshare90_burst1.0_mc2",))
+    with pytest.raises(InvalidCellError):
+        failed.drive()
+    resumed = _Ab(task)
+
+    resumed.drive()
+
+    # Kubernetes rolls a Deployment out only when its pod template changes, so the
+    # resume's redeploy of the same arm and knobs must still apply a different template,
+    # or the engine keeps the failed attempt's warm cache tiers.
+    first, again = (
+        yaml.safe_load(ab.kubectl.applied[0])["spec"]["template"]
+        for ab in (failed, resumed)
+    )
+    assert first != again
+
+
+def _drive_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, s3: _S3
+) -> tuple[list[str], list[str]]:
+    """Drive the flow over a one-run-per-arm workload, returning its pointers and the
+    metrics URLs it scraped."""
+    workload = tmp_path / "kv-ab.yaml"
+    agent = (
+        _REPO / "bench" / "configs" / "kv-cache-extension-ab.agent.yaml"
+    ).read_text(encoding="utf-8")
+    workload.write_text(agent.replace("runs_per_arm: 3", "runs_per_arm: 1"))
+    task = _isolated_task(tmp_path)
+    kubectl = _Kubectl()
+    metrics = _Metrics(kubectl)
+    metrics_urls: list[str] = []
+
+    def _fetch(url: str) -> str:
+        metrics_urls.append(url)
+        return metrics()
+
+    monkeypatch.setattr(kv_ab_module, "build_kubectl", lambda: kubectl)
+    monkeypatch.setattr(kv_ab_module, "build_ssm_client", lambda _region: s3.ssm)
+    monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: s3)
+    monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
+    monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
+
+    pointers = kv_ab_flow(
+        run_id="ab1",
+        instance_id="i-1",
+        region="us-east-1",
+        bucket="bench",
+        image_ref="bench:sha",
+        model_yaml=_REPO / "model.yaml",
+        kv_ab_config=workload,
+        vllm_manifest=_REPO / "k8s" / "vllm-gpu.yaml",
+        metrics_url="http://engine:8000/metrics",
+    )
+    return pointers, metrics_urls
+
+
+# The six rungs' labels keys a one-run-per-arm A/B writes over the agent workload's ladder.
+_LABELS_KEYS = [
+    f"kv-offload-ab/ab1/{run}/pshare90_burst1.0_mc{cap}.kv_ab.json"
+    for run in ("off-r1", "on-r1")
+    for cap in (1, 2, 4)
+]
+
+
+def test_the_flow_drives_its_workload_renders_it_and_returns_the_labels_pointers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = _S3()
+
+    pointers, metrics_urls = _drive_flow(tmp_path, monkeypatch, s3)
+
+    assert pointers == [f"s3://bench/{key}" for key in _LABELS_KEYS]
+    # The render joins each rung's labels to the raw result the bench host stored.
+    assert s3.raw_reads == [
+        key.removesuffix(".kv_ab.json") + ".json" for key in _LABELS_KEYS
+    ]
+    assert set(metrics_urls) == {"http://engine:8000/metrics"}
+    # The terminal render folds the records and uploads the chart under the run's charts.
+    assert list(s3.charts) == ["kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
+
+
+def test_a_failed_render_fails_the_flow_with_every_rungs_labels_already_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = _S3(chart_error=OSError("chart upload failed"))
+
+    with pytest.raises(OSError, match="chart upload failed"):
+        _drive_flow(tmp_path, monkeypatch, s3)
+
+    # The labels are in S3, so a re-run resumes every run and re-renders.
+    assert sorted(s3.puts) == sorted(_LABELS_KEYS)
+
+
+def test_the_flow_publishes_the_ab_config_it_ran_on_the_run_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: dict[str, str] = {}
+
+    def _publish(**kwargs: Any) -> None:
+        published[kwargs["key"]] = kwargs["markdown"]
+
+    monkeypatch.setattr(kv_ab_module, "create_markdown_artifact", _publish)
+    monkeypatch.setenv("ORCH_IMAGE_REF", "repo/orchestration:qa")
+
+    _drive_flow(tmp_path, monkeypatch, _S3())
+
+    # The A/B config and the model are shown verbatim, beside the image refs the run
+    # executed, so the run page names the engine and workload both arms ran on.
+    config = published["kv-ab-config"]
+    workload = (tmp_path / "kv-ab.yaml").read_text(encoding="utf-8")
+    assert "## kv-ab config (ab1)" in config
+    assert f"### kv-ab.yaml\n\n```yaml\n{workload.rstrip()}\n```" in config
+    assert "kv_cache_memory_bytes" in config
+    assert "- bench_image: `bench:sha`" in config
+    assert "- orch_image: `repo/orchestration:qa`" in config
+    assert "${KV_TRANSFER_CONFIG}" in config
+
+
+def test_a_workload_the_loader_refuses_still_shows_its_config_on_the_run_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: dict[str, str] = {}
+
+    def _publish(**kwargs: Any) -> None:
+        published[kwargs["key"]] = kwargs["markdown"]
+
+    monkeypatch.setattr(kv_ab_module, "create_markdown_artifact", _publish)
+    workload = tmp_path / "kv-ab.yaml"
+    workload.write_text("runs_per_arm: 0\n", encoding="utf-8")
+
+    with pytest.raises(KvAbConfigError):
+        kv_ab_flow(
+            run_id="ab1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench",
+            image_ref="bench:sha",
+            model_yaml=_REPO / "model.yaml",
+            kv_ab_config=workload,
+            vllm_manifest=_REPO / "k8s" / "vllm-gpu.yaml",
+        )
+
+    # The run page shows the refused workload, so the refusal reads against it.
+    assert "runs_per_arm: 0" in published["kv-ab-config"]

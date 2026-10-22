@@ -1,39 +1,45 @@
-"""The resume address of a cell: ``digest:point-slug:cell-name``.
+"""The address of a cell: ``run-id:digest:point-slug:cell-name``.
 
 ADR-0012: Prefect skips a cell when a ``cache_key_fn`` returns a key it has already
-seen — the key is ``digest:point-slug:cell-name``, so config identity (the deep
-digest), engine coordinates (the point slug), and the client-load rung (the cell name)
-together address exactly one measurement. The pure :func:`build_cache_key` holds the
-one format; :func:`get_cell_cache_key` is the Prefect-shaped adapter that reads the three
-parts off a task's call parameters, kept import-light so no Prefect type leaks in.
+seen — the key is ``run-id:digest:point-slug:cell-name``, so the run (a new run id
+re-measures, the same one resumes), config identity (the deep digest), engine
+coordinates (the point slug), and the client-load rung (the cell name) together address
+exactly one measurement. The pure :func:`build_cache_key` holds the one format;
+:func:`get_cell_cache_key` is the Prefect-shaped adapter that reads the four parts off a
+task's call parameters, kept import-light so no Prefect type leaks in.
 """
 
 from collections.abc import Mapping
 from typing import Any
 
-# The parameter names the sweep task is called with that name a cell's resume
-# address; the adapter reads exactly these three off the call.
-_KEY_PARTS = ("digest", "point_slug", "cell_name")
+# The parameter names the sweep task is called with that name a cell's address; the
+# adapter reads exactly these four off the call.
+_KEY_PARTS = ("run_id", "digest", "point_slug", "cell_name")
 
 
 class CacheKeyError(Exception):
-    """A cache key that cannot address a cell — a blank component."""
+    """A cache key that cannot address a cell — a blank or ``:``-holding part."""
 
 
-def build_cache_key(*, digest: str, point_slug: str, cell_name: str) -> str:
-    """Join the three parts into a cell's resume key, rejecting a blank component.
+def build_cache_key(
+    *, run_id: str, digest: str, point_slug: str, cell_name: str
+) -> str:
+    """Join the four parts into a cell's cache key, rejecting a bad part.
 
+    :param run_id: the cell's run id, a knob-sweep point's ``<run>/<point-slug>`` or an
+        A/B's ``kv-offload-ab/<run>/<arm>-r<n>`` (a new one re-measures).
     :param digest: the deep config digest (config identity).
     :param point_slug: the engine-knob point slug, e.g. ``mns64_kvfp8_pcon``.
-    :param cell_name: the client-load cell name, e.g. ``pshare50_mc64``.
-    :return: ``digest:point-slug:cell-name``.
-    :raise CacheKeyError: when any part is blank — a key with an empty component
+    :param cell_name: the client-load cell name, e.g. ``pshare50_burst1.0_mc64.json``.
+    :return: ``run-id:digest:point-slug:cell-name``.
+    :raise CacheKeyError: when any part is blank or holds the ``:`` separator — either
         would collide cells that must resume independently.
     """
+    _require("run_id", run_id)
     _require("digest", digest)
     _require("point_slug", point_slug)
     _require("cell_name", cell_name)
-    return f"{digest}:{point_slug}:{cell_name}"
+    return f"{run_id}:{digest}:{point_slug}:{cell_name}"
 
 
 def get_cell_cache_key(_context: object, parameters: Mapping[str, Any]) -> str:
@@ -44,9 +50,9 @@ def get_cell_cache_key(_context: object, parameters: Mapping[str, Any]) -> str:
     of the parameters — so it is named ``_context`` to mark it intentionally unread.
 
     :param _context: the Prefect task run context, required by the contract, unused.
-    :param parameters: the task's call parameters, carrying ``digest``,
+    :param parameters: the task's call parameters, carrying ``run_id``, ``digest``,
         ``point_slug``, and ``cell_name``.
-    :return: the cell's resume key.
+    :return: the cell's cache key.
     :raise CacheKeyError: when a key part is absent or blank.
     """
     missing = [part for part in _KEY_PARTS if part not in parameters]
@@ -55,6 +61,7 @@ def get_cell_cache_key(_context: object, parameters: Mapping[str, Any]) -> str:
             f"cache key parameters missing {', '.join(missing)}: cannot address a cell"
         )
     return build_cache_key(
+        run_id=parameters["run_id"],
         digest=parameters["digest"],
         point_slug=parameters["point_slug"],
         cell_name=parameters["cell_name"],
@@ -62,6 +69,11 @@ def get_cell_cache_key(_context: object, parameters: Mapping[str, Any]) -> str:
 
 
 def _require(name: str, value: str) -> None:
-    """Reject a blank cache-key component."""
+    """Reject a blank cache-key component, or one holding the ``:`` separator."""
     if not isinstance(value, str) or not value.strip():
         raise CacheKeyError(f"cache key {name} is blank: cannot address a cell")
+    if ":" in value:
+        raise CacheKeyError(
+            f"cache key {name} {value!r} holds ':', the key separator: "
+            "cannot address a cell unambiguously"
+        )

@@ -44,6 +44,16 @@ run "exposure_invariants" {
     error_message = "Must be an ALB: only the application load balancer terminates mutual TLS."
   }
 
+  # idle_timeout bounds a no-byte window. Under a saturated top rung a request sits
+  # queued in vLLM with no response byte while it waits for a decode slot, and that
+  # pre-first-token wait is the only zero-byte window far longer than the ALB's 60s
+  # default. The default severs it and the bench client reads a transport drop instead
+  # of a slow measurement; 600s covers the deepest rung's queue wait with headroom.
+  assert {
+    condition     = aws_lb.bench_endpoint.idle_timeout == 600
+    error_message = "ALB idle timeout must be 600s so a queued sweep request is measured, not severed at the 60s default."
+  }
+
   # The HTTPS listener terminates mutual TLS in verify mode against a trust store.
   assert {
     condition     = aws_lb_listener.https.port == 443

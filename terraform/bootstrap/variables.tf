@@ -1,6 +1,6 @@
 # Inputs for the state-bootstrap stack.
 variable "region" {
-  description = "AWS region hosting the Terraform state bucket."
+  description = "AWS region hosting the Terraform state bucket and the stacks the bootstrap roles reach (the sweep-dispatch role's cluster ARN and DescribeInstances region condition)."
   type        = string
   default     = "eu-west-1"
 }
@@ -51,4 +51,22 @@ variable "orchestration_image_push_role_name" {
   description = "Name of the IAM role GitHub Actions assumes via OIDC to push the orchestration image."
   type        = string
   default     = "slipstream-orchestration-image-push"
+}
+
+variable "sweep_dispatch_role_name" {
+  description = "Name of the IAM role the flow-dispatch GitHub Actions workflow (behind sweep-dispatch and kv-ab-dispatch) assumes via OIDC to reach the cluster and trigger the knob sweep or the KV cache A/B."
+  type        = string
+  default     = "slipstream-sweep-dispatch"
+}
+
+variable "cluster_name" {
+  description = "Name of the EKS cluster the sweep-dispatch role may describe, also published as the cluster_name output gh-vars sets as EKS_CLUSTER_NAME. Must match the eks stack's cluster_name (both default to slipstream); the eks plan fails if they differ."
+  type        = string
+  default     = "slipstream"
+}
+
+variable "prefect_namespace" {
+  description = "Namespace the Prefect server runs in, which the flow-dispatch workflow port-forwards into. Must match the eks stack's prefect_namespace local (prefect)."
+  type        = string
+  default     = "prefect"
 }

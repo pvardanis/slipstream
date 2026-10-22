@@ -1,10 +1,10 @@
 """A fake S3 serving a knob-sweep run's cell objects, each record keyed off its basename.
 
-Shared by the render tests and the knob-sweep flow test: ``materialize_run`` and
-``point_is_complete`` download a run's cells by S3 key, so a fake that writes a valid,
-SLO-passing cell record for every key — its prefix_share and max_concurrency read back off
-the object's ``pshare{N}_burst{b}_mc{cap}`` basename — lets both fold a materialized run into
-the grid's own points with no real S3. The keys read are recorded so a test asserts which
+Shared by the render tests and the knob-sweep flow test: ``materialize_run`` downloads a
+run's cells by S3 key, so a fake that writes a valid, SLO-passing cell record for every key
+— its prefix_share and max_concurrency read back off the object's
+``pshare{N}_burst{b}_mc{cap}`` basename — lets both fold a materialized run into the grid's
+own points with no real S3. The keys read are recorded so a test asserts which
 cells were materialized.
 """
 
@@ -45,6 +45,9 @@ class ServingCellS3:
             "max_concurrency": int(match["cap"]),
             "request_goodput": 1.0,
             "request_throughput": 1.0,
+            "p95_ttft_ms": 850.0,
+            "p95_tpot_ms": 42.0,
+            "output_throughput": 1234.5,
             "errors": [""],
         }
         Path(dest).write_text(json.dumps(record), encoding="utf-8")
