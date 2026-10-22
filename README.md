@@ -17,9 +17,10 @@
 A self-hosted LLM inference platform on AWS EKS. Today it serves an AWQ-quantized open
 model with vLLM on a Karpenter-provisioned `g5` GPU node and benchmarks it from outside
 the cluster. An unattended two-tier knob sweep (engine knobs × client concurrency)
-finds each configuration's sustained concurrency ceiling at an SLO. `just stack-up` /
-`just stack-down` conjure and destroy the whole rig. Like the low-drag wake it is named
-after, every layer exists to move more tokens per dollar.
+finds each configuration's sustained concurrency ceiling at an SLO, and a KV cache A/B
+measures what offloading KV cache to a CPU tier (LMCache) adds on top of the GPU prefix
+cache. `just stack-up` / `just stack-down` conjure and destroy the whole rig. Like the
+low-drag wake it is named after, every layer exists to move more tokens per dollar.
 
 The build spec is [`docs/spec.md`](docs/spec.md); decisions are recorded in
 [`docs/adr/`](docs/adr/) and terms in [`CONTEXT.md`](CONTEXT.md).
@@ -38,7 +39,7 @@ flowchart TB
     subgraph gha[GitHub Actions]
         ci[ci.yml<br/>lint, tests, no-push builds]
         img[bench-image /<br/>orchestration-image]
-        disp[sweep-dispatch]
+        disp[sweep-dispatch /<br/>kv-ab-dispatch]
     end
 
     subgraph aws[AWS]
@@ -46,7 +47,7 @@ flowchart TB
         ecr@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ecr.svg", label: "ECR", pos: "b", w: 48, h: 48, constraint: "on" }
         subgraph eks[EKS]
             ekslogo@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/eks.svg", label: "", pos: "b", w: 32, h: 32, constraint: "on" }
-            vllm[vLLM on g5<br/>Karpenter]
+            vllm[vLLM on g5<br/>Karpenter,<br/>optional LMCache CPU tier]
             ps@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/prefect/prefect.svg", label: "Prefect server", pos: "b", w: 48, h: 48, constraint: "on" }
             pw[Prefect worker]
         end
@@ -62,12 +63,12 @@ flowchart TB
     img -- OIDC push --> ecr
     disp -- OIDC + port-forward:<br/>register + run --> ps
     ps --> pw
-    pw -- redeploy per point --> vllm
+    pw -- redeploy per point<br/>or arm run --> vllm
     pw -- SSM: one docker run per cell --> host
     ecr -. image .-> host & pw
     host -- load --> alb --> vllm
     host -- result JSON --> s3
-    pw -- "charts, Prefect<br/>results + cache keys" --> s3
+    pw -- "charts, A/B records,<br/>Prefect results + cache keys" --> s3
 ```
 
 The CI/CD pipeline and the benchmark data path are detailed in
@@ -140,6 +141,7 @@ hence the order:
 ```sh
 just stack-up             # cluster + Prefect + GPU pool + vLLM + bench endpoint
 # trigger a knob sweep: Actions → sweep-dispatch → Run workflow (on main)
+# or a KV cache A/B:    Actions → kv-ab-dispatch → Run workflow (on main)
 just bench-results-sync   # pull results into bench/results/ — before stack-down
 just stack-down           # tear down, then zero-leak sweep (spend → 0)
 ```
@@ -199,9 +201,11 @@ from that:
 - **A duty cycle, not 24/7.** The GPU budget is ~$100–250/mo, while the cheapest 24 GB
   card run continuously is ~$365/mo, so `just stack-down` returns spend to zero between
   sweeps.
-- **One sample per cell.** Each cell is measured once; re-sampling is a deliberate new
-  `run_id`, never an average taken by default
-  ([ADR-0012](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)).
+- **One sample per cell.** Each knob-sweep cell is measured once; re-sampling is a
+  deliberate new `run_id`, never an average taken by default
+  ([ADR-0012](docs/adr/0012-sweep-resumability-and-orchestrator-choice.md)). The KV cache
+  A/B is the exception: it compares two arms, so each arm is run `runs_per_arm` times,
+  interleaved, and reported as median and range.
 - **No apply/destroy infra tests per push.** CI runs policy checks and offline
   `terraform test` against mocked providers; the real-spend check, `just cloud-verify`,
   runs by hand ([ADR-0002](docs/adr/0002-infrastructure-testing-strategy.md)).
