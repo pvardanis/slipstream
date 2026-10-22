@@ -3,12 +3,13 @@
 ## Run
 
 - **run_id:** `20261022T131457Z` (Prefect flow run `happy-tench`, `b61fa378-6ab4-4b65-bff6-aa5b22dda38f`, Completed)
+- **Arms:** **on** is vLLM with KV cache offload to LMCache's CPU tier enabled (`--kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'`, pod memory 12Gi for the tier). **off** is vLLM with no KV connector (8Gi). Both keep vLLM's GPU prefix cache. "Offload" below always means KV cache offload to LMCache.
 - **SLO:** `ttft:1000`, `tpot:50` (ms); goodput floor `0.95`
 - **runs_per_arm:** 3
 - **Rungs (`max_concurrency`):** 1, 2, 4 (warmup at 1, unrecorded)
 - **Workload:** agent workload, `prefix_share` 90%, `num_prefixes` 8, `total_len` 3584, `output_len` 128, `num_prompts` 128, `align_blocks` 256, `request_rate` inf. Each prompt carries a 3072-token shared prefix; the 8 prefixes make a 24,576-token working set.
 - **Engine point:** `max_num_seqs` 64, `kv_cache_dtype` fp8
-- **GPU KV pool cap:** `kv_cache_memory_bytes` 1207959552 (16,384 tokens); the working set is 1.5× the pool
+- **GPU KV pool cap:** `kv_cache_memory_bytes` 1207959552 (16,384 tokens); the working set is 1.5× the pool. The pool is capped because the g5.xlarge's host RAM (14.4 GiB allocatable) cannot hold a CPU tier larger than the uncapped GPU pool (185,696 tokens). The LMCache tier here is about 58k tokens. With a tier smaller than the pool, offload adds no reuse, because reachable reuse is max(GPU, CPU), not their sum. A larger tier needs a g5.2xlarge (32 GiB), and the G-instance vCPU quota increase it needs has not been approved yet. Capping the pool below the tier measures the same mechanism now, at a smaller scale (ADR-0023).
 - **Images:**
   - vLLM: `vllm/vllm-openai:v0.29.0`
   - bench: `<account>.dkr.ecr.eu-west-1.amazonaws.com/slipstream/bench-client:qwen3-8b-awq-main`
@@ -16,7 +17,7 @@
 
 ## Verdict
 
-**Offload wins.** It wins at all three rungs (1, 2, 4): p95 TTFT and output throughput separate in on's favour at every rung, and goodput fraction separates in on's favour at rungs 2 and 4. This holds for the agent workload above: 90% prefix share, with 8 prefixes whose working set exceeds the capped GPU pool.
+**Offload wins:** enabling KV cache offload to LMCache's CPU tier beats the GPU prefix cache alone at all three rungs (1, 2, 4): p95 TTFT and output throughput separate in on's favour at every rung, and goodput fraction separates in on's favour at rungs 2 and 4. This holds for the agent workload above: 90% prefix share, with 8 prefixes whose working set exceeds the capped GPU pool.
 
 ## Evidence
 
@@ -92,7 +93,7 @@ Both median ceilings are set. Both arms run on the same node at the same $/hr, s
 - on at rung 4: 207.1 tok/s
 - on/off throughput ratio: **3.70×**
 
-So at this SLO, offload serves output tokens at **about 0.27× off's cost per token**, roughly 73% cheaper.
+So at this SLO, LMCache offload serves output tokens at **about 0.27× off's cost per token**, roughly 73% cheaper, on the capped 16,384-token GPU pool. On the uncapped g5.xlarge, offload adds no reuse (see Caveats), so this ratio is not a gain the uncapped rig would see.
 
 On's ceiling is the top rung, so its true ceiling may be higher. That makes 3.70× a lower bound on the gain this ladder can show.
 
@@ -112,6 +113,6 @@ The chart has three panels:
 
 - **One GPU (A10G).** The 3.70× cost ratio holds on this hardware and node price only.
 - **The run's own SLO and workload.** The SLO (TTFT 1000 ms, TPOT 50 ms) and the workload (90% prefix share, 8 prefixes, 3584/128 tokens) are this run's own. A lower prefix share, or a working set that fits the GPU pool, would shrink the CPU tier's share and the gain with it.
-- **Capped GPU pool.** The run capped the GPU KV pool at 1,207,959,552 bytes (16,384 tokens), and the flow refuses a pool that holds the working set. The win therefore describes a working set larger than the GPU pool (1.5× here), not an uncapped engine.
+- **Capped GPU pool.** The run capped the GPU KV pool at 1,207,959,552 bytes (16,384 tokens). The CPU tier the g5.xlarge's RAM allows (~58k tokens) is smaller than the uncapped pool (185,696 tokens), and the g5.2xlarge quota that would give a bigger tier is still pending approval. The flow refuses a pool that holds the working set. The win therefore describes a working set larger than the GPU pool (1.5× here), not an uncapped engine. On today's uncapped g5.xlarge, offload adds no reuse. The same gain at full pool size needs the g5.2xlarge.
 - **The ladder bounds the ceilings.** The rungs measured were 1, 2 and 4. On's ceiling sits at the top rung and may be higher. Off's ceiling is 1 because rung 2 missed the floor; the ladder has no rung between 1 and 2.
 - **Significance bound.** With 3 runs per arm, each separation's one-sided permutation p is 1/20 = 0.05. That bound is the run's limit. The effect sizes are large: TTFT is 3–5× lower, and the ranges do not come close to overlapping.
