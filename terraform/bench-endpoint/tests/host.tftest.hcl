@@ -298,12 +298,12 @@ run "bench_host_invariants" {
     error_message = "Results bucket must be force-destroyed so bench-endpoint-down can remove it."
   }
 
-  # The sweep-dispatch workflow finds the results bucket by listing this prefix
+  # The flow-dispatch workflow finds the results bucket by listing this prefix
   # (<cluster_name>-bench-endpoint-results-), since the suffix changes whenever the
   # bucket is recreated. Renaming it breaks the dispatch's bucket lookup.
   assert {
     condition     = aws_s3_bucket.results.bucket_prefix == "slipstream-bench-endpoint-results-"
-    error_message = "Results bucket prefix must be <cluster_name>-bench-endpoint-results-, the prefix sweep-dispatch lists by."
+    error_message = "Results bucket prefix must be <cluster_name>-bench-endpoint-results-, the prefix flow-dispatch lists by."
   }
 }
 

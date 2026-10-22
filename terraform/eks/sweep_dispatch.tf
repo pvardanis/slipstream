@@ -1,10 +1,11 @@
-# Kubernetes access for the sweep-dispatch workflow (#180): the CI trigger that fires a
-# knob-sweep run from the GitHub UI (ADR-0015 'CI later' arm). The workflow assumes the
-# bootstrap stack's sweep-dispatch role over OIDC, then reaches the in-cluster Prefect API
-# over `kubectl port-forward svc/prefect-server` (no public endpoint, ADR-0015). An EKS
-# access entry maps that role to a Kubernetes group, and a namespaced Role grants the group
-# only what the port-forward needs in the prefect namespace — no AWS-managed access policy,
-# no cluster-wide grant.
+# Kubernetes access for the flow-dispatch workflow (#180) behind sweep-dispatch and
+# kv-ab-dispatch: the CI triggers that fire a knob-sweep or KV cache A/B run from the
+# GitHub UI (ADR-0015 'CI later' arm). The workflow assumes the bootstrap stack's
+# sweep-dispatch role over OIDC, then reaches the in-cluster Prefect API over `kubectl
+# port-forward svc/prefect-server` (no public endpoint, ADR-0015). An EKS access entry
+# maps that role to a Kubernetes group, and a namespaced Role grants the group only what
+# the port-forward needs in the prefect namespace — no AWS-managed access policy, no
+# cluster-wide grant.
 
 locals {
   sweep_dispatch_group = "sweep-dispatch"

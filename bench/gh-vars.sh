@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set the GitHub repository variables the image and sweep-dispatch workflows read,
+# Set the GitHub repository variables the image and flow-dispatch workflows read,
 # from the bootstrap stack's outputs, so they can be set before any cluster exists.
 # Every output is read and checked before any variable is set, so a failed, empty or
 # malformed one aborts with nothing set; a gh failure mid-update stops there and says
