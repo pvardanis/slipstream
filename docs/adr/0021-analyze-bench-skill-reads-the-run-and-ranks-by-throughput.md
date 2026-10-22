@@ -146,7 +146,7 @@ the skill had when they were decided.
 
 The A/B's results ticket (#328) asks the report for more than a verdict: overlapping ranges
 labelled inconclusive, the hit rates with their ranges, the CPU tier's host-memory cost next
-to the win, and a recommendation on turning offload on by default. `analyze-kv-ab` now
+to the win, and a recommendation on turning offload on by default. `analyze-kv-ab`
 writes all four. Every judged and reported metric whose off and on ranges overlap at a rung
 is listed as inconclusive there, and the recommendation follows from the verdict and the
 pool cap: a win on a capped pool does not carry to the uncapped default deployment, so the

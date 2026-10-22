@@ -62,11 +62,11 @@ A missing `kv-ab-config` or `kv-ab-rung-spreads` stops the skill: say which. A m
 
 The goodput floor is `0.95`, a source constant (`packages/report/src/slipstream_bench/report/aggregation.py:28`).
 
-Done when you hold the SLO, the workload fields above, and the parsed spreads table.
+Done when you hold the SLO, the workload fields above, the parsed spreads table, and the tier size and both pod memory limits (or know them to be unknown).
 
 ## Step 3 — Judge each rung
 
-For every `max_concurrency` both arms measured, compare on against off on `goodput_fraction`, `p95_ttft_ms`, and `output_throughput`. A metric **separates** at a rung when the two arms' ranges do not overlap; the direction says which arm it favours (higher goodput and throughput, lower TTFT). A metric whose ranges overlap at a rung is **inconclusive** there; label it so, for `p95_tpot_ms` too, never as a win or a loss.
+For every `max_concurrency` both arms measured, compare on against off on `goodput_fraction`, `p95_ttft_ms`, and `output_throughput`. A metric **separates** at a rung when the two arms' ranges do not overlap; the direction says which arm it favours (higher goodput and throughput, lower TTFT). A metric whose ranges overlap at a rung is **inconclusive** there; label it so, for `p95_tpot_ms` too, never as a win or a loss. Where `p95_tpot_ms` separates, say so beside the table; it informs the SLO attribution but not the verdict.
 
 Separation is the strongest claim the run supports. With `n` runs per arm, complete separation in the direction you predicted has a one-sided permutation p of `1 / C(2n, n)`: `n=2` → 1/6, `n=3` → 1/20, `n=4` → 1/70. With `n=1` there are no ranges; every comparison is directional only.
 
@@ -126,6 +126,6 @@ Write `reports/kv-cache-ab-<run_id>/RECOMMENDATION.md` with these sections, in o
 5. **Ceilings and cost** — the ceilings table, the cost comparison from Step 3, and the host-memory cost beside it.
 6. **Recommendation** — whether to turn offload on by default, with the reasoning from Step 3.
 7. **Chart** — the downloaded PNG embedded by relative path (`![KV cache A/B by max_concurrency](kv-ab-by-max-concurrency.png)`) with one line on what it shows, or the reason it is absent.
-8. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, pending the g5.2xlarge quota (Step 2). The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on the uncapped g5.xlarge, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
+8. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; when `kv_cache_memory_bytes` is set, the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, pending the g5.2xlarge quota (Step 2). The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on the uncapped g5.xlarge, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
 
 Done when `RECOMMENDATION.md` has all eight sections, the verdict traces to named rungs and metrics, and `reports/kv-cache-ab-<run_id>/` holds exactly the chart it embeds, with no `.part` file left.
