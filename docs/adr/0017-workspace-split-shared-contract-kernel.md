@@ -174,4 +174,5 @@ member needs it, not before.
 `contract.kv_ab_record` builds a rung's labels (`build_kv_ab_labels`) and joins them to the
 rung's raw result (`build_kv_ab_record`). The worker writes only the labels, beside the raw
 result the bench host stored, so the result is stored once (ADR-0024). The worker's render
-joins the two and hands `report` the same record as before, so `report` reads it unchanged.
+joins the two and hands `report` the record `build_kv_ab_record` returns, with the labels'
+and the raw result's paths for `report`'s error messages.
