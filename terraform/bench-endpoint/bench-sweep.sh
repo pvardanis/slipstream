@@ -115,10 +115,10 @@ if [[ "${count}" -eq 0 ]]; then
   exit "${cell_rc}"
 fi
 
-echo "bench-cell: copying the result to s3://${RESULTS_BUCKET}/sweeps/${RUN_ID}/" >&2
+echo "bench-cell: copying the result to s3://${RESULTS_BUCKET}/${RUN_ID}/" >&2
 # Copy the cell's JSON, then surface the cell's exit code so the caller sees a stamp
 # failure after the salvageable result is safely uploaded.
-aws s3 cp "${results_dir}" "s3://${RESULTS_BUCKET}/sweeps/${RUN_ID}/" \
+aws s3 cp "${results_dir}" "s3://${RESULTS_BUCKET}/${RUN_ID}/" \
   --recursive --region "${REGION}"
 
 echo "bench-cell: done (${count} cell, exit ${cell_rc})" >&2

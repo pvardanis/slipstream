@@ -100,8 +100,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # The host writes the sweep result objects; the worker reads them back (aws s3 sync
-      # sweeps/…), so GetObject/ListBucket across the whole bucket.
+      # The host writes the cell result objects; the worker reads them back (under
+      # knob-sweep/… and kv-offload-ab/…), so GetObject/ListBucket across the whole bucket.
       {
         Sid      = "ResultsBucketObjects"
         Effect   = "Allow"
@@ -116,7 +116,7 @@ resource "aws_iam_role_policy" "prefect_worker" {
       },
       # The worker persists its own resume state with persist_result=True: the task result
       # under prefect/results and the cache-key records under prefect/cache-keys. PutObject
-      # is scoped to those two prefixes, never the host-owned sweep objects at the root.
+      # is scoped to those two prefixes, never the host-owned cell objects at the root.
       {
         Sid    = "PrefectStateObjects"
         Effect = "Allow"
@@ -126,23 +126,28 @@ resource "aws_iam_role_policy" "prefect_worker" {
           "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/prefect/cache-keys/*",
         ]
       },
-      # The terminal render task uploads each plot's PNG under sweeps/<run>/charts/ as the
-      # run's durable copy (ADR-0018). PutObject is scoped to exactly that charts prefix,
-      # never the sibling cell-result JSONs the host writes under sweeps/<run>/<point>/.
+      # The terminal render tasks upload each plot's PNG under knob-sweep/<run>/charts/ or
+      # kv-offload-ab/<run>/charts/ as the run's durable copy (ADR-0018). PutObject is
+      # scoped to exactly those charts prefixes, never the sibling cell-result JSONs the
+      # host writes beside them.
       {
-        Sid      = "ChartObjects"
-        Effect   = "Allow"
-        Action   = ["s3:PutObject"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/sweeps/*/charts/*"
+        Sid    = "ChartObjects"
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/knob-sweep/*/charts/*",
+          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/kv-offload-ab/*/charts/*",
+        ]
       },
-      # The kv-cache-extension-ab flow labels each rung's raw result with its arm, run, and
-      # prefix-cache hit rates and writes the record under kv-ab/<run>/ at the bucket root
-      # (#326). PutObject is scoped to that prefix, never the host's raw results under sweeps/.
+      # The kv-cache-extension-ab flow labels each rung with its arm, run, and prefix-cache
+      # window, written as a <cell>.kv_ab.json object beside the host's raw <cell>.json
+      # under kv-offload-ab/<run>/<arm>-r<n>/ (#326). PutObject is scoped to that suffix,
+      # never the host's raw results it sits beside.
       {
-        Sid      = "KvAbRecordObjects"
+        Sid      = "KvAbLabelObjects"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/kv-ab/*"
+        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/kv-offload-ab/*.kv_ab.json"
       },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;

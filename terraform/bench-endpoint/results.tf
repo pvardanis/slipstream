@@ -26,11 +26,11 @@ resource "aws_s3_bucket_public_access_block" "results" {
 
 # Opens the chart paths for anonymous read, so the render task's plot PNGs load as public
 # image artifacts in the Prefect UI (inline, zoomable, never expiring — ADR-0018 Amendment).
-# Scoped to sweeps/*/charts/*; the * spans "/", so it matches any charts/ path under
-# sweeps/ — the knob sweep's sweeps/<run>/charts/ and the kv-ab flow's
-# sweeps/kv-ab/<run>/charts/. The cell-result JSONs under sweeps/<run>/<point>/ and
-# sweeps/kv-ab/<run>/<arm>-r<n>/ hold the measurements and stay private only while no run
-# id has a charts segment. depends_on the public access block so block_public_policy is
+# Scoped to knob-sweep/*/charts/* and kv-offload-ab/*/charts/*; the * spans "/", so each
+# matches any charts/ path under its experiment's prefix — the knob sweep's
+# knob-sweep/<run>/charts/ and the kv-ab flow's kv-offload-ab/<run>/charts/. The
+# cell-result JSONs under knob-sweep/<run>/<point>/ and kv-offload-ab/<run>/<arm>-r<n>/
+# hold the measurements and stay private only while no run id has a charts segment. depends_on the public access block so block_public_policy is
 # already off when PutBucketPolicy runs.
 resource "aws_s3_bucket_policy" "results_public_charts" {
   bucket = aws_s3_bucket.results.id
@@ -43,7 +43,10 @@ resource "aws_s3_bucket_policy" "results_public_charts" {
         Effect    = "Allow"
         Principal = "*"
         Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.results.arn}/sweeps/*/charts/*"
+        Resource = [
+          "${aws_s3_bucket.results.arn}/knob-sweep/*/charts/*",
+          "${aws_s3_bucket.results.arn}/kv-offload-ab/*/charts/*",
+        ]
       },
     ]
   })
