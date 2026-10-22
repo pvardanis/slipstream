@@ -54,7 +54,7 @@ variable "orchestration_image_push_role_name" {
 }
 
 variable "sweep_dispatch_role_name" {
-  description = "Name of the IAM role the sweep-dispatch GitHub Actions workflow assumes via OIDC to reach the cluster and trigger the knob sweep."
+  description = "Name of the IAM role the flow-dispatch GitHub Actions workflow (behind sweep-dispatch and kv-ab-dispatch) assumes via OIDC to reach the cluster and trigger the knob sweep or the KV cache A/B."
   type        = string
   default     = "slipstream-sweep-dispatch"
 }
@@ -66,7 +66,7 @@ variable "cluster_name" {
 }
 
 variable "prefect_namespace" {
-  description = "Namespace the Prefect server runs in, which the sweep-dispatch workflow port-forwards into. Must match the eks stack's prefect_namespace local (prefect)."
+  description = "Namespace the Prefect server runs in, which the flow-dispatch workflow port-forwards into. Must match the eks stack's prefect_namespace local (prefect)."
   type        = string
   default     = "prefect"
 }

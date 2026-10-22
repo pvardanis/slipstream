@@ -1,5 +1,5 @@
 # GitHub OIDC trust and the IAM roles GitHub Actions workflows assume: the image-push
-# roles (see ecr.tf) and the sweep-dispatch role the CI sweep trigger uses to reach the
+# roles (see ecr.tf) and the sweep-dispatch role the CI flow triggers use to reach the
 # cluster. They live in the bootstrap stack because they are durable, account-wide
 # identity that must exist before any workflow runs and must outlive
 # `just cluster-down`. No long-lived AWS keys: each workflow exchanges its short-lived
@@ -104,7 +104,7 @@ locals {
     ]
   }
 
-  # The sweep-dispatch workflow's AWS reads, made before it port-forwards to the Prefect
+  # The flow-dispatch workflow's AWS reads, made before it port-forwards to the Prefect
   # server: DescribeCluster backs `aws eks update-kubeconfig` and is scoped to this one
   # cluster's ARN; DescribeInstances resolves the bench host from its tags. Describe
   # actions take no resource scope, so that grant is on "*", narrowed to the stack's
