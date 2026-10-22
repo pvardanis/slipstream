@@ -21,7 +21,6 @@ filter its point sweeps group under.
 """
 
 import logging
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -49,6 +48,7 @@ from slipstream_bench.orchestration.cluster import (
 from slipstream_bench.orchestration.config_artifact import (
     ImageRefs,
     publish_config_artifact,
+    read_orch_image_ref,
 )
 from slipstream_bench.orchestration.digest import (
     ServingConfig,
@@ -238,20 +238,15 @@ def knob_sweep_flow(
     # executed without the files leaving the image. The orchestration image bakes its own ref
     # as ORCH_IMAGE_REF; a local or test build bakes none, so it reads as "unknown" — logged
     # so a cluster run whose env should carry the ref but doesn't leaves a trace.
-    orch_ref = os.environ.get("ORCH_IMAGE_REF")
-    if not orch_ref:
-        logger.info(
-            'ORCH_IMAGE_REF unset; recording the orchestration image as "unknown"'
-        )
-        orch_ref = "unknown"
     publish_config_artifact(
+        flow="knob-sweep",
         run_id=run_id,
         images=ImageRefs(
             bench=image_ref,
-            orch=orch_ref,
+            orch=read_orch_image_ref(logger),
         ),
         model_yaml=model_yaml,
-        sweep_grid=sweep_grid,
+        workload=sweep_grid,
         vllm_manifest=vllm_manifest,
         publish=create_markdown_artifact,
     )

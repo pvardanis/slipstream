@@ -11,11 +11,15 @@ from the Prefect UI, without re-uploading the files anywhere. The render is a pu
 of its inputs, covered here without a Prefect server.
 """
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from slipstream_bench.orchestration.config_artifact import (
     ImageRefs,
     publish_config_artifact,
+    read_orch_image_ref,
     render_config_artifact,
 )
 
@@ -56,11 +60,13 @@ _VLLM_ARGS_TEXT = """\
 
 def test_render_embeds_the_version_anchors_and_the_config_bodies() -> None:
     markdown = render_config_artifact(
+        flow="knob-sweep",
         run_id="e2e-smoke-5",
         bench_image_ref="repo/bench-client:qwen3-8b-awq-main",
         orch_image="repo/orchestration:abc123",
         model_yaml_text="model:\n  hfId: Qwen/Qwen3-8B\n",
-        grid_text="tier1:\n  max_num_seqs: [16]\n",
+        workload_name="sweep-grid.yaml",
+        workload_text="tier1:\n  max_num_seqs: [16]\n",
         vllm_image_ref="vllm/vllm-openai:v0.29.0",
         vllm_args_text=_VLLM_ARGS_TEXT,
     )
@@ -79,11 +85,13 @@ def test_render_embeds_the_version_anchors_and_the_config_bodies() -> None:
 
 def test_render_embeds_the_vllm_args_verbatim_with_the_placeholders_intact() -> None:
     markdown = render_config_artifact(
+        flow="knob-sweep",
         run_id="run1",
         bench_image_ref="repo/bench-client:tag",
         orch_image="repo/orchestration:tag",
         model_yaml_text="model: x\n",
-        grid_text="tier1: {}\n",
+        workload_name="sweep-grid.yaml",
+        workload_text="tier1: {}\n",
         vllm_image_ref="vllm/vllm-openai:v0.29.0",
         vllm_args_text=_VLLM_ARGS_TEXT,
     )
@@ -98,11 +106,13 @@ def test_render_embeds_the_vllm_args_verbatim_with_the_placeholders_intact() -> 
 
 def test_render_fences_the_three_config_bodies() -> None:
     markdown = render_config_artifact(
+        flow="knob-sweep",
         run_id="run1",
         bench_image_ref="repo:tag",
         orch_image="repo/orchestration:tag",
         model_yaml_text="model: x\n",
-        grid_text="tier1: {}\n",
+        workload_name="sweep-grid.yaml",
+        workload_text="tier1: {}\n",
         vllm_image_ref="vllm/vllm-openai:v0.29.0",
         vllm_args_text=_VLLM_ARGS_TEXT,
     )
@@ -113,11 +123,13 @@ def test_render_fences_the_three_config_bodies() -> None:
 
 def test_render_orders_the_header_bullets_before_the_fenced_bodies() -> None:
     markdown = render_config_artifact(
+        flow="knob-sweep",
         run_id="run1",
         bench_image_ref="repo/bench-client:tag",
         orch_image="repo/orchestration:tag",
         model_yaml_text="model: x\n",
-        grid_text="tier1: {}\n",
+        workload_name="sweep-grid.yaml",
+        workload_text="tier1: {}\n",
         vllm_image_ref="vllm/vllm-openai:v0.29.0",
         vllm_args_text=_VLLM_ARGS_TEXT,
     )
@@ -135,11 +147,13 @@ def test_render_orders_the_header_bullets_before_the_fenced_bodies() -> None:
 
 def test_render_strips_trailing_whitespace_inside_each_fence() -> None:
     markdown = render_config_artifact(
+        flow="knob-sweep",
         run_id="run1",
         bench_image_ref="repo:tag",
         orch_image="repo/orchestration:tag",
         model_yaml_text="model: x\n\n\n",
-        grid_text="tier1: {}\n",
+        workload_name="sweep-grid.yaml",
+        workload_text="tier1: {}\n",
         vllm_image_ref="vllm/vllm-openai:v0.29.0",
         vllm_args_text=_VLLM_ARGS_TEXT,
     )
@@ -169,12 +183,13 @@ def test_publish_reads_the_config_and_keys_the_artifact(tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     publish_config_artifact(
+        flow="knob-sweep",
         run_id="e2e-smoke-5",
         images=ImageRefs(
             bench="repo/bench-client:tag", orch="repo/orchestration:abc123"
         ),
         model_yaml=model_yaml,
-        sweep_grid=sweep_grid,
+        workload=sweep_grid,
         vllm_manifest=vllm_manifest,
         publish=lambda **kwargs: captured.update(kwargs),
     )
@@ -191,3 +206,76 @@ def test_publish_reads_the_config_and_keys_the_artifact(tmp_path: Path) -> None:
     assert "${MAX_NUM_SEQS}" in markdown
     assert "${PREFIX_CACHING_FLAG}" in markdown
     assert "repo/orchestration:abc123" in markdown
+
+
+def test_publish_keys_and_heads_the_artifact_by_flow_and_names_the_workload_file(
+    tmp_path: Path,
+) -> None:
+    model_yaml = tmp_path / "model.yaml"
+    workload = tmp_path / "kv-top.yaml"
+    vllm_manifest = tmp_path / "vllm-gpu.yaml"
+    model_yaml.write_text("model:\n  hfId: Qwen/Qwen3-8B\n", encoding="utf-8")
+    workload.write_text("runs_per_arm: 2\n", encoding="utf-8")
+    vllm_manifest.write_text(
+        "kind: Deployment\n"
+        "spec:\n  template:\n    spec:\n      containers:\n"
+        "        - name: vllm\n"
+        "          image: vllm/vllm-openai:v0.29.0\n"
+        "          args:\n"
+        "            - --kv-transfer-config\n"
+        "            - '${KV_TRANSFER_CONFIG}'\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    publish_config_artifact(
+        flow="kv-ab",
+        run_id="ab1",
+        images=ImageRefs(bench="repo/bench-client:tag", orch="repo/orchestration:qa"),
+        model_yaml=model_yaml,
+        workload=workload,
+        vllm_manifest=vllm_manifest,
+        publish=lambda **kwargs: captured.update(kwargs),
+    )
+
+    # Each flow keeps its own cross-run artifact history, and the workload section is
+    # titled with the file the run was given.
+    assert captured["key"] == "kv-ab-config"
+    markdown = captured["markdown"]
+    assert isinstance(markdown, str)
+    assert markdown.startswith("## kv-ab config (ab1)\n")
+    assert "### kv-top.yaml\n\n```yaml\nruns_per_arm: 2\n```" in markdown
+    assert "${KV_TRANSFER_CONFIG}" in markdown
+
+
+def test_read_orch_image_ref_returns_the_baked_ref_without_logging(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("ORCH_IMAGE_REF", "repo/orchestration:sha256-abc")
+
+    with caplog.at_level(logging.INFO):
+        ref = read_orch_image_ref(logging.getLogger("run"))
+
+    assert ref == "repo/orchestration:sha256-abc"
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize("baked", [None, ""])
+def test_read_orch_image_ref_logs_and_reads_unknown_when_no_ref_is_baked(
+    baked: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    if baked is None:
+        monkeypatch.delenv("ORCH_IMAGE_REF", raising=False)
+    else:
+        monkeypatch.setenv("ORCH_IMAGE_REF", baked)
+
+    with caplog.at_level(logging.INFO):
+        ref = read_orch_image_ref(logging.getLogger("run"))
+
+    # A build that baked no ref reads as "unknown", and says so on the run's log.
+    assert ref == "unknown"
+    assert [record.getMessage() for record in caplog.records] == [
+        'ORCH_IMAGE_REF unset; recording the orchestration image as "unknown"'
+    ]

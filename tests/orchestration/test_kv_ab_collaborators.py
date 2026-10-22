@@ -32,7 +32,10 @@ from slipstream_bench.orchestration.flows.kv_ab import (
     drive_kv_ab,
     kv_ab_flow,
 )
-from slipstream_bench.orchestration.kv_ab_config import load_kv_ab_config
+from slipstream_bench.orchestration.kv_ab_config import (
+    KvAbConfigError,
+    load_kv_ab_config,
+)
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
 from slipstream_bench.orchestration.tasks.kv_ab_cell import build_kv_ab_cell_task
 from slipstream_bench.orchestration.validity import InvalidCellError
@@ -454,3 +457,56 @@ def test_a_failed_render_fails_the_flow_with_every_record_already_written(
 
     # The records are in S3, so a re-run resumes every run and re-renders.
     assert sorted(s3.puts) == sorted(_RECORD_KEYS)
+
+
+def test_the_flow_publishes_the_ab_config_it_ran_on_the_run_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: dict[str, str] = {}
+
+    def _publish(**kwargs: Any) -> None:
+        published[kwargs["key"]] = kwargs["markdown"]
+
+    monkeypatch.setattr(kv_ab_module, "create_markdown_artifact", _publish)
+    monkeypatch.setenv("ORCH_IMAGE_REF", "repo/orchestration:qa")
+
+    _drive_flow(tmp_path, monkeypatch, _S3())
+
+    # The A/B config and the model are shown verbatim, beside the image refs the run
+    # executed, so the run page names the engine and workload both arms ran on.
+    config = published["kv-ab-config"]
+    workload = (tmp_path / "kv-ab.yaml").read_text(encoding="utf-8")
+    assert "## kv-ab config (ab1)" in config
+    assert f"### kv-ab.yaml\n\n```yaml\n{workload.rstrip()}\n```" in config
+    assert "kv_cache_memory_bytes" in config
+    assert "- bench_image: `bench:sha`" in config
+    assert "- orch_image: `repo/orchestration:qa`" in config
+    assert "${KV_TRANSFER_CONFIG}" in config
+
+
+def test_a_workload_the_loader_refuses_still_shows_its_config_on_the_run_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: dict[str, str] = {}
+
+    def _publish(**kwargs: Any) -> None:
+        published[kwargs["key"]] = kwargs["markdown"]
+
+    monkeypatch.setattr(kv_ab_module, "create_markdown_artifact", _publish)
+    workload = tmp_path / "kv-ab.yaml"
+    workload.write_text("runs_per_arm: 0\n", encoding="utf-8")
+
+    with pytest.raises(KvAbConfigError):
+        kv_ab_flow(
+            run_id="ab1",
+            instance_id="i-1",
+            region="us-east-1",
+            bucket="bench",
+            image_ref="bench:sha",
+            model_yaml=_REPO / "model.yaml",
+            kv_ab_config=workload,
+            vllm_manifest=_REPO / "k8s" / "vllm-gpu.yaml",
+        )
+
+    # The run page shows the refused workload, so the refusal reads against it.
+    assert "runs_per_arm: 0" in published["kv-ab-config"]
