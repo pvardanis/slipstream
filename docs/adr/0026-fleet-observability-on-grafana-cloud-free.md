@@ -113,7 +113,7 @@ attribute, `request_id` included.
   rate(all).
 - **Why not from histograms:** vLLM's histograms record each gate separately, so they
   cannot give the joint figure ADR-0009 and the bench reports use.
-- **Parity:** a spine test asserts the Collector's thresholds equal the bench configs'
+- **Parity:** a static check in CI asserts the Collector's thresholds equal the bench configs'
   `goodput` gates (`["ttft:1000", "tpot:50"]`), so live and offline cannot drift apart.
 
 ### Panels
