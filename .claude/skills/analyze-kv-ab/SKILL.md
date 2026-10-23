@@ -44,7 +44,12 @@ Expect four keys:
 
 - `kv-ab-config` — the images, `model.yaml`, the workload YAML, and the vLLM args. Read from the workload YAML: the SLO (`load.goodput`, e.g. `["ttft:1000", "tpot:50"]`), `runs_per_arm`, `max_concurrency`, `prefix_share` (a percentage), `load.num_prefixes`, `load.total_len`, `load.output_len`, and `engine` (`max_num_seqs`, `kv_cache_dtype`, `kv_cache_memory_bytes`). **This is the SLO and workload you report for; never ask for or infer them.**
 
-  **Why the GPU pool is capped.** When `engine.kv_cache_memory_bytes` is set in `kv-cache-extension-ab.yaml`, the run capped the GPU KV pool below the CPU tier on purpose (ADR-0023, "An eviction-sized workload on a capped GPU KV pool"). The g5.xlarge's host RAM cannot hold a CPU tier larger than the uncapped GPU pool. Without that, offload adds no reuse, because reachable reuse is max(GPU, CPU), not their sum. A larger tier needs the g5.2xlarge, which waits on a G-instance vCPU quota increase that has not been approved. Take the capped pool's token count from the YAML's comment on that key. When the key is absent, the pool was uncapped; say so, and drop the cap from the report.
+  **Why the GPU pool is capped.** When `engine.kv_cache_memory_bytes` is set in `kv-cache-extension-ab.yaml`, the run capped the GPU KV pool below the CPU tier on purpose (ADR-0023, "An eviction-sized workload on a capped GPU KV pool"). A tier smaller than the GPU pool adds no reuse, because reachable reuse is max(GPU, CPU), not their sum, so the cap stands in for a node whose host RAM holds a tier larger than the uncapped pool. Whether the run needed the cap depends on its node, so read the node and the account's quota rather than assume them:
+
+  - **Node:** `node.kubernetes.io/instance-type` in `git show <tag>:k8s/gpu-node-pool.yaml`, where `<tag>` is the orchestration image's tag (see "The CPU tier's host-memory cost" below). On the g5.xlarge, host RAM cannot hold a tier larger than the uncapped pool (ADR-0023); the g5.2xlarge can.
+  - **Quota:** the g5.2xlarge needs 8 vCPUs of the eu-west-1 `Running On-Demand G and VT instances` quota. Read its value today with `aws service-quotas get-service-quota --region eu-west-1 --service-code ec2 --quota-code L-DB2E81BA --query Quota.Value`. Below 8, say the larger node is not available to this account; at 8 or more, say it is and that the A/B can run uncapped on it. If the call fails, say the quota is unknown.
+
+  Take the capped pool's token count from the YAML's comment on that key. When the key is absent, the pool was uncapped; say so, and drop the cap from the report.
 - `kv-ab-rung-spreads` — one row per `(arm, max_concurrency)`: `runs`, then `goodput_fraction`, `p95_ttft_ms`, `p95_tpot_ms`, `output_throughput`, `gpu_hit_rate`, `combined_hit_rate`, each as `median [min–max]` across the arm's runs. This is the evidence.
 - `kv-ab-ceilings` — one row per arm: each run's ceiling (`r1`, `r2`, …; `none` when no rung held the floor) and the median (blank when any run is `none`).
 - `kv-ab-plot` — an image artifact whose `data` is a public `https` URL to the chart PNG.
@@ -62,7 +67,7 @@ A missing `kv-ab-config` or `kv-ab-rung-spreads` stops the skill: say which. A m
 
 The goodput floor is `0.95`, a source constant (`packages/report/src/slipstream_bench/report/aggregation.py:28`).
 
-Done when you hold the SLO, the workload fields above, the parsed spreads table, and the tier size and both pod memory limits (or know them to be unknown).
+Done when you hold the SLO, the workload fields above, the parsed spreads table, the node and the larger node's quota when the pool was capped, and the tier size and both pod memory limits (or know them to be unknown).
 
 ## Step 3 — Judge each rung
 
@@ -126,6 +131,6 @@ Write `reports/kv-cache-ab-<run_id>/RECOMMENDATION.md` with these sections, in o
 5. **Ceilings and cost** — the ceilings table, the cost comparison from Step 3, and the host-memory cost beside it.
 6. **Recommendation** — whether to turn offload on by default, with the reasoning from Step 3.
 7. **Chart** — the downloaded PNG embedded by relative path (`![KV cache A/B by max_concurrency](kv-ab-by-max-concurrency.png)`) with one line on what it shows, or the reason it is absent.
-8. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; when `kv_cache_memory_bytes` is set, the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, pending the g5.2xlarge quota (Step 2). The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on the uncapped g5.xlarge, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
+8. **Caveats** — one fixed GPU, so the cost ratio holds on this hardware only; the SLO and workload are the run's own; when `kv_cache_memory_bytes` is set, the run capped the GPU KV pool at `kv_cache_memory_bytes` because the CPU tier the node's RAM allows is smaller than the uncapped pool, with the larger node's availability as Step 2 found it. The flow refuses a pool that holds the working set, so the result describes a working set larger than the GPU pool, not an uncapped engine; on that node uncapped, offload adds no reuse (ADR-0023, Consequences). Say this beside every cost ratio the report quotes; the rungs measured bound the ceilings (a ceiling at the top rung may sit higher); the significance bound from Step 3.
 
 Done when `RECOMMENDATION.md` has all eight sections, the verdict traces to named rungs and metrics, and `reports/kv-cache-ab-<run_id>/` holds exactly the chart it embeds, with no `.part` file left.
