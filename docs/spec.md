@@ -184,7 +184,8 @@ L0 → L1 → L2a → L2b (thesis-complete floor) → L3 (bonus) → L4 (bonus)
 
 ## 5. Observability design
 
-Three tools, three deliberately distinct layers, joined by one request ID. Effort ceiling ≈
+Three tools, three deliberately distinct layers, joined by one request ID, plus a spend-leak
+guard outside the cluster. Effort ceiling ≈
 **one fifth of total**; the named failure mode is this becoming SDK plumbing instead of inference
 depth.
 
@@ -193,9 +194,10 @@ depth.
   scoreboard and SLO burn-rate alerts.
 - **Spend-leak guard — "is anything billing with no session running?"** Lives in AWS, outside
   the cluster it watches, so it survives the failed `just cluster-down` it exists to catch: a
-  CloudWatch alarm pages when on-demand GPU vCPUs stay above zero for 20 hours, and the monthly
-  AWS Budget catches every other leak, hours later. A forgotten GPU is the only real-money
-  failure mode here.
+  CloudWatch alarm pages when on-demand G-class vCPUs stay above zero for 20 hours, and the
+  monthly AWS Budget covers all other spend, paging only when spend crosses one of its
+  thresholds. Spot GPUs, once L2b allows them, reach only the budget, and a GPU session longer
+  than 20 hours pages falsely. A forgotten GPU is the only real-money failure mode here.
 - **Sentry — "what broke, and where in the code path?"** Instrument the router/gateway; trace
   gateway → routing decision → vLLM engine → first token → completion. CUDA OOMs, timeouts, spot
   evictions as fingerprinted issues.
@@ -206,10 +208,11 @@ depth.
 
 The **irreducible spine** is one `request_id` stamped on the **Sentry span + PostHog event +
 structured log line**, with **one tested pivot path**: PostHog funnel drop-off → Sentry trace →
-Loki line. All four sinks (Sentry, PostHog, Prometheus exemplar, Loki) are reachable, but the
+Loki line. All four sinks (Sentry, PostHog, Grafana exemplar, Loki) are reachable, but the
 acceptance bar is that one worked pivot, not four-way completeness.
 
-- **Transport:** a **minimal OTel Collector** (receive OTLP, fan out, batch only — no
+- **Transport:** an **OTel Collector** (receive OTLP, map vLLM's attributes to the spine names,
+  set per-request goodput, derive exemplar-bearing latency metrics, fan out, batch — no
   tail-sampling). vLLM emits OTel traces.
 - **Deploy → Sentry release marker:** a deploy event creates a Sentry release + commit SHA so a
   p95 regression attributes to the exact rollout. **Deployer-agnostic** — the marker rides
@@ -292,8 +295,10 @@ Two of the brief's four hooks, chosen by one lens: **pick hooks that ride a comm
 ones that open a new workstream.**
 
 - **Cost scoreboard** — live $/1M tokens and tokens/sec/$ of what slipstream itself serves,
-  priced at the hourly price of the GPU capacity running it, idle time included. The commercial
-  comparison stays with the L0 bench reports; spans every layer; the most legible motivator.
+  priced at the hourly price of the GPU capacity running it, idle time included. Rides the
+  fleet-health dashboards; spans every layer; the most legible motivator. It is one blended
+  figure because nothing commercial is compared against it live: the commercial comparison,
+  input and output priced separately, stays with the L0 bench reports.
 - **Chaos day** — evict spot nodes mid-generation, capture a token stream surviving node death.
   Rides L2b spot-eviction survival (the heaviest layer); it is the *demonstration* of L2, not a
   new layer.
