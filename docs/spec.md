@@ -6,8 +6,8 @@ A self-hosted LLM inference platform on AWS EKS: open models on spot GPUs, with 
 **cluster-level machinery around the model** as the focus — autoscaling on inference
 signals, spot-eviction survival mid-stream, cold-start elimination on large weight loads,
 inference-aware routing, and prefill/decode disaggregation. `just cluster-up` / `just cluster-down` fully
-create and destroy GPU capacity. It runs cost-competitive against commercial APIs and proves
-it on a live scoreboard.
+create and destroy GPU capacity. It runs cost-competitive against commercial APIs, proves it in
+measured bench runs, and shows its live serving cost on a scoreboard.
 
 This is a **planning spec**, detailed enough to begin building Layer 0 and to sequence the
 phases after it. Deeper per-phase experiment design is deferred to build-time (see
@@ -98,7 +98,7 @@ six half-finished layers. Every decision below favours depth-first over breadth-
 - **Cold vs warm cache, both labelled.** Prefix-cache warmth swings throughput hard; a run long
   enough to warm the cache reports numbers first traffic never sees. Report **cold (empty cache)
   and steady-state (warm) SLO** — the inference analog of a train/test boundary.
-- **Measure the commercial baseline, don't quote it.** The cost scoreboard's commercial arm is the
+- **Measure the commercial baseline, don't quote it.** The bench's commercial arm is the
   **same L0 workload fired at the commercial API** and measured (real TTFT/TPOT/cost), never a list
   price off a docs page. Apples-to-apples or it is not a baseline.
 
@@ -190,9 +190,12 @@ depth.
 
 - **Grafana — "is the fleet healthy?"** GPU utilization, KV-cache occupancy,
   `num_requests_waiting`, TTFT p95, Karpenter scaling events, tokens/sec/$. Home of the cost
-  scoreboard and SLO burn-rate alerts. Also a **cost-drift alert**: $/hr over the duty-cycle
-  budget pages — the guard against a forgotten GPU after a failed `just cluster-down`, which is the only
-  real-money failure mode here.
+  scoreboard and SLO burn-rate alerts.
+- **Spend-leak guard — "is anything billing with no session running?"** Lives in AWS, outside
+  the cluster it watches, so it survives the failed `just cluster-down` it exists to catch: a
+  CloudWatch alarm pages when on-demand GPU vCPUs stay above zero for 20 hours, and the monthly
+  AWS Budget catches every other leak, hours later. A forgotten GPU is the only real-money
+  failure mode here.
 - **Sentry — "what broke, and where in the code path?"** Instrument the router/gateway; trace
   gateway → routing decision → vLLM engine → first token → completion. CUDA OOMs, timeouts, spot
   evictions as fingerprinted issues.
@@ -223,9 +226,11 @@ acceptance bar is that one worked pivot, not four-way completeness.
   content leaves the cluster, ever.**
 
 **Cut order (enforces the ~1/5 ceiling; cut top-down):**
-1. Prometheus exemplars → downgrade to timestamp correlation.
-2. OTel Collector → direct SDK export, if the Collector costs more than an afternoon.
-3. Deploy → Sentry release marker.
+1. OTel Collector → direct SDK export, if the Collector costs more than an afternoon.
+2. Deploy → Sentry release marker.
+
+Exemplars are not on the list: the Collector derives them from vLLM's spans, so they stand or
+fall with it.
 
 **Never cut** the spine: one `request_id` on Sentry + PostHog + structured logs, with one
 documented pivot path. Grafana stays timestamp-correlated in the fully-cut state.
@@ -286,8 +291,9 @@ persona id, real = Danny, synthetic = generated persona, no PII):
 Two of the brief's four hooks, chosen by one lens: **pick hooks that ride a committed layer, not
 ones that open a new workstream.**
 
-- **Cost scoreboard** — live self-hosted $/1M-tokens vs commercial API cost. Rides the L0 cost/1M
-  post-processor already committed in the harness; spans every layer; the most legible motivator.
+- **Cost scoreboard** — live $/1M tokens and tokens/sec/$ of what slipstream itself serves,
+  priced at the hourly price of the GPU capacity running it, idle time included. The commercial
+  comparison stays with the L0 bench reports; spans every layer; the most legible motivator.
 - **Chaos day** — evict spot nodes mid-generation, capture a token stream surviving node death.
   Rides L2b spot-eviction survival (the heaviest layer); it is the *demonstration* of L2, not a
   new layer.
