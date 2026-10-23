@@ -155,10 +155,22 @@ points, pinned images and the cloud-verify check are in
 [`docs/operations.md`](docs/operations.md); `uv run slipstream-bench --help` lists the
 bench CLI.
 
-## What a run looks like
+## What a benchmark run looks like
 
-Every knob sweep and KV cache offload A/B is a Prefect flow run you follow from the UI
-(`just prefect-ui`). These are from KV cache offload A/B run `20261022T131457Z`. Each arm
+The platform runs two kinds of benchmark:
+
+- **Knob sweep** finds the engine config to deploy. It redeploys vLLM once per point of an
+  engine-knob grid (`max_num_seqs` × KV cache dtype × prefix caching) and steps each point up a
+  client-concurrency ladder until it breaks the goodput SLO. The highest rung that holds is
+  that point's concurrency ceiling, and the point with the most output throughput at its
+  ceiling is the cheapest per token.
+- **KV cache offload A/B** measures what offloading KV cache to LMCache's CPU tier adds on
+  top of the GPU prefix cache. It runs one engine point with offload off and on,
+  interleaved over repeated runs, up the same kind of ladder, and compares the arms' ranges
+  at each rung.
+
+Each is a Prefect flow run you follow from the UI (`just prefect-ui`). These are from KV
+cache offload A/B run `20261022T131457Z`. Each arm
 redeploys vLLM, either with KV cache offload to LMCache's CPU tier enabled (on) or
 without it (off). It then runs three repetitions of the `max_concurrency` ladder, and one
 task renders the tables and the chart as artifacts:
@@ -182,9 +194,9 @@ The `kv-ab-rung-spreads` artifact gives each arm's median and range per rung, an
 
 ![kv-ab-plot artifact in the Prefect UI](docs/images/prefect-kv-ab-plot.png)
 
-The run caps the GPU KV pool at 16,384 tokens, below LMCache's CPU tier. The g5.xlarge's
-RAM cannot hold a tier larger than the uncapped pool, and the g5.2xlarge quota that would
-allow one is still pending
+This run, on the g5.xlarge, capped the GPU KV pool at 16,384 tokens, below LMCache's CPU
+tier: the g5.xlarge's RAM cannot hold a tier larger than the uncapped pool, and the
+account had no G-instance quota for the g5.2xlarge that could
 ([ADR-0023](docs/adr/0023-kv-cache-extension-cpu-tier-and-ab.md)). On this workload (90%
 shared prefix, working set 1.5× the capped pool), enabling LMCache offload held the SLO up
 to `max_concurrency` 4, while off held it only at 1. That is 3.7× the output throughput at
