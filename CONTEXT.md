@@ -108,3 +108,9 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 
 - **Request-ID** — one identifier carried across Grafana (fleet health), Sentry (code-path
   errors), and PostHog (product) via OpenTelemetry, so a single request is traceable end to end.
+- **Fleet health** — the live state of the serving fleet while a session runs: GPU, KV
+  cache, queue, latency, and scaling.
+- **Cost scoreboard** — the live $/1M tokens and tokens/sec/$ of what slipstream itself
+  serves, priced at the hourly price of the GPU capacity running it.
+- **Spend leak** — AWS spend accruing while no session is running: a GPU left up after a
+  failed `just cluster-down`, or any other slipstream resource that outlived its session.
