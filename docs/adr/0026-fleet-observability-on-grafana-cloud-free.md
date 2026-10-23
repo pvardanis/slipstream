@@ -1,4 +1,4 @@
-<!-- ADR recording the fleet-health and cost-scoreboard observability design (issue #35): kube-prometheus-stack in the cluster remote-writing an allowlist of series to Grafana Cloud's free tier, so dashboards and 14 days of history outlive every cluster-down; dashboards as code in a persistent terraform/grafana stack; Grafana Cloud tokens kept in Secrets Manager and synced into the cluster by the External Secrets Operator; vLLM's traces carried through the OTel Collector, which renames vLLM's attributes to the spine names, computes per-request goodput, and derives an exemplar-bearing latency histogram, because vLLM's own metrics carry no exemplars; the scoreboard priced from Karpenter's price estimate with no commercial arm. Records why AMP + AMG, self-hosted Grafana, and in-cluster-only storage were rejected. Builds on ADR-0006 (no GPU Operator), ADR-0009 (goodput definition) and the #26 request-ID spine; amends spec §5.1's cut order and §6's scoreboard. -->
+<!-- ADR recording the fleet-health and cost-scoreboard observability design (issue #35): kube-prometheus-stack in the cluster remote-writing an allowlist of series to Grafana Cloud's free tier, so dashboards and 14 days of history outlive every cluster-down; dashboards as code in a persistent terraform/grafana stack; Grafana Cloud tokens kept in Secrets Manager and synced into the cluster by the External Secrets Operator; vLLM's traces carried through the OTel Collector, which renames vLLM's attributes to the spine names, computes per-request goodput, and derives an exemplar-bearing latency histogram, because vLLM's own metrics carry no exemplars; every panel replica-aware (fleet aggregate plus per-pod breakdown, pod name on traces) so horizontal scale needs no panel rewrite; the scoreboard priced from Karpenter's price estimate with no commercial arm. Records why AMP + AMG, self-hosted Grafana, and in-cluster-only storage were rejected. Builds on ADR-0006 (no GPU Operator), ADR-0009 (goodput definition) and the #26 request-ID spine; amends spec §5.1's cut order and §6's scoreboard. -->
 
 # ADR-0026: Fleet observability runs on Grafana Cloud's free tier, with traces through the Collector
 
@@ -39,7 +39,9 @@ attribute, `request_id` included.
   Alertmanager are off, because dashboards live in Grafana Cloud and the spend-leak alarm is
   AWS-side (ADR-0025). Local storage is the chart's `emptyDir`, so no EBS volume can leak.
 - **Scrape targets:** ServiceMonitors for vLLM, Karpenter and `dcgm-exporter`. The exporter
-  runs as one DaemonSet on GPU nodes, keeping ADR-0006's rejection of the GPU Operator.
+  runs as one DaemonSet on GPU nodes, keeping ADR-0006's rejection of the GPU Operator. The
+  vLLM ServiceMonitor scrapes every replica behind the Service, so each series carries its
+  pod. `dcgm-exporter` labels each GPU with the pod using it.
 - **Allowlist:** `remote_write` sends only the series the panels read. Everything else stays
   local and dies with the cluster. Karpenter's price gauge has one series per instance type,
   zone and capacity type, so it is filtered to the instance types actually running.
@@ -76,6 +78,10 @@ attribute, `request_id` included.
 - **vLLM side:** the GPU replica sets `--otlp-traces-endpoint` at the Collector, without
   `--collect-detailed-traces`, whose documented performance cost would contaminate bench
   numbers.
+- **Replica identity:** vLLM's spans carry only module name and pid as resource attributes,
+  so the vLLM pod sets `OTEL_RESOURCE_ATTRIBUTES` with `k8s.pod.name` from the downward API.
+  `spanmetrics` carries `k8s.pod.name` as a dimension, so goodput and latency split by
+  replica.
 - **Lifecycle:** `just stack-up` chains `just obs-up`, so the Collector runs every session.
   Its manifests and `k8s/otel-collector-config.yaml` stay the single source the spine test
   runs.
@@ -110,6 +116,14 @@ attribute, `request_id` included.
 
 ### Panels
 
+Every serving and GPU panel shows the fleet aggregate (`sum`, or `histogram_quantile` over
+`sum by (le)`) beside a per-replica breakdown `by (pod)`, so one hot replica is not hidden in
+the average. With one GPU replica today the two agree. Under horizontal scale (L2) and
+routing (L3) the breakdown shows the imbalance.
+
+- **Replicas:** replicas available against desired, from kube-state-metrics
+  (`kube_deployment_status_replicas_available`).
+
 - **GPU:** two utilisation panels.
   - `DCGM_FI_DEV_GPU_UTIL`, labelled busy time.
   - `DCGM_FI_PROF_DRAM_ACTIVE`, labelled memory-bandwidth active. Decode is memory-bound,
@@ -123,8 +137,8 @@ attribute, `request_id` included.
   - voluntary disruptions by reason.
 - **Spend:** the CloudWatch G-vCPU panel.
 - **Cost scoreboard:**
-  - $/1M tokens: GPU dollars over the dashboard's time range ÷ prompt plus generation
-    tokens served in that range. Idle GPU time is included, so it shows what serving cost.
+  - $/1M tokens: GPU dollars over the dashboard's time range, summed over every GPU node,
+    ÷ prompt plus generation tokens served in that range, summed over every replica. Idle GPU time is included, so it shows what serving cost.
   - tokens/sec/$.
   - The price is Karpenter's `karpenter_cloudprovider_instance_type_offering_price_estimate`
     for the running GPU node. There is no commercial arm, and no input:output split, since
@@ -156,7 +170,9 @@ attribute, `request_id` included.
 ## Consequences
 
 - Grafana Cloud is a third-party dependency, and history stops at 14 days.
-- The 10k-series cap is a hard limit, and the allowlist is how it is held.
+- The 10k-series cap is a hard limit, and the allowlist is how it is held. Per-replica
+  series multiply the allowlist by the replica count. At the handful of GPUs the budget
+  allows this stays well under the cap, and the build's series count confirms it.
 - vLLM tracing is a serving change. One bench run with tracing on against one with it off
   shows its overhead is noise rather than assuming it.
 - Facts the build must verify, not assume:
