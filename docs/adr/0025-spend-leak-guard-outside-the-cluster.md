@@ -73,7 +73,7 @@ does not.
 ## Consequences
 
 - **The spot gap.** `Class=G/OnDemand` counts on-demand capacity only, since the documented
-  usage classes are all `*/OnDemand`. The GPU node pool is on-demand only today
+  usage classes are all `*/OnDemand`. The GPU node pool is on-demand only
   (`k8s/gpu-node-pool.yaml`), so the alarm covers it completely. If L2b allows spot, a spot
   GPU leak reaches only the slow budget layer until the fast layer is extended.
 - Non-GPU leaks (NAT, ALBs, the bench host, the control plane) page only through the

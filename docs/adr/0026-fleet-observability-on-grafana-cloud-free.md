@@ -37,7 +37,7 @@ attribute, `request_id` included.
   metrics up from the first minute.
 - **What runs:** Prometheus, the Operator, kube-state-metrics and node-exporter. Grafana and
   Alertmanager are off, because dashboards live in Grafana Cloud and the spend-leak alarm is
-  AWS-side (ADR-0025). Local storage is the chart's `emptyDir`, so no EBS volume can leak.
+  AWS-side (ADR-0025). Where SLO burn-rate alerts are evaluated is #41's decision. Local storage is the chart's `emptyDir`, so no EBS volume can leak.
 - **Scrape targets:** ServiceMonitors for vLLM, Karpenter and `dcgm-exporter`. The exporter
   runs as one DaemonSet on GPU nodes, keeping ADR-0006's rejection of the GPU Operator. The
   vLLM ServiceMonitor scrapes every replica behind the Service, so each series carries its
@@ -69,7 +69,9 @@ attribute, `request_id` included.
   with `aws secretsmanager put-secret-value`, so neither value enters a resource's Terraform
   state.
 - **Into the cluster:** the External Secrets Operator, a `helm_release` in `terraform/eks`
-  reading through Pod Identity, syncs the write token into the `monitoring` namespace.
+  reading through Pod Identity, syncs the write token into the `monitoring` namespace for
+  Prometheus and into the `slipstream` namespace for the Collector, since a Secret is read only
+  from its own namespace.
 - **For dashboards:** `terraform/grafana` reads the API token through a data source. That
   places it in that stack's state, the usual price of a provider credential.
 
@@ -118,7 +120,7 @@ attribute, `request_id` included.
 
 Every serving and GPU panel shows the fleet aggregate (`sum`, or `histogram_quantile` over
 `sum by (le)`) beside a per-replica breakdown `by (pod)`, so one hot replica is not hidden in
-the average. With one GPU replica today the two agree. Under horizontal scale (L2) and
+the average. With one GPU replica the two agree. Under horizontal scale (L2) and
 routing (L3) the breakdown shows the imbalance.
 
 - **Replicas:** replicas available against desired, from kube-state-metrics
@@ -138,7 +140,8 @@ routing (L3) the breakdown shows the imbalance.
 - **Spend:** the CloudWatch G-vCPU panel.
 - **Cost scoreboard:**
   - $/1M tokens: GPU dollars over the dashboard's time range, summed over every GPU node,
-    ÷ prompt plus generation tokens served in that range, summed over every replica. Idle GPU time is included, so it shows what serving cost.
+    ÷ prompt plus generation tokens served in that range, summed over every replica, × 1e6.
+    Idle GPU time is included, so it shows what serving cost.
   - tokens/sec/$.
   - The price is Karpenter's `karpenter_cloudprovider_instance_type_offering_price_estimate`
     for the running GPU node. There is no commercial arm, and no input:output split, since
@@ -161,7 +164,7 @@ routing (L3) the breakdown shows the imbalance.
 - **Allowlisting vLLM's `gen_ai.*` names in `redaction`.** These follow the OTel GenAI
   semantic conventions, but the change would rewrite spec §5.1's schema and the spine's
   test contract.
-- **A hand-pinned hourly price for the scoreboard.** No pinned value is committed today:
+- **A hand-pinned hourly price for the scoreboard.** No pinned value is committed:
   `price_per_hour` lives in per-run YAML. Karpenter's estimate is the price of what is
   actually running, with nothing to keep in sync.
 - **Per-gate SLO panels from vLLM's histograms.** Cheaper, but they cannot give the joint
@@ -176,13 +179,12 @@ routing (L3) the breakdown shows the imbalance.
 - vLLM tracing is a serving change. One bench run with tracing on against one with it off
   shows its overhead is noise rather than assuming it.
 - Facts the build must verify, not assume:
-  - the stack fits on the system node group's single `t3.large`, beside Karpenter, Prefect
-    and the Collector;
+  - the stack fits on the system node group's single `t3.large`, beside Karpenter, Prefect,
+    the External Secrets Operator and the Collector;
   - the A10G supports `DCGM_FI_PROF_*` metrics (`dcgmi profile -l`). If not, the
     memory-bandwidth panel drops;
   - exemplars are enabled on the free Grafana Cloud tenant;
   - Grafana Assume Role works on the free tier;
   - vLLM's metric names match the live `/metrics`.
 - The External Secrets Operator is one more controller on the system node.
-- Spec §5.1's cut order no longer cuts exemplars first: they are kept, built through
-  `spanmetrics`. Spec §6's scoreboard drops the commercial arm.
+- Spec §5.1's cut order drops exemplars: they are kept, built through `spanmetrics`. Spec §6's scoreboard drops the commercial arm.
