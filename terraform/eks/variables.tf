@@ -68,3 +68,9 @@ variable "prefect_work_pool" {
   type        = string
   default     = "sweep-pool"
 }
+
+variable "external_secrets_chart_version" {
+  description = "Pinned external-secrets Helm chart version from the https://charts.external-secrets.io repo (appVersion v2.14.0)."
+  type        = string
+  default     = "2.14.0"
+}
