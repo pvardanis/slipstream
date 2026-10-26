@@ -26,11 +26,19 @@ processors:
   # Maps vLLM's llm_request span onto the spine's names before the shape-only
   # guard sees it, and sets per-request goodput (ADR-0026). vLLM v0.29.0 names
   # its attributes gen_ai.*, which the redaction allowlist would drop wholesale.
-  # Only spans carrying gen_ai.request.id are touched; spans already in the
-  # spine's names pass through unchanged.
+  # Only spans carrying gen_ai.request.id are mapped; spans already in the
+  # spine's names pass through, losing only an slo_met they arrive with.
   transform:
     error_mode: ignore
     trace_statements:
+      # Only the Collector sets slo_met: a span that is not vLLM's loses any
+      # slo_met it arrives with, so no client can report its own goodput.
+      # Runs first, while gen_ai.request.id still marks vLLM's spans.
+      - context: span
+        conditions:
+          - span.attributes["gen_ai.request.id"] == nil
+        statements:
+          - delete_key(span.attributes, "slo_met")
       - context: span
         conditions:
           - span.attributes["gen_ai.request.id"] != nil
@@ -46,7 +54,7 @@ processors:
           - delete_key(span.attributes, "gen_ai.usage.prompt_tokens")
           - delete_key(span.attributes, "gen_ai.usage.completion_tokens")
           # vLLM's span omits the model; the Collector is given the served model
-          # (model.yaml's hfId, via just obs-up) in MODEL_ID.
+          # (model.yaml's hfId as of the last just obs-up) in MODEL_ID.
           - set(span.attributes["model_id"], "${env:MODEL_ID}")
           # Goodput gates, in seconds: the bench configs' goodput
           # ["ttft:1000", "tpot:50"] (ms). test/goodput-parity-test.sh holds the
@@ -55,9 +63,9 @@ processors:
           - set(span.cache["tpot_gate_s"], 0.05)
           # TPOT = (e2e - TTFT) / (completion_tokens - 1). With one completion
           # token or none TPOT is undefined and counts as 0, so TTFT alone
-          # decides; vllm bench serve treats it the same way, which keeps live
-          # and offline goodput equal. A span missing a latency leaves tpot_s
-          # unset, which fails the gate below.
+          # decides, the same one-token rule vllm bench serve applies. A span
+          # with more than one completion token but a missing latency leaves
+          # tpot_s unset, which fails the gate below.
           - set(span.cache["tpot_s"], 0.0) where span.attributes["completion_tokens"] <= 1
           - set(span.cache["tpot_s"], (span.attributes["gen_ai.latency.e2e"] - span.attributes["gen_ai.latency.time_to_first_token"]) / Double(span.attributes["completion_tokens"] - 1)) where span.attributes["completion_tokens"] > 1 and span.attributes["gen_ai.latency.e2e"] != nil and span.attributes["gen_ai.latency.time_to_first_token"] != nil
           # slo_met: TTFT <= 1.0 s and TPOT <= 0.05 s, both gates inclusive.
