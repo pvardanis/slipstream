@@ -130,7 +130,11 @@ hence the order:
    ```sh
    gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
    ```
-2. `just bootstrap` — remote-state bucket, ECR repositories, GitHub OIDC roles.
+2. `just bootstrap` — remote-state bucket, ECR repositories, GitHub OIDC roles, and the
+   spend-leak guard. Set `operator_email` first, in the gitignored
+   `terraform/bootstrap/terraform.tfvars` or as `TF_VAR_operator_email`, then click the
+   confirmation link AWS emails
+   ([runbook](docs/operations.md#spend-leak-alert)).
 3. `just gh-vars` — sets the eight repo variables the workflows read from the
    bootstrap outputs.
 4. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
