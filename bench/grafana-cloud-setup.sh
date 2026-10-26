@@ -364,7 +364,7 @@ run_wizard() {
   say "One access-policy token lets Prometheus and the Collector write to the stack."
   open_url "${STACK_URL}/a/grafana-auth-app"
   step "Click Create access policy; name it slipstream-write."
-  step "Set the realm to this stack and tick Write for metrics and traces only."
+  step "Tick Write for metrics and traces only; a policy made here covers this stack alone."
   step "Click Create, then Add token on the new policy, and copy the token (glc_...)."
   note "Grafana shows the token once. It goes to ${write_secret}, not to any file."
   put_token "${write_secret}" "Paste the write token:"
