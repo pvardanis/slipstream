@@ -94,6 +94,8 @@ vllm_tpot_miss="vllm-tpot-miss-003"
 # One completion token, TPOT undefined: counts as 0, so only TTFT decides.
 vllm_one_token_met="vllm-one-token-met-004"
 vllm_one_token_miss="vllm-one-token-miss-005"
+# No e2e latency, so TPOT cannot be computed: the gate fails closed.
+vllm_no_e2e="vllm-no-e2e-006"
 
 echo "==> sending OTLP trace with request_id + shape-only fields + prompt sentinel + vLLM spans"
 payload=$(
@@ -124,7 +126,8 @@ payload=$(
       $(vllm_span "${vllm_ttft_miss}" "0000000000000002" 1.2 2.2 21),
       $(vllm_span "${vllm_tpot_miss}" "0000000000000003" 0.5 1.6 21),
       $(vllm_span "${vllm_one_token_met}" "0000000000000004" 0.5 3.0 1),
-      $(vllm_span "${vllm_one_token_miss}" "0000000000000005" 1.5 3.0 1)]
+      $(vllm_span "${vllm_one_token_miss}" "0000000000000005" 1.5 3.0 1),
+      $(vllm_span "${vllm_no_e2e}" "0000000000000006" 0.5 2.0 21 | grep -vF '"gen_ai.latency.e2e"')]
     }]
   }]
 }
@@ -170,6 +173,13 @@ assert_span_attribute() {
     fail=1
   fi
 }
+# The span whose request_id is $1 carries no exported attribute named $2.
+assert_span_lacks() {
+  if grep -q "^$2: " <<<"$(span_attributes "$1")"; then
+    echo "FAIL: span ${1} carries '$2' on the exporter output" >&2
+    fail=1
+  fi
+}
 
 # request_id present on the exporter output (acceptance criterion 2).
 assert_present "${request_id}"
@@ -201,13 +211,11 @@ assert_span_attribute "${vllm_ttft_miss}" "slo_met: Bool(false)"
 assert_span_attribute "${vllm_tpot_miss}" "slo_met: Bool(false)"
 assert_span_attribute "${vllm_one_token_met}" "slo_met: Bool(true)"
 assert_span_attribute "${vllm_one_token_miss}" "slo_met: Bool(false)"
+assert_span_attribute "${vllm_no_e2e}" "slo_met: Bool(false)"
 # Spans already in the spine's names are not vLLM spans: they pass through
 # unchanged and get no slo_met.
 assert_span_attribute "${request_id}" "prefix_hash: Str(${prefix_hash})"
-if grep -qF "slo_met" <<<"$(span_attributes "${request_id}")"; then
-  echo "FAIL: slo_met set on the spine-named span ${request_id}" >&2
-  fail=1
-fi
+assert_span_lacks "${request_id}" "slo_met"
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- collector logs ----" >&2
