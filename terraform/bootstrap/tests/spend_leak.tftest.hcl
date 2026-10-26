@@ -37,10 +37,18 @@ run "gpu_alarm_watches_on_demand_g_vcpus_for_20_hours" {
   }
 
   # 20 hours sits above the longest legitimate GPU session (an 18-hour benchmark run),
-  # and every period in it must breach: a single hour with no GPU resets the window.
+  # and every period in it must breach: a period with no GPU resets the window.
   assert {
     condition     = aws_cloudwatch_metric_alarm.gpu_spend_leak.period * aws_cloudwatch_metric_alarm.gpu_spend_leak.evaluation_periods == 20 * 3600
     error_message = "The GPU alarm's evaluation window must be 20 hours."
+  }
+
+  # Periods align to the clock, so a GPU touching N of them may have run little more than
+  # N-1 periods. Short periods keep that slack to minutes: an hourly period would let a
+  # run just over 18 hours page.
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.gpu_spend_leak.period <= 300
+    error_message = "The GPU alarm's period must be at most 5 minutes, so it pages within minutes of 20 hours of runtime, not after 18."
   }
   assert {
     condition     = aws_cloudwatch_metric_alarm.gpu_spend_leak.datapoints_to_alarm == aws_cloudwatch_metric_alarm.gpu_spend_leak.evaluation_periods
@@ -58,7 +66,7 @@ run "gpu_alarm_watches_on_demand_g_vcpus_for_20_hours" {
     error_message = "Missing GPU vCPU data must count as not breaching."
   }
   assert {
-    condition     = aws_cloudwatch_metric_alarm.gpu_spend_leak.alarm_actions == toset(["arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"])
+    condition     = aws_cloudwatch_metric_alarm.gpu_spend_leak.alarm_actions == toset([aws_sns_topic.spend_leak.arn])
     error_message = "The GPU alarm must page through the spend-leak SNS topic and nothing else."
   }
 }
@@ -67,7 +75,12 @@ run "spend_leak_topic_emails_the_operator" {
   command = plan
 
   assert {
-    condition     = aws_sns_topic_subscription.operator_email.topic_arn == "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
+    condition     = aws_sns_topic.spend_leak.name == "slipstream-spend-leak"
+    error_message = "The spend-leak topic must be named slipstream-spend-leak."
+  }
+
+  assert {
+    condition     = aws_sns_topic_subscription.operator_email.topic_arn == aws_sns_topic.spend_leak.arn
     error_message = "The operator's email subscription must be on the spend-leak topic."
   }
   assert {
@@ -82,7 +95,7 @@ run "topic_policy_lets_both_layers_publish" {
   command = plan
 
   assert {
-    condition     = aws_sns_topic_policy.spend_leak.arn == "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
+    condition     = aws_sns_topic_policy.spend_leak.arn == aws_sns_topic.spend_leak.arn
     error_message = "The publish policy must be attached to the spend-leak topic."
   }
   assert {
@@ -96,7 +109,7 @@ run "topic_policy_lets_both_layers_publish" {
         for s in jsondecode(aws_sns_topic_policy.spend_leak.policy).Statement : s
         if s.Principal.Service == service
         && s.Action == "sns:Publish"
-        && s.Resource == "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
+        && s.Resource == aws_sns_topic.spend_leak.arn
         && s.Condition.StringEquals["aws:SourceAccount"] == "111122223333"
       ]) == 1
     ])
@@ -145,10 +158,42 @@ run "monthly_budget_keeps_its_limit_and_thresholds" {
     error_message = "The imported budget must keep exactly its 50/75/90% actual and 100% forecast notifications."
   }
   assert {
+    condition     = length(aws_budgets_budget.monthly.notification) == 4
+    error_message = "The imported budget must carry exactly four notifications, none duplicated."
+  }
+  assert {
     condition = alltrue([
       for n in aws_budgets_budget.monthly.notification :
-      n.subscriber_sns_topic_arns == toset(["arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"]) && try(length(n.subscriber_email_addresses), 0) == 0
+      n.subscriber_sns_topic_arns == toset([aws_sns_topic.spend_leak.arn]) && (n.subscriber_email_addresses == null ? 0 : length(n.subscriber_email_addresses)) == 0
     ])
     error_message = "Every budget notification must route to the spend-leak topic only, so the operator gets one email per alert."
   }
+}
+
+# A typo in the sensitive address is hidden in plan output, so it fails validation instead
+# of sending the confirmation link nowhere.
+run "operator_email_rejects_a_malformed_address" {
+  command = plan
+
+  variables {
+    operator_email = "operator.example.com"
+  }
+
+  expect_failures = [var.operator_email]
+}
+
+# Until the operator clicks the confirmation link, both layers publish into nothing, so
+# every plan and apply warns while the subscription is pending.
+run "pending_email_subscription_warns" {
+  command = plan
+
+  override_resource {
+    target          = aws_sns_topic_subscription.operator_email
+    override_during = plan
+    values = {
+      pending_confirmation = true
+    }
+  }
+
+  expect_failures = [check.operator_email_confirmed]
 }

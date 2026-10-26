@@ -11,6 +11,10 @@ provider "aws" {
 # conditions to it.
 data "aws_caller_identity" "current" {}
 
+locals {
+  account_id = data.aws_caller_identity.current.account_id
+}
+
 # A random suffix keeps the bucket name unique in S3's global namespace.
 resource "random_id" "suffix" {
   byte_length = 3

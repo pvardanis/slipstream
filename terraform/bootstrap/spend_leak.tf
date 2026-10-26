@@ -5,10 +5,6 @@
 # running on-demand G-class vCPUs; the slow catch-all is the monthly AWS Budget, which
 # also sees the NAT, the ALBs, the bench host and the control plane.
 
-locals {
-  account_id = data.aws_caller_identity.current.account_id
-}
-
 resource "aws_sns_topic" "spend_leak" {
   name = "slipstream-spend-leak"
 }
@@ -21,8 +17,18 @@ resource "aws_sns_topic_subscription" "operator_email" {
   endpoint  = var.operator_email
 }
 
-# CloudWatch alarms and Budgets both publish as AWS service principals, which a topic
-# policy must allow; each is confined to this account's alarms and budgets.
+# A pending subscription leaves both layers publishing into nothing, and apply still
+# succeeds, so every plan and apply warns until the link is clicked.
+check "operator_email_confirmed" {
+  assert {
+    condition     = !aws_sns_topic_subscription.operator_email.pending_confirmation
+    error_message = "The spend-leak email subscription is pending: click the confirmation link AWS emailed to var.operator_email, or no alarm or budget alert is delivered."
+  }
+}
+
+# This policy replaces the topic's default, so it must allow both publishers: CloudWatch
+# alarms and Budgets, each as an AWS service principal confined to this account's alarms
+# and budgets.
 resource "aws_sns_topic_policy" "spend_leak" {
   arn = aws_sns_topic.spend_leak.arn
 
@@ -56,11 +62,11 @@ resource "aws_sns_topic_policy" "spend_leak" {
 }
 
 # AWS/Usage publishes the account's running on-demand G-family vCPUs at one-minute
-# resolution. Hourly Maximum periods, all 20 of which must breach, page once a GPU has
-# touched 20 consecutive clock hours, so after 19 to 20 hours of runtime: above the
-# longest legitimate session (an 18-hour benchmark run spans at most 19 such hours), and
-# about $22 of g5.xlarge on-demand spend. The count covers on-demand capacity
-# only; a spot GPU leak reaches only the budget.
+# resolution. Five-minute Maximum periods, all 240 of which must breach, page once a GPU
+# has touched 20 hours of consecutive clock-aligned periods, so after 19h55m to 20h of
+# runtime: above the longest legitimate session (an 18-hour benchmark run), and about $22
+# of g5.xlarge on-demand spend. The count covers on-demand capacity only; a spot GPU leak
+# reaches only the budget.
 resource "aws_cloudwatch_metric_alarm" "gpu_spend_leak" {
   alarm_name        = "slipstream-gpu-spend-leak"
   alarm_description = "On-demand G-class vCPUs have been running for 20 hours: a GPU is likely left up with no session running (ADR-0025)."
@@ -75,9 +81,9 @@ resource "aws_cloudwatch_metric_alarm" "gpu_spend_leak" {
   }
 
   statistic           = "Maximum"
-  period              = 3600
-  evaluation_periods  = 20
-  datapoints_to_alarm = 20
+  period              = 300
+  evaluation_periods  = 240
+  datapoints_to_alarm = 240
   comparison_operator = "GreaterThanThreshold"
   threshold           = 0
 
@@ -87,15 +93,15 @@ resource "aws_cloudwatch_metric_alarm" "gpu_spend_leak" {
   alarm_actions = [aws_sns_topic.spend_leak.arn]
 }
 
-# The budget was made in the console; the import brings it under Terraform with its
-# limit and thresholds as they were, so it keeps its history.
+# The budget exists outside Terraform; the import adopts it in place with its limit and
+# thresholds, so it keeps its spend history.
 import {
   to = aws_budgets_budget.monthly
   id = "${local.account_id}:${local.monthly_budget_name}"
 }
 
 locals {
-  # The console name, kept so the import binds to the existing budget.
+  # The existing budget's name, which the import binds to.
   monthly_budget_name = "slipstream-monthly"
 
   monthly_budget_notifications = [
@@ -114,6 +120,9 @@ resource "aws_budgets_budget" "monthly" {
   time_unit    = "MONTHLY"
   limit_amount = "200.0"
   limit_unit   = "USD"
+
+  # Budgets checks it may publish to the topic when it saves an SNS subscriber.
+  depends_on = [aws_sns_topic_policy.spend_leak]
 
   dynamic "notification" {
     for_each = local.monthly_budget_notifications

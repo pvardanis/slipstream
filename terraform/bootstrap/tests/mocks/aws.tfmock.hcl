@@ -9,12 +9,23 @@ mock_data "aws_caller_identity" {
   }
 }
 
-# A fixed spend-leak topic ARN, set at plan, so the alarm action, budget subscribers and
-# topic policy resource are known and comparable against it.
-mock_resource "aws_sns_topic" {
+# A fixed ARN for the spend-leak topic alone, set at plan, so the alarm action, budget
+# subscribers and topic policy resource are known there; any other topic stays unknown and
+# cannot pass for it.
+override_resource {
+  target          = aws_sns_topic.spend_leak
+  override_during = plan
+  values = {
+    arn = "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
+  }
+}
+
+# A confirmed email subscription at plan, so the confirmation check evaluates instead of
+# waiting on apply; a run overrides it to pending to prove the check fires.
+mock_resource "aws_sns_topic_subscription" {
   override_during = plan
   defaults = {
-    arn = "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
+    pending_confirmation = false
   }
 }
 
