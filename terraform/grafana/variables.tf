@@ -1,6 +1,6 @@
 # Inputs for the persistent grafana Terraform stack.
 variable "region" {
-  description = "AWS region hosting the Terraform state bucket the bootstrap stack's outputs are read from. Must match the bootstrap default."
+  description = "AWS region hosting the Terraform state bucket the bootstrap stack's outputs are read from, and the Secrets Manager secret holding the Grafana API token. Must match the bootstrap default."
   type        = string
   default     = "eu-west-1"
 }
@@ -16,7 +16,7 @@ variable "state_bucket" {
 }
 
 variable "grafana_url" {
-  description = "URL of the Grafana Cloud stack, https://<stack>.grafana.net, the one bench/grafana-cloud-setup.sh creates. Override it in the gitignored terraform.tfvars or as TF_VAR_grafana_url to point at another stack."
+  description = "URL of the Grafana Cloud stack, https://<stack>.grafana.net, the one the bench/grafana-cloud-setup.sh walkthrough has the operator create. Override it in the gitignored terraform.tfvars or as TF_VAR_grafana_url to point at another stack."
   type        = string
   default     = "https://slipstreamobs.grafana.net"
 

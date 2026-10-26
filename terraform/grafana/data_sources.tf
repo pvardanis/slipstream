@@ -1,8 +1,8 @@
 # The data sources the dashboards query (ADR-0026).
 
 # CloudWatch through Grafana Assume Role: Grafana Cloud assumes the bootstrap stack's
-# read-only IAM role, so no AWS key is stored in Grafana. The spend panel reads AWS/Usage
-# through it while the cluster is down.
+# read-only IAM role, so no AWS key is stored in Grafana. A spend panel reads AWS/Usage
+# through it, so it keeps working while the cluster is down.
 resource "grafana_data_source" "cloudwatch" {
   type = "cloudwatch"
   name = "CloudWatch"
