@@ -121,7 +121,7 @@ locals {
         Sid      = "DescribeCluster"
         Effect   = "Allow"
         Action   = "eks:DescribeCluster"
-        Resource = "arn:aws:eks:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.cluster_name}"
+        Resource = "arn:aws:eks:${var.region}:${local.account_id}:cluster/${var.cluster_name}"
       },
       {
         Sid      = "DescribeInstances"
