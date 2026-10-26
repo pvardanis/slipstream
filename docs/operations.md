@@ -214,6 +214,38 @@ gitignored tfvars file or `TF_VAR_grafana_external_id`, and fails without it. A 
 worktree has no tfvars file: copy it from the main checkout (`chmod 600` it, as it holds
 the operator's address), or export both variables.
 
+## Grafana Cloud write token in the cluster
+
+`just cluster-up` installs the External Secrets Operator, which copies the
+`grafana-cloud/write` token from Secrets Manager into the `monitoring` and `slipstream`
+namespaces as the Secret `grafana-cloud-write`, key `token`
+([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). The apply does not
+wait for that copy, so check it after `cluster-up`:
+
+```sh
+kubectl get externalsecret -n monitoring
+kubectl get externalsecret -n slipstream
+```
+
+Both should show `grafana-cloud-write` with status `SecretSynced` and ready `True`. To
+confirm the token is non-empty without printing it:
+
+```sh
+kubectl get secret grafana-cloud-write -n monitoring -o jsonpath='{.data.token}' | wc -c
+```
+
+A count of 0, or a missing Secret, means the sync failed. `kubectl describe externalsecret
+grafana-cloud-write -n monitoring` shows why in its status and events. A `grafana-cloud/write`
+secret that `just grafana-cloud-setup` never filled has no value to read.
+
+The operator re-reads the secret hourly. After replacing the token, force an immediate
+sync in each namespace:
+
+```sh
+kubectl annotate externalsecret grafana-cloud-write -n monitoring force-sync="$(date +%s)" --overwrite
+kubectl annotate externalsecret grafana-cloud-write -n slipstream force-sync="$(date +%s)" --overwrite
+```
+
 ## Grafana data sources
 
 The `terraform/grafana` stack owns the data sources the dashboards query
