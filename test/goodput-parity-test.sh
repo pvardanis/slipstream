@@ -14,33 +14,62 @@ fail=0
 
 # The transform processor's OTTL statements, one per line.
 statements="$(yq '.processors.transform.trace_statements[].statements[]' "${collector_config}")"
-# The statement that sets slo_met true; it must compare against both gates.
-slo_met_statement="$(grep -F 'set(span.attributes["slo_met"], true)' <<<"${statements}" || true)"
+# Every statement that sets slo_met other than its false default. There must be
+# exactly one, the gated true; any other would override the gates at runtime.
+slo_met_statement="$(grep -F 'set(span.attributes["slo_met"]' <<<"${statements}" |
+  grep -vxF 'set(span.attributes["slo_met"], false)' || true)"
 
-# The Collector's gate $1 (ttft or tpot) in seconds, from its
+# Every statement that sets gate $1's (ttft or tpot) cache value. There must be
+# exactly one, unconditional; a second would override the value the check reads.
+collector_gate_statements() {
+  grep -F "set(span.cache[\"$1_gate_s\"]" <<<"${statements}" || true
+}
+
+# The Collector's gate $1 in seconds, from its one unconditional
 # set(span.cache["<gate>_gate_s"], <value>) statement. Empty when absent.
 collector_gate_s() {
   sed -n "s/^set(span.cache\[\"$1_gate_s\"\], \([0-9.]*\))\$/\1/p" <<<"${statements}"
+}
+
+# Every bench config file, relative to the repo root.
+bench_configs() {
+  find "${bench_configs_dir}" \( -name '*.yaml' -o -name '*.yml' \) | sed "s|^${repo_root}/||" | sort
 }
 
 # Every "<config>: <gate>:<ms>" goodput entry across the bench configs, wherever
 # the goodput list sits in the config (top level or under load). find exits
 # non-zero when yq fails on any config.
 bench_gates() {
-  find "${bench_configs_dir}" -name '*.yaml' -exec yq --no-doc \
+  find "${bench_configs_dir}" \( -name '*.yaml' -o -name '*.yml' \) -exec yq --no-doc \
     '.. | select(tag == "!!map") | select(has("goodput")) | .goodput[] | filename + ": " + .' {} + |
     sed "s|^${repo_root}/||" | sort
 }
 
-ttft_s="$(collector_gate_s ttft)"
-tpot_s="$(collector_gate_s tpot)"
+if [[ "$(grep -c . <<<"${slo_met_statement}")" -ne 1 ]] ||
+  [[ "${slo_met_statement}" != 'set(span.attributes["slo_met"], true) where '* ]]; then
+  echo "FAIL: ${collector_config} must set slo_met true in exactly one statement," \
+    "gated by a where clause; found:" >&2
+  echo "${slo_met_statement:-  (none)}" >&2
+  fail=1
+fi
+
+ttft_s=""
+tpot_s=""
 for gate in ttft tpot; do
-  value_var="${gate}_s"
-  if [[ -z "${!value_var}" ]]; then
+  gate_statements="$(collector_gate_statements "${gate}")"
+  if [[ "$(grep -c . <<<"${gate_statements}")" -ne 1 ]]; then
+    echo "FAIL: ${collector_config} sets span.cache[\"${gate}_gate_s\"] in" \
+      "$(grep -c . <<<"${gate_statements}") statements; expected exactly one" >&2
+    fail=1
+    continue
+  fi
+  value="$(collector_gate_s "${gate}")"
+  if [[ -z "${value}" ]]; then
     echo "FAIL: no ${gate} gate in ${collector_config}; expected a statement" \
       "set(span.cache[\"${gate}_gate_s\"], <seconds>) in the transform processor" >&2
     fail=1
   fi
+  printf -v "${gate}_s" '%s' "${value}"
   if ! grep -qF "<= span.cache[\"${gate}_gate_s\"]" <<<"${slo_met_statement}"; then
     echo "FAIL: the slo_met statement in ${collector_config} does not compare against" \
       "span.cache[\"${gate}_gate_s\"]; the gate the check reads is not the one applied" >&2
@@ -85,7 +114,7 @@ while IFS= read -r entry; do
 done <<<"${entries}"
 
 # slo_met applies both gates jointly, so every bench config must gate on both;
-# a config gating on fewer would count goodput the Collector does not.
+# a config gating on fewer, or on none, would count goodput the Collector does not.
 while IFS= read -r config; do
   [[ -n "${config}" ]] || continue
   for gate in ttft tpot; do
@@ -95,7 +124,7 @@ while IFS= read -r config; do
       fail=1
     fi
   done
-done <<<"$(cut -d: -f1 <<<"${entries}" | sort -u)"
+done <<<"$(bench_configs)"
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
