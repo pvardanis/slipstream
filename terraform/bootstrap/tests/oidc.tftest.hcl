@@ -4,17 +4,17 @@
 # only main-branch workflows of this repo can assume each role, and that each role can do
 # its one job and nothing else — without creating a real IAM provider or role. The real
 # end-to-end proof (a workflow actually assumes a role and uses it) is the cloud tier.
+# The shared mocks (tests/mocks) fix the account id, so the sweep-dispatch policy's
+# cluster ARN is known at plan and assertable exactly.
 mock_provider "aws" {
-  # A fixed account id so the sweep-dispatch policy's cluster ARN is known at plan and
-  # assertable exactly.
-  mock_data "aws_caller_identity" {
-    defaults = {
-      account_id = "111122223333"
-      arn        = "arn:aws:iam::111122223333:user/test"
-    }
-  }
+  source = "./tests/mocks"
 }
 mock_provider "random" {}
+
+# No default, so every run supplies the spend-leak topic's email address.
+variables {
+  operator_email = "operator@example.com"
+}
 
 run "github_oidc_trust_and_permissions" {
   command = plan

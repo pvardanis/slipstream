@@ -3,8 +3,15 @@
 # floating -main tag is claimed by a higher-priority rule so the -sha count rule
 # never expires it, the count rule keeps the configured number of -sha images, and
 # the existing untagged-7-day rule stays.
-mock_provider "aws" {}
+mock_provider "aws" {
+  source = "./tests/mocks"
+}
 mock_provider "random" {}
+
+# No default, so every run supplies the spend-leak topic's email address.
+variables {
+  operator_email = "operator@example.com"
+}
 
 run "bench_client_lifecycle_rules" {
   command = plan
