@@ -65,6 +65,12 @@ variable "cluster_name" {
   default     = "slipstream"
 }
 
+variable "operator_email" {
+  description = "Email address the spend-leak SNS topic pages (the GPU alarm and the monthly budget). No default, so the address stays out of this public repo: set it in the gitignored terraform.tfvars or as TF_VAR_operator_email. AWS emails a confirmation link on apply that must be clicked before any page is delivered."
+  type        = string
+  sensitive   = true
+}
+
 variable "prefect_namespace" {
   description = "Namespace the Prefect server runs in, which the flow-dispatch workflow port-forwards into. Must match the eks stack's prefect_namespace local (prefect)."
   type        = string

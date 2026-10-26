@@ -3,8 +3,15 @@
 # default cluster name and Prefect namespace match the eks stack's (var.cluster_name and
 # local.prefect_namespace), so the variables can be set before any cluster exists and
 # point at the cluster and namespace eks creates.
-mock_provider "aws" {}
+mock_provider "aws" {
+  source = "./tests/mocks"
+}
 mock_provider "random" {}
+
+# No default, so every run supplies the spend-leak topic's email address.
+variables {
+  operator_email = "operator@example.com"
+}
 
 run "sweep_dispatch_target_outputs" {
   command = plan
