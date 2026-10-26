@@ -1,0 +1,4 @@
+# Values test/chart-render-test.sh renders the chart with in CI, standing in for the
+# region and secret name terraform/eks/external_secrets.tf sets.
+region: eu-west-1
+remoteKey: grafana-cloud/write
