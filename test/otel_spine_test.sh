@@ -87,7 +87,7 @@ JSON
 # (e2e - TTFT) / (completion_tokens - 1)), each keyed by its X-Request-Id.
 # Both gates exactly on the boundary: TTFT 1.0 s, TPOT 1.0 / 20 = 0.05 s.
 vllm_met="vllm-met-001"
-# TPOT holds at 0.05 s; TTFT 1.2 s misses.
+# TPOT 0.8 / 20 = 0.04 s holds; TTFT 1.2 s misses.
 vllm_ttft_miss="vllm-ttft-miss-002"
 # TTFT holds; TPOT 1.1 / 20 = 0.055 s misses.
 vllm_tpot_miss="vllm-tpot-miss-003"
@@ -96,6 +96,10 @@ vllm_one_token_met="vllm-one-token-met-004"
 vllm_one_token_miss="vllm-one-token-miss-005"
 # No e2e latency, so TPOT cannot be computed: the gate fails closed.
 vllm_no_e2e="vllm-no-e2e-006"
+# No completion tokens counts as one: TPOT 0, TTFT 0.5 s holds.
+vllm_zero_token_met="vllm-zero-token-met-007"
+# One completion token and no TTFT latency: TTFT alone decides, and fails closed.
+vllm_one_token_no_ttft="vllm-one-token-no-ttft-008"
 
 echo "==> sending OTLP trace with request_id + shape-only fields + prompt sentinel + vLLM spans"
 payload=$(
@@ -119,15 +123,18 @@ payload=$(
           {"key": "prompt_tokens", "value": {"intValue": "42"}},
           {"key": "completion_tokens", "value": {"intValue": "128"}},
           {"key": "prefix_hash", "value": {"stringValue": "${prefix_hash}"}},
+          {"key": "slo_met", "value": {"boolValue": true}},
           {"key": "prompt", "value": {"stringValue": "${prompt_sentinel}"}}
         ]
       },
       $(vllm_span "${vllm_met}" "0000000000000001" 1.0 2.0 21),
-      $(vllm_span "${vllm_ttft_miss}" "0000000000000002" 1.2 2.2 21),
+      $(vllm_span "${vllm_ttft_miss}" "0000000000000002" 1.2 2.0 21),
       $(vllm_span "${vllm_tpot_miss}" "0000000000000003" 0.5 1.6 21),
       $(vllm_span "${vllm_one_token_met}" "0000000000000004" 0.5 3.0 1),
       $(vllm_span "${vllm_one_token_miss}" "0000000000000005" 1.5 3.0 1),
-      $(vllm_span "${vllm_no_e2e}" "0000000000000006" 0.5 2.0 21 | grep -vF '"gen_ai.latency.e2e"')]
+      $(vllm_span "${vllm_no_e2e}" "0000000000000006" 0.5 2.0 21 | grep -vF '"gen_ai.latency.e2e"'),
+      $(vllm_span "${vllm_zero_token_met}" "0000000000000007" 0.5 2.0 0),
+      $(vllm_span "${vllm_one_token_no_ttft}" "0000000000000008" 0.5 2.0 1 | grep -vF '"gen_ai.latency.time_to_first_token"')]
     }]
   }]
 }
@@ -203,6 +210,12 @@ assert_absent "redaction.redacted.keys"
 assert_span_attribute "${vllm_met}" "model_id: Str(${collector_model_id})"
 assert_span_attribute "${vllm_met}" "prompt_tokens: Int(42)"
 assert_span_attribute "${vllm_met}" "completion_tokens: Int(21)"
+# Every transform statement ran: error_mode: ignore logs a failing statement as
+# a warning and carries on, which would otherwise pass unnoticed.
+if grep -qF "failed to execute statement" <<<"${logs}"; then
+  echo "FAIL: a transform statement failed on the collector (see its warn log)" >&2
+  fail=1
+fi
 assert_absent "chatcmpl-"
 assert_absent "gen_ai."
 # slo_met per request at the joint gate, both gates inclusive.
@@ -212,8 +225,11 @@ assert_span_attribute "${vllm_tpot_miss}" "slo_met: Bool(false)"
 assert_span_attribute "${vllm_one_token_met}" "slo_met: Bool(true)"
 assert_span_attribute "${vllm_one_token_miss}" "slo_met: Bool(false)"
 assert_span_attribute "${vllm_no_e2e}" "slo_met: Bool(false)"
+assert_span_attribute "${vllm_zero_token_met}" "slo_met: Bool(true)"
+assert_span_attribute "${vllm_one_token_no_ttft}" "slo_met: Bool(false)"
 # Spans already in the spine's names are not vLLM spans: they pass through
-# unchanged and get no slo_met.
+# unchanged, and an slo_met they arrive with is dropped, since only the
+# Collector sets it.
 assert_span_attribute "${request_id}" "prefix_hash: Str(${prefix_hash})"
 assert_span_lacks "${request_id}" "slo_met"
 
