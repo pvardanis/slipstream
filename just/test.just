@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine, bench image tagging/build, and the repo-variable setter and orchestration image check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter and orchestration image check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -9,6 +9,11 @@ cli-test:
 [group('test')]
 obs-test:
     bash test/otel_spine_test.sh
+
+# Assert the Collector's slo_met gates equal every bench config's goodput gates (static, no collector).
+[group('test')]
+goodput-parity-test:
+    bash test/goodput-parity-test.sh
 
 # Assert the bench image's slug and content tags derive from model.yaml as expected (no cluster).
 [group('test')]
