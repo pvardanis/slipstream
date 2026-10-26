@@ -5,6 +5,10 @@
 # and a sentinel prompt attribute, then asserts the debug exporter's stdout
 # keeps the request_id and shape-only fields, drops the prompt content, and
 # redacts without emitting the redacted key names (summary: info).
+# The same trace carries vLLM-shaped llm_request spans (vLLM's gen_ai.* names
+# and chatcmpl- prefix); the test asserts the Collector maps them onto the
+# spine's names, adds model_id and sets slo_met per span at the goodput gates
+# (ADR-0026). Manual only: needs Docker.
 # No mocks: a real collector, real OTLP, the cluster's real config.
 set -euo pipefail
 
@@ -20,6 +24,9 @@ prompt_sentinel="SECRET_PROMPT_CONTENT_do_not_leak"
 request_id="req-abc-123"
 model_id="Qwen/Qwen2.5-0.5B-Instruct"
 prefix_hash="9f86d081"
+# The model the Collector stamps on vLLM spans as model_id; the cluster sets it
+# from model.yaml (just obs-up), the test from this value.
+collector_model_id="test-org/test-model"
 
 cleanup() {
   docker rm -f "${container}" >/dev/null 2>&1 || true
@@ -29,6 +36,7 @@ trap cleanup EXIT
 echo "==> starting collector (${image})"
 docker run -d --name "${container}" \
   -p "${http_port}:4318" \
+  -e "MODEL_ID=${collector_model_id}" \
   -v "${config}:/etc/otelcol-contrib/config.yaml:ro" \
   "${image}" >/dev/null
 
@@ -50,7 +58,44 @@ if [[ -z "${ready}" ]]; then
   exit 1
 fi
 
-echo "==> sending OTLP trace with request_id + shape-only fields + prompt sentinel"
+# One vLLM llm_request span as vLLM v0.29.0 emits it: request id with the
+# chatcmpl- prefix, latencies in seconds as doubles, token counts as ints.
+# Args: X-Request-Id, span id, TTFT (s), e2e (s), completion tokens.
+vllm_span() {
+  cat <<JSON
+{
+  "traceId": "5b8efff798038103d269b633813fc60c",
+  "spanId": "$2",
+  "name": "llm_request",
+  "kind": 2,
+  "startTimeUnixNano": "1700000000000000000",
+  "endTimeUnixNano": "1700000002000000000",
+  "attributes": [
+    {"key": "gen_ai.request.id", "value": {"stringValue": "chatcmpl-$1"}},
+    {"key": "gen_ai.latency.time_to_first_token", "value": {"doubleValue": $3}},
+    {"key": "gen_ai.latency.e2e", "value": {"doubleValue": $4}},
+    {"key": "gen_ai.latency.time_in_queue", "value": {"doubleValue": 0.01}},
+    {"key": "gen_ai.usage.prompt_tokens", "value": {"intValue": "42"}},
+    {"key": "gen_ai.usage.completion_tokens", "value": {"intValue": "$5"}},
+    {"key": "gen_ai.request.max_tokens", "value": {"intValue": "256"}}
+  ]
+}
+JSON
+}
+
+# Goodput cases at the gates (TTFT <= 1.0 s and TPOT <= 0.05 s, TPOT =
+# (e2e - TTFT) / (completion_tokens - 1)), each keyed by its X-Request-Id.
+# Both gates exactly on the boundary: TTFT 1.0 s, TPOT 1.0 / 20 = 0.05 s.
+vllm_met="vllm-met-001"
+# TPOT holds at 0.05 s; TTFT 1.2 s misses.
+vllm_ttft_miss="vllm-ttft-miss-002"
+# TTFT holds; TPOT 1.1 / 20 = 0.055 s misses.
+vllm_tpot_miss="vllm-tpot-miss-003"
+# One completion token, TPOT undefined: counts as 0, so only TTFT decides.
+vllm_one_token_met="vllm-one-token-met-004"
+vllm_one_token_miss="vllm-one-token-miss-005"
+
+echo "==> sending OTLP trace with request_id + shape-only fields + prompt sentinel + vLLM spans"
 payload=$(
   cat <<JSON
 {
@@ -74,7 +119,12 @@ payload=$(
           {"key": "prefix_hash", "value": {"stringValue": "${prefix_hash}"}},
           {"key": "prompt", "value": {"stringValue": "${prompt_sentinel}"}}
         ]
-      }]
+      },
+      $(vllm_span "${vllm_met}" "0000000000000001" 1.0 2.0 21),
+      $(vllm_span "${vllm_ttft_miss}" "0000000000000002" 1.2 2.2 21),
+      $(vllm_span "${vllm_tpot_miss}" "0000000000000003" 0.5 1.6 21),
+      $(vllm_span "${vllm_one_token_met}" "0000000000000004" 0.5 3.0 1),
+      $(vllm_span "${vllm_one_token_miss}" "0000000000000005" 1.5 3.0 1)]
     }]
   }]
 }
@@ -101,6 +151,25 @@ assert_absent() {
     fail=1
   fi
 }
+# The exported attributes of the span whose request_id is $1, one per line as
+# the debug exporter renders them ("key: Type(value)"). The detailed output
+# starts each span at a "Span #" line and lists its attributes as "-> " lines.
+span_attributes() {
+  awk -v id="$1" '
+    function flush() { if (found) printf "%s", block; block = ""; found = 0 }
+    /Span #/ { flush() }
+    /-> / { line = $0; sub(/.*-> /, "", line); block = block line "\n" }
+    index($0, "-> request_id: Str(" id ")") { found = 1 }
+    END { flush() }
+  ' <<<"${logs}"
+}
+# The span whose request_id is $1 carries the exported attribute $2 exactly.
+assert_span_attribute() {
+  if ! grep -qxF "$2" <<<"$(span_attributes "$1")"; then
+    echo "FAIL: span ${1} lacks '$2' on the exporter output" >&2
+    fail=1
+  fi
+}
 
 # request_id present on the exporter output (acceptance criterion 2).
 assert_present "${request_id}"
@@ -118,10 +187,32 @@ assert_absent "${prompt_sentinel}"
 assert_present "redaction.redacted.count"
 assert_absent "redaction.redacted.keys"
 
+# vLLM spans reach the exporter under the spine's names: request_id is the
+# client's X-Request-Id with the chatcmpl- prefix stripped, model_id is the one
+# the Collector was given, and the token counts keep their values.
+assert_span_attribute "${vllm_met}" "model_id: Str(${collector_model_id})"
+assert_span_attribute "${vllm_met}" "prompt_tokens: Int(42)"
+assert_span_attribute "${vllm_met}" "completion_tokens: Int(21)"
+assert_absent "chatcmpl-"
+assert_absent "gen_ai."
+# slo_met per request at the joint gate, both gates inclusive.
+assert_span_attribute "${vllm_met}" "slo_met: Bool(true)"
+assert_span_attribute "${vllm_ttft_miss}" "slo_met: Bool(false)"
+assert_span_attribute "${vllm_tpot_miss}" "slo_met: Bool(false)"
+assert_span_attribute "${vllm_one_token_met}" "slo_met: Bool(true)"
+assert_span_attribute "${vllm_one_token_miss}" "slo_met: Bool(false)"
+# Spans already in the spine's names are not vLLM spans: they pass through
+# unchanged and get no slo_met.
+assert_span_attribute "${request_id}" "prefix_hash: Str(${prefix_hash})"
+if grep -qF "slo_met" <<<"$(span_attributes "${request_id}")"; then
+  echo "FAIL: slo_met set on the spine-named span ${request_id}" >&2
+  fail=1
+fi
+
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- collector logs ----" >&2
   echo "${logs}" >&2
   exit 1
 fi
 
-echo "PASS: request_id + shape-only fields exported, prompt content dropped"
+echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met"

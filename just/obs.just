@@ -3,9 +3,15 @@
 # Deploy the OTel Collector spine stub to the cluster.
 [group('obs')]
 obs-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
     kubectl create namespace slipstream --dry-run=client -o yaml | kubectl apply -f -
+    # The Collector stamps model_id on vLLM spans from model-id; model.yaml is its
+    # source of truth, as for the serving manifest.
+    model="$({{ image_tag_tool }} hf-id)"
     kubectl create configmap otel-collector-config -n slipstream \
       --from-file=config.yaml={{ otel_config }} \
+      --from-literal=model-id="${model}" \
       --dry-run=client -o yaml | kubectl apply -f -
     kubectl apply -f {{ otel_manifests }}
     kubectl -n slipstream rollout status deploy/otel-collector --timeout=120s
