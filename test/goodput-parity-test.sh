@@ -12,11 +12,15 @@ bench_configs_dir="${BENCH_CONFIGS_DIR:-${repo_root}/bench/configs}"
 
 fail=0
 
+# The transform processor's OTTL statements, one per line.
+statements="$(yq '.processors.transform.trace_statements[].statements[]' "${collector_config}")"
+# The statement that sets slo_met true; it must compare against both gates.
+slo_met_statement="$(grep -F 'set(span.attributes["slo_met"], true)' <<<"${statements}" || true)"
+
 # The Collector's gate $1 (ttft or tpot) in seconds, from its
 # set(span.cache["<gate>_gate_s"], <value>) statement. Empty when absent.
 collector_gate_s() {
-  yq '.processors.transform.trace_statements[].statements[]' "${collector_config}" |
-    sed -n "s/^set(span.cache\[\"$1_gate_s\"\], \([0-9.]*\))\$/\1/p"
+  sed -n "s/^set(span.cache\[\"$1_gate_s\"\], \([0-9.]*\))\$/\1/p" <<<"${statements}"
 }
 
 # Every "<config>: <gate>:<ms>" goodput entry across the bench configs, wherever
@@ -37,6 +41,11 @@ for gate in ttft tpot; do
       "set(span.cache[\"${gate}_gate_s\"], <seconds>) in the transform processor" >&2
     fail=1
   fi
+  if ! grep -qF "<= span.cache[\"${gate}_gate_s\"]" <<<"${slo_met_statement}"; then
+    echo "FAIL: the slo_met statement in ${collector_config} does not compare against" \
+      "span.cache[\"${gate}_gate_s\"]; the gate the check reads is not the one applied" >&2
+    fail=1
+  fi
 done
 
 entries="$(bench_gates)"
@@ -51,6 +60,11 @@ while IFS= read -r entry; do
   gate="${entry#*: }"
   name="${gate%%:*}"
   ms="${gate#*:}"
+  if ! [[ "${ms}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "FAIL: ${config} gates ${name} at '${ms}', not a number of milliseconds" >&2
+    fail=1
+    continue
+  fi
   case "${name}" in
   ttft) collector_s="${ttft_s}" ;;
   tpot) collector_s="${tpot_s}" ;;
@@ -69,6 +83,19 @@ while IFS= read -r entry; do
     fail=1
   fi
 done <<<"${entries}"
+
+# slo_met applies both gates jointly, so every bench config must gate on both;
+# a config gating on fewer would count goodput the Collector does not.
+while IFS= read -r config; do
+  [[ -n "${config}" ]] || continue
+  for gate in ttft tpot; do
+    if ! grep -q "^${config}: ${gate}:" <<<"${entries}"; then
+      echo "FAIL: ${config} has no ${gate} goodput gate, but the Collector's slo_met" \
+        "applies one; add it to the config's goodput list" >&2
+      fail=1
+    fi
+  done
+done <<<"$(cut -d: -f1 <<<"${entries}" | sort -u)"
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
