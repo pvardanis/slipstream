@@ -232,11 +232,15 @@ confirm the token is non-empty without printing it:
 
 ```sh
 kubectl get secret grafana-cloud-write -n monitoring -o jsonpath='{.data.token}' | wc -c
+kubectl get secret grafana-cloud-write -n slipstream -o jsonpath='{.data.token}' | wc -c
 ```
 
-A count of 0, or a missing Secret, means the sync failed. `kubectl describe externalsecret
-grafana-cloud-write -n monitoring` shows why in its status and events. A `grafana-cloud/write`
-secret that `just grafana-cloud-setup` never filled has no value to read.
+A count of 0, or a missing Secret, means the sync into that namespace failed; each
+namespace syncs on its own.
+`kubectl describe externalsecret grafana-cloud-write -n <namespace>` shows why in its
+status and events. A `grafana-cloud/write` secret that `just grafana-cloud-setup` never
+filled has no version, so the read fails, the `ExternalSecret` shows `SecretSyncedError`,
+and no Secret is created.
 
 The operator re-reads the secret hourly. After replacing the token, force an immediate
 sync in each namespace:

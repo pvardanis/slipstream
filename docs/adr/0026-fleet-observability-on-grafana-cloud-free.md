@@ -197,12 +197,14 @@ routing (L3) the breakdown shows the imbalance.
 ## Amendment (2026-10-26, #366): how the write token reaches the two namespaces
 
 - **Namespaces:** `terraform/eks` creates `monitoring`. `slipstream` already exists at
-  `cluster-up`, created by the same stack for the Prefect worker's Role (`worker.tf`), so the
-  token lands in both before any consumer is deployed.
+  `cluster-up`, created by the same stack (`worker.tf`) for vllm-gpu and the Prefect worker's
+  Role, so both ExternalSecrets exist before any consumer is deployed.
 - **One store per namespace:** each namespace gets its own `SecretStore` and `ExternalSecret`,
   installed by a local chart (`terraform/eks/charts/grafana-cloud-write-token`) as one Helm
   release per namespace, after the operator's release. There is no `ClusterSecretStore`, so
-  only these two namespaces can read the token.
+  no other namespace's `ExternalSecret` can use these stores. A store with no `auth` block
+  reads with the controller's own credentials, so permission to create a `SecretStore` is
+  what limits who can read the token.
 - **The Secret:** `grafana-cloud-write`, key `token`, owned by its `ExternalSecret` and
   refreshed hourly. The operator's role grants `secretsmanager:GetSecretValue` on
   `grafana-cloud/write` only.
