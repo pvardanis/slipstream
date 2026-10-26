@@ -93,7 +93,7 @@ attribute, `request_id` included.
   - strips the `chatcmpl-` prefix, so `request_id` is exactly the client's `X-Request-Id`,
     the value a gateway, Sentry or PostHog stamping the same header joins on;
   - adds `model_id`: `just obs-up` writes `model.yaml`'s `hfId` into the Collector's
-    ConfigMap, and the Collector reads it from its environment;
+    ConfigMap and restarts the Collector, which reads it from its environment at start;
   - sets `slo_met`, below.
 
   The spine's names and spec §5.1's schema stay canonical.
@@ -108,13 +108,14 @@ attribute, `request_id` included.
 
 ### Goodput: per request, the bench's joint gate
 
-- **Definition:** the `transform` sets `slo_met` from each span. A request meets the SLO
-  when TTFT ≤ 1.0 s **and** TPOT ≤ 0.05 s, with TPOT = (e2e − TTFT) / (completion_tokens −
-  1). `spanmetrics` counts requests by `slo_met`, and live goodput = rate(`slo_met=true`) /
-  rate(all).
+- **Definition:** the `transform` sets `slo_met` from each vLLM span, and drops any
+  `slo_met` another span arrives with, so only the Collector reports goodput. A request
+  meets the SLO when TTFT ≤ 1.0 s **and** TPOT ≤ 0.05 s, with TPOT = (e2e − TTFT) /
+  (completion_tokens − 1). `spanmetrics` counts requests by `slo_met`, and live goodput =
+  rate(`slo_met=true`) / rate(all).
 - **One completion token:** with `completion_tokens` ≤ 1, TPOT is undefined and counts
-  as 0, so TTFT alone decides `slo_met`. `vllm bench serve` scores such a request the same
-  way, so live and offline goodput agree on it.
+  as 0, so TTFT alone decides `slo_met`. `vllm bench serve` applies the same one-token
+  rule.
 - **Why not from histograms:** vLLM's histograms record each gate separately, so they
   cannot give the joint figure ADR-0009 and the bench reports use.
 - **Parity:** a static check in CI asserts the Collector's thresholds equal the bench configs'
