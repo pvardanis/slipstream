@@ -17,9 +17,10 @@ override_data {
   }
 }
 
+# grafana_url is left at its default, so the runs also check that the default names a
+# Grafana Cloud stack whose hosted data sources resolve.
 variables {
   state_bucket = "slipstream-tf-state-test"
-  grafana_url  = "https://slipstream.grafana.net"
 }
 
 # Grafana Assume Role: the data source reads CloudWatch through the bootstrap stack's IAM
@@ -52,11 +53,11 @@ run "hosted_prometheus_and_tempo_are_read_by_stack_name" {
   command = plan
 
   assert {
-    condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstream-prom"
+    condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstreamobs-prom"
     error_message = "The hosted Prometheus data source must be read as grafanacloud-<stack>-prom."
   }
   assert {
-    condition     = data.grafana_data_source.tempo.name == "grafanacloud-slipstream-traces"
+    condition     = data.grafana_data_source.tempo.name == "grafanacloud-slipstreamobs-traces"
     error_message = "The hosted Tempo data source must be read as grafanacloud-<stack>-traces."
   }
 }
@@ -90,11 +91,11 @@ run "grafana_url_may_end_in_a_slash" {
   command = plan
 
   variables {
-    grafana_url = "https://slipstream.grafana.net/"
+    grafana_url = "https://slipstreamobs.grafana.net/"
   }
 
   assert {
-    condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstream-prom"
+    condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstreamobs-prom"
     error_message = "A stack URL with a trailing slash must name the same hosted data sources."
   }
 }

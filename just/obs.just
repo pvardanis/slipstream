@@ -57,8 +57,7 @@ obs-pivot:
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
 # The Terraform stack outlives `just cluster-down`, so it has no down recipe. Requires
-# `just grafana-cloud-setup` done and grafana_url set in the gitignored
-# terraform/grafana/terraform.tfvars or as TF_VAR_grafana_url.
+# `just grafana-cloud-setup` done.
 # Apply the persistent grafana Terraform stack: its data sources (ADR-0026).
 [group('obs')]
 grafana-up: _bootstrap-init
