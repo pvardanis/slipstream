@@ -12,7 +12,8 @@ mock_provider "aws" {
 mock_provider "random" {}
 
 variables {
-  operator_email = "operator@example.com"
+  operator_email      = "operator@example.com"
+  grafana_external_id = "123456"
 }
 
 run "gpu_alarm_watches_on_demand_g_vcpus_for_20_hours" {
