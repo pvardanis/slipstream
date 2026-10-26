@@ -102,10 +102,22 @@ run "topic_policy_lets_both_layers_publish" {
     ])
     error_message = "CloudWatch and Budgets must each be allowed to publish to the topic, only for this account."
   }
+
+  # The source ARNs are built from the region and account id; each service may publish
+  # only for this account's alarms in this region, and this account's budgets.
+  assert {
+    condition = toset([
+      for s in jsondecode(aws_sns_topic_policy.spend_leak.policy).Statement : s.Condition.ArnLike["aws:SourceArn"]
+      ]) == toset([
+      "arn:aws:cloudwatch:eu-west-1:111122223333:alarm:*",
+      "arn:aws:budgets::111122223333:*",
+    ])
+    error_message = "The topic policy must confine publishing to this account's alarms in the stack's region and this account's budgets."
+  }
 }
 
-# The budget was made in the console and is imported with its limit and thresholds
-# unchanged; only its notifications move from a direct email to the topic.
+# The imported budget keeps its console limit and thresholds, and every notification
+# pages through the topic.
 run "monthly_budget_keeps_its_limit_and_thresholds" {
   command = plan
 

@@ -5,6 +5,10 @@
 # running on-demand G-class vCPUs; the slow catch-all is the monthly AWS Budget, which
 # also sees the NAT, the ALBs, the bench host and the control plane.
 
+locals {
+  account_id = data.aws_caller_identity.current.account_id
+}
+
 resource "aws_sns_topic" "spend_leak" {
   name = "slipstream-spend-leak"
 }
@@ -32,8 +36,8 @@ resource "aws_sns_topic_policy" "spend_leak" {
         Action    = "sns:Publish"
         Resource  = aws_sns_topic.spend_leak.arn
         Condition = {
-          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
-          ArnLike      = { "aws:SourceArn" = "arn:aws:cloudwatch:${var.region}:${data.aws_caller_identity.current.account_id}:alarm:*" }
+          StringEquals = { "aws:SourceAccount" = local.account_id }
+          ArnLike      = { "aws:SourceArn" = "arn:aws:cloudwatch:${var.region}:${local.account_id}:alarm:*" }
         }
       },
       {
@@ -43,8 +47,8 @@ resource "aws_sns_topic_policy" "spend_leak" {
         Action    = "sns:Publish"
         Resource  = aws_sns_topic.spend_leak.arn
         Condition = {
-          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
-          ArnLike      = { "aws:SourceArn" = "arn:aws:budgets::${data.aws_caller_identity.current.account_id}:*" }
+          StringEquals = { "aws:SourceAccount" = local.account_id }
+          ArnLike      = { "aws:SourceArn" = "arn:aws:budgets::${local.account_id}:*" }
         }
       },
     ]
@@ -53,8 +57,9 @@ resource "aws_sns_topic_policy" "spend_leak" {
 
 # AWS/Usage publishes the account's running on-demand G-family vCPUs at one-minute
 # resolution. Hourly Maximum periods, all 20 of which must breach, page once a GPU has
-# stayed up for 20 hours: above the longest legitimate session (an 18-hour benchmark
-# run), and about $22 of g5.xlarge on-demand spend. The count covers on-demand capacity
+# touched 20 consecutive clock hours, so after 19 to 20 hours of runtime: above the
+# longest legitimate session (an 18-hour benchmark run spans at most 19 such hours), and
+# about $22 of g5.xlarge on-demand spend. The count covers on-demand capacity
 # only; a spot GPU leak reaches only the budget.
 resource "aws_cloudwatch_metric_alarm" "gpu_spend_leak" {
   alarm_name        = "slipstream-gpu-spend-leak"
@@ -86,10 +91,13 @@ resource "aws_cloudwatch_metric_alarm" "gpu_spend_leak" {
 # limit and thresholds as they were, so it keeps its history.
 import {
   to = aws_budgets_budget.monthly
-  id = "${data.aws_caller_identity.current.account_id}:slipstream-monthly"
+  id = "${local.account_id}:${local.monthly_budget_name}"
 }
 
 locals {
+  # The console name, kept so the import binds to the existing budget.
+  monthly_budget_name = "slipstream-monthly"
+
   monthly_budget_notifications = [
     { type = "ACTUAL", threshold = 50 },
     { type = "ACTUAL", threshold = 75 },
@@ -101,7 +109,7 @@ locals {
 # Budgets refreshes up to three times a day, so this layer pages hours after spend
 # crosses a threshold; it is the catch-all, not the fast path.
 resource "aws_budgets_budget" "monthly" {
-  name         = "slipstream-monthly"
+  name         = local.monthly_budget_name
   budget_type  = "COST"
   time_unit    = "MONTHLY"
   limit_amount = "200.0"

@@ -142,8 +142,6 @@ locals {
   }
 }
 
-data "aws_caller_identity" "current" {}
-
 # AWS uses its own library of trusted root CAs to validate GitHub's issuer, so no
 # thumbprint_list is configured (an explicit list would need a network read of the
 # discovery certificate, which the offline plan tests must not do).
