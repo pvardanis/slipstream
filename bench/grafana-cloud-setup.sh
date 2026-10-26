@@ -201,6 +201,11 @@ is_stack_url() { [[ "$1" =~ ^https://[a-z0-9-]+\.grafana\.net/?$ ]]; }
 # shellcheck disable=SC2317,SC2329 # called by name through ask_valid
 is_external_id() { [[ "$1" =~ ^[[:alnum:]_+=,.@:/-]+$ && ${#1} -ge 2 && ${#1} -le 1224 ]]; }
 
+# is_email VALUE succeeds for what the bootstrap stack's operator_email validation
+# accepts, minus the characters that would need escaping in an HCL string.
+# shellcheck disable=SC2317,SC2329 # called by name through ask_valid
+is_email() { [[ "$1" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ && "$1" != *[\"\\\$%]* ]]; }
+
 # ask_valid KEY PROMPT CHECK MESSAGE asks for KEY until CHECK accepts it, warning MESSAGE
 # after each rejected answer.
 ask_valid() {
@@ -287,7 +292,7 @@ check_secret_set() {
 
 run_wizard() {
 
-  TOTAL_STAGES=7
+  TOTAL_STAGES=8
 
   # Everything the stages need is checked before the operator starts the browser work.
   if [[ ! -d "${bootstrap_dir}" ]]; then
@@ -337,9 +342,19 @@ run_wizard() {
     "not a valid external ID; copy it from the instructions box"
   write_tfvar grafana_external_id "${GRAFANA_EXTERNAL_ID}"
 
+  stage "Bootstrap: operator email"
+  say "The bootstrap stack's spend-leak alarms page this address (ADR-0025)."
+  if [[ -n "${TF_VAR_operator_email:-}" ]] || grep -qE '^operator_email[[:space:]]*=' "${tfvars}" 2>/dev/null; then
+    note "operator_email is already set; the apply uses it."
+  else
+    ask_valid OPERATOR_EMAIL "Email address for spend-leak alerts:" is_email \
+      "not an email address, or holds one of \" \\ \$ %"
+    write_tfvar operator_email "${OPERATOR_EMAIL}"
+    note "AWS emails a confirmation link on apply; click it, or no alert is delivered."
+  fi
+
   stage "Bootstrap: apply"
   say "Applying the bootstrap stack creates the two empty secrets and the IAM role."
-  note "operator_email must be set in ${tfvars} or as TF_VAR_operator_email."
   if ! confirm "Plan and apply ${bootstrap_dir} now? Terraform asks again before it changes anything."; then
     echo "bootstrap not applied; rerun the wizard when ready" >&2
     exit 1
