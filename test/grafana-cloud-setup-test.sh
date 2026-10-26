@@ -3,11 +3,14 @@
 # stubbed on PATH and the operator's answers are piped on stdin, so no apply, AWS call or
 # browser runs. It checks that the external ID lands in terraform.tfvars beside the values
 # already there before the apply reads it, and a first run creates the file at mode 0600;
+# that the stack URL lands in the grafana stack's terraform.tfvars without its trailing
+# slash; that the operator leaves the CloudWatch data source unsaved for the grafana
+# stack to create, and gives the service account the Admin role it needs to create it;
 # that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
 # never appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that
 # an invalid external ID or an empty token is asked for again; that the data source,
 # access policy and service account pages open; that the operator email is asked for
-# only when neither terraform.tfvars nor TF_VAR_operator_email sets it; and that a missing bootstrap dir or tool,
+# only when neither terraform.tfvars nor TF_VAR_operator_email sets it; and that a missing bootstrap or grafana dir or tool,
 # an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply, an
 # unreadable bootstrap output, a failed write, a failed read, a secret left empty or an
 # unreadable terraform.tfvars exits non-zero, the last leaving the file intact.
@@ -21,7 +24,7 @@ trap 'rm -rf "${tmp}"' EXIT
 write_token="glc_write-token-SECRET-1"
 api_token="glsa_api-token-SECRET-2"
 
-mkdir -p "${tmp}/bin" "${tmp}/bootstrap" "${tmp}/empty"
+mkdir -p "${tmp}/bin" "${tmp}/bootstrap" "${tmp}/grafana" "${tmp}/empty"
 # The wizard runs under this bash by path, so it still starts when RUN_PATH hides every tool.
 bash_bin="$(command -v bash)"
 
@@ -90,13 +93,13 @@ chmod +x "${tmp}/bin/"*
 
 # The operator's answers, in prompt order: start, stack created, stack URL, an invalid
 # external ID then a valid one, the operator email answers when the wizard has to ask
-# (EMAIL_ANSWERS, one per line), apply, ARN pasted, an empty write token then the token,
+# (EMAIL_ANSWERS, one per line), apply, an empty write token then the token,
 # and the API token. ANSWER_LINES cuts them short, as a closed stdin does.
 answers() {
   {
     printf '%s\n' "" "" "https://slipstream.grafana.net/" "bad id!" "ext-123"
     [[ -z "${EMAIL_ANSWERS:-}" ]] || printf '%s\n' "${EMAIL_ANSWERS}"
-    printf '%s\n' "${APPLY_ANSWER:-y}" "" "" "${write_token}" "${api_token}"
+    printf '%s\n' "${APPLY_ANSWER:-y}" "" "${write_token}" "${api_token}"
   } | head -n "${ANSWER_LINES:-99}"
 }
 
@@ -105,13 +108,14 @@ run() {
   rm -rf "${tmp}/store" "${tmp}/applied-with"
   : >"${tmp}/aws-calls"
   : >"${tmp}/opened"
-  rm -f "${tmp}/bootstrap/"*
+  rm -f "${tmp}/bootstrap/"* "${tmp}/grafana/"*
   if [[ -z "${NO_TFVARS:-}" ]]; then
     printf 'operator_email = "op@example.com"\ngrafana_external_id = "stale"\n' >"${tmp}/bootstrap/terraform.tfvars"
     chmod "${TFVARS_MODE:-600}" "${tmp}/bootstrap/terraform.tfvars"
   fi
   # TRACE runs the wizard under bash -x; RUN_PATH replaces PATH, hiding the stubs.
   answers | PATH="${RUN_PATH:-${tmp}/bin:${PATH}}" "${bash_bin}" ${TRACE:+-x} "${script}" "${BOOTSTRAP_ARG:-${tmp}/bootstrap}" \
+    "${GRAFANA_ARG:-${tmp}/grafana}" \
     >"${tmp}/stdout" 2>"${tmp}/stderr"
 }
 ok() { echo "ok   $1"; }
@@ -161,8 +165,11 @@ check_file "api token put in region" "${tmp}/aws-calls" "secretsmanager put-secr
 check_file "data source page opened" "${tmp}/opened" "https://slipstream.grafana.net/connections/datasources/new"
 check_file "access policies page opened" "${tmp}/opened" "https://slipstream.grafana.net/a/grafana-auth-app"
 check_file "service accounts page opened" "${tmp}/opened" "https://slipstream.grafana.net/org/serviceaccounts"
-check_file "role arn shown" "${tmp}/stdout" "    arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch"
+check_file "stack url written for the grafana stack" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://slipstream.grafana.net"'
+if grep -qF "Save & test" "${tmp}/stdout"; then bad "cloudwatch data source left unsaved"; else ok "cloudwatch data source left unsaved"; fi
+if grep -qF "role Admin" "${tmp}/stdout"; then ok "service account given the Admin role"; else bad "service account given the Admin role"; fi
 check_no_token "tokens never echoed, passed as arguments or written to a file"
+if [[ "$(ls "${tmp}/grafana")" == terraform.tfvars ]]; then ok "no temp file left beside the grafana tfvars"; else bad "no temp file left beside the grafana tfvars"; fi
 if [[ "$(ls "${tmp}/bootstrap")" == terraform.tfvars ]]; then ok "no temp file left beside tfvars"; else bad "no temp file left beside tfvars"; fi
 if grep -qF "not a valid external ID" "${tmp}/stdout" && grep -qF "token is empty" "${tmp}/stdout"; then
   ok "invalid external id and empty token asked again"
@@ -192,6 +199,7 @@ else
   bad "first run creates tfvars with the external id and email"
 fi
 if [[ -n "$(find "${tfvars}" -perm 0600)" ]]; then ok "first run tfvars is mode 0600"; else bad "first run tfvars is mode 0600"; fi
+if [[ -n "$(find "${tmp}/grafana/terraform.tfvars" -perm 0600)" ]]; then ok "first run grafana tfvars is mode 0600"; else bad "first run grafana tfvars is mode 0600"; fi
 if [[ "$(grep -c "not an email address" "${tmp}/stdout")" == 2 ]]; then ok "invalid operator email asked again"; else bad "invalid operator email asked again"; fi
 check_file "apply read the new external id with no tfvars before" "${tmp}/applied-with" 'grafana_external_id = "ext-123"'
 
@@ -204,13 +212,14 @@ if [[ "$(cat "${tfvars}")" == 'grafana_external_id = "ext-123"' ]]; then ok "TF_
 
 # Failures stop the wizard with a message naming what to do.
 BOOTSTRAP_ARG="${tmp}/missing" check_aborted "missing bootstrap dir" "bootstrap dir ${tmp}/missing not found"
+GRAFANA_ARG="${tmp}/missing" check_aborted "missing grafana dir" "grafana dir ${tmp}/missing not found"
 RUN_PATH="${tmp}/empty" check_aborted "missing terraform" "terraform not found on PATH"
 AWS_STS_EXIT=255 check_aborted "aws not authenticated" "aws is not authenticated"
 if grep -qF "Token has expired" "${tmp}/stderr"; then ok "aws's own error shown"; else bad "aws's own error shown"; fi
 AWS_CLI_HISTORY=enabled check_aborted "aws cli history on" "cli_history is enabled"
 ANSWER_LINES=4 check_aborted "stdin closed at a prompt" "stdin closed before GRAFANA_EXTERNAL_ID was entered"
 NO_TFVARS=1 ANSWER_LINES=5 check_aborted "stdin closed at the email" "stdin closed before OPERATOR_EMAIL was entered"
-ANSWER_LINES=8 check_aborted "stdin closed at a token" "stdin closed before the token for grafana-cloud/write was entered"
+ANSWER_LINES=7 check_aborted "stdin closed at a token" "stdin closed before the token for grafana-cloud/write was entered"
 APPLY_ANSWER=n check_aborted "apply declined" "bootstrap not applied"
 if [[ ! -e "${tmp}/applied-with" ]]; then ok "declined apply never runs terraform apply"; else bad "declined apply never runs terraform apply"; fi
 TF_EMPTY_OUTPUT=region check_aborted "empty bootstrap output" "cannot read bootstrap output region"
