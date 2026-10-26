@@ -16,7 +16,7 @@ variable "state_bucket" {
 }
 
 variable "grafana_url" {
-  description = "URL of the Grafana Cloud stack, https://<stack>.grafana.net, the one the bench/grafana-cloud-setup.sh walkthrough has the operator create. Override it in the gitignored terraform.tfvars or as TF_VAR_grafana_url to point at another stack."
+  description = "URL of the Grafana Cloud stack, https://<stack>.grafana.net, the one the bench/grafana-cloud-setup.sh walkthrough has the operator create. `just grafana-cloud-setup` writes it into the gitignored terraform.tfvars; TF_VAR_grafana_url also sets it."
   type        = string
   default     = "https://slipstreamobs.grafana.net"
 
