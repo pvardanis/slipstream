@@ -7,6 +7,10 @@ provider "aws" {
   region = var.region
 }
 
+# The account the stack applies into; the OIDC and spend-leak policies scope ARNs and
+# conditions to it.
+data "aws_caller_identity" "current" {}
+
 # A random suffix keeps the bucket name unique in S3's global namespace.
 resource "random_id" "suffix" {
   byte_length = 3
