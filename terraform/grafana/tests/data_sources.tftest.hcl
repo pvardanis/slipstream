@@ -6,19 +6,22 @@
 mock_provider "aws" {}
 mock_provider "grafana" {}
 
+# The overridden region and secret name differ from this stack's own defaults, so the
+# assertions on them fail if the code reads var.region or a literal instead of the bootstrap
+# outputs.
 override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
     outputs = {
-      region                        = "eu-west-1"
-      grafana_cloud_api_secret_name = "grafana-cloud/api"
+      region                        = "eu-central-1"
+      grafana_cloud_api_secret_name = "test/grafana-api"
       grafana_cloudwatch_role_arn   = "arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch"
     }
   }
 }
 
-# grafana_url is left at its default, so the runs also check that the default names a
-# Grafana Cloud stack whose hosted data sources resolve.
+# grafana_url is left at its default, so the runs also check the hosted data source names
+# the default URL produces.
 variables {
   state_bucket = "slipstream-tf-state-test"
 }
@@ -41,7 +44,7 @@ run "cloudwatch_reads_through_the_bootstrap_role" {
     error_message = "The CloudWatch data source must assume the bootstrap stack's grafana_cloudwatch_role_arn."
   }
   assert {
-    condition     = jsondecode(grafana_data_source.cloudwatch.json_data_encoded).defaultRegion == "eu-west-1"
+    condition     = jsondecode(grafana_data_source.cloudwatch.json_data_encoded).defaultRegion == "eu-central-1"
     error_message = "The CloudWatch data source's default region must be the bootstrap stack's region."
   }
 }
@@ -68,7 +71,7 @@ run "provider_token_is_read_from_the_bootstrap_api_secret" {
   command = plan
 
   assert {
-    condition     = data.aws_secretsmanager_secret_version.grafana_api.secret_id == "grafana-cloud/api"
+    condition     = data.aws_secretsmanager_secret_version.grafana_api.secret_id == "test/grafana-api"
     error_message = "The Grafana provider's token must be read from the bootstrap stack's grafana_cloud_api_secret_name."
   }
 }
@@ -98,4 +101,16 @@ run "grafana_url_may_end_in_a_slash" {
     condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstreamobs-prom"
     error_message = "A stack URL with a trailing slash must name the same hosted data sources."
   }
+}
+
+# An empty bucket name, from a failed bootstrap output lookup, is rejected by the variable
+# rather than reaching the bootstrap remote state read.
+run "state_bucket_must_be_non_empty" {
+  command = plan
+
+  variables {
+    state_bucket = ""
+  }
+
+  expect_failures = [var.state_bucket]
 }
