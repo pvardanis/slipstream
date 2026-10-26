@@ -111,7 +111,8 @@ cluster-down: _bootstrap-init
     terraform -chdir={{ eks_dir }} destroy -auto-approve -refresh=false -var="state_bucket=${bucket}"
 
 # Needs `aws` authenticated to the bootstrap account. Covers the free stack, its Assume
-# Role external ID, a bootstrap apply, and both tokens written to Secrets Manager.
+# Role external ID, a bootstrap apply, the CloudWatch data source's role, and both tokens
+# written to Secrets Manager.
 # Walk through Grafana Cloud's one-time setup (ADR-0026).
 [group('cluster')]
 grafana-cloud-setup:

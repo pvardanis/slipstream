@@ -15,6 +15,9 @@
 # it. Author the per-step stages below the marker.
 
 set -euo pipefail
+# The tokens pass through shell variables, so tracing stays off even under bash -x or an
+# inherited SHELLOPTS=xtrace.
+set +x
 
 # ──────────────────────────────────────────────────────────────────────────
 # Wizard library: delightful, consistent UX, identical across every wizard.
@@ -60,7 +63,7 @@ banner() {
   printf '%s  %s stages%s\n\n' "$DIM" "$TOTAL_STAGES" "$RESET"
   printf '%s  You drive the browser; this wizard tells you exactly what to do and\n' "$DIM"
   printf '  captures the values you copy back. Stop any time with Ctrl-C and re-run\n'
-  printf '  later, since it remembers values already saved.%s\n' "$RESET"
+  printf '  it later.%s\n' "$RESET"
   pause "Ready to start?"
 }
 
@@ -203,7 +206,10 @@ is_external_id() { [[ "$1" =~ ^[[:alnum:]_+=,.@:/-]+$ && ${#1} -ge 2 && ${#1} -l
 ask_valid() {
   local key="$1" prompt="$2" check="$3" message="$4"
   while true; do
-    ask "${key}" "${prompt}"
+    if ! ask "${key}" "${prompt}"; then
+      echo "stdin closed before ${key} was entered; rerun the wizard" >&2
+      return 1
+    fi
     "${check}" "${!key}" && return 0
     warn "${message}"
   done
@@ -224,32 +230,42 @@ read_output() {
 # line. Creates the file at mode 0600; VALUE is validated by the caller, so it needs no
 # HCL escaping.
 write_tfvar() {
-  local key="$1" value="$2" tmp
+  local key="$1" value="$2" tmp rc=0
   [[ -e "${tfvars}" ]] || (umask 077 && : >"${tfvars}")
-  tmp=$(mktemp)
-  grep -vE "^${key}[[:space:]]*=" "${tfvars}" >"${tmp}" || true
+  # The new file is built beside tfvars and moved over it, so a failed write leaves the
+  # old file whole.
+  tmp=$(mktemp "${tfvars}.XXXXXX")
+  # grep exits 1 when no other line is left, which is fine; above 1 it could not read the
+  # file, and writing on would replace every value in it with KEY alone.
+  grep -vE "^${key}[[:space:]]*=" "${tfvars}" >"${tmp}" || rc=$?
+  if ((rc > 1)); then
+    rm -f "${tmp}"
+    echo "cannot read ${tfvars}; check its permissions and rerun the wizard" >&2
+    return 1
+  fi
   printf '%s = "%s"\n' "${key}" "${value}" >>"${tmp}"
-  cat "${tmp}" >"${tfvars}"
-  rm -f "${tmp}"
+  mv -f "${tmp}" "${tfvars}"
   printf '  %s✓ wrote%s %s → %s\n' "$GREEN" "$RESET" "${key}" "${tfvars}"
 }
 
 # put_token SECRET_ID PROMPT asks for a token with hidden entry, again while it is empty,
 # and writes it to SECRET_ID through aws's stdin.
 put_token() {
-  local secret_id="$1" prompt="$2"
-  TOKEN=""
+  # Local, so the token is gone once the function returns; ask_secret still fills it
+  # through bash's dynamic scope.
+  local secret_id="$1" prompt="$2" TOKEN=""
   while [[ -z "${TOKEN}" ]]; do
-    ask_secret TOKEN "${prompt}"
+    if ! ask_secret TOKEN "${prompt}"; then
+      echo "stdin closed before the token for ${secret_id} was entered; rerun the wizard" >&2
+      return 1
+    fi
     [[ -n "${TOKEN}" ]] || warn "token is empty; paste it again"
   done
   if ! printf '%s' "${TOKEN}" | aws secretsmanager put-secret-value --region "${region}" \
     --secret-id "${secret_id}" --secret-string file:///dev/stdin >/dev/null; then
-    TOKEN=""
-    echo "writing ${secret_id} failed; mint a fresh token and rerun the wizard" >&2
+    echo "writing ${secret_id} failed; check the AWS identity can write it (aws's error is above) and rerun the wizard" >&2
     return 1
   fi
-  TOKEN=""
   printf '  %s✓ wrote%s token → Secrets Manager %s\n' "$GREEN" "$RESET" "${secret_id}"
 }
 
@@ -257,8 +273,11 @@ put_token() {
 # its length so the value itself is never printed.
 check_secret_set() {
   local length
-  length="$(aws secretsmanager get-secret-value --region "${region}" --secret-id "$1" \
-    --query 'length(SecretString)' --output text)"
+  if ! length="$(aws secretsmanager get-secret-value --region "${region}" --secret-id "$1" \
+    --query 'length(SecretString)' --output text)"; then
+    echo "cannot read $1 from Secrets Manager; check the AWS identity can read it and rerun the wizard" >&2
+    return 1
+  fi
   if [[ ! "${length}" =~ ^[0-9]+$ ]] || ((length == 0)); then
     echo "$1 holds no value; rerun the wizard" >&2
     return 1
@@ -270,8 +289,26 @@ run_wizard() {
 
   TOTAL_STAGES=7
 
-  if ! aws sts get-caller-identity >/dev/null 2>&1; then
+  # Everything the stages need is checked before the operator starts the browser work.
+  if [[ ! -d "${bootstrap_dir}" ]]; then
+    echo "bootstrap dir ${bootstrap_dir} not found; pass the terraform/bootstrap directory" >&2
+    exit 1
+  fi
+  local tool
+  for tool in terraform aws; do
+    if ! command -v "${tool}" >/dev/null; then
+      echo "${tool} not found on PATH; install it and rerun the wizard" >&2
+      exit 1
+    fi
+  done
+  if ! aws sts get-caller-identity >/dev/null; then
     echo "aws is not authenticated: set AWS_PROFILE to the bootstrap account and log in" >&2
+    exit 1
+  fi
+  # With AWS CLI history on, aws records each call's parameters, the token included, in
+  # ~/.aws/cli/history. `configure get` exits 1 when the setting is unset.
+  if [[ "$(aws configure get cli_history || true)" == enabled ]]; then
+    echo "cli_history is enabled in the AWS config, so aws would record each token; disable it and rerun the wizard" >&2
     exit 1
   fi
 
