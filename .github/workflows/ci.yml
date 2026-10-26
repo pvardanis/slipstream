@@ -242,7 +242,7 @@ jobs:
           echo "${RUNNER_TEMP}/kubeconform" >> "${GITHUB_PATH}"
       # Lints and renders every local chart under terraform/*/charts/ and validates the
       # output against the Kubernetes and CRD schemas, so a chart Terraform installs at
-      # cluster-up cannot reach it with a template that fails to render or a resource
-      # the API server would reject.
+      # cluster-up fails here, not at cluster-up, on a template that fails to render or a
+      # resource the API server would reject.
       - name: Render and validate the local Helm charts
         run: bash test/chart-render-test.sh

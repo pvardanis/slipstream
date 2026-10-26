@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter and orchestration image check, and the local Helm charts' render (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the orchestration image check, and the local Helm chart render check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
