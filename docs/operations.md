@@ -171,6 +171,46 @@ well-formed completion, tears everything down, then sweeps EC2 for any
 volume live outside Terraform state). Teardown and the sweep run even if the smoke
 fails. A green exit means the rig served and spend is back at zero.
 
+## Grafana Cloud setup
+
+Grafana Cloud's free tier holds the dashboards, metrics and traces
+([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). The bootstrap stack
+creates two empty Secrets Manager secrets, `grafana-cloud/write` and `grafana-cloud/api`,
+and the IAM role the stack's CloudWatch data source assumes (Grafana Assume Role). The
+tokens are minted by hand in Grafana Cloud, so a wizard walks through it once per
+environment:
+
+```sh
+just grafana-cloud-setup
+```
+
+It checks `terraform` and `aws` are installed, `aws` is logged in, and AWS CLI history is
+off (history would record each token), then runs eight stages:
+
+1. Create a free Grafana Cloud stack and paste its URL.
+2. Copy the External ID from the CloudWatch data source's Connection Details; it is
+   written as `grafana_external_id` into `terraform/bootstrap/terraform.tfvars`.
+3. Enter the spend-leak alert address as `operator_email`. Skipped when the tfvars file or
+   `TF_VAR_operator_email` already sets it.
+4. Apply the bootstrap stack.
+5. Paste the role ARN into the data source and click Save & test. The role reads CloudWatch
+   metrics only, so the test reports the metrics query as working and the logs query as
+   failing; that is expected.
+6. Mint the access-policy token for metrics and traces writes, stored in
+   `grafana-cloud/write`.
+7. Mint the service account token for the Grafana Terraform provider, stored in
+   `grafana-cloud/api`.
+8. Check both secrets hold a value.
+
+Tokens are piped to `aws secretsmanager put-secret-value` on stdin, so they never reach a
+file, the command line, or Terraform state. A failed stage stops the wizard; rerun it
+from the start.
+
+`grafana_external_id` has no default, so every later `just bootstrap` needs it from the
+gitignored tfvars file or `TF_VAR_grafana_external_id`, and fails without it. A fresh
+worktree has no tfvars file: copy it from the main checkout (`chmod 600` it, as it holds
+the operator's address), or export both variables.
+
 ## Spend-leak alert
 
 The spend-leak guard ([ADR-0025](adr/0025-spend-leak-guard-outside-the-cluster.md)) emails
@@ -210,10 +250,10 @@ aws ce get-cost-and-usage --time-period Start="$(date -u +%Y-%m-01)",End="$(date
 
 **Setup.** `just bootstrap` needs the operator's address, kept out of this public repo:
 `operator_email` in the gitignored `terraform/bootstrap/terraform.tfvars`, or
-`TF_VAR_operator_email`. AWS then emails a confirmation link; nothing is delivered until
-it is clicked, and every bootstrap plan warns (`operator_email_confirmed`) while it is
-pending. An unsubscribe link in an alert email removes the subscription; `just bootstrap`
-re-creates it.
+`TF_VAR_operator_email`; `just grafana-cloud-setup` asks for it when neither is set. AWS
+then emails a confirmation link; nothing is delivered until it is clicked, and every
+bootstrap plan warns (`operator_email_confirmed`) while it is pending. An unsubscribe link
+in an alert email removes the subscription; `just bootstrap` re-creates it.
 
 **Rehearsal.** Force the alarm and check the email arrives:
 
