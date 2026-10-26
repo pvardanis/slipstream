@@ -16,8 +16,9 @@ variable "state_bucket" {
 }
 
 variable "grafana_url" {
-  description = "URL of the Grafana Cloud stack, https://<stack>.grafana.net, the one bench/grafana-cloud-setup.sh creates. No default, so it stays out of this public repo: set it in the gitignored terraform.tfvars or as TF_VAR_grafana_url."
+  description = "URL of the Grafana Cloud stack, https://<stack>.grafana.net, the one bench/grafana-cloud-setup.sh creates. Override it in the gitignored terraform.tfvars or as TF_VAR_grafana_url to point at another stack."
   type        = string
+  default     = "https://slipstreamobs.grafana.net"
 
   validation {
     condition     = can(regex("^https://[a-z0-9-]+\\.grafana\\.net/?$", var.grafana_url))
