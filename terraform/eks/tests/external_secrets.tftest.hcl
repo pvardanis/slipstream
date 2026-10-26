@@ -137,6 +137,13 @@ run "write_token_synced_into_both_namespaces" {
     condition     = sort([for r in helm_release.grafana_cloud_write_token : r.namespace]) == tolist(["monitoring", "slipstream"])
     error_message = "The write token must sync into the monitoring and slipstream namespaces."
   }
+  # Helm ignores a values key the chart does not read, so a key renamed on one side only
+  # leaves the chart's empty default, which the templates' required rejects at install,
+  # not here.
+  assert {
+    condition     = alltrue([for r in helm_release.grafana_cloud_write_token : sort(keys(yamldecode(r.values[0]))) == sort(keys(yamldecode(file("charts/grafana-cloud-write-token/values.yaml"))))])
+    error_message = "Every sync release must set exactly the keys the chart's values.yaml declares."
+  }
   assert {
     condition     = alltrue([for r in helm_release.grafana_cloud_write_token : yamldecode(r.values[0]).remoteKey == "grafana-cloud/write"])
     error_message = "Every sync must read the grafana-cloud/write secret the operator's policy grants."
