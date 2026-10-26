@@ -1,0 +1,9 @@
+# The External Secrets resources that sync the Grafana Cloud write token from Secrets
+# Manager into one namespace that sends to Grafana Cloud (ADR-0026), installed once per
+# namespace since a Secret is read only from its own. A chart of its own, installed after
+# the operator's release, because its kinds exist only once the operator's CRDs do.
+apiVersion: v2
+name: grafana-cloud-write-token
+description: Syncs the Grafana Cloud write token into the release's namespace.
+type: application
+version: 0.1.0

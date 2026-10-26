@@ -46,10 +46,11 @@ override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
     outputs = {
-      orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-      sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
-      cluster_name                 = "slipstream"
-      prefect_namespace            = "prefect"
+      orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+      grafana_cloud_write_secret_name = "grafana-cloud/write"
+      cluster_name                    = "slipstream"
+      prefect_namespace               = "prefect"
     }
   }
 }
@@ -142,10 +143,11 @@ run "sweep_dispatch_rejects_a_different_bootstrap_cluster" {
     target = data.terraform_remote_state.bootstrap
     values = {
       outputs = {
-        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
-        cluster_name                 = "other-cluster"
-        prefect_namespace            = "prefect"
+        orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        grafana_cloud_write_secret_name = "grafana-cloud/write"
+        cluster_name                    = "other-cluster"
+        prefect_namespace               = "prefect"
       }
     }
   }
@@ -160,10 +162,11 @@ run "sweep_dispatch_rejects_a_different_bootstrap_namespace" {
     target = data.terraform_remote_state.bootstrap
     values = {
       outputs = {
-        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
-        cluster_name                 = "slipstream"
-        prefect_namespace            = "other-namespace"
+        orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        grafana_cloud_write_secret_name = "grafana-cloud/write"
+        cluster_name                    = "slipstream"
+        prefect_namespace               = "other-namespace"
       }
     }
   }
@@ -181,8 +184,9 @@ run "sweep_dispatch_rejects_a_bootstrap_without_target_outputs" {
     target = data.terraform_remote_state.bootstrap
     values = {
       outputs = {
-        orchestration_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-        sweep_dispatch_role_arn      = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        grafana_cloud_write_secret_name = "grafana-cloud/write"
       }
     }
   }
