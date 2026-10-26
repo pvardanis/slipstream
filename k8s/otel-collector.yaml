@@ -39,6 +39,15 @@ spec:
           # Contrib distro: the redaction processor that enforces shape-only is
           # not in the core collector. Pinned so a measurement reproduces.
           image: otel/opentelemetry-collector-contrib:0.160.0
+          # The served model, stamped as model_id on vLLM spans. Not optional:
+          # without it the pod does not start, rather than exporting spans with an
+          # empty model_id.
+          env:
+            - name: MODEL_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: otel-collector-config
+                  key: model-id
           ports:
             - name: otlp-grpc
               containerPort: 4317

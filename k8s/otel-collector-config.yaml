@@ -1,4 +1,5 @@
-# Request-ID spine stub: a minimal OTel Collector that receives OTLP, enforces
+# Request-ID spine stub: a minimal OTel Collector that receives OTLP, maps vLLM's
+# spans onto the spine's names with per-request goodput (ADR-0026), enforces
 # the shape-only privacy stance, batches, and fans out to its sinks (spec §5.1).
 # For the stub the only sink is the debug exporter, whose detailed output puts
 # the request_id on the collector's stdout (readable via `kubectl logs`); the
@@ -22,6 +23,45 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
+  # Maps vLLM's llm_request span onto the spine's names before the shape-only
+  # guard sees it, and sets per-request goodput (ADR-0026). vLLM v0.29.0 names
+  # its attributes gen_ai.*, which the redaction allowlist would drop wholesale.
+  # Only spans carrying gen_ai.request.id are touched; spans already in the
+  # spine's names pass through unchanged.
+  transform:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        conditions:
+          - span.attributes["gen_ai.request.id"] != nil
+        statements:
+          # vLLM's request id is "chatcmpl-" plus the client's X-Request-Id;
+          # stripped, request_id is exactly the header value a gateway, Sentry
+          # or PostHog joins on.
+          - set(span.attributes["request_id"], span.attributes["gen_ai.request.id"])
+          - replace_pattern(span.attributes["request_id"], "^chatcmpl-", "")
+          - set(span.attributes["prompt_tokens"], span.attributes["gen_ai.usage.prompt_tokens"])
+          - set(span.attributes["completion_tokens"], span.attributes["gen_ai.usage.completion_tokens"])
+          - delete_key(span.attributes, "gen_ai.request.id")
+          - delete_key(span.attributes, "gen_ai.usage.prompt_tokens")
+          - delete_key(span.attributes, "gen_ai.usage.completion_tokens")
+          # vLLM's span omits the model; the Collector is given the served model
+          # (model.yaml's hfId, via just obs-up) in MODEL_ID.
+          - set(span.attributes["model_id"], "${env:MODEL_ID}")
+          # Goodput gates, in seconds: the bench configs' goodput
+          # ["ttft:1000", "tpot:50"] (ms). test/goodput-parity-test.sh holds the
+          # two equal.
+          - set(span.cache["ttft_gate_s"], 1.0)
+          - set(span.cache["tpot_gate_s"], 0.05)
+          # TPOT = (e2e - TTFT) / (completion_tokens - 1). With one completion
+          # token or none TPOT is undefined and counts as 0, so TTFT alone
+          # decides; vllm bench serve treats it the same way, which keeps live
+          # and offline goodput equal.
+          - set(span.cache["tpot_s"], 0.0)
+          - set(span.cache["tpot_s"], (span.attributes["gen_ai.latency.e2e"] - span.attributes["gen_ai.latency.time_to_first_token"]) / Double(span.attributes["completion_tokens"] - 1)) where span.attributes["completion_tokens"] > 1
+          # slo_met: TTFT <= 1.0 s and TPOT <= 0.05 s, both gates inclusive.
+          - set(span.attributes["slo_met"], false)
+          - set(span.attributes["slo_met"], true) where span.attributes["gen_ai.latency.time_to_first_token"] <= span.cache["ttft_gate_s"] and span.cache["tpot_s"] <= span.cache["tpot_gate_s"]
   # Shape-only guard, fail-closed: only these keys survive on a span; every other
   # span attribute (a raw prompt, a completion, anything vLLM or a future gateway
   # attaches as a span attribute) is dropped before it can reach a sink — the
@@ -36,6 +76,7 @@ processors:
       - prompt_tokens
       - completion_tokens
       - prefix_hash
+      - slo_met
     # Count redacted keys but never emit their names or values — a name list can
     # itself leak shape (spec §5.1). Counts are enough to see the guard working.
     summary: info
@@ -55,5 +96,5 @@ service:
     # and the debug exporter renders it to the collector's stdout.
     traces:
       receivers: [otlp]
-      processors: [redaction, batch]
+      processors: [transform, redaction, batch]
       exporters: [debug]
