@@ -143,7 +143,7 @@ needs no live cluster.
 | Stack | Lifetime | Holds |
 | --- | --- | --- |
 | `terraform/bootstrap` | permanent | state bucket, ECR repositories, GitHub OIDC roles |
-| `terraform/grafana` | permanent, `grafana-up` | Grafana Cloud CloudWatch data source; reads the hosted Prometheus and Tempo data sources |
+| `terraform/grafana` | permanent | Grafana Cloud CloudWatch data source |
 | `terraform/eks` | `cluster-up` → `cluster-down` | VPC, EKS, Karpenter, EBS storage, Prefect server and worker, sweep-dispatch RBAC |
 | `terraform/bench-endpoint` | `bench-endpoint-up` → `bench-endpoint-down` | mTLS ALB, certs, bench host, results bucket |
 

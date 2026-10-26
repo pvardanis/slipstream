@@ -1,7 +1,8 @@
 # Operations
 
-Runbooks for the live rig. All but cloud verify and the spend-leak alert assume the stack
-is up (`just stack-up`) and end with `just stack-down`.
+Runbooks for the live rig. All but cloud verify, the Grafana Cloud setup, the Grafana data
+sources and the spend-leak alert assume the stack is up (`just stack-up`) and end with
+`just stack-down`.
 
 ## Knob sweep
 
@@ -199,8 +200,8 @@ off (history would record each token), then runs seven stages:
    `grafana-cloud/write`.
 6. Mint the service account token for the Grafana Terraform provider, stored in
    `grafana-cloud/api`. The service account needs the Admin role, as only Admin can
-   create data sources; an existing `slipstream-terraform` account is moved to Admin
-   and reused.
+   create data sources. If `slipstream-terraform` already exists, change its role to
+   Admin and reuse it.
 7. Check both secrets hold a value, then write the stack URL as `grafana_url` into
    `terraform/grafana/terraform.tfvars`.
 
