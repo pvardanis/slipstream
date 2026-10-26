@@ -1,4 +1,4 @@
-# Observability lifecycle: the persistent Grafana Cloud stack, and the OTel Collector spine stub deploy, teardown, and trace pivot.
+# Observability lifecycle: the persistent grafana Terraform stack, and the OTel Collector spine stub deploy, teardown, and trace pivot.
 
 # Deploy the OTel Collector spine stub to the cluster.
 [group('obs')]
@@ -56,10 +56,10 @@ obs-pivot:
     sleep 3
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
-# The stack outlives `just cluster-down`, so it has no down recipe. Requires
+# The Terraform stack outlives `just cluster-down`, so it has no down recipe. Requires
 # `just grafana-cloud-setup` done and grafana_url set in the gitignored
 # terraform/grafana/terraform.tfvars or as TF_VAR_grafana_url.
-# Apply the persistent Grafana Cloud stack: its data sources (ADR-0026).
+# Apply the persistent grafana Terraform stack: its data sources (ADR-0026).
 [group('obs')]
 grafana-up: _bootstrap-init
     #!/usr/bin/env bash
@@ -69,4 +69,6 @@ grafana-up: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ grafana_dir }} init -input=false -backend-config="bucket=${bucket}"
+    # No -auto-approve: the Terraform stack persists across sessions, so its plan is
+    # read before it changes what Grafana Cloud holds.
     terraform -chdir={{ grafana_dir }} apply -var="state_bucket=${bucket}"

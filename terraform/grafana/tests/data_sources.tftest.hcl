@@ -1,4 +1,4 @@
-# Plan-level tests for the Grafana Cloud data sources the persistent grafana stack owns
+# Plan-level tests for the Grafana Cloud data sources the persistent grafana Terraform stack owns
 # or reads (ADR-0026). They run offline: the aws and grafana providers are mocked and the
 # bootstrap stack's remote state is overridden, so the assertions check how the data
 # sources are wired without a Grafana Cloud stack. Grafana actually assuming the role is
@@ -46,7 +46,7 @@ run "cloudwatch_reads_through_the_bootstrap_role" {
 }
 
 # Grafana Cloud provisions the hosted Prometheus and Tempo data sources with every stack,
-# named after its slug, so the stack reads them by name instead of managing copies that
+# named after its slug, so this Terraform stack reads them by name instead of managing copies that
 # would need a read token of their own.
 run "hosted_prometheus_and_tempo_are_read_by_stack_name" {
   command = plan
