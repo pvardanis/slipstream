@@ -92,7 +92,8 @@ attribute, `request_id` included.
     `prompt_tokens` and `gen_ai.usage.completion_tokens` → `completion_tokens`;
   - strips the `chatcmpl-` prefix, so `request_id` is exactly the client's `X-Request-Id`,
     the value a gateway, Sentry or PostHog stamping the same header joins on;
-  - adds `model_id`;
+  - adds `model_id`: `just obs-up` writes `model.yaml`'s `hfId` into the Collector's
+    ConfigMap, and the Collector reads it from its environment;
   - sets `slo_met`, below.
 
   The spine's names and spec §5.1's schema stay canonical.
@@ -111,6 +112,9 @@ attribute, `request_id` included.
   when TTFT ≤ 1.0 s **and** TPOT ≤ 0.05 s, with TPOT = (e2e − TTFT) / (completion_tokens −
   1). `spanmetrics` counts requests by `slo_met`, and live goodput = rate(`slo_met=true`) /
   rate(all).
+- **One completion token:** with `completion_tokens` ≤ 1, TPOT is undefined and counts
+  as 0, so TTFT alone decides `slo_met`. `vllm bench serve` scores such a request the same
+  way, so live and offline goodput agree on it.
 - **Why not from histograms:** vLLM's histograms record each gate separately, so they
   cannot give the joint figure ADR-0009 and the bench reports use.
 - **Parity:** a static check in CI asserts the Collector's thresholds equal the bench configs'
