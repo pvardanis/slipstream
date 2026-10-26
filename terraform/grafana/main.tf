@@ -2,8 +2,8 @@
 # sources the dashboards query. It outlives `just cluster-down`, like the history it shows.
 
 # Read-only reference to the bootstrap stack's outputs: the IAM role the CloudWatch data
-# source assumes and the region it reads. Both live in bootstrap because they must exist
-# before Grafana Cloud is set up.
+# source assumes, the region it reads, and the name of the API token's secret. They live in
+# bootstrap because the setup wizard creates them before this stack is applied.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"
   config = {
