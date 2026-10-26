@@ -41,6 +41,7 @@ updates:
       - /terraform/bootstrap
       - /terraform/bench-endpoint
       - /terraform/eks
+      - /terraform/grafana
     schedule:
       interval: weekly
     cooldown:
