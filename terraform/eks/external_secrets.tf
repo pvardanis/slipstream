@@ -42,8 +42,8 @@ resource "aws_iam_role" "external_secrets" {
 }
 
 # Read on the write token only. Syncing a secret's current value is a single
-# GetSecretValue call; DescribeSecret and the rest are for pushing secrets, which this
-# cluster never does. The secret uses the AWS-managed key, whose key policy allows
+# GetSecretValue call; the other Secrets Manager actions serve PushSecret and `find`
+# lookups, neither of which this cluster uses. The secret uses the AWS-managed key, whose key policy allows
 # decryption through Secrets Manager, so no KMS grant is needed.
 resource "aws_iam_role_policy" "external_secrets" {
   name = "${var.cluster_name}-external-secrets"
@@ -99,8 +99,8 @@ resource "helm_release" "external_secrets" {
   depends_on = [module.eks, aws_eks_pod_identity_association.external_secrets, aws_iam_role_policy.external_secrets]
 }
 
-# The namespace Prometheus runs in, created here so the write token has somewhere to land
-# at cluster-up; the metrics release installs into it.
+# The namespace for Prometheus remote_write (ADR-0026), created here so the write token
+# has somewhere to land at cluster-up.
 resource "kubernetes_namespace_v1" "monitoring" {
   metadata {
     name = "monitoring"
@@ -140,7 +140,8 @@ resource "helm_release" "grafana_cloud_write_token" {
     remoteKey = local.grafana_cloud_write_secret_name
   })]
 
-  # On destroy these uninstall first, so the ExternalSecrets and the Secrets they own are
-  # deleted while the operator that handles them is still running.
+  # On destroy these uninstall first, while the operator's CRDs still exist and its
+  # webhook, which validates deletes of stores and ExternalSecrets, is still serving.
+  # The Secrets each ExternalSecret owns go with it through the owner reference.
   depends_on = [helm_release.external_secrets]
 }
