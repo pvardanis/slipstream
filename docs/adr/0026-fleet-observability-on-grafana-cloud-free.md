@@ -193,3 +193,19 @@ routing (L3) the breakdown shows the imbalance.
   - vLLM's metric names match the live `/metrics`.
 - The External Secrets Operator is one more controller on the system node.
 - Spec §5.1's cut order drops exemplars: they are kept, built through `spanmetrics`. Spec §6's scoreboard drops the commercial arm.
+
+## Amendment (2026-10-26, #366): how the write token reaches the two namespaces
+
+- **Namespaces:** `terraform/eks` creates `monitoring`. `slipstream` already exists at
+  `cluster-up`, created by the same stack for the Prefect worker's Role (`worker.tf`), so the
+  token lands in both before any consumer is deployed.
+- **One store per namespace:** each namespace gets its own `SecretStore` and `ExternalSecret`,
+  installed by a local chart (`terraform/eks/charts/grafana-cloud-write-token`) as one Helm
+  release per namespace, after the operator's release. There is no `ClusterSecretStore`, so
+  only these two namespaces can read the token.
+- **The Secret:** `grafana-cloud-write`, key `token`, owned by its `ExternalSecret` and
+  refreshed hourly. The operator's role grants `secretsmanager:GetSecretValue` on
+  `grafana-cloud/write` only.
+- **What `cluster-up` checks:** the operator's webhook rejects a malformed store or
+  `ExternalSecret`, failing the apply. Helm does not wait on the sync, so an empty or
+  unreadable secret leaves the apply green and shows only in the `ExternalSecret`'s status.
