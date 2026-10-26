@@ -3,15 +3,17 @@
 # stubbed on PATH and the operator's answers are piped on stdin, so no apply, AWS call or
 # browser runs. It checks that the external ID lands in terraform.tfvars beside the values
 # already there before the apply reads it, and a first run creates the file at mode 0600;
-# that the stack URL lands in the grafana stack's terraform.tfvars without its trailing
-# slash; that the operator leaves the CloudWatch data source unsaved for the grafana
-# stack to create, and gives the service account the Admin role it needs to create it;
-# that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
+# that the stack URL replaces the one in the grafana stack's terraform.tfvars, without its
+# trailing slash and beside the values already there, only once both tokens are stored;
+# that the operator is told to delete the CloudWatch data source the external ID page
+# creates, so the grafana stack can create its own, and to give the service account the
+# Admin role it needs to create it, a new account or an existing one; that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
 # never appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that
 # an invalid external ID or an empty token is asked for again; that the data source,
 # access policy and service account pages open; that the operator email is asked for
-# only when neither terraform.tfvars nor TF_VAR_operator_email sets it; and that a missing bootstrap or grafana dir or tool,
-# an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply, an
+# only when neither terraform.tfvars nor TF_VAR_operator_email sets it; that a missing
+# bootstrap or grafana dir stops the wizard before any page opens; and that a missing
+# tool, an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply, an
 # unreadable bootstrap output, a failed write, a failed read, a secret left empty or an
 # unreadable terraform.tfvars exits non-zero, the last leaving the file intact.
 set -euo pipefail
@@ -41,7 +43,6 @@ case "\$2" in
     [[ "\$4" == "\${TF_EMPTY_OUTPUT:-}" ]] && exit 0
     case "\$4" in
       region) echo eu-west-1 ;;
-      grafana_cloudwatch_role_arn) echo arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch ;;
       grafana_cloud_write_secret_name) echo grafana-cloud/write ;;
       grafana_cloud_api_secret_name) echo grafana-cloud/api ;;
       *) echo "unexpected output \$4" >&2; exit 1 ;;
@@ -112,6 +113,7 @@ run() {
   if [[ -z "${NO_TFVARS:-}" ]]; then
     printf 'operator_email = "op@example.com"\ngrafana_external_id = "stale"\n' >"${tmp}/bootstrap/terraform.tfvars"
     chmod "${TFVARS_MODE:-600}" "${tmp}/bootstrap/terraform.tfvars"
+    printf 'grafana_url = "https://old.grafana.net"\nkept = "yes"\n' >"${tmp}/grafana/terraform.tfvars"
   fi
   # TRACE runs the wizard under bash -x; RUN_PATH replaces PATH, hiding the stubs.
   answers | PATH="${RUN_PATH:-${tmp}/bin:${PATH}}" "${bash_bin}" ${TRACE:+-x} "${script}" "${BOOTSTRAP_ARG:-${tmp}/bootstrap}" \
@@ -129,7 +131,7 @@ check_file() {
 }
 check_no_token() {
   local label="$1" file
-  for file in "${tmp}/stdout" "${tmp}/stderr" "${tmp}/aws-calls" "${tmp}/bootstrap"; do
+  for file in "${tmp}/stdout" "${tmp}/stderr" "${tmp}/aws-calls" "${tmp}/bootstrap" "${tmp}/grafana"; do
     if grep -rqF -e "${write_token}" -e "${api_token}" "${file}"; then
       bad "${label}: a token appears in ${file##*/}"
       return
@@ -165,9 +167,14 @@ check_file "api token put in region" "${tmp}/aws-calls" "secretsmanager put-secr
 check_file "data source page opened" "${tmp}/opened" "https://slipstream.grafana.net/connections/datasources/new"
 check_file "access policies page opened" "${tmp}/opened" "https://slipstream.grafana.net/a/grafana-auth-app"
 check_file "service accounts page opened" "${tmp}/opened" "https://slipstream.grafana.net/org/serviceaccounts"
-check_file "stack url written for the grafana stack" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://slipstream.grafana.net"'
-if grep -qF "Save & test" "${tmp}/stdout"; then bad "cloudwatch data source left unsaved"; else ok "cloudwatch data source left unsaved"; fi
+grafana_tfvars="${tmp}/grafana/terraform.tfvars"
+check_file "stack url written for the grafana stack" "${grafana_tfvars}" 'grafana_url = "https://slipstream.grafana.net"'
+check_file "other grafana tfvars kept" "${grafana_tfvars}" 'kept = "yes"'
+if [[ "$(grep -c '^grafana_url' "${grafana_tfvars}")" == 1 ]]; then ok "stack url replaced, not duplicated"; else bad "stack url replaced, not duplicated"; fi
+if grep -qF "Save & test" "${tmp}/stdout"; then bad "cloudwatch data source not saved by hand"; else ok "cloudwatch data source not saved by hand"; fi
+if grep -qF "click Delete" "${tmp}/stdout"; then ok "cloudwatch data source the page creates is deleted"; else bad "cloudwatch data source the page creates is deleted"; fi
 if grep -qF "role Admin" "${tmp}/stdout"; then ok "service account given the Admin role"; else bad "service account given the Admin role"; fi
+if grep -qF "already exists, change its role to Admin" "${tmp}/stdout"; then ok "existing service account moved to Admin"; else bad "existing service account moved to Admin"; fi
 check_no_token "tokens never echoed, passed as arguments or written to a file"
 if [[ "$(ls "${tmp}/grafana")" == terraform.tfvars ]]; then ok "no temp file left beside the grafana tfvars"; else bad "no temp file left beside the grafana tfvars"; fi
 if [[ "$(ls "${tmp}/bootstrap")" == terraform.tfvars ]]; then ok "no temp file left beside tfvars"; else bad "no temp file left beside tfvars"; fi
@@ -212,7 +219,9 @@ if [[ "$(cat "${tfvars}")" == 'grafana_external_id = "ext-123"' ]]; then ok "TF_
 
 # Failures stop the wizard with a message naming what to do.
 BOOTSTRAP_ARG="${tmp}/missing" check_aborted "missing bootstrap dir" "bootstrap dir ${tmp}/missing not found"
+if [[ ! -s "${tmp}/opened" ]]; then ok "missing bootstrap dir stops before any page opens"; else bad "missing bootstrap dir stops before any page opens"; fi
 GRAFANA_ARG="${tmp}/missing" check_aborted "missing grafana dir" "grafana dir ${tmp}/missing not found"
+if [[ ! -s "${tmp}/opened" ]]; then ok "missing grafana dir stops before any page opens"; else bad "missing grafana dir stops before any page opens"; fi
 RUN_PATH="${tmp}/empty" check_aborted "missing terraform" "terraform not found on PATH"
 AWS_STS_EXIT=255 check_aborted "aws not authenticated" "aws is not authenticated"
 if grep -qF "Token has expired" "${tmp}/stderr"; then ok "aws's own error shown"; else bad "aws's own error shown"; fi
@@ -225,6 +234,7 @@ if [[ ! -e "${tmp}/applied-with" ]]; then ok "declined apply never runs terrafor
 TF_EMPTY_OUTPUT=region check_aborted "empty bootstrap output" "cannot read bootstrap output region"
 AWS_FAIL_PUT=grafana-cloud/api check_aborted "failed write" "writing grafana-cloud/api failed"
 check_no_token "failed write echoes no token"
+check_file "failed write leaves the stack url as it was" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
 AWS_EMPTY_GET=grafana-cloud/write check_aborted "secret left empty" "grafana-cloud/write holds no value"
 AWS_FAIL_GET=grafana-cloud/api check_aborted "failed read" "cannot read grafana-cloud/api"
 

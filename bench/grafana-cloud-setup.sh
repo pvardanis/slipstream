@@ -2,10 +2,10 @@
 # Walk the operator through Grafana Cloud's one-time setup (ADR-0026): create the free
 # stack, write its URL into the grafana stack's terraform.tfvars, read its Grafana Assume
 # Role external ID into the bootstrap stack's terraform.tfvars, apply bootstrap, and mint
-# the two Grafana Cloud tokens, each written to its Secrets Manager
-# secret with `aws secretsmanager put-secret-value` so neither enters Terraform state. A
-# token is read with hidden entry and handed to aws on stdin, so it never appears on
-# screen or in a process's arguments.
+# the two Grafana Cloud tokens, each written to its Secrets Manager secret with `aws
+# secretsmanager put-secret-value` so neither enters Terraform state. A token is read
+# with hidden entry and handed to aws on stdin, so it never appears on screen or in a
+# process's arguments.
 # Usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>
 #
 # A wizard walks a human through a manual procedure, step by step.
@@ -335,7 +335,6 @@ run_wizard() {
   ask_valid STACK_URL "Paste the stack URL (https://<stack>.grafana.net):" is_stack_url \
     "not a https://<stack>.grafana.net URL"
   STACK_URL="${STACK_URL%/}"
-  write_tfvar "${grafana_tfvars}" grafana_url "${STACK_URL}"
 
   stage "Grafana Assume Role: external ID"
   say "The bootstrap stack's IAM role trusts Grafana's AWS account only with this ID."
@@ -345,10 +344,12 @@ run_wizard() {
   step "The instructions box shows Grafana's account ID and your External ID."
   note "The role trusts account 008923505280. If the box shows another account, set"
   note "grafana_account_id in ${tfvars} to it before the apply."
-  note "Leave the data source unsaved: \`just grafana-up\` creates it with the role ARN."
   ask_valid GRAFANA_EXTERNAL_ID "Paste the External ID:" is_external_id \
     "not a valid external ID; copy it from the instructions box"
   write_tfvar "${tfvars}" grafana_external_id "${GRAFANA_EXTERNAL_ID}"
+  step "Back on that page, click Delete at the bottom, and Delete again to confirm."
+  note "Picking the type created the data source; \`just grafana-up\` creates its own"
+  note "CloudWatch data source with the role ARN, and two of the same name would clash."
 
   stage "Bootstrap: operator email"
   say "The bootstrap stack's spend-leak alarms page this address (ADR-0025)."
@@ -387,6 +388,7 @@ run_wizard() {
   open_url "${STACK_URL}/org/serviceaccounts"
   step "Click Add service account; name it slipstream-terraform, role Admin."
   note "Admin, because creating the CloudWatch data source needs it; Editor cannot."
+  note "If slipstream-terraform already exists, change its role to Admin and reuse it."
   step "Click Add service account token, generate it, and copy the token (glsa_...)."
   note "Grafana shows the token once. It goes to ${api_secret}, not to any file."
   put_token "${api_secret}" "Paste the API token:"
@@ -394,6 +396,10 @@ run_wizard() {
   stage "Secrets: check"
   check_secret_set "${write_secret}"
   check_secret_set "${api_secret}"
+  # Written once both tokens are stored, so the URL never names a stack the stored tokens
+  # do not belong to.
+  write_tfvar "${grafana_tfvars}" grafana_url "${STACK_URL}"
+  say "Next: \`just grafana-up\` creates the data sources."
   pause "Press Enter to finish."
 
   finish
