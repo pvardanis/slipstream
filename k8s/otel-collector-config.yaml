@@ -56,9 +56,10 @@ processors:
           # TPOT = (e2e - TTFT) / (completion_tokens - 1). With one completion
           # token or none TPOT is undefined and counts as 0, so TTFT alone
           # decides; vllm bench serve treats it the same way, which keeps live
-          # and offline goodput equal.
-          - set(span.cache["tpot_s"], 0.0)
-          - set(span.cache["tpot_s"], (span.attributes["gen_ai.latency.e2e"] - span.attributes["gen_ai.latency.time_to_first_token"]) / Double(span.attributes["completion_tokens"] - 1)) where span.attributes["completion_tokens"] > 1
+          # and offline goodput equal. A span missing a latency leaves tpot_s
+          # unset, which fails the gate below.
+          - set(span.cache["tpot_s"], 0.0) where span.attributes["completion_tokens"] <= 1
+          - set(span.cache["tpot_s"], (span.attributes["gen_ai.latency.e2e"] - span.attributes["gen_ai.latency.time_to_first_token"]) / Double(span.attributes["completion_tokens"] - 1)) where span.attributes["completion_tokens"] > 1 and span.attributes["gen_ai.latency.e2e"] != nil and span.attributes["gen_ai.latency.time_to_first_token"] != nil
           # slo_met: TTFT <= 1.0 s and TPOT <= 0.05 s, both gates inclusive.
           - set(span.attributes["slo_met"], false)
           - set(span.attributes["slo_met"], true) where span.attributes["gen_ai.latency.time_to_first_token"] <= span.cache["ttft_gate_s"] and span.cache["tpot_s"] <= span.cache["tpot_gate_s"]
