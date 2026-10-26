@@ -5,6 +5,7 @@
 eks_dir := "terraform/eks"
 bootstrap_dir := "terraform/bootstrap"
 bench_endpoint_dir := "terraform/bench-endpoint"
+grafana_dir := "terraform/grafana"
 manifests := "k8s/vllm.yaml"
 gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
 gpu_manifests := "k8s/vllm-gpu.yaml"
