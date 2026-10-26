@@ -185,31 +185,63 @@ just grafana-cloud-setup
 ```
 
 It checks `terraform` and `aws` are installed, `aws` is logged in, and AWS CLI history is
-off (history would record each token), then runs eight stages:
+off (history would record each token), then runs seven stages:
 
 1. Create a free Grafana Cloud stack and paste its URL.
 2. Copy the External ID from the CloudWatch data source's Connection Details; it is
-   written as `grafana_external_id` into `terraform/bootstrap/terraform.tfvars`.
+   written as `grafana_external_id` into `terraform/bootstrap/terraform.tfvars`. Then
+   delete that data source: picking the CloudWatch type creates one named `CloudWatch`,
+   and `just grafana-up` creates its own under the same name.
 3. Enter the spend-leak alert address as `operator_email`. Skipped when the tfvars file or
    `TF_VAR_operator_email` already sets it.
 4. Apply the bootstrap stack.
-5. Paste the role ARN into the data source and click Save & test. The role reads CloudWatch
-   metrics only, so the test reports the metrics query as working and the logs query as
-   failing; that is expected.
-6. Mint the access-policy token for metrics and traces writes, stored in
+5. Mint the access-policy token for metrics and traces writes, stored in
    `grafana-cloud/write`.
-7. Mint the service account token for the Grafana Terraform provider, stored in
-   `grafana-cloud/api`.
-8. Check both secrets hold a value.
+6. Mint the service account token for the Grafana Terraform provider, stored in
+   `grafana-cloud/api`. The service account needs the Admin role, as only Admin can
+   create data sources; an existing `slipstream-terraform` account is moved to Admin
+   and reused.
+7. Check both secrets hold a value, then write the stack URL as `grafana_url` into
+   `terraform/grafana/terraform.tfvars`.
 
-Tokens are piped to `aws secretsmanager put-secret-value` on stdin, so they never reach a
-file, the command line, or Terraform state. A failed stage stops the wizard; rerun it
-from the start.
+The wizard pipes tokens to `aws secretsmanager put-secret-value` on stdin, so they never
+reach a file or the command line. A failed stage stops the wizard; rerun it from the
+start.
 
 `grafana_external_id` has no default, so every later `just bootstrap` needs it from the
 gitignored tfvars file or `TF_VAR_grafana_external_id`, and fails without it. A fresh
 worktree has no tfvars file: copy it from the main checkout (`chmod 600` it, as it holds
 the operator's address), or export both variables.
+
+## Grafana data sources
+
+The `terraform/grafana` stack owns the data sources the dashboards query
+([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). Once
+`just grafana-cloud-setup` is done:
+
+```sh
+just grafana-up
+```
+
+It initialises the stack against the state bucket, then plans and asks before applying;
+the stack persists across sessions, so read the plan first. It has no down recipe:
+`just cluster-down` and `just stack-down` leave it in place.
+
+- **CloudWatch** is created by the stack. It authenticates with Grafana Assume Role
+  through the bootstrap stack's IAM role, so no AWS key is stored in Grafana.
+- **Prometheus and Tempo** come with every Grafana Cloud stack as
+  `grafanacloud-<stack>-prom` and `grafanacloud-<stack>-traces`. The stack reads them by
+  name rather than managing them.
+
+The Grafana provider signs in with the `grafana-cloud/api` token, which the stack reads
+from Secrets Manager. The token is therefore held in the stack's state, in the encrypted
+state bucket. The stack URL comes from `grafana_url` in the gitignored
+`terraform/grafana/terraform.tfvars`, or from `TF_VAR_grafana_url`; with neither set it
+defaults to `https://slipstreamobs.grafana.net`.
+
+After the apply, open the CloudWatch data source and click Save & test. The role reads
+CloudWatch metrics only, so the test reports the metrics query as working and the logs
+query as failing; that is expected.
 
 ## Spend-leak alert
 

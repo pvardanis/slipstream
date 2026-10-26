@@ -136,13 +136,14 @@ flowchart TB
 
 ## Terraform stacks
 
-Applied in this order. `eks` and `bench-endpoint` read bootstrap outputs through remote
-state; `bench-endpoint-up` passes the eks network outputs in as variables, so teardown
+Applied in this order. `grafana`, `eks` and `bench-endpoint` read bootstrap outputs through
+remote state; `bench-endpoint-up` passes the eks network outputs in as variables, so teardown
 needs no live cluster.
 
 | Stack | Lifetime | Holds |
 | --- | --- | --- |
 | `terraform/bootstrap` | permanent | state bucket, ECR repositories, GitHub OIDC roles |
+| `terraform/grafana` | permanent, `grafana-up` | Grafana Cloud CloudWatch data source; reads the hosted Prometheus and Tempo data sources |
 | `terraform/eks` | `cluster-up` → `cluster-down` | VPC, EKS, Karpenter, EBS storage, Prefect server and worker, sweep-dispatch RBAC |
 | `terraform/bench-endpoint` | `bench-endpoint-up` → `bench-endpoint-down` | mTLS ALB, certs, bench host, results bucket |
 

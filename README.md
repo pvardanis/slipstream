@@ -134,14 +134,18 @@ hence the order:
    applies the bootstrap stack: remote-state bucket, ECR repositories, GitHub OIDC
    roles, the spend-leak guard, and the Grafana Cloud token secrets and Assume Role.
    It writes `grafana_external_id`, and `operator_email` when unset, into the gitignored
-   `terraform/bootstrap/terraform.tfvars`, and stores both Grafana Cloud tokens in
-   Secrets Manager ([runbook](docs/operations.md#grafana-cloud-setup)). Click the
-   confirmation link AWS emails ([runbook](docs/operations.md#spend-leak-alert)).
+   `terraform/bootstrap/terraform.tfvars`, stores both Grafana Cloud tokens in
+   Secrets Manager, and writes the stack URL as `grafana_url` into the gitignored
+   `terraform/grafana/terraform.tfvars` ([runbook](docs/operations.md#grafana-cloud-setup)).
+   Click the confirmation link AWS emails ([runbook](docs/operations.md#spend-leak-alert)).
    Later `just bootstrap` runs read the same file and fail without
    `grafana_external_id`; a fresh worktree has no copy of it.
-3. `just gh-vars` — sets the eight repo variables the workflows read from the
+3. `just grafana-up` — applies the grafana stack: the CloudWatch data source, which
+   reads CloudWatch through the bootstrap stack's IAM role. It asks before applying and
+   has no down recipe ([runbook](docs/operations.md#grafana-data-sources)).
+4. `just gh-vars` — sets the eight repo variables the workflows read from the
    bootstrap outputs.
-4. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
+5. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
    ECR keeps them across `just stack-down`, so this is once per environment.
 
 ## Quickstart
