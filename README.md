@@ -142,7 +142,8 @@ hence the order:
    `grafana_external_id`; a fresh worktree has no copy of it.
 3. `just grafana-up` — applies the grafana stack: the CloudWatch data source, which
    reads CloudWatch through the bootstrap stack's IAM role. It asks before applying and
-   has no down recipe ([runbook](docs/operations.md#grafana-data-sources)).
+   has no down recipe. Then click Save & test on the data source
+   ([runbook](docs/operations.md#grafana-data-sources)).
 4. `just gh-vars` — sets the eight repo variables the workflows read from the
    bootstrap outputs.
 5. Dispatch `bench-image` and `orchestration-image` on `main` to publish the images.
@@ -241,7 +242,7 @@ Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 | `prefect` | Work pool, deployment registration, UI port-forward (`prefect-ui`), storage drain |
 | `serve` | vLLM api-key Secret, GPU replica deploy/scale, completion smokes |
 | `bench` | Bench-client image, one point's ladder, prefix-cache, results sync, mTLS endpoint |
-| `obs` | OTel Collector spine stub |
+| `obs` | Persistent grafana stack (`grafana-up`), OTel Collector spine stub |
 | `test` | Python suite and shell unit tests (no cluster) |
 | `orchestrate` | Whole-stack up/down, cloud verification |
 
