@@ -6,7 +6,8 @@
 # that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
 # never appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that
 # an invalid external ID or an empty token is asked for again; that the data source,
-# access policy and service account pages open; and that a missing bootstrap dir or tool,
+# access policy and service account pages open; that the operator email is asked for
+# only when neither terraform.tfvars nor TF_VAR_operator_email sets it; and that a missing bootstrap dir or tool,
 # an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply, an
 # unreadable bootstrap output, a failed write, a failed read, a secret left empty or an
 # unreadable terraform.tfvars exits non-zero, the last leaving the file intact.
@@ -88,12 +89,15 @@ done
 chmod +x "${tmp}/bin/"*
 
 # The operator's answers, in prompt order: start, stack created, stack URL, an invalid
-# external ID then a valid one, apply, ARN pasted, an empty write token then the token,
-# and the API token.
-# ANSWER_LINES cuts them short, as a closed stdin does.
+# external ID then a valid one, the operator email answers when the wizard has to ask
+# (EMAIL_ANSWERS, one per line), apply, ARN pasted, an empty write token then the token,
+# and the API token. ANSWER_LINES cuts them short, as a closed stdin does.
 answers() {
-  printf '%s\n' "" "" "https://slipstream.grafana.net/" "bad id!" "ext-123" \
-    "${APPLY_ANSWER:-y}" "" "" "${write_token}" "${api_token}" | head -n "${ANSWER_LINES:-10}"
+  {
+    printf '%s\n' "" "" "https://slipstream.grafana.net/" "bad id!" "ext-123"
+    [[ -z "${EMAIL_ANSWERS:-}" ]] || printf '%s\n' "${EMAIL_ANSWERS}"
+    printf '%s\n' "${APPLY_ANSWER:-y}" "" "" "${write_token}" "${api_token}"
+  } | head -n "${ANSWER_LINES:-99}"
 }
 
 fail=0
@@ -173,13 +177,30 @@ TRACE=1 run || {
 }
 check_no_token "tokens kept out of xtrace"
 
-# A first run creates terraform.tfvars, owner-only, holding just the external ID.
-NO_TFVARS=1 run || {
+if grep -qF "operator_email is already set" "${tmp}/stdout"; then ok "operator email in tfvars not asked for"; else bad "operator email in tfvars not asked for"; fi
+
+# A first run asks for the operator email, again while it is not an address or holds a
+# character that would need HCL escaping, and creates terraform.tfvars, owner-only, with
+# the external ID and the email; the apply sees both.
+EMAIL_ANSWERS=$'not-an-email\nop"x@example.com\nnew@example.com' NO_TFVARS=1 run || {
   cat "${tmp}/stderr" >&2
   exit 1
 }
-if [[ "$(cat "${tfvars}")" == 'grafana_external_id = "ext-123"' ]]; then ok "first run creates tfvars"; else bad "first run creates tfvars"; fi
+if [[ "$(cat "${tfvars}")" == $'grafana_external_id = "ext-123"\noperator_email = "new@example.com"' ]]; then
+  ok "first run creates tfvars with the external id and email"
+else
+  bad "first run creates tfvars with the external id and email"
+fi
 if [[ -n "$(find "${tfvars}" -perm 0600)" ]]; then ok "first run tfvars is mode 0600"; else bad "first run tfvars is mode 0600"; fi
+if [[ "$(grep -c "not an email address" "${tmp}/stdout")" == 2 ]]; then ok "invalid operator email asked again"; else bad "invalid operator email asked again"; fi
+check_file "apply read the new external id with no tfvars before" "${tmp}/applied-with" 'grafana_external_id = "ext-123"'
+
+# An operator email exported as TF_VAR_operator_email is used as is, not asked for.
+TF_VAR_operator_email=env@example.com NO_TFVARS=1 run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if [[ "$(cat "${tfvars}")" == 'grafana_external_id = "ext-123"' ]]; then ok "TF_VAR operator email not asked for"; else bad "TF_VAR operator email not asked for"; fi
 
 # Failures stop the wizard with a message naming what to do.
 BOOTSTRAP_ARG="${tmp}/missing" check_aborted "missing bootstrap dir" "bootstrap dir ${tmp}/missing not found"
@@ -188,6 +209,7 @@ AWS_STS_EXIT=255 check_aborted "aws not authenticated" "aws is not authenticated
 if grep -qF "Token has expired" "${tmp}/stderr"; then ok "aws's own error shown"; else bad "aws's own error shown"; fi
 AWS_CLI_HISTORY=enabled check_aborted "aws cli history on" "cli_history is enabled"
 ANSWER_LINES=4 check_aborted "stdin closed at a prompt" "stdin closed before GRAFANA_EXTERNAL_ID was entered"
+NO_TFVARS=1 ANSWER_LINES=5 check_aborted "stdin closed at the email" "stdin closed before OPERATOR_EMAIL was entered"
 ANSWER_LINES=8 check_aborted "stdin closed at a token" "stdin closed before the token for grafana-cloud/write was entered"
 APPLY_ANSWER=n check_aborted "apply declined" "bootstrap not applied"
 if [[ ! -e "${tmp}/applied-with" ]]; then ok "declined apply never runs terraform apply"; else bad "declined apply never runs terraform apply"; fi
