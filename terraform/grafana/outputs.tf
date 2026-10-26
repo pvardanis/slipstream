@@ -1,5 +1,5 @@
-# Outputs from the persistent Grafana Cloud stack: the UIDs dashboards reference their
-# data sources by.
+# Outputs from the persistent grafana Terraform stack: the UIDs of the data sources, the
+# identifier a dashboard panel references its data source by.
 output "prometheus_data_source_uid" {
   description = "UID of the stack's hosted Prometheus data source, grafanacloud-<stack>-prom."
   value       = data.grafana_data_source.prometheus.uid

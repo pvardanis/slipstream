@@ -1,4 +1,4 @@
-# Inputs for the persistent Grafana Cloud stack.
+# Inputs for the persistent grafana Terraform stack.
 variable "region" {
   description = "AWS region hosting the Terraform state bucket the bootstrap stack's outputs are read from. Must match the bootstrap default."
   type        = string
