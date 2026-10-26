@@ -14,6 +14,9 @@ obs-up:
       --from-literal=model-id="${model}" \
       --dry-run=client -o yaml | kubectl apply -f -
     kubectl apply -f {{ otel_manifests }}
+    # The Collector reads config.yaml and MODEL_ID only at start, and an unchanged
+    # Deployment does not roll; restart so a changed config or model takes effect.
+    kubectl -n slipstream rollout restart deploy/otel-collector
     kubectl -n slipstream rollout status deploy/otel-collector --timeout=120s
 
 # Remove the OTel Collector (leaves the cluster running).
