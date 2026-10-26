@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Walk the operator through Grafana Cloud's one-time setup (ADR-0026): create the free
-# stack, write its URL into the grafana stack's terraform.tfvars, read its Grafana Assume
-# Role external ID into the bootstrap stack's terraform.tfvars, apply bootstrap, and mint
-# the two Grafana Cloud tokens, each written to its Secrets Manager secret with `aws
-# secretsmanager put-secret-value` so neither enters Terraform state. A token is read
+# stack, read its Grafana Assume Role external ID into the bootstrap stack's
+# terraform.tfvars, apply bootstrap, mint the two Grafana Cloud tokens, each written to
+# its Secrets Manager secret with `aws secretsmanager put-secret-value` so neither enters
+# the bootstrap stack's state, then write the stack URL into the grafana stack's
+# terraform.tfvars. A token is read
 # with hidden entry and handed to aws on stdin, so it never appears on screen or in a
 # process's arguments.
 # Usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>
@@ -399,7 +400,7 @@ run_wizard() {
   # Written once both tokens are stored, so the URL never names a stack the stored tokens
   # do not belong to.
   write_tfvar "${grafana_tfvars}" grafana_url "${STACK_URL}"
-  say "Next: \`just grafana-up\` creates the data sources."
+  say "Next: \`just grafana-up\` creates the CloudWatch data source."
   pause "Press Enter to finish."
 
   finish
