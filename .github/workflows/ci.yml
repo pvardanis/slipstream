@@ -1,5 +1,6 @@
-# No-cloud CI gate (ADR 0002 tier 1): lint/format/validate, Python tests, and
-# offline terraform tests. Runs on PRs and pushes to main with no AWS credentials.
+# No-cloud CI gate (ADR 0002 tier 1): lint/format/validate, Python tests, offline
+# terraform tests, and a schema check of the rendered local Helm charts. Runs on PRs
+# and pushes to main with no AWS credentials.
 name: ci
 
 on:
@@ -102,7 +103,7 @@ jobs:
     # ceiling), so gate it on every other check: a PR that fails any of them
     # cannot merge, and building an image for a doomed PR only burns runner time.
     # Failing one skips the build instead.
-    needs: [lint, python, terraform, shell-tests]
+    needs: [lint, python, terraform, shell-tests, chart-render]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -144,7 +145,7 @@ jobs:
     # builds before merge with no credentials; a push to main publishes via
     # orchestration-image.yml, which rebuilds anyway.
     if: github.event_name == 'pull_request'
-    needs: [lint, python, terraform, shell-tests]
+    needs: [lint, python, terraform, shell-tests, chart-render]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -212,3 +213,36 @@ jobs:
           bash test/orchestration-image-check-test.sh
           bash test/goodput-parity-test.sh
           bash test/grafana-cloud-setup-test.sh
+
+  chart-render:
+    name: helm chart render (kubeconform)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      # kubeconform ships no setup action; the release tarball is checked against the
+      # sha256 published in that release's CHECKSUMS before it is unpacked.
+      - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+          KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+        run: |
+          set -euo pipefail
+          tarball="kubeconform-linux-amd64.tar.gz"
+          curl -fsSLo "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/${tarball}"
+          echo "${KUBECONFORM_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum --check --strict
+          mkdir -p "${RUNNER_TEMP}/kubeconform"
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/kubeconform" kubeconform
+          echo "${RUNNER_TEMP}/kubeconform" >> "${GITHUB_PATH}"
+      # Lints and renders every local chart under terraform/*/charts/ and validates the
+      # output against the Kubernetes and CRD schemas, so a chart Terraform installs at
+      # cluster-up cannot reach it with a template that fails to render or a resource
+      # the API server would reject.
+      - name: Render and validate the local Helm charts
+        run: bash test/chart-render-test.sh
