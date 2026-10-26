@@ -5,7 +5,8 @@
 # assertions check the install's shape (pinned chart, wait/atomic, a policy that reads one
 # secret and nothing else, both target namespaces) without standing a cluster up. The
 # token actually landing in both namespaces and both ExternalSecrets reporting synced is
-# the manual tier (`just stack-up`).
+# the manual tier: `just cluster-up`, then
+# `kubectl get externalsecret -n monitoring` and `-n slipstream`.
 
 # The eks module builds IAM roles whose assume_role_policy is validated as JSON at plan;
 # the mock provider's random string is not valid JSON, so every policy document gets a
@@ -145,8 +146,7 @@ run "write_token_synced_into_both_namespaces" {
     error_message = "Every secret store must read Secrets Manager in the stack's region."
   }
 
-  # No stack creates monitoring before this one, so the eks stack owns it; the metrics
-  # release installs into it.
+  # No stack creates monitoring before this one, so the eks stack owns it.
   assert {
     condition     = kubernetes_namespace_v1.monitoring.metadata[0].name == "monitoring"
     error_message = "The eks stack must create the monitoring namespace the token syncs into."
