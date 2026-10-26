@@ -81,3 +81,30 @@ variable "prefect_namespace" {
   type        = string
   default     = "prefect"
 }
+
+variable "grafana_external_id" {
+  description = "External ID Grafana Cloud presents when assuming the Grafana Assume Role IAM role, unique to the Grafana Cloud stack. Shown in the instructions box under Connection Details of the stack's CloudWatch data source once Grafana Assume Role is selected. No default because it exists only once that stack does: bench/grafana-cloud-setup.sh walks the operator to it and writes it into the gitignored terraform.tfvars; TF_VAR_grafana_external_id also sets it."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.grafana_external_id)) > 0
+    error_message = "grafana_external_id must be the external ID shown under Connection Details of the Grafana Cloud CloudWatch data source."
+  }
+}
+
+variable "grafana_account_id" {
+  description = "Grafana Cloud's shared AWS account, the principal the Grafana Assume Role IAM role trusts. The instructions box under Connection Details of the CloudWatch data source shows it once Grafana Assume Role is selected; override it only if that box shows another account."
+  type        = string
+  default     = "008923505280"
+
+  validation {
+    condition     = can(regex("^[0-9]{12}$", var.grafana_account_id))
+    error_message = "grafana_account_id must be a 12-digit AWS account ID."
+  }
+}
+
+variable "grafana_cloudwatch_role_name" {
+  description = "Name of the IAM role Grafana Cloud's CloudWatch data source assumes (Grafana Assume Role)."
+  type        = string
+  default     = "slipstream-grafana-cloudwatch"
+}

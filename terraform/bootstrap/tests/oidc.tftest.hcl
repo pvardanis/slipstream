@@ -11,9 +11,11 @@ mock_provider "aws" {
 }
 mock_provider "random" {}
 
-# No default, so every run supplies the spend-leak topic's email address.
+# No defaults, so every run supplies the spend-leak topic's email address and the Grafana
+# Cloud stack's external ID.
 variables {
-  operator_email = "operator@example.com"
+  operator_email      = "operator@example.com"
+  grafana_external_id = "123456"
 }
 
 run "github_oidc_trust_and_permissions" {
