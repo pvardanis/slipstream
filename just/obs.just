@@ -1,4 +1,4 @@
-# Observability lifecycle: the OTel Collector spine stub deploy, teardown, and trace pivot.
+# Observability lifecycle: the persistent Grafana Cloud stack, and the OTel Collector spine stub deploy, teardown, and trace pivot.
 
 # Deploy the OTel Collector spine stub to the cluster.
 [group('obs')]
@@ -55,3 +55,18 @@ obs-pivot:
       -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"'"${model}"'"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
     sleep 3
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
+
+# The stack outlives `just cluster-down`, so it has no down recipe. Requires
+# `just grafana-cloud-setup` done and grafana_url set in the gitignored
+# terraform/grafana/terraform.tfvars or as TF_VAR_grafana_url.
+# Apply the persistent Grafana Cloud stack: its data sources (ADR-0026).
+[group('obs')]
+grafana-up: _bootstrap-init
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bare assignment so a failed lookup aborts rather than feeding an empty bucket
+    # into terraform (see `cluster-up`).
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
+    [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
+    terraform -chdir={{ grafana_dir }} init -input=false -backend-config="bucket=${bucket}"
+    terraform -chdir={{ grafana_dir }} apply -var="state_bucket=${bucket}"
