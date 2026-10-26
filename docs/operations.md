@@ -1,7 +1,7 @@
 # Operations
 
-Runbooks for the live rig. All but cloud verify assume the stack is up
-(`just stack-up`) and end with `just stack-down`.
+Runbooks for the live rig. All but cloud verify and the spend-leak alert assume the stack
+is up (`just stack-up`) and end with `just stack-down`.
 
 ## Knob sweep
 
@@ -170,3 +170,65 @@ well-formed completion, tears everything down, then sweeps EC2 for any
 `Project=slipstream` instance or volume still billing (the Karpenter `g5` and its root
 volume live outside Terraform state). Teardown and the sweep run even if the smoke
 fails. A green exit means the rig served and spend is back at zero.
+
+## Spend-leak alert
+
+The spend-leak guard ([ADR-0025](adr/0025-spend-leak-guard-outside-the-cluster.md)) emails
+the operator through the `slipstream-spend-leak` SNS topic when the account bills with no
+session running. It lives in `terraform/bootstrap`, so it outlasts `just stack-down`. Two
+alerts reach the inbox:
+
+- **`slipstream-gpu-spend-leak`** (CloudWatch alarm): on-demand G-class vCPUs have run for
+  20 hours. A GPU is almost certainly left up.
+- **`slipstream-monthly`** (AWS Budget): month-to-date spend crossed 50%, 75% or 90% of
+  $200, or the month's forecast crossed 100%. It covers all spend (NAT, ALBs, bench
+  host, control plane, spot), and lands hours after the spend.
+
+**On a GPU alarm**, tear the rig down and let the leak sweep report what survived:
+
+```sh
+just stack-down
+```
+
+If the GPU belongs to no stack (say, a hand-launched instance), find it and stop it:
+
+```sh
+aws ec2 describe-instances --region eu-west-1 \
+  --filters Name=instance-state-name,Values=running Name=instance-type,Values='g*' \
+  --query 'Reservations[].Instances[].[InstanceId,InstanceType,LaunchTime,Tags[?Key==`Name`]|[0].Value]' \
+  --output table
+```
+
+The alarm returns to OK once no G-class vCPU runs; it emails only on the way into ALARM.
+
+**On a budget alert**, find what is billing this month (Cost Explorer bills $0.01 per call):
+
+```sh
+aws ce get-cost-and-usage --time-period Start="$(date -u +%Y-%m-01)",End="$(date -u +%Y-%m-%d)" \
+  --granularity MONTHLY --metrics UnblendedCost --group-by Type=DIMENSION,Key=SERVICE
+```
+
+**Setup.** `just bootstrap` needs the operator's address, kept out of this public repo:
+`operator_email` in the gitignored `terraform/bootstrap/terraform.tfvars`, or
+`TF_VAR_operator_email`. AWS then emails a confirmation link; nothing is delivered until
+it is clicked, and every bootstrap plan warns (`operator_email_confirmed`) while it is
+pending. An unsubscribe link in an alert email removes the subscription; `just bootstrap`
+re-creates it.
+
+**Rehearsal.** Force the alarm and check the email arrives:
+
+```sh
+aws cloudwatch set-alarm-state --region eu-west-1 --alarm-name slipstream-gpu-spend-leak \
+  --state-value ALARM --state-reason "spend-leak rehearsal"
+aws cloudwatch describe-alarm-history --region eu-west-1 --alarm-name slipstream-gpu-spend-leak \
+  --max-records 3 --query 'AlarmHistoryItems[].[Timestamp,HistorySummary]' --output text
+```
+
+The history shows `Alarm updated from OK to ALARM` and then `Successfully executed action
+arn:aws:sns:...:slipstream-spend-leak`; the alarm returns to OK at its next evaluation.
+
+### Rehearsal log
+
+| Date | Rehearsal | Result |
+|---|---|---|
+| 2026-10-26 | First apply of the guard (#362), then the rehearsal above | ALARM at 10:42:36 UTC, SNS action executed, email received. A plan of the budget, alarm and topic policy afterwards: no changes. |
