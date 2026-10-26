@@ -129,7 +129,9 @@ resource "helm_release" "grafana_cloud_write_token" {
   chart     = "${path.module}/charts/grafana-cloud-write-token"
 
   # The operator's webhook validates the store and ExternalSecret as they are created, so
-  # a rejected one fails the apply and rolls back.
+  # a rejected one fails the apply and rolls back. Helm does not wait on an ExternalSecret's
+  # sync, so an empty or unreadable secret leaves the apply green and shows only in the
+  # ExternalSecret's status.
   wait   = true
   atomic = true
 
