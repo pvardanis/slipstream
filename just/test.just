@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, and the local Helm chart render check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the Grafana MCP server launcher, and the local Helm chart render check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -39,6 +39,11 @@ gh-vars-test:
 [group('test')]
 orchestration-image-check-test:
     bash test/orchestration-image-check-test.sh
+
+# Assert grafana-mcp.sh starts the server read-only at its pinned version with the stack URL, from the environment, tfvars or the grafana stack's state, and the token from the bootstrap secret, and aborts before starting it on a failed read (terraform, aws and uvx stubbed).
+[group('test')]
+grafana-mcp-test:
+    bash test/grafana-mcp-test.sh
 
 # Lint and render every local Helm chart under terraform/*/charts/ and validate it against the Kubernetes and CRD schemas (needs helm and kubeconform, no cluster).
 [group('test')]

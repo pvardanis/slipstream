@@ -232,6 +232,27 @@ re-runs anything.
 Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 `just prefect-ui` running.
 
+### Grafana MCP server
+
+The project's [`.mcp.json`](.mcp.json) gives Claude Code the
+[Grafana MCP server](https://github.com/grafana/mcp-grafana), so a session can run
+PromQL and TraceQL against the Grafana Cloud stack and read its dashboards. Claude Code
+starts it with `just grafana-mcp` and asks you to approve it on first use. The server
+runs read-only, because the grafana Terraform stack owns the stack's dashboards and data
+sources.
+
+It needs `uv`, AWS credentials for the account (`AWS_PROFILE`), and
+`just grafana-cloud-setup` done. It reads the API token from the bootstrap stack's
+Secrets Manager secret each time it starts, so the token never lands in a file. It reads
+the stack URL from `GRAFANA_URL`, then `TF_VAR_grafana_url`, then `grafana_url` in
+`terraform/grafana/terraform.tfvars`, and otherwise from the grafana stack's
+`grafana_url` output, so a fresh worktree needs no setup once `just grafana-up` has
+run. Claude Code holds a session's first turn until the server connects, which takes
+about 5 seconds, longer the first time `uvx` fetches the server or a fresh worktree
+initialises the grafana stack. `/mcp` shows whether the server connected. If it did
+not, run `just grafana-mcp` in a terminal to see the error; if that starts but Claude
+Code reports a timeout, raise its 30-second startup limit, e.g. `MCP_TIMEOUT=60000 claude`.
+
 ## Recipes
 
 `just` (or `just --list`) lists every recipe, grouped by concern
@@ -245,6 +266,7 @@ Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 | `bench` | Bench-client image, one point's ladder, prefix-cache, results sync, mTLS endpoint |
 | `obs` | Persistent grafana stack (`grafana-up`), OTel Collector spine stub |
 | `test` | Python suite and shell unit tests (no cluster) |
+| `dev` | Grafana MCP server for Claude Code (`grafana-mcp`) |
 | `orchestrate` | Whole-stack up/down, cloud verification |
 
 ## Roadmap

@@ -204,7 +204,8 @@ jobs:
       # bench configs with yq and fails when their goodput gates differ (ADR-0026).
       # grafana-cloud-setup-test stubs terraform, aws and the browser openers, so no apply,
       # AWS call or browser runs. bootstrap-test stubs terraform and aws, so no apply or
-      # AWS call runs.
+      # AWS call runs. grafana-mcp-test stubs terraform, aws and uvx, so no AWS call or
+      # server runs.
       - name: Run shell unit tests
         run: |
           set -euo pipefail
@@ -215,6 +216,7 @@ jobs:
           bash test/goodput-parity-test.sh
           bash test/grafana-cloud-setup-test.sh
           bash test/bootstrap-test.sh
+          bash test/grafana-mcp-test.sh
 
   chart-render:
     name: helm chart render (kubeconform)
