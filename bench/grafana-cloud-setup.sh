@@ -199,16 +199,11 @@ ENV_FILE=/dev/null
 # shellcheck disable=SC2317,SC2329 # called by name through ask_valid
 is_stack_url() { [[ "$1" =~ ^https://[a-z0-9-]+\.grafana\.net/?$ ]]; }
 
-# is_external_id VALUE succeeds for what AWS accepts as an external ID: 2 to 1224
-# characters from this set. The length is checked apart from the pattern because a
-# regex repeat count stops at 255.
-# shellcheck disable=SC2317,SC2329 # called by name through ask_valid
-is_external_id() { [[ "$1" =~ ^[[:alnum:]_+=,.@:/-]+$ && ${#1} -ge 2 && ${#1} -le 1224 ]]; }
-
-# is_email VALUE succeeds for what the bootstrap stack's operator_email validation
-# accepts, minus the characters that would need escaping in an HCL string.
-# shellcheck disable=SC2317,SC2329 # called by name through ask_valid
-is_email() { [[ "$1" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ && "$1" != *[\"\\\$%]* ]]; }
+# The external ID and email checks are shared with bootstrap.sh.
+# Parameter expansion, not dirname, so the file is found even before the tool check below
+# confirms the PATH.
+# shellcheck source=bench/bootstrap-values.sh
+source "${BASH_SOURCE[0]%/*}/bootstrap-values.sh"
 
 # ask_valid KEY PROMPT CHECK MESSAGE asks for KEY until CHECK accepts it, warning MESSAGE
 # after each rejected answer.

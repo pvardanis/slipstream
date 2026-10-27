@@ -68,3 +68,8 @@ output "grafana_cloudwatch_role_arn" {
   description = "ARN of the IAM role Grafana Cloud's CloudWatch data source assumes; pasted into the data source's Assume Role ARN field."
   value       = aws_iam_role.grafana_cloudwatch.arn
 }
+
+output "spend_leak_topic_arn" {
+  description = "ARN of the SNS topic both spend-leak layers page through; `just bootstrap` reads the operator email back from its email subscription."
+  value       = aws_sns_topic.spend_leak.arn
+}
