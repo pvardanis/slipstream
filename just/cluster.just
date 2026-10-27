@@ -125,4 +125,4 @@ grafana-cloud-setup:
 # Apply the state-bootstrap stack once, before the first `just cluster-up`.
 [group('cluster')]
 bootstrap:
-    bench/bootstrap.sh {{ bootstrap_dir }}
+    {{ justfile_directory() }}/bench/bootstrap.sh {{ bootstrap_dir }}

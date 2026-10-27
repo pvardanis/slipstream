@@ -4,8 +4,8 @@
 # AWS call. It checks that a set TF_VAR_grafana_external_id or a terraform.tfvars entry
 # is used as is with no AWS read; that otherwise the ID is read from the live Grafana
 # CloudWatch role named by the bootstrap output; that a bootstrap with no state yet
-# applies without one and names the setup wizard; and that a failed or empty role read
-# aborts before the apply.
+# applies without one, naming the setup wizard and repeating terraform's error; and that a
+# failed, empty or malformed role read aborts before the apply.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,7 +24,7 @@ case "\$1" in
   init) exit 0 ;;
   output)
     [[ "\$2 \$3" == "-raw grafana_cloudwatch_role_arn" ]] || { echo "unexpected output: \$*" >&2; exit 2; }
-    [[ -n "\${NO_STATE:-}" ]] && { echo "No outputs found" >&2; exit 1; }
+    [[ -n "\${NO_STATE:-}" ]] && { echo "\${OUTPUT_ERROR:-No outputs found}" >&2; exit 1; }
     echo arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch ;;
   apply) printf 'apply %s\n' "\${TF_VAR_grafana_external_id-<unset>}" >>"${tmp}/calls" ;;
   *) echo "unexpected call: \$*" >&2; exit 2 ;;
@@ -104,5 +104,15 @@ fi
 AWS_FAIL=1 check_aborted "failed role read" "cannot read the external ID"
 ROLE_EXTERNAL_ID="" check_aborted "empty role read" "cannot read the external ID"
 ROLE_EXTERNAL_ID=None check_aborted "role without the condition" "cannot read the external ID"
+# A list-valued condition prints tab-separated IDs; written back, it would be one bad ID.
+ROLE_EXTERNAL_ID=$'ext-a\text-b' check_aborted "role with several IDs" "is not one external ID"
+
+# A failed output read repeats terraform's own error, so a cause other than missing state
+# reads as itself.
+if NO_STATE=1 OUTPUT_ERROR="Error: ExpiredToken" run && grep -qF "Error: ExpiredToken" "${tmp}/stderr"; then
+  pass "failed output read repeats terraform's error"
+else
+  flunk "failed output read repeats terraform's error" "error not repeated"
+fi
 
 exit "${fail}"
