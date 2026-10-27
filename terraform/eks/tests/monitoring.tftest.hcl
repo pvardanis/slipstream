@@ -131,10 +131,14 @@ run "remote_write_targets_grafana_cloud_with_the_write_token" {
     error_message = "Prometheus must remote_write to the grafana stack's prometheus_remote_write_url, and nowhere else."
   }
 
-  # The password is the token ESO syncs into monitoring (external_secrets.tf).
+  # The password is the token ESO syncs into monitoring (external_secrets.tf): the Secret
+  # name and key the monitoring sync release writes.
   assert {
-    condition     = yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].basicAuth.password == { name = "grafana-cloud-write", key = "token" }
-    error_message = "The remote_write password must be the token key of the grafana-cloud-write Secret."
+    condition = yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].basicAuth.password == {
+      name = yamldecode(helm_release.grafana_cloud_write_token["monitoring"].values[0]).secretName
+      key  = yamldecode(helm_release.grafana_cloud_write_token["monitoring"].values[0]).secretKey
+    }
+    error_message = "The remote_write password must be the Secret name and key the monitoring sync release writes the token to."
   }
 
   # The username is the instance ID, from a Secret the release creates: the Prometheus

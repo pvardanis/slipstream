@@ -1,3 +1,5 @@
 # Set by terraform/eks/external_secrets.tf; empty, so a missing value fails the render.
 region: ""
 remoteKey: ""
+secretName: ""
+secretKey: ""
