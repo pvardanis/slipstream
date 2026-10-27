@@ -115,6 +115,29 @@ run "metrics_stack_shape" {
     error_message = "Prometheus storage must be an emptyDir, never a volume claim."
   }
 
+  # Retention by size trims blocks before the emptyDir fills, or the kubelet evicts the
+  # pod for exceeding its sizeLimit.
+  assert {
+    condition = (
+      tonumber(regex("^([0-9]+)GB$", yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.retentionSize)[0]) * 1000000000
+      < tonumber(regex("^([0-9]+)Gi$", yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.storageSpec.emptyDir.sizeLimit)[0]) * pow(2, 30)
+    )
+    error_message = "Prometheus retentionSize (in GB) must be below the emptyDir sizeLimit (in Gi)."
+  }
+
+  # kube-state-metrics emits the allowlisted kube_deployment_* series, and node-exporter
+  # is part of the stack #367 specifies. The chart enables both by default, under its
+  # top-level toggles and the subcharts' own.
+  assert {
+    condition = (
+      try(yamldecode(helm_release.kube_prometheus_stack.values[0]).kube-state-metrics.enabled, true)
+      && try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus-node-exporter.enabled, true)
+      && try(yamldecode(helm_release.kube_prometheus_stack.values[0]).kubeStateMetrics.enabled, true)
+      && try(yamldecode(helm_release.kube_prometheus_stack.values[0]).nodeExporter.enabled, true)
+    )
+    error_message = "kube-state-metrics and node-exporter must stay enabled."
+  }
+
   # Nothing Prometheus scrapes emits exemplars (ADR-0026).
   assert {
     condition     = !contains(try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.enableFeatures, []), "exemplar-storage")
@@ -221,6 +244,24 @@ run "service_monitors_scrape_vllm_and_karpenter" {
       endpoints         = [{ port = "http", path = "/metrics" }]
     }
     error_message = "The vLLM ServiceMonitor must scrape /metrics on the http port of the vllm and vllm-gpu Services in slipstream."
+  }
+
+  # The selector matches the Services the vLLM manifests deploy, so a label, port or
+  # namespace renamed on one side only fails here rather than silently stopping the scrape.
+  assert {
+    condition = alltrue([
+      for f in ["../../k8s/vllm.yaml", "../../k8s/vllm-gpu.yaml"] : (
+        length([for d in [for doc in split("\n---\n", file(f)) : yamldecode(doc)] : d if d.kind == "Service"]) == 1
+        && alltrue([
+          for d in [for doc in split("\n---\n", file(f)) : yamldecode(doc)] : (
+            contains(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm.selector.matchExpressions[0].values, d.metadata.labels.app)
+            && contains(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm.namespaceSelector.matchNames, d.metadata.namespace)
+            && contains([for p in d.spec.ports : p.name], yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm.endpoints[0].port)
+          ) if d.kind == "Service"
+        ])
+      )
+    ])
+    error_message = "The vLLM ServiceMonitor's app label, namespace and port must match the Service in k8s/vllm.yaml and in k8s/vllm-gpu.yaml."
   }
 
   # The Karpenter chart's Service, in the controller release's namespace.
