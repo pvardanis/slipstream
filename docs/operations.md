@@ -209,10 +209,15 @@ The wizard pipes tokens to `aws secretsmanager put-secret-value` on stdin, so th
 reach a file or the command line. A failed stage stops the wizard; rerun it from the
 start.
 
-`grafana_external_id` has no default, so every later `just bootstrap` needs it from the
-gitignored tfvars file or `TF_VAR_grafana_external_id`, and fails without it. A fresh
-worktree has no tfvars file: copy it from the main checkout (`chmod 600` it, as it holds
-the operator's address), or export both variables.
+`grafana_external_id` and `operator_email` have no default. A later `just bootstrap` takes
+each from the gitignored tfvars file or its `TF_VAR_`; when neither sets it, as in a fresh
+worktree with no tfvars file, it reads the value back from AWS: the external ID from the
+`slipstream-grafana-cloudwatch` role's trust policy, the email from the
+`slipstream-spend-leak` topic's email subscription. Terraform prompts for a value only when
+there is nothing to read: no bootstrap state yet, a state that lacks the role or topic
+output (that apply adds it, so this happens once), or a topic with no email subscription.
+A failed AWS read, or one that returns more than one external ID or address, stops before
+the apply, naming the variable to set.
 
 ## Grafana Cloud write token in the cluster
 
@@ -319,10 +324,13 @@ aws ce get-cost-and-usage --time-period Start="$(date -u +%Y-%m-01)",End="$(date
 
 **Setup.** `just bootstrap` needs the operator's address, kept out of this public repo:
 `operator_email` in the gitignored `terraform/bootstrap/terraform.tfvars`, or
-`TF_VAR_operator_email`; `just grafana-cloud-setup` asks for it when neither is set. AWS
-then emails a confirmation link; nothing is delivered until it is clicked, and every
-bootstrap plan warns (`operator_email_confirmed`) while it is pending. An unsubscribe link
-in an alert email removes the subscription; `just bootstrap` re-creates it.
+`TF_VAR_operator_email`; `just grafana-cloud-setup` asks for it when neither is set. Once
+the topic has its email subscription, confirmed or pending, `just bootstrap` with neither
+set reads the address back from it. AWS emails a confirmation link; nothing is delivered until it is clicked,
+and every bootstrap plan warns (`operator_email_confirmed`) while it is pending. An
+unsubscribe link in an alert email removes the subscription; `just bootstrap` re-creates
+it, prompting for the address when neither the tfvars file nor `TF_VAR_operator_email`
+sets it.
 
 **Rehearsal.** Force the alarm and check the email arrives:
 

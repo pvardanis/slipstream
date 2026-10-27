@@ -138,8 +138,9 @@ hence the order:
    Secrets Manager, and writes the stack URL as `grafana_url` into the gitignored
    `terraform/grafana/terraform.tfvars` ([runbook](docs/operations.md#grafana-cloud-setup)).
    Click the confirmation link AWS emails ([runbook](docs/operations.md#spend-leak-alert)).
-   Later `just bootstrap` runs read the same file and fail without
-   `grafana_external_id`; a fresh worktree has no copy of it.
+   Later `just bootstrap` runs, in any worktree, take `grafana_external_id` and
+   `operator_email` from `terraform/bootstrap/terraform.tfvars` or their `TF_VAR_`, and
+   otherwise read them back from AWS, so a fresh worktree bootstraps without the wizard.
 3. `just grafana-up` — applies the grafana stack: the CloudWatch data source, which
    reads CloudWatch through the bootstrap stack's IAM role. It asks before applying and
    has no down recipe. Then click Save & test on the data source
