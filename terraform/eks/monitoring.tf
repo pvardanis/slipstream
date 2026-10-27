@@ -22,20 +22,20 @@ locals {
   prometheus_remote_write_url      = try(data.terraform_remote_state.grafana.outputs.prometheus_remote_write_url, "")
   prometheus_remote_write_username = try(data.terraform_remote_state.grafana.outputs.prometheus_remote_write_username, "")
 
-  # The one place the sent series are listed; a dashboard check reads the same file.
+  # The one place the sent series are listed.
   remote_write_allowlist = yamldecode(file("${path.module}/remote-write-allowlist.yaml"))
 
-  # One keep rule over "<__name__>;<instance_type>": an allowlisted series passes with any
-  # instance_type, the price gauge only with one of the listed instance types. Relabel
-  # regexes are RE2 with no negative lookahead, so the price gauge is matched apart from
-  # the other names rather than excluded afterwards. Prometheus anchors the regex.
+  # One keep rule over "<__name__>;<instance_type>", one alternative per allowlisted
+  # series: each passes with any instance_type, except the price gauge, which passes only
+  # with one of the listed instance types. Relabel regexes are RE2 with no negative
+  # lookahead, so the price gauge gets its own alternative rather than being excluded
+  # afterwards. Prometheus anchors the regex.
   remote_write_price_metric = "karpenter_cloudprovider_instance_type_offering_price_estimate"
-  remote_write_keep_regex = format(
-    "(?:%s);.*|%s;(?:%s)",
-    join("|", [for m in local.remote_write_allowlist.metrics : m if m != local.remote_write_price_metric]),
-    local.remote_write_price_metric,
-    join("|", [for t in local.remote_write_allowlist.price_instance_types : replace(t, ".", "\\.")]),
-  )
+  remote_write_price_types  = join("|", [for t in local.remote_write_allowlist.price_instance_types : replace(t, ".", "\\.")])
+  remote_write_keep_regex = join("|", [
+    for m in local.remote_write_allowlist.metrics :
+    m == local.remote_write_price_metric ? "${m};(?:${local.remote_write_price_types})" : "${m};.*"
+  ])
 
   # The Secret the release creates for the remote_write username: the Prometheus CRD reads
   # both basic-auth halves from Secrets. The instance ID is not a secret.

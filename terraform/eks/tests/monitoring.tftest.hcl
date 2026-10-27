@@ -161,13 +161,17 @@ run "remote_write_keeps_only_the_allowlist" {
     error_message = "remote_write must carry exactly one keep rule over __name__ and instance_type."
   }
 
-  # Every allowlisted series is sent; the price gauge only for the GPU pool's instance type.
+  # Every allowlisted series is sent, with or without an instance_type label
+  # (karpenter_nodes_allocatable carries one); the price gauge only for the GPU pool's
+  # instance type.
   assert {
-    condition = alltrue([
-      for m in yamldecode(file("remote-write-allowlist.yaml")).metrics :
-      can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].writeRelabelConfigs[0].regex})$", m == "karpenter_cloudprovider_instance_type_offering_price_estimate" ? "${m};g5.xlarge" : "${m};"))
-    ])
-    error_message = "Every series in remote-write-allowlist.yaml must pass the remote_write keep rule."
+    condition = alltrue(flatten([
+      for m in yamldecode(file("remote-write-allowlist.yaml")).metrics : [
+        for s in(m == "karpenter_cloudprovider_instance_type_offering_price_estimate" ? ["${m};g5.xlarge"] : ["${m};", "${m};g5.xlarge"]) :
+        can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].writeRelabelConfigs[0].regex})$", s))
+      ]
+    ]))
+    error_message = "Every series in remote-write-allowlist.yaml must pass the remote_write keep rule, with or without an instance_type."
   }
 
   # Anything off the list stays local, and the price gauge of any other instance type is
