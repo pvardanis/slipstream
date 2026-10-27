@@ -110,6 +110,12 @@ locals {
         storageSpec   = { emptyDir = { sizeLimit = "2Gi" } }
         retentionSize = "1GB"
 
+        # The operator's 600s default keeps a terminating pod's namespace waiting 5m
+        # before the namespace controller re-checks it, past the provider's 5m wait on
+        # the monitoring namespace's delete at cluster-down. 120s still covers
+        # remote_write's 1m flush on shutdown; the emptyDir has nothing else to save.
+        terminationGracePeriodSeconds = 120
+
         resources = {
           requests = { cpu = "100m", memory = "768Mi" }
           limits   = { memory = "768Mi" }

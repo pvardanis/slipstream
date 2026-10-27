@@ -125,6 +125,18 @@ run "metrics_stack_shape" {
     error_message = "Prometheus retentionSize (in GB) must be below the emptyDir sizeLimit (in Gi)."
   }
 
+  # The namespace controller re-checks a namespace no sooner than its pods' remaining grace
+  # period allows, capped at 5m, which is also how long the provider waits on the
+  # monitoring namespace's delete at cluster-down. Above remote_write's 1m shutdown flush,
+  # so the last samples still reach Grafana Cloud.
+  assert {
+    condition = (
+      try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.terminationGracePeriodSeconds, 600) > 60
+      && try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.terminationGracePeriodSeconds, 600) < 300
+    )
+    error_message = "Prometheus terminationGracePeriodSeconds must sit between remote_write's 60s flush and the 300s namespace delete timeout."
+  }
+
   # kube-state-metrics emits the allowlisted kube_deployment_* series, and node-exporter
   # is part of the stack #367 specifies. The chart enables both by default, under its
   # top-level toggles and the subcharts' own.
