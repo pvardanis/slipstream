@@ -131,3 +131,27 @@ run "grafana_url_is_published_for_the_mcp_server" {
     error_message = "The grafana_url output must be the stack URL the provider uses."
   }
 }
+
+# Prometheus remote_write in the eks stack pushes to the hosted Prometheus this stack reads,
+# authenticating as its instance: the push endpoint is the data source's query URL plus
+# /push, and the basic-auth user is the data source's, the stack's numeric instance ID.
+run "remote_write_target_is_the_hosted_prometheus" {
+  command = plan
+
+  override_data {
+    target = data.grafana_data_source.prometheus
+    values = {
+      url                 = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom"
+      basic_auth_username = "1234567"
+    }
+  }
+
+  assert {
+    condition     = output.prometheus_remote_write_url == "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+    error_message = "The remote_write URL must be the hosted Prometheus data source's URL plus /push."
+  }
+  assert {
+    condition     = output.prometheus_remote_write_username == "1234567"
+    error_message = "The remote_write username must be the hosted Prometheus data source's basic-auth user."
+  }
+}
