@@ -118,10 +118,11 @@ cluster-down: _bootstrap-init
 grafana-cloud-setup:
     {{ justfile_directory() }}/bench/grafana-cloud-setup.sh {{ bootstrap_dir }} {{ grafana_dir }}
 
-# Apply the state-bootstrap stack once, before the first `just cluster-up`. Assumes the
-# state bucket already exists (state lives in it, see backend.tf). A brand-new
-# environment bootstraps the bucket first with the two-step in ADR-0005.
+# Assumes the state bucket already exists (state lives in it, see backend.tf). A brand-new
+# environment bootstraps the bucket first with the two-step in ADR-0005. When neither
+# terraform.tfvars nor the environment sets grafana_external_id, bench/bootstrap.sh reads
+# it back from the live Grafana CloudWatch role.
+# Apply the state-bootstrap stack once, before the first `just cluster-up`.
 [group('cluster')]
 bootstrap:
-    terraform -chdir={{ bootstrap_dir }} init -input=false
-    terraform -chdir={{ bootstrap_dir }} apply -auto-approve
+    bench/bootstrap.sh {{ bootstrap_dir }}

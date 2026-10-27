@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Apply the bootstrap stack. Its grafana_external_id variable has no default; when neither
+# TF_VAR_grafana_external_id nor the gitignored terraform.tfvars sets it (a fresh worktree
+# has no tfvars file), the ID is read back from the live Grafana CloudWatch role's trust
+# policy, so a rerun applies without prompting. A bootstrap with no state yet has no role
+# to read, and the apply asks as before; `just grafana-cloud-setup` writes the ID instead.
+# Usage: bootstrap.sh <bootstrap-dir>
+set -euo pipefail
+
+bootstrap_dir="$1"
+
+terraform -chdir="${bootstrap_dir}" init -input=false
+
+if [[ -z "${TF_VAR_grafana_external_id:-}" ]] &&
+  ! grep -qE '^[[:space:]]*grafana_external_id[[:space:]]*=' "${bootstrap_dir}/terraform.tfvars" 2>/dev/null; then
+  if role_arn="$(terraform -chdir="${bootstrap_dir}" output -raw grafana_cloudwatch_role_arn 2>/dev/null)" &&
+    [[ -n "${role_arn}" ]]; then
+    role="${role_arn##*/}"
+    # The aws error stays on stderr, so a credentials or access failure reads as itself.
+    # --output text prints None when the role has no such condition.
+    if ! external_id="$(aws iam get-role --role-name "${role}" \
+      --query 'Role.AssumeRolePolicyDocument.Statement[0].Condition.StringEquals."sts:ExternalId"' \
+      --output text)" || [[ -z "${external_id}" || "${external_id}" == None ]]; then
+      echo "cannot read the external ID from role ${role}; set grafana_external_id in ${bootstrap_dir}/terraform.tfvars or TF_VAR_grafana_external_id" >&2
+      exit 1
+    fi
+    export TF_VAR_grafana_external_id="${external_id}"
+  else
+    echo "no bootstrap state to read grafana_external_id from; run \`just grafana-cloud-setup\` to set it" >&2
+  fi
+fi
+
+terraform -chdir="${bootstrap_dir}" apply -auto-approve
