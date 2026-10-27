@@ -43,14 +43,15 @@ locals {
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. Requests sit beside Karpenter, Prefect, ESO and the Collector on the
-  # system node's single t3.large; memory limits equal requests so the node is never
-  # overcommitted, and CPU is left unlimited.
+  # system node's single t3.large; memory limits equal requests so the node's memory is
+  # never overcommitted, and CPU is left unlimited.
   kube_prometheus_stack_helm_values = {
     # Dashboards live in Grafana Cloud and the spend-leak alarm is AWS-side (ADR-0025).
     grafana      = { enabled = false }
     alertmanager = { enabled = false }
-    # Alerting is #41's decision, and with no Alertmanager nothing reads the default
-    # alerting and recording rules, so they are not evaluated on the system node.
+    # With no Alertmanager the default alerting rules have no receiver, and no recording
+    # rule's output is queried in the cluster or allowlisted for Grafana Cloud, so neither
+    # is evaluated on the system node.
     defaultRules = { create = false }
     # EKS runs etcd, the scheduler and the controller manager off the nodes, and binds
     # kube-proxy's metrics to localhost, so their targets would only ever be down.
@@ -141,8 +142,10 @@ resource "helm_release" "kube_prometheus_stack" {
 
   # Block apply until the operator, kube-state-metrics and node-exporter are Ready and roll
   # back atomically on failure, so a broken install fails cluster-up loudly. Helm does not
-  # wait on the Prometheus pod, which the operator creates; a remote_write that cannot
-  # authenticate shows only in Prometheus's logs and the empty Grafana Cloud panels.
+  # wait on the Prometheus pod, which the operator creates: until the write token's Secret
+  # exists the operator holds Prometheus back, which shows in the Prometheus resource's
+  # status and the operator's logs; a remote_write that cannot authenticate shows only in
+  # Prometheus's logs and the empty Grafana Cloud panels.
   wait   = true
   atomic = true
 
@@ -150,12 +153,12 @@ resource "helm_release" "kube_prometheus_stack" {
 
   lifecycle {
     precondition {
-      condition     = local.prometheus_remote_write_url != "" && local.prometheus_remote_write_username != ""
-      error_message = "The grafana stack has no prometheus_remote_write_url or prometheus_remote_write_username output, so Prometheus has nowhere to remote_write. Run `just grafana-up`, then `just cluster-up` again."
+      condition     = startswith(local.prometheus_remote_write_url, "https://") && local.prometheus_remote_write_username != ""
+      error_message = "The grafana stack has no https prometheus_remote_write_url or no prometheus_remote_write_username output, so Prometheus has nowhere to remote_write. Run `just grafana-up`, then `just cluster-up` again."
     }
   }
 
-  # The write token's Secret must exist before Prometheus reads it for remote_write.
+  # The write token's ExternalSecret is installed first; Helm does not wait for its sync.
   # module.eks brings the node group the pods need.
   depends_on = [module.eks, helm_release.grafana_cloud_write_token]
 }

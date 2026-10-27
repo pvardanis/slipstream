@@ -1,6 +1,6 @@
 # The series Prometheus remote-writes to Grafana Cloud (ADR-0026): only those the panels
 # read. Everything else stays in the cluster and dies with it, which keeps the free tier
-# under its 10k active series. Adding a panel means adding its series here on purpose.
+# under its 10k active series. A panel whose series is not listed here gets no data.
 # monitoring.tf builds the remote_write keep rule from this file.
 metrics:
   # vLLM v0.29.0 (vllm/v1/metrics/loggers.py): KV-cache usage, queueing, TTFT p95 and

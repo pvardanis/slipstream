@@ -165,6 +165,12 @@ run "remote_write_keeps_only_the_allowlist" {
     error_message = "remote_write must carry exactly one keep rule over __name__ and instance_type."
   }
 
+  # An empty list joins to an empty regex, which drops every series.
+  assert {
+    condition     = length(local.remote_write_allowlist.metrics) > 0
+    error_message = "remote-write-allowlist.yaml must list at least one metric, or the keep rule drops every series."
+  }
+
   # Every allowlisted series is sent, with or without an instance_type label
   # (karpenter_nodes_allocatable carries one); the price gauge only for the GPU pool's
   # instance type.
@@ -237,6 +243,40 @@ run "metrics_stack_rejects_a_grafana_stack_without_remote_write_outputs" {
     target = data.terraform_remote_state.grafana
     values = {
       outputs = {}
+    }
+  }
+
+  expect_failures = [helm_release.kube_prometheus_stack]
+}
+
+# Either output missing on its own fails the plan too: a URL with no instance ID to
+# authenticate as is no more usable than no URL.
+run "metrics_stack_rejects_a_grafana_stack_without_a_remote_write_username" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.grafana
+    values = {
+      outputs = {
+        prometheus_remote_write_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      }
+    }
+  }
+
+  expect_failures = [helm_release.kube_prometheus_stack]
+}
+
+# A data source with no URL publishes a bare "/push", which is not an endpoint.
+run "metrics_stack_rejects_a_remote_write_url_that_is_not_https" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.grafana
+    values = {
+      outputs = {
+        prometheus_remote_write_url      = "/push"
+        prometheus_remote_write_username = "1234567"
+      }
     }
   }
 
