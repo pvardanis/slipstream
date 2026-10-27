@@ -55,6 +55,18 @@ override_data {
   }
 }
 
+# The metrics stack (monitoring.tf) reads the grafana stack's remote_write outputs; stub
+# them instead of reaching for real S3.
+override_data {
+  target = data.terraform_remote_state.grafana
+  values = {
+    outputs = {
+      prometheus_remote_write_url      = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      prometheus_remote_write_username = "1234567"
+    }
+  }
+}
+
 variables {
   state_bucket = "slipstream-tfstate-abc123"
 }
