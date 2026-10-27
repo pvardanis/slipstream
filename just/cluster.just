@@ -120,8 +120,9 @@ grafana-cloud-setup:
 
 # Assumes the state bucket already exists (state lives in it, see backend.tf). A brand-new
 # environment bootstraps the bucket first with the two-step in ADR-0005. When neither
-# terraform.tfvars nor the environment sets grafana_external_id, bench/bootstrap.sh reads
-# it back from the live Grafana CloudWatch role.
+# terraform.tfvars nor the environment sets grafana_external_id or operator_email,
+# bench/bootstrap.sh reads each back from AWS: the external ID from the live Grafana
+# CloudWatch role, the email from the spend-leak topic's email subscription.
 # Apply the state-bootstrap stack once, before the first `just cluster-up`.
 [group('cluster')]
 bootstrap:

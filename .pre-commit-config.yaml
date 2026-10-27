@@ -34,6 +34,9 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
+        # -x follows a sourced file (bench/bootstrap-values.sh) even when only the script
+        # that sources it is checked.
+        args: [-x]
 
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: v3.10.0-2

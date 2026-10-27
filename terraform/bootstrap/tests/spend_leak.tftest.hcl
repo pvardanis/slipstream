@@ -88,6 +88,12 @@ run "spend_leak_topic_emails_the_operator" {
     condition     = aws_sns_topic_subscription.operator_email.protocol == "email" && aws_sns_topic_subscription.operator_email.endpoint == "operator@example.com"
     error_message = "The spend-leak topic must email var.operator_email."
   }
+
+  # bench/bootstrap.sh reads the operator email back from this topic's subscription.
+  assert {
+    condition     = output.spend_leak_topic_arn == "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
+    error_message = "The spend_leak_topic_arn output must be the spend-leak topic's ARN."
+  }
 }
 
 # Both layers publish as AWS services, so the topic policy must let CloudWatch alarms and

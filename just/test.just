@@ -25,7 +25,7 @@ image-tag-test:
 build-image-test:
     bash test/build-image-test.sh
 
-# Assert bootstrap.sh passes the Grafana external ID from the environment or tfvars as is, else reads it from the live role, and aborts before the apply on a failed read (terraform and aws stubbed).
+# Assert bootstrap.sh passes the Grafana external ID and operator email from the environment or tfvars as is, else reads them from the live role and spend-leak topic, prompts when there is nothing to read, and aborts before the apply on a failed read (terraform and aws stubbed).
 [group('test')]
 bootstrap-test:
     bash test/bootstrap-test.sh
