@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit test for bench/grafana-cloud-setup.sh: terraform, aws and the browser openers are
+# Unit test for scripts/grafana-cloud-setup.sh: terraform, aws and the browser openers are
 # stubbed on PATH and the operator's answers are piped on stdin, so no apply, AWS call or
 # browser runs. It checks that the external ID lands in terraform.tfvars beside the values
 # already there before the apply reads it, and a first run creates the file at mode 0600;
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script="${repo_root}/bench/grafana-cloud-setup.sh"
+script="${repo_root}/scripts/grafana-cloud-setup.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 

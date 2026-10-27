@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit test for bench/gh-vars.sh: terraform and gh are stubbed on PATH so the
+# Unit test for scripts/gh-vars.sh: terraform and gh are stubbed on PATH so the
 # test asserts the repo variables the script sets from the bootstrap outputs, never
 # a real terraform read or GitHub write. It checks that all eight variables are
 # set with their output values (the ECR repository names stripped of their
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script="${repo_root}/bench/gh-vars.sh"
+script="${repo_root}/scripts/gh-vars.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 

@@ -10,7 +10,7 @@
 # Usage: bootstrap.sh <bootstrap-dir>
 set -euo pipefail
 
-# shellcheck source=bench/bootstrap-values.sh
+# shellcheck source=scripts/bootstrap-values.sh
 source "${BASH_SOURCE[0]%/*}/bootstrap-values.sh"
 
 bootstrap_dir="$1"

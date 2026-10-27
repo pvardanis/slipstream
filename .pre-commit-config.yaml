@@ -34,7 +34,7 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
-        # -x follows a sourced file (bench/bootstrap-values.sh) even when only the script
+        # -x follows a sourced file (scripts/bootstrap-values.sh) even when only the script
         # that sources it is checked.
         args: [-x]
 

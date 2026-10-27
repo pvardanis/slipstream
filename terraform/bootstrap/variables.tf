@@ -83,7 +83,7 @@ variable "prefect_namespace" {
 }
 
 variable "grafana_external_id" {
-  description = "External ID Grafana Cloud presents when assuming the Grafana Assume Role IAM role, unique to the Grafana Cloud stack. Shown in the instructions box under Connection Details of the stack's CloudWatch data source once Grafana Assume Role is selected. No default because it exists only once that stack does: bench/grafana-cloud-setup.sh walks the operator to it and writes it into the gitignored terraform.tfvars; TF_VAR_grafana_external_id also sets it."
+  description = "External ID Grafana Cloud presents when assuming the Grafana Assume Role IAM role, unique to the Grafana Cloud stack. Shown in the instructions box under Connection Details of the stack's CloudWatch data source once Grafana Assume Role is selected. No default because it exists only once that stack does: scripts/grafana-cloud-setup.sh walks the operator to it and writes it into the gitignored terraform.tfvars; TF_VAR_grafana_external_id also sets it."
   type        = string
 
   validation {

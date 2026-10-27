@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit test for bench/bootstrap.sh: terraform and aws are stubbed on PATH so the test
+# Unit test for scripts/bootstrap.sh: terraform and aws are stubbed on PATH so the test
 # asserts which Grafana external ID and operator email the bootstrap apply receives, never
 # a real apply or AWS call. For each of the two, it checks that a set TF_VAR_ or an
 # uncommented terraform.tfvars entry is used as is with no AWS read; that otherwise it is
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script="${repo_root}/bench/bootstrap.sh"
+script="${repo_root}/scripts/bootstrap.sh"
 tmp="$(mktemp -d)"
 trap 'rm -r "${tmp}"' EXIT
 mkdir -p "${tmp}/bin" "${tmp}/bootstrap"

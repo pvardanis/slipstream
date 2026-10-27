@@ -252,7 +252,7 @@ jobs:
           # lifecycle recipes use, given the namespace from the repo var because the
           # runner has no terraform state to resolve it from.
           # shellcheck source=/dev/null
-          source bench/prefect-portforward.sh
+          source orchestration/prefect-portforward.sh
           prefect_api_portforward "${PREFECT_NAMESPACE}" 4200
 
           # Register (or overwrite) the deployment with the resolved defaults; the
