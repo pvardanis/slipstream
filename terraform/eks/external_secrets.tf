@@ -14,6 +14,10 @@ locals {
   grafana_cloud_write_secret_name = try(data.terraform_remote_state.bootstrap.outputs.grafana_cloud_write_secret_name, "")
   grafana_cloud_write_secret_arn  = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${local.grafana_cloud_write_secret_name}-??????"
 
+  # The in-cluster Secret each sync release writes the token to, and the key it sits under;
+  # Prometheus remote_write (monitoring.tf) reads it by the same name and key.
+  grafana_cloud_write_token_secret = { name = "grafana-cloud-write", key = "token" }
+
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. serviceAccount.name must match the Pod Identity association, or the
   # controller has no AWS credentials.
@@ -136,8 +140,10 @@ resource "helm_release" "grafana_cloud_write_token" {
   atomic = true
 
   values = [yamlencode({
-    region    = var.region
-    remoteKey = local.grafana_cloud_write_secret_name
+    region     = var.region
+    remoteKey  = local.grafana_cloud_write_secret_name
+    secretName = local.grafana_cloud_write_token_secret.name
+    secretKey  = local.grafana_cloud_write_token_secret.key
   })]
 
   # On destroy these uninstall first, while the operator's CRDs still exist and its

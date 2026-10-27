@@ -119,7 +119,7 @@ locals {
           basicAuth = {
             username = { name = local.prometheus_remote_write_username_secret, key = "username" }
             # The Secret ESO syncs into monitoring (external_secrets.tf).
-            password = { name = "grafana-cloud-write", key = "token" }
+            password = local.grafana_cloud_write_token_secret
           }
           writeRelabelConfigs = [{
             action       = "keep"
