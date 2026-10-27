@@ -74,3 +74,9 @@ variable "external_secrets_chart_version" {
   type        = string
   default     = "2.14.0"
 }
+
+variable "kube_prometheus_stack_chart_version" {
+  description = "Pinned kube-prometheus-stack Helm chart version from the https://prometheus-community.github.io/helm-charts repo (appVersion v0.94.2, the Prometheus Operator)."
+  type        = string
+  default     = "92.14.0"
+}

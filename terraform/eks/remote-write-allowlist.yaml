@@ -1,0 +1,31 @@
+# The series Prometheus remote-writes to Grafana Cloud (ADR-0026): only those the panels
+# read. Everything else stays in the cluster and dies with it, which keeps the free tier
+# under its 10k active series. Adding a panel means adding its series here on purpose.
+# monitoring.tf builds the remote_write keep rule from this file, and a dashboard check
+# reads it to confirm every queried metric is sent.
+metrics:
+  # vLLM v0.29.0 (vllm/v1/metrics/loggers.py): KV-cache usage, queueing, TTFT p95 and
+  # throughput. Counters are exposed with a _total suffix, histograms as _bucket.
+  - vllm:kv_cache_usage_perc
+  - vllm:num_requests_waiting
+  - vllm:time_to_first_token_seconds_bucket
+  - vllm:prompt_tokens_total
+  - vllm:generation_tokens_total
+  - vllm:request_success_total
+  # Karpenter 1.8: node count, create/terminate annotations, pod-provisioning cold start (a
+  # summary, so its quantiles are series of the base name), voluntary disruptions, and the
+  # scoreboard's price with the allocatable GPUs that tell which node it applies to.
+  - karpenter_cluster_state_node_count
+  - karpenter_nodes_created_total
+  - karpenter_nodes_terminated_total
+  - karpenter_pods_startup_duration_seconds
+  - karpenter_voluntary_disruption_decisions_total
+  - karpenter_nodes_allocatable
+  - karpenter_cloudprovider_instance_type_offering_price_estimate
+  # kube-state-metrics: replicas available against desired.
+  - kube_deployment_status_replicas_available
+  - kube_deployment_spec_replicas
+# The price gauge has one series per instance type, zone and capacity type; only these
+# instance types, the GPU NodePool's (k8s/gpu-node-pool.yaml), are sent.
+price_instance_types:
+  - g5.xlarge
