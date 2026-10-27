@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the orchestration image check, and the local Helm chart render check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, and the local Helm chart render check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -24,6 +24,11 @@ image-tag-test:
 [group('test')]
 build-image-test:
     bash test/build-image-test.sh
+
+# Assert bootstrap.sh passes the Grafana external ID from the environment or tfvars as is, else reads it from the live role, and aborts before the apply on a failed read (terraform and aws stubbed).
+[group('test')]
+bootstrap-test:
+    bash test/bootstrap-test.sh
 
 # Assert gh-vars.sh sets every workflow repo variable from the bootstrap outputs and aborts before any set on a missing one (terraform and gh stubbed).
 [group('test')]
