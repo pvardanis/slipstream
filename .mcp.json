@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "just",
+      "args": ["grafana-mcp"]
+    }
+  }
+}
