@@ -17,7 +17,7 @@
 prefect-up:
     #!/usr/bin/env bash
     set -euo pipefail
-    source bench/prefect-portforward.sh
+    source orchestration/prefect-portforward.sh
     namespace="$(prefect_namespace {{ eks_dir }})"
     kubectl -n "${namespace}" rollout status deploy/prefect-server --timeout=120s
     # Reach the API over a transient port-forward (reaped on exit), so pool creation
@@ -42,7 +42,7 @@ prefect-down:
     # Best-effort: if the server or its API is already gone, there is no pool to
     # remove — cluster-down reaps the server regardless. Reach it over a transient
     # port-forward, skipping quietly (exit 0) if that fails.
-    source bench/prefect-portforward.sh
+    source orchestration/prefect-portforward.sh
     if ! namespace="$(prefect_namespace {{ eks_dir }})" || ! prefect_api_portforward "${namespace}" {{ prefect_port }}; then
       echo "prefect-down: Prefect API not reachable; nothing to remove" >&2
       exit 0
@@ -148,7 +148,7 @@ _prefect-register deployment:
     [[ -n "${image}" ]] || { echo "_bench-image-ref resolved empty" >&2; exit 1; }
     # Reach the API over a transient port-forward (reaped on exit), so registration needs
     # no public endpoint.
-    source bench/prefect-portforward.sh
+    source orchestration/prefect-portforward.sh
     namespace="$(prefect_namespace {{ eks_dir }})"
     prefect_api_portforward "${namespace}" {{ prefect_port }}
     uv run slipstream-orchestrate register-{{ deployment }} \

@@ -89,7 +89,7 @@ run "spend_leak_topic_emails_the_operator" {
     error_message = "The spend-leak topic must email var.operator_email."
   }
 
-  # bench/bootstrap.sh reads the operator email back from this topic's subscription.
+  # scripts/bootstrap.sh reads the operator email back from this topic's subscription.
   assert {
     condition     = output.spend_leak_topic_arn == "arn:aws:sns:eu-west-1:111122223333:slipstream-spend-leak"
     error_message = "The spend_leak_topic_arn output must be the spend-leak topic's ARN."

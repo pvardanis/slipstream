@@ -202,7 +202,7 @@ is_stack_url() { [[ "$1" =~ ^https://[a-z0-9-]+\.grafana\.net/?$ ]]; }
 # The external ID and email checks are shared with bootstrap.sh.
 # Parameter expansion, not dirname, so the file is found even before the tool check below
 # confirms the PATH.
-# shellcheck source=bench/bootstrap-values.sh
+# shellcheck source=scripts/bootstrap-values.sh
 source "${BASH_SOURCE[0]%/*}/bootstrap-values.sh"
 
 # ask_valid KEY PROMPT CHECK MESSAGE asks for KEY until CHECK accepts it, warning MESSAGE

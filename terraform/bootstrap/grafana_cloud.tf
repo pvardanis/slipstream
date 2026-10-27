@@ -4,7 +4,7 @@
 # outlive `just cluster-down`, like the dashboards and history they back.
 
 # Both secrets are created empty: no secret version is managed here, so no token enters
-# Terraform state. bench/grafana-cloud-setup.sh has the operator mint each token in
+# Terraform state. scripts/grafana-cloud-setup.sh has the operator mint each token in
 # Grafana Cloud and writes it with `aws secretsmanager put-secret-value`.
 
 # One access-policy token scoped metrics:write and traces:write, for Prometheus

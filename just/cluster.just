@@ -22,7 +22,7 @@ cluster-up: _bootstrap-init
     # bootstrap orchestration ECR repo URL (via the remote state in state_bucket) and
     # resolves the image's content-sha tag, failing loudly if its manifest carries no
     # single content tag. The check first fails a missing :main with the publish step.
-    {{ justfile_directory() }}/bench/orchestration-image-check.sh {{ bootstrap_dir }}
+    {{ justfile_directory() }}/orchestration/orchestration-image-check.sh {{ bootstrap_dir }}
     terraform -chdir={{ eks_dir }} apply -auto-approve -var="state_bucket=${bucket}"
     name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
@@ -39,14 +39,14 @@ cluster-plan: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    {{ justfile_directory() }}/bench/orchestration-image-check.sh {{ bootstrap_dir }}
+    {{ justfile_directory() }}/orchestration/orchestration-image-check.sh {{ bootstrap_dir }}
     terraform -chdir={{ eks_dir }} plan -var="state_bucket=${bucket}"
 
 # Needs `gh` authenticated and the bootstrap stack applied (`just bootstrap`).
 # Set the GitHub repo variables the CI workflows read from the bootstrap outputs.
 [group('cluster')]
 gh-vars: _bootstrap-init
-    {{ justfile_directory() }}/bench/gh-vars.sh {{ bootstrap_dir }}
+    {{ justfile_directory() }}/scripts/gh-vars.sh {{ bootstrap_dir }}
 
 # Apply the GPU node pool (NodePool + EC2NodeClass) and the NVIDIA device plugin.
 # Karpenter provisions no node until a pod tolerates the GPU taint and requests
@@ -116,14 +116,14 @@ cluster-down: _bootstrap-init
 # Walk through Grafana Cloud's one-time setup (ADR-0026).
 [group('cluster')]
 grafana-cloud-setup:
-    {{ justfile_directory() }}/bench/grafana-cloud-setup.sh {{ bootstrap_dir }} {{ grafana_dir }}
+    {{ justfile_directory() }}/scripts/grafana-cloud-setup.sh {{ bootstrap_dir }} {{ grafana_dir }}
 
 # Assumes the state bucket already exists (state lives in it, see backend.tf). A brand-new
 # environment bootstraps the bucket first with the two-step in ADR-0005. When neither
 # terraform.tfvars nor the environment sets grafana_external_id or operator_email,
-# bench/bootstrap.sh reads each back from AWS: the external ID from the live Grafana
+# scripts/bootstrap.sh reads each back from AWS: the external ID from the live Grafana
 # CloudWatch role, the email from the spend-leak topic's email subscription.
 # Apply the state-bootstrap stack once, before the first `just cluster-up`.
 [group('cluster')]
 bootstrap:
-    {{ justfile_directory() }}/bench/bootstrap.sh {{ bootstrap_dir }}
+    {{ justfile_directory() }}/scripts/bootstrap.sh {{ bootstrap_dir }}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit test for bench/orchestration-image-check.sh: terraform and aws are stubbed on
+# Unit test for orchestration/orchestration-image-check.sh: terraform and aws are stubbed on
 # PATH so the test asserts the ECR lookup the script makes from the bootstrap outputs,
 # never a real AWS call. It checks that a published :main passes, that a missing one
 # fails naming the publish step, and that an empty bootstrap output aborts before any
@@ -7,7 +7,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script="${repo_root}/bench/orchestration-image-check.sh"
+script="${repo_root}/orchestration/orchestration-image-check.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 

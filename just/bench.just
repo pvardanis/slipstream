@@ -66,7 +66,7 @@ bench point_slug *args:
 
     # The cell cache index and flow-run history live in a Prefect API; bring one up
     # (a local server by default, or an operator-set PREFECT_API_URL) for the run.
-    source bench/prefect-server.sh
+    source orchestration/prefect-server.sh
     prefect_server_up
 
     # Extra load-cell flags (--dry-run, --api-key-env) appended to `just bench`, base64-
