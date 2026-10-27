@@ -232,26 +232,30 @@ re-runs anything.
 Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 `just prefect-ui` running.
 
-### Grafana MCP server
+## Grafana MCP server
 
 The project's [`.mcp.json`](.mcp.json) gives Claude Code the
 [Grafana MCP server](https://github.com/grafana/mcp-grafana), so a session can run
 PromQL and TraceQL against the Grafana Cloud stack and read its dashboards. Claude Code
 starts it with `just grafana-mcp` and asks you to approve it on first use. The server
-runs read-only, because the grafana Terraform stack owns the stack's dashboards and data
-sources.
+runs read-only (`--disable-write`), because the grafana Terraform stack owns the stack's
+configuration. Its token is that stack's Admin service account token, so read-only rests
+on the server's flag, not on the token.
 
-It needs `uv`, AWS credentials for the account (`AWS_PROFILE`), and
-`just grafana-cloud-setup` done. It reads the API token from the bootstrap stack's
-Secrets Manager secret each time it starts, so the token never lands in a file. It reads
-the stack URL from `GRAFANA_URL`, then `TF_VAR_grafana_url`, then `grafana_url` in
-`terraform/grafana/terraform.tfvars`, and otherwise from the grafana stack's
-`grafana_url` output, so a fresh worktree needs no setup once `just grafana-up` has
-run. Claude Code holds a session's first turn until the server connects, which takes
-about 5 seconds, longer the first time `uvx` fetches the server or a fresh worktree
-initialises the grafana stack. `/mcp` shows whether the server connected. If it did
+It needs `uv`, AWS credentials for the account in the shell that starts Claude Code
+(e.g. `AWS_PROFILE`), and `just grafana-cloud-setup` done. It reads the API token from
+the bootstrap stack's Secrets Manager secret each time it starts, so the token never
+lands in a file. It reads the stack URL from `GRAFANA_URL`, then as `just grafana-up`
+takes it: `grafana_url` in `terraform/grafana/terraform.tfvars`, then
+`TF_VAR_grafana_url`. With none of these it reads the grafana stack's `grafana_url`
+output, so a fresh worktree needs no setup once `just grafana-up` has published that
+output. It logs the URL it chose and where from to stderr.
+
+Claude Code waits for the server to connect before the session's first turn. That takes
+a few seconds, longer the first time `uvx` fetches the server or a fresh worktree
+initialises the Terraform stacks. `/mcp` shows whether the server connected. If it did
 not, run `just grafana-mcp` in a terminal to see the error; if that starts but Claude
-Code reports a timeout, raise its 30-second startup limit, e.g. `MCP_TIMEOUT=60000 claude`.
+Code reports a timeout, raise its startup limit, e.g. `MCP_TIMEOUT=60000 claude`.
 
 ## Recipes
 

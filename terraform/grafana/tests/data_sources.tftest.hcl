@@ -116,8 +116,9 @@ run "state_bucket_must_be_non_empty" {
 }
 
 # The stack URL is published for the Grafana MCP server launcher (scripts/grafana-mcp.sh),
-# which reads it from this stack's state in any worktree. A URL other than the default
-# fails the run if the output is a literal.
+# which reads it from this stack's state in a worktree whose environment and tfvars set no
+# URL. The URL differs from var.grafana_url's default, so the assert fails if the output
+# hardcodes the default instead of reading the variable.
 run "grafana_url_is_published_for_the_mcp_server" {
   command = plan
 
