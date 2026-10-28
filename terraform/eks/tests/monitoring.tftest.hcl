@@ -300,37 +300,52 @@ run "service_monitors_scrape_vllm_karpenter_and_dcgm_exporter" {
   }
 
   # The dcgm-exporter chart's Service, in its release's namespace, selected by the labels
-  # the chart puts on it (app.kubernetes.io/name and instance, the release name).
+  # the chart puts on it: app.kubernetes.io/name is the chart's name unless a name
+  # override renames it, and instance is the release name.
   assert {
     condition = (
       yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.namespaceSelector == { matchNames = [helm_release.dcgm_exporter.namespace] }
       && yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.selector == {
-        matchLabels = { "app.kubernetes.io/name" = "dcgm-exporter", "app.kubernetes.io/instance" = helm_release.dcgm_exporter.name }
+        matchLabels = { "app.kubernetes.io/name" = helm_release.dcgm_exporter.chart, "app.kubernetes.io/instance" = helm_release.dcgm_exporter.name }
       }
+      && length(setintersection(keys(yamldecode(helm_release.dcgm_exporter.values[0])), ["nameOverride", "fullnameOverride"])) == 0
     )
-    error_message = "The dcgm-exporter ServiceMonitor must select the dcgm-exporter release's Service in its namespace."
+    error_message = "The dcgm-exporter ServiceMonitor must select the dcgm-exporter release's Service in its namespace, by the chart's name with no name override."
   }
 
   # The exporter labels a GPU's series with the pod, namespace and container using it.
-  # Prometheus renames those to exported_* under the exporter's own target labels, so
-  # each is moved back, and a GPU no pod holds carries none rather than the exporter's.
+  # Each scrape target already carries the exporter's own pod, namespace and container,
+  # so Prometheus renames the exporter's to exported_*. Each is copied back, and only
+  # then are the exported_* copies dropped; dropped first, the pod name would be lost.
   assert {
-    condition = yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints == [{
-      port = "metrics"
-      metricRelabelings = [
-        { sourceLabels = ["exported_pod"], targetLabel = "pod", regex = "(.*)", replacement = "$1", action = "replace" },
-        { sourceLabels = ["exported_namespace"], targetLabel = "namespace", regex = "(.*)", replacement = "$1", action = "replace" },
-        { sourceLabels = ["exported_container"], targetLabel = "container", regex = "(.*)", replacement = "$1", action = "replace" },
-        { regex = "exported_(pod|namespace|container)", action = "labeldrop" },
+    condition = (
+      [for e in yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints : e.port] == ["metrics"]
+      && alltrue([
+        for l in ["pod", "namespace", "container"] : contains(
+          yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints[0].metricRelabelings,
+          { sourceLabels = ["exported_${l}"], targetLabel = l, regex = "(.*)", replacement = "$1", action = "replace" }
+        )
+      ])
+    )
+    error_message = "The dcgm-exporter ServiceMonitor must scrape the metrics port and copy exported_pod, exported_namespace and exported_container back to pod, namespace and container."
+  }
+  assert {
+    condition = alltrue(flatten([
+      for r in [element(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints[0].metricRelabelings, -1)] : [
+        for l in ["pod", "namespace", "container"] : [
+          r.action == "labeldrop",
+          can(regex("^(?:${r.regex})$", "exported_${l}")),
+          !can(regex("^(?:${r.regex})$", l)),
+        ]
       ]
-    }]
-    error_message = "The dcgm-exporter ServiceMonitor must scrape the metrics port and put the GPU's own pod, namespace and container back on its series."
+    ]))
+    error_message = "The dcgm-exporter ServiceMonitor's last relabeling must drop exported_pod, exported_namespace and exported_container, and keep pod, namespace and container."
   }
 }
 
 # dcgm-exporter (#368) is one DaemonSet on the GPU nodes only, read against the GPU
 # NodePool's own label and taint (k8s/gpu-node-pool.yaml), so a renamed label or taint on
-# either side fails here rather than leaving the exporter Pending or on the wrong nodes.
+# either side fails here rather than leaving the exporter on no GPU node, or on the wrong nodes.
 run "gpu_metrics_exporter_runs_only_on_gpu_nodes" {
   command = plan
 
@@ -358,9 +373,13 @@ run "gpu_metrics_exporter_runs_only_on_gpu_nodes" {
   }
 
   # Each of the GPU NodePool's taints is tolerated, and nothing else is: the chart's
-  # default control-plane toleration is replaced, not extended.
+  # default control-plane toleration is replaced, not extended. A pool with no taint
+  # fails too, rather than every taint passing vacuously.
   assert {
-    condition = alltrue([
+    condition = length(one([
+      for d in [for doc in split("\n---\n", file("../../k8s/gpu-node-pool.yaml")) : yamldecode(doc)] :
+      d.spec.template.spec.taints if d.kind == "NodePool"
+      ])) > 0 && alltrue([
       for t in one([
         for d in [for doc in split("\n---\n", file("../../k8s/gpu-node-pool.yaml")) : yamldecode(doc)] :
         d.spec.template.spec.taints if d.kind == "NodePool"
@@ -387,7 +406,7 @@ run "gpu_metrics_exporter_runs_only_on_gpu_nodes" {
   # Karpenter does not count DaemonSet pods when it finds a node empty, unless a pod opts
   # out of disruption; the exporter must not, or the GPU node outlives scale-to-zero.
   assert {
-    condition     = !contains(keys(try(yamldecode(helm_release.dcgm_exporter.values[0]).podAnnotations, {})), "karpenter.sh/do-not-disrupt")
+    condition     = !contains(keys(lookup(yamldecode(helm_release.dcgm_exporter.values[0]), "podAnnotations", {})), "karpenter.sh/do-not-disrupt")
     error_message = "dcgm-exporter's pods must not carry karpenter.sh/do-not-disrupt, or the GPU node is never reaped."
   }
 }

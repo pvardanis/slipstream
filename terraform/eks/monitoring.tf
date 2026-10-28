@@ -101,15 +101,17 @@ locals {
           selector          = { matchLabels = { "app.kubernetes.io/name" = "karpenter" } }
           endpoints         = [{ port = "http-metrics" }]
         }
-        # The dcgm-exporter chart's Service (dcgm_exporter.tf). The exporter labels each
-        # GPU's series with the pod, namespace and container using it; Prometheus renames
-        # those exported_* beneath the exporter's own target labels, so each is moved
-        # back. A GPU no pod holds has no exported_pod, so its series carry no pod rather
-        # than the exporter's.
+        # The dcgm-exporter chart's Service (dcgm_exporter.tf), labelled with the chart's
+        # name and the release's. The exporter labels each GPU's series with the pod,
+        # namespace and container using it. The scrape target already carries the
+        # exporter's own pod, namespace and container, so Prometheus renames the
+        # exporter's to exported_*, and each is copied back before the copies are
+        # dropped. A GPU no pod holds has no exported_pod, so its series carry no pod
+        # rather than the exporter's.
         dcgm-exporter = {
           namespaceSelector = { matchNames = [helm_release.dcgm_exporter.namespace] }
           selector = { matchLabels = {
-            "app.kubernetes.io/name"     = "dcgm-exporter"
+            "app.kubernetes.io/name"     = helm_release.dcgm_exporter.chart
             "app.kubernetes.io/instance" = helm_release.dcgm_exporter.name
           } }
           endpoints = [{
