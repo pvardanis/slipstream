@@ -1,7 +1,8 @@
-# The request-ID spine stub: a minimal OTel Collector in the slipstream cluster.
-# It receives OTLP (gRPC 4317 / HTTP 4318), enforces the shape-only guard, batches,
-# and writes the telemetry — request_id and all — to its stdout, readable with
-# `kubectl logs`. The collector config is a separate file
+# The request-ID spine: an OTel Collector in the slipstream cluster. It receives
+# OTLP (gRPC 4317 / HTTP 4318), enforces the shape-only guard, batches, writes the
+# telemetry — request_id and all — to its stdout, readable with `kubectl logs`, and
+# exports the traces to Grafana Cloud Traces and their span metrics to Grafana
+# Cloud's Prometheus. The collector config is a separate file
 # (k8s/otel-collector-config.yaml) loaded into a ConfigMap by `just obs-up`, so the
 # same config the local test exercises is what the cluster runs. Reachable
 # in-cluster as otel-collector.slipstream.svc:4317; no public endpoint.
@@ -48,6 +49,37 @@ spec:
                 configMapKeyRef:
                   name: otel-collector-config
                   key: model-id
+            # Where Grafana Cloud takes traces and span metrics, and the instance
+            # IDs each authenticates as: the eks stack's grafana-cloud-endpoints
+            # ConfigMap, from the grafana stack's outputs. Not optional, for the
+            # same reason as MODEL_ID.
+            - name: GRAFANA_CLOUD_TRACES_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: grafana-cloud-endpoints
+                  key: traces-endpoint
+            - name: GRAFANA_CLOUD_TRACES_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: grafana-cloud-endpoints
+                  key: traces-username
+            - name: GRAFANA_CLOUD_METRICS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: grafana-cloud-endpoints
+                  key: metrics-url
+            - name: GRAFANA_CLOUD_METRICS_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: grafana-cloud-endpoints
+                  key: metrics-username
+            # The metrics:write + traces:write token both exporters authenticate
+            # with, which ESO syncs into this namespace at cluster-up.
+            - name: GRAFANA_CLOUD_WRITE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-cloud-write
+                  key: token
           ports:
             - name: otlp-grpc
               containerPort: 4317
