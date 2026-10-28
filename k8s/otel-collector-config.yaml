@@ -138,13 +138,13 @@ exporters:
   debug:
     verbosity: detailed
   # Grafana Cloud Traces, over OTLP/gRPC to the stack's Tempo.
-  otlp/grafana-cloud:
+  otlp_grpc/grafana-cloud:
     endpoint: ${env:GRAFANA_CLOUD_TRACES_ENDPOINT}
     auth:
       authenticator: basicauth/grafana-cloud-traces
   # Grafana Cloud's Prometheus, the same push endpoint the cluster's Prometheus
   # remote-writes to. Exemplars ride on the histogram's series.
-  prometheusremotewrite/grafana-cloud:
+  prometheus_remote_write/grafana-cloud:
     endpoint: ${env:GRAFANA_CLOUD_METRICS_URL}
     auth:
       authenticator: basicauth/grafana-cloud-metrics
@@ -160,7 +160,7 @@ service:
     traces:
       receivers: [otlp]
       processors: [transform, redaction, batch]
-      exporters: [debug, otlp/grafana-cloud, span_metrics]
+      exporters: [debug, otlp_grpc/grafana-cloud, span_metrics]
     metrics:
       receivers: [span_metrics]
-      exporters: [prometheusremotewrite/grafana-cloud]
+      exporters: [prometheus_remote_write/grafana-cloud]
