@@ -10,7 +10,8 @@
 # spine's names, adds model_id and sets slo_met per span at the goodput gates
 # (ADR-0026). The spanmetrics connector's output is asserted too: the e2e latency
 # histogram, with exemplars, and the request counts, both split by slo_met and
-# the replica's k8s.pod.name. The Grafana Cloud exporters are swapped for the
+# the replica's k8s.pod.name. The Collector's own metrics on :8888 must count what the
+# debug exporter sent, spans and metric points. The Grafana Cloud exporters are swapped for the
 # debug exporter (test/otel-spine-sinks.yaml), so nothing leaves the laptop;
 # before that, the cluster config alone must start without a warning or error.
 # Manual only: needs Docker.

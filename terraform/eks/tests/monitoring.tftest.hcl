@@ -377,7 +377,7 @@ run "service_monitors_scrape_vllm_karpenter_dcgm_exporter_and_the_collector" {
   }
 
   # Of the Collector's own metrics only the exporters' sent and failed counts are kept,
-  # the series the delivery checks read.
+  # the same series delivery reads from the Collector's :8888.
   assert {
     condition = (
       [for r in yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.endpoints[0].metricRelabelings : {

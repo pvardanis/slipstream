@@ -2,7 +2,7 @@
 
 # Bring the whole benchmark stack up and leave it running: cluster (with the self-hosted
 # Prefect server and worker), the OTel Collector exporting traces and span metrics to Grafana Cloud,
-# checked by `obs-pivot` to deliver there before any GPU spend, the server's work pool,
+# checked by `obs-pivot` that Grafana Cloud accepts what it exports, before any GPU spend, the server's work pool,
 # GPU node pool, GPU replica, and the ephemeral mTLS bench endpoint. Everything `just bench` and `just prefix-cache`
 # need — run them against it as often as you like, then `just stack-down` at the end of
 # the day to return spend to zero. Ordered cluster-up -> obs-up -> obs-pivot -> prefect-up -> gpu-pool-up: the server (a helm_release in
