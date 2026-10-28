@@ -105,6 +105,7 @@ metadata:
 """
 
 _COMMITTED_MANIFEST = Path(__file__).resolve().parents[2] / "k8s" / "vllm-gpu.yaml"
+_COLLECTOR_MANIFEST = _COMMITTED_MANIFEST.parent / "otel-collector.yaml"
 
 _POINT = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _FP16_OFF = EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False)
@@ -324,6 +325,38 @@ def test_the_recipe_renders_the_same_offload_values_as_the_worker() -> None:
     assert f"kv_transfer_config='{_kv_transfer_config(on)}'\n" in recipe
     assert f"memory_limit={off['resources']['limits']['memory']}\n" in recipe
     assert f"memory_limit={on['resources']['limits']['memory']}\n" in recipe
+
+
+def _get_collector_otlp_grpc_address() -> str:
+    """The in-cluster host:port of the Collector Service's OTLP gRPC port."""
+    (service,) = (
+        doc
+        for doc in yaml.safe_load_all(_COLLECTOR_MANIFEST.read_text(encoding="utf-8"))
+        if doc and doc["kind"] == "Service"
+    )
+    (port,) = (p["port"] for p in service["spec"]["ports"] if p["name"] == "otlp-grpc")
+    metadata = service["metadata"]
+    return f"{metadata['name']}.{metadata['namespace']}.svc:{port}"
+
+
+def test_render_keeps_the_replica_s_traces_flowing_to_the_collector() -> None:
+    # Every point the worker redeploys still sends one span per request to the
+    # Collector, named after its own pod: Kubernetes, not the render, expands the
+    # $(POD_NAME) reference, and only from a variable declared earlier in env, so
+    # the render must leave it intact and POD_NAME must come first.
+    container = _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+    args = container["args"]
+    env_names = [var["name"] for var in container["env"]]
+    env = {var["name"]: var for var in container["env"]}
+
+    endpoint = args[args.index("--otlp-traces-endpoint") + 1]
+    assert endpoint == f"grpc://{_get_collector_otlp_grpc_address()}"
+    assert "--collect-detailed-traces" not in args
+    assert env["OTEL_EXPORTER_OTLP_TRACES_INSECURE"]["value"] == "true"
+    assert env["OTEL_SERVICE_NAME"]["value"] == "vllm"
+    assert env["POD_NAME"]["valueFrom"] == {"fieldRef": {"fieldPath": "metadata.name"}}
+    assert env["OTEL_RESOURCE_ATTRIBUTES"]["value"] == "k8s.pod.name=$(POD_NAME)"
+    assert env_names.index("POD_NAME") < env_names.index("OTEL_RESOURCE_ATTRIBUTES")
 
 
 @pytest.mark.parametrize("workload", ["agent", "chat"])
