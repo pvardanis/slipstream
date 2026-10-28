@@ -1,0 +1,19 @@
+# Overlay the spine test (test/otel_spine_test.sh) merges over
+# k8s/otel-collector-config.yaml: the same pipelines, with the Grafana Cloud exporters
+# swapped for the debug exporter, so the test reads what would be sent on the
+# collector's stdout without reaching Grafana Cloud. The Collector merges maps and
+# replaces lists, so only the sinks, the auth extensions they need and the flush
+# interval change; every processor and the spanmetrics connector's dimensions,
+# buckets and exemplars are the cluster's own.
+connectors:
+  # Flush within the test's wait rather than once a minute.
+  span_metrics:
+    metrics_flush_interval: 1s
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      exporters: [debug, span_metrics]
+    metrics:
+      exporters: [debug]

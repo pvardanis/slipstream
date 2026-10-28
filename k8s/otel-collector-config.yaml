@@ -1,18 +1,31 @@
-# Request-ID spine stub: a minimal OTel Collector that receives OTLP, maps vLLM's
-# spans onto the spine's names with per-request goodput (ADR-0026), enforces
-# the shape-only privacy stance, batches, and fans out to its sinks (spec §5.1).
-# For the stub the only sink is the debug exporter, whose detailed output puts
-# the request_id on the collector's stdout (readable via `kubectl logs`); the
-# real sinks attach as further exporters on this same pipeline at L3. No
-# tail-sampling.
+# Request-ID spine: an OTel Collector that receives OTLP, maps vLLM's spans onto
+# the spine's names with per-request goodput (ADR-0026), enforces the shape-only
+# privacy stance, batches, and fans out to its sinks (spec §5.1): the debug
+# exporter, whose detailed output puts the request_id on the collector's stdout
+# (readable via `kubectl logs`), and Grafana Cloud Traces. The spanmetrics
+# connector derives an exemplar-bearing e2e latency histogram and request counts
+# from the same spans and remote-writes them to Grafana Cloud's Prometheus, since
+# vLLM's own histograms carry no exemplars. No tail-sampling.
 #
 # This file is the single source of truth for the collector config: the local
 # integration test (test/otel_spine_test.sh) runs the real collector against it,
-# and `just obs-up` loads it verbatim into the cluster ConfigMap.
+# swapping only the Grafana Cloud sinks, and `just obs-up` loads it verbatim into
+# the cluster ConfigMap. The GRAFANA_CLOUD_* variables come from the eks stack's
+# grafana-cloud-endpoints ConfigMap and the grafana-cloud-write Secret.
 extensions:
   # Liveness/readiness surface for the k8s probes (the local test does not use it).
   health_check:
     endpoint: 0.0.0.0:13133
+  # Grafana Cloud authenticates each store as its own instance ID, with the one
+  # write token scoped metrics:write and traces:write.
+  basicauth/grafana-cloud-traces:
+    client_auth:
+      username: ${env:GRAFANA_CLOUD_TRACES_USERNAME}
+      password: ${env:GRAFANA_CLOUD_WRITE_TOKEN}
+  basicauth/grafana-cloud-metrics:
+    client_auth:
+      username: ${env:GRAFANA_CLOUD_METRICS_USERNAME}
+      password: ${env:GRAFANA_CLOUD_WRITE_TOKEN}
 
 receivers:
   otlp:
@@ -71,12 +84,11 @@ processors:
           # slo_met: TTFT <= 1.0 s and TPOT <= 0.05 s, both gates inclusive.
           - set(span.attributes["slo_met"], false)
           - set(span.attributes["slo_met"], true) where span.attributes["gen_ai.latency.time_to_first_token"] <= span.cache["ttft_gate_s"] and span.cache["tpot_s"] <= span.cache["tpot_gate_s"]
-  # Shape-only guard, fail-closed: only these keys survive on a span; every other
-  # span attribute (a raw prompt, a completion, anything vLLM or a future gateway
-  # attaches as a span attribute) is dropped before it can reach a sink — the
+  # Shape-only guard, fail-closed: only these keys survive on a span or its
+  # resource; every other attribute (a raw prompt, a completion, anything vLLM or
+  # a future gateway attaches) is dropped before it can reach a sink — the
   # shape-only privacy stance (spec §5.1), enforced here rather than by convention.
-  # Scope is span attributes: resource attributes and the span name are not
-  # filtered, so shape-only discipline upstream still matters.
+  # The span name is not filtered, so shape-only discipline upstream still matters.
   redaction:
     allow_all_keys: false
     allowed_keys:
@@ -86,24 +98,69 @@ processors:
       - completion_tokens
       - prefix_hash
       - slo_met
+      # Resource attributes: the sending service, and the replica the vLLM pod
+      # names itself as, which spanmetrics and a trace search split by.
+      - service.name
+      - k8s.pod.name
     # Count redacted keys but never emit their names or values — a name list can
     # itself leak shape (spec §5.1). Counts are enough to see the guard working.
     summary: info
   # Batch only — no tail-sampling in the spine stub (spec §5.1).
   batch: {}
 
+connectors:
+  # Request counts and an e2e latency histogram from the spans, after the
+  # transform and redaction, so they split by slo_met for live goodput
+  # (rate(slo_met=true) / rate(all)). For vLLM's llm_request span the duration
+  # is e2e latency. k8s.pod.name is a resource attribute the vLLM pod sets from
+  # the downward API, so every panel can break down by replica. Each histogram
+  # data point carries exemplars, the spans' trace IDs, so a latency panel opens
+  # the trace and its request_id.
+  span_metrics:
+    histogram:
+      unit: s
+      # LLM requests run from well under a second to minutes, past the
+      # connector's default buckets (2 ms to 15 s).
+      explicit:
+        buckets: [250ms, 500ms, 1s, 2s, 4s, 8s, 15s, 30s, 60s, 120s, 300s]
+    dimensions:
+      - name: slo_met
+      - name: k8s.pod.name
+    exemplars:
+      enabled: true
+    # Once a minute: Grafana Cloud's free tier counts each series at one data
+    # point a minute.
+    metrics_flush_interval: 60s
+
 exporters:
-  # The stub's sink: detailed telemetry on the collector's stdout, so the
-  # request_id is visible via `kubectl logs`.
+  # Detailed telemetry on the collector's stdout, so the request_id is visible
+  # via `kubectl logs`.
   debug:
     verbosity: detailed
+  # Grafana Cloud Traces, over OTLP/gRPC to the stack's Tempo.
+  otlp/grafana-cloud:
+    endpoint: ${env:GRAFANA_CLOUD_TRACES_ENDPOINT}
+    auth:
+      authenticator: basicauth/grafana-cloud-traces
+  # Grafana Cloud's Prometheus, the same push endpoint the cluster's Prometheus
+  # remote-writes to. Exemplars ride on the histogram's series.
+  prometheusremotewrite/grafana-cloud:
+    endpoint: ${env:GRAFANA_CLOUD_METRICS_URL}
+    auth:
+      authenticator: basicauth/grafana-cloud-metrics
+    # Only the spanmetrics series are sent: no panel reads target_info.
+    target_info:
+      enabled: false
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, basicauth/grafana-cloud-traces, basicauth/grafana-cloud-metrics]
   pipelines:
     # vLLM emits OTel traces (spec §5.1); the request_id rides as a span attribute
     # and the debug exporter renders it to the collector's stdout.
     traces:
       receivers: [otlp]
       processors: [transform, redaction, batch]
-      exporters: [debug]
+      exporters: [debug, otlp/grafana-cloud, span_metrics]
+    metrics:
+      receivers: [span_metrics]
+      exporters: [prometheusremotewrite/grafana-cloud]
