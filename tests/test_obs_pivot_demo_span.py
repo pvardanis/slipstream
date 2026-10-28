@@ -11,8 +11,11 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 _REPO = Path(__file__).resolve().parents[1]
 _OBS_JUST = _REPO / "just" / "obs.just"
+_VLLM_GPU_MANIFEST = _REPO / "k8s" / "vllm-gpu.yaml"
 
 
 def _get_demo_span_resource() -> dict[str, str]:
@@ -28,5 +31,16 @@ def _get_demo_span_resource() -> dict[str, str]:
     }
 
 
+def _get_vllm_service_name() -> str:
+    (deployment,) = (
+        doc
+        for doc in yaml.safe_load_all(_VLLM_GPU_MANIFEST.read_text(encoding="utf-8"))
+        if doc and doc["kind"] == "Deployment"
+    )
+    (container,) = deployment["spec"]["template"]["spec"]["containers"]
+    env = {var["name"]: var for var in container["env"]}
+    return env["OTEL_SERVICE_NAME"]["value"]
+
+
 def test_the_demo_span_is_not_sent_as_vllm() -> None:
-    assert _get_demo_span_resource()["service.name"] != "vllm"
+    assert _get_demo_span_resource()["service.name"] != _get_vllm_service_name()
