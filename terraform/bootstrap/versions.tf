@@ -1,5 +1,5 @@
 # Provider and Terraform version pins for the state-bootstrap stack.
-# required_version >= 1.16, the Terraform .tool-versions pins and CI tests.
+# required_version >= 1.16, the Terraform version pinned in .tool-versions and tested in CI.
 terraform {
   required_version = ">= 1.16"
 
