@@ -15,13 +15,28 @@ set -euo pipefail
 
 namespace=slipstream
 
+# report_kubectl_failure ERROR prints kubectl's ERROR, for failures other than a missing
+# object, with the context kubectl ran against.
+report_kubectl_failure() {
+  echo "kubectl failed: $1" >&2
+  echo "kubectl's current context is $(kubectl config current-context 2>&1); check it points at the slipstream cluster" >&2
+}
+
 preflight() {
-  if ! kubectl -n "${namespace}" get configmap grafana-cloud-endpoints -o name >/dev/null; then
-    echo "the grafana-cloud-endpoints ConfigMap is not in ${namespace}: run \`just cluster-up\`, which creates it from the grafana stack's outputs" >&2
+  local err
+  if ! err="$(kubectl -n "${namespace}" get configmap grafana-cloud-endpoints -o name 2>&1 >/dev/null)"; then
+    case "${err}" in
+    *NotFound*) echo "the grafana-cloud-endpoints ConfigMap is not in ${namespace}: run \`just cluster-up\`, which creates it from the grafana stack's outputs" >&2 ;;
+    *) report_kubectl_failure "${err}" ;;
+    esac
     return 1
   fi
-  if ! kubectl -n "${namespace}" wait --for=condition=Ready externalsecret/grafana-cloud-write --timeout=120s >/dev/null; then
-    echo "the grafana-cloud-write Secret has not synced from Secrets Manager: see why in \`kubectl -n ${namespace} describe externalsecret grafana-cloud-write\`; if the write token was never stored, run \`just grafana-cloud-setup\`" >&2
+  if ! err="$(kubectl -n "${namespace}" wait --for=condition=Ready externalsecret/grafana-cloud-write --timeout=120s 2>&1 >/dev/null)"; then
+    case "${err}" in
+    *"timed out"*) echo "the grafana-cloud-write Secret has not synced from Secrets Manager: see why in \`kubectl -n ${namespace} describe externalsecret grafana-cloud-write\`; if the write token was never stored, run \`just grafana-cloud-setup\`" >&2 ;;
+    *NotFound* | *"doesn't have a resource type"*) echo "the grafana-cloud-write ExternalSecret is not in ${namespace}: run \`just cluster-up\`, whose eks stack creates it" >&2 ;;
+    *) report_kubectl_failure "${err}" ;;
+    esac
     return 1
   fi
 }
@@ -31,11 +46,12 @@ rollout() {
     return 0
   fi
   # A container that cannot start waits with a reason and a message naming the cause,
-  # such as CreateContainerConfigError and the ConfigMap key or Secret it lacks.
-  echo "the Collector did not roll out; its pods wait on:" >&2
-  kubectl -n "${namespace}" get pods -l app=otel-collector -o jsonpath='{range .items[*]}{.metadata.name}{": "}{range .status.containerStatuses[*]}{.state.waiting.reason}{" "}{.state.waiting.message}{end}{"\n"}{end}' >&2 ||
+  # such as CreateContainerConfigError and the ConfigMap key or Secret it lacks; one that
+  # crashes also shows how it last exited; a pod no node has room for shows why.
+  echo "the Collector did not roll out; its pods:" >&2
+  kubectl -n "${namespace}" get pods -l app=otel-collector -o jsonpath='{range .items[*]}{.metadata.name}{":"}{range .status.containerStatuses[?(@.state.waiting)]}{" waiting "}{.state.waiting.reason}{" "}{.state.waiting.message}{end}{range .status.containerStatuses[?(@.lastState.terminated)]}{" last exited "}{.lastState.terminated.exitCode}{" "}{.lastState.terminated.reason}{end}{range .status.conditions[?(@.reason=="Unschedulable")]}{" unschedulable: "}{.message}{end}{"\n"}{end}' >&2 ||
     echo "(could not read the Collector pods' status)" >&2
-  echo "see the pod's events in \`kubectl -n ${namespace} describe pod -l app=otel-collector\`" >&2
+  echo "see the pod's events in \`kubectl -n ${namespace} describe pod -l app=otel-collector\`, and a crashed Collector's last log in \`kubectl -n ${namespace} logs -l app=otel-collector --previous\`" >&2
   return 1
 }
 
