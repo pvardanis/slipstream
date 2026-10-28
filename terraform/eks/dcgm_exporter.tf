@@ -19,9 +19,10 @@ locals {
     # its CRD comes from the stack's release; the stack scrapes the exporter instead.
     serviceMonitor = { enabled = false }
 
-    # Memory limit equals the request so the exporter cannot overcommit the g5's host
-    # RAM beside the vLLM replica; CPU is left unlimited. Helm merges these over the
-    # chart's own values, so the chart's 200m CPU limit is removed by setting it to null.
+    # Memory limit equals the request so the exporter cannot use more of the g5's host
+    # RAM than it reserves beside the vLLM replica; CPU is left unlimited. Helm merges
+    # these over the chart's own values, so the chart's 200m CPU limit is removed by
+    # setting it to null.
     resources = {
       requests = { cpu = "100m", memory = "512Mi" }
       limits   = { cpu = null, memory = "512Mi" }
@@ -37,7 +38,8 @@ resource "helm_release" "dcgm_exporter" {
   version    = var.dcgm_exporter_chart_version
 
   # A DaemonSet with no GPU node up has no pod to wait for, so cluster-up does not wait
-  # on a GPU; a bad chart or values still fail the apply and roll back.
+  # on a GPU. A chart or values that fail to render or apply still fail the apply and
+  # roll back; a failure in the exporter pod itself shows only once a GPU node is up.
   wait   = true
   atomic = true
 
