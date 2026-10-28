@@ -177,9 +177,9 @@ fails. A green exit means the rig served and spend is back at zero.
 Grafana Cloud's free tier holds the dashboards, metrics and traces
 ([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). The bootstrap stack
 creates three empty Secrets Manager secrets, `grafana-cloud/write`, `grafana-cloud/api` and
-`grafana-cloud/stack-read`, and the IAM role the stack's CloudWatch data source assumes (Grafana Assume Role). The
-tokens are minted by hand in Grafana Cloud, so a wizard walks through it once per
-environment:
+`grafana-cloud/stack-read`, and the IAM role the stack's CloudWatch data source assumes
+(Grafana Assume Role). The tokens are minted by hand in Grafana Cloud, so a wizard walks
+through it once per environment:
 
 ```sh
 just grafana-cloud-setup
@@ -218,7 +218,7 @@ On a setup made before the stack-read token existed, `just bootstrap` creates
 in stage 7, then store it without rerunning the wizard:
 
 ```sh
-read -rs t && printf '%s' "$t" | aws secretsmanager put-secret-value \
+read -rs t && printf '%s' "$t" | aws secretsmanager put-secret-value --region eu-west-1 \
   --secret-id grafana-cloud/stack-read --secret-string file:///dev/stdin; unset t
 ```
 
@@ -291,14 +291,14 @@ the stack persists across sessions, so read the plan first. It has no down recip
   the Grafana Cloud API, not from those data sources, whose URLs name Grafana-internal
   hosts no sender can reach. The plan fails if the API reports no public
   `https://<host>.grafana.net` endpoint or no instance ID. `just cluster-up` reads the
-  outputs and publishes the Collector's half as the ConfigMap `grafana-cloud-endpoints` in
-  `slipstream`, so run `just grafana-up` before it.
+  outputs and publishes the endpoints and usernames the Collector reads as the ConfigMap
+  `grafana-cloud-endpoints` in `slipstream`, so run `just grafana-up` before it.
 
 The Grafana provider signs in with the `grafana-cloud/api` token and reads the Cloud API
 with the `grafana-cloud/stack-read` token, both read from Secrets Manager. Both tokens are
-therefore held in the stack's state, in the encrypted state bucket. The stack URL comes from `grafana_url` in the gitignored
-`terraform/grafana/terraform.tfvars`, or from `TF_VAR_grafana_url`; with neither set it
-defaults to `https://slipstreamobs.grafana.net`.
+therefore held in the stack's state, in the encrypted state bucket. The stack URL comes
+from `grafana_url` in the gitignored `terraform/grafana/terraform.tfvars`, or from
+`TF_VAR_grafana_url`; with neither set it defaults to `https://slipstreamobs.grafana.net`.
 
 After the apply, open the CloudWatch data source and click Save & test. The role reads
 CloudWatch metrics only, so the test reports the metrics query as working and the logs

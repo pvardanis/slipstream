@@ -216,16 +216,15 @@ routing (L3) the breakdown shows the imbalance.
 
 - **Why:** the hosted Prometheus and Tempo data sources now report their URLs as
   `<host>-local-nlb.internal.grafana.net`, which resolves to a private `10.63.x.x` address.
-  Prometheus `remote_write` and the Collector run in AWS and cannot reach it, so the data
-  sources stop being the source of where metrics and traces are sent. The dashboards still
-  query them by UID.
+  Prometheus `remote_write` and the Collector run in AWS and cannot reach it, so the send
+  endpoints are not taken from the data sources. The dashboards still query them by UID.
 - **Source:** `terraform/grafana` reads the stack through the Grafana Cloud API
   (`data.grafana_cloud_stack`), which reports the public endpoints:
   `prometheus_remote_write_endpoint` and `prometheus_user_id` for metrics, `traces_url` and
   `traces_user_id` for traces. The Tempo OTLP endpoint is the `traces_url` host on port 443.
-- **Guard:** each output has a precondition: the URL must be a public
-  `https://<host>.grafana.net` endpoint and the instance ID must be above 0. An internal or
-  missing endpoint fails `just grafana-up`'s plan instead of reaching a sender.
+- **Guard:** each of the four send-endpoint outputs has a precondition: the URL must be a
+  public `https://<host>.grafana.net` endpoint and the instance ID must be above 0. An
+  internal or missing endpoint fails `just grafana-up`'s plan instead of reaching a sender.
 - **A third secret:** reading the Cloud API needs a Cloud access-policy token with
   `stacks:read`, realm this stack. `bootstrap` creates `grafana-cloud/stack-read` empty,
   beside `grafana-cloud/write` and `grafana-cloud/api`, and the setup wizard has the
