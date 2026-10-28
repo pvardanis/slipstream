@@ -54,6 +54,8 @@ env:
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
   EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
   PREFECT_NAMESPACE: ${{ vars.PREFECT_NAMESPACE }}
+  # The Python uv runs the Prefect CLI on, the workspace's lowest supported.
+  UV_PYTHON: "3.11"
 
 jobs:
   trigger:
@@ -125,11 +127,11 @@ jobs:
       # Run the Prefect CLI from the repo's lockfile so its version matches the prefect
       # the worker image was built against — a client/server skew is the one failure a
       # bare `pip install prefect` would invite.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # Versions and checksums from mise.toml and mise.lock.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
-          version-file: .tool-versions
-          python-version: "3.11"
-          enable-cache: true
+          version: 2026.10.21
+          install_args: uv
 
       - name: Authenticate to AWS via OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
