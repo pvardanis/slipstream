@@ -4,7 +4,15 @@
 # sources are wired without a Grafana Cloud stack. Grafana actually assuming the role is
 # checked by the CloudWatch data source's Save & test after apply.
 mock_provider "aws" {}
-mock_provider "grafana" {}
+# The mocked hosted data sources get a URL-shaped url, which the Tempo OTLP endpoint
+# output parses, instead of the mock's random string.
+mock_provider "grafana" {
+  mock_data "grafana_data_source" {
+    defaults = {
+      url = "https://mock.grafana.net/api"
+    }
+  }
+}
 
 # The overridden region and secret name differ from this stack's own defaults, so the
 # assertions on them fail if the code reads var.region or a literal instead of the bootstrap
@@ -153,5 +161,30 @@ run "remote_write_target_is_the_hosted_prometheus" {
   assert {
     condition     = output.prometheus_remote_write_username == "1234567"
     error_message = "The remote_write username must be the hosted Prometheus data source's basic-auth user."
+  }
+}
+
+# The Collector in the eks stack exports traces over OTLP gRPC to the hosted Tempo this
+# stack reads, authenticating as its instance: the gRPC endpoint is the data source URL's
+# host on port 443, without the /tempo query path, and the basic-auth user is the data
+# source's, the stack's numeric Tempo instance ID.
+run "trace_export_target_is_the_hosted_tempo" {
+  command = plan
+
+  override_data {
+    target = data.grafana_data_source.tempo
+    values = {
+      url                 = "https://tempo-prod-10-prod-eu-west-2.grafana.net/tempo"
+      basic_auth_username = "7654321"
+    }
+  }
+
+  assert {
+    condition     = output.tempo_otlp_endpoint == "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+    error_message = "The OTLP endpoint must be the hosted Tempo data source URL's host on port 443."
+  }
+  assert {
+    condition     = output.tempo_username == "7654321"
+    error_message = "The OTLP username must be the hosted Tempo data source's basic-auth user."
   }
 }

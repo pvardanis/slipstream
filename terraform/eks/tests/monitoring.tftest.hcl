@@ -1,7 +1,8 @@
 # Plan-level tests for the in-cluster metrics stack on the eks stack (ADR-0026, #367, #368):
 # the kube-prometheus-stack release, its ServiceMonitors for vLLM, Karpenter and
-# dcgm-exporter, the dcgm-exporter DaemonSet on the GPU nodes, and the remote_write that
-# sends only the allowlisted series to Grafana Cloud. They run offline — the aws, helm,
+# dcgm-exporter, the dcgm-exporter DaemonSet on the GPU nodes, the remote_write that
+# sends only the allowlisted series to Grafana Cloud, and the ConfigMap naming where the
+# Collector sends traces and span metrics in Grafana Cloud (#369). They run offline — the aws, helm,
 # and kubernetes providers are mocked and both remote states overridden — so the
 # assertions check the releases' values without a cluster. The series actually landing in
 # Grafana Cloud with the vLLM pod's name, the system node's headroom, the active series
@@ -62,13 +63,16 @@ override_data {
   }
 }
 
-# The grafana stack's outputs name the hosted Prometheus remote_write pushes to.
+# The grafana stack's outputs name the hosted Prometheus remote_write pushes to and the
+# hosted Tempo the Collector exports traces to.
 override_data {
   target = data.terraform_remote_state.grafana
   values = {
     outputs = {
       prometheus_remote_write_url      = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
       prometheus_remote_write_username = "1234567"
+      tempo_otlp_endpoint              = "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+      tempo_username                   = "7654321"
     }
   }
 }
@@ -412,7 +416,8 @@ run "gpu_metrics_exporter_runs_only_on_gpu_nodes" {
 }
 
 # A grafana stack not yet applied, or applied before it published the remote_write
-# outputs, fails the plan with the step that fixes it.
+# outputs, fails the plan with the step that fixes it. A stack not yet applied has no
+# Tempo outputs either, so the Collector's endpoints fail with it.
 run "metrics_stack_rejects_a_grafana_stack_without_remote_write_outputs" {
   command = plan
 
@@ -423,7 +428,7 @@ run "metrics_stack_rejects_a_grafana_stack_without_remote_write_outputs" {
     }
   }
 
-  expect_failures = [helm_release.kube_prometheus_stack]
+  expect_failures = [helm_release.kube_prometheus_stack, kubernetes_config_map_v1.grafana_cloud_endpoints]
 }
 
 # Either output missing on its own fails the plan too: a URL with no instance ID to
@@ -436,6 +441,8 @@ run "metrics_stack_rejects_a_grafana_stack_without_a_remote_write_username" {
     values = {
       outputs = {
         prometheus_remote_write_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+        tempo_otlp_endpoint         = "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+        tempo_username              = "7654321"
       }
     }
   }
@@ -453,9 +460,72 @@ run "metrics_stack_rejects_a_remote_write_url_that_is_not_https" {
       outputs = {
         prometheus_remote_write_url      = "/push"
         prometheus_remote_write_username = "1234567"
+        tempo_otlp_endpoint              = "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+        tempo_username                   = "7654321"
       }
     }
   }
 
   expect_failures = [helm_release.kube_prometheus_stack]
+}
+
+# The Collector (k8s/otel-collector.yaml) reads where to send from this ConfigMap: traces
+# over OTLP to the hosted Tempo and span metrics by remote_write to the hosted Prometheus,
+# each authenticating as its own instance ID with the write token.
+run "collector_endpoints_name_the_hosted_tempo_and_prometheus" {
+  command = plan
+
+  assert {
+    condition     = kubernetes_config_map_v1.grafana_cloud_endpoints.metadata[0].namespace == "slipstream"
+    error_message = "The Grafana Cloud endpoints ConfigMap must sit in slipstream, beside the Collector."
+  }
+  assert {
+    condition     = kubernetes_config_map_v1.grafana_cloud_endpoints.metadata[0].name == "grafana-cloud-endpoints"
+    error_message = "The Collector reads the ConfigMap named grafana-cloud-endpoints."
+  }
+  assert {
+    condition = kubernetes_config_map_v1.grafana_cloud_endpoints.data == tomap({
+      traces-endpoint  = "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+      traces-username  = "7654321"
+      metrics-url      = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      metrics-username = "1234567"
+    })
+    error_message = "The ConfigMap must hold the grafana stack's Tempo OTLP endpoint and username and Prometheus push URL and username."
+  }
+}
+
+# A grafana stack applied before it published the Tempo outputs fails the plan with the
+# step that fixes it, rather than leaving the Collector an empty trace endpoint.
+run "collector_endpoints_reject_a_grafana_stack_without_tempo_outputs" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.grafana
+    values = {
+      outputs = {
+        prometheus_remote_write_url      = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+        prometheus_remote_write_username = "1234567"
+      }
+    }
+  }
+
+  expect_failures = [kubernetes_config_map_v1.grafana_cloud_endpoints]
+}
+
+# Either Tempo output missing on its own fails the plan too.
+run "collector_endpoints_reject_a_grafana_stack_without_a_tempo_username" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.grafana
+    values = {
+      outputs = {
+        prometheus_remote_write_url      = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+        prometheus_remote_write_username = "1234567"
+        tempo_otlp_endpoint              = "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+      }
+    }
+  }
+
+  expect_failures = [kubernetes_config_map_v1.grafana_cloud_endpoints]
 }
