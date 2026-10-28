@@ -21,6 +21,13 @@ dev = [
 [tool.uv.workspace]
 members = ["packages/*"]
 
+# Floors on transitive dependencies, each set at the first release that fixes a CVE the
+# orchestration image scan fails on (HIGH/CRITICAL with a fix available).
+# oauthlib reaches the image through prefect -> apprise -> requests-oauthlib, which
+# allows any oauthlib>=3.0.0; 4.0.0 fixes CVE-2026-49272.
+[tool.uv]
+constraint-dependencies = ["oauthlib>=4.0.0"]
+
 [tool.uv.sources]
 slipstream-bench-contract = { workspace = true }
 slipstream-bench-executor = { workspace = true }

@@ -23,6 +23,7 @@ members = [
     "slipstream-bench-orchestration",
     "slipstream-bench-report",
 ]
+constraints = [{ name = "oauthlib", specifier = ">=4.0.0" }]
 
 [manifest.dependency-groups]
 dev = [
