@@ -22,10 +22,18 @@ _CONFIG_MAP_TF = _REPO / "terraform" / "eks" / "otel_collector.tf"
 _EXTERNAL_SECRETS_TF = _REPO / "terraform" / "eks" / "external_secrets.tf"
 
 
-def _get_collector_env() -> list[dict[str, Any]]:
-    documents = yaml.safe_load_all(_MANIFEST.read_text(encoding="utf-8"))
-    deployment = next(d for d in documents if d and d["kind"] == "Deployment")
+def _get_collector_container_and_service() -> tuple[dict[str, Any], dict[str, Any]]:
+    documents = [
+        d for d in yaml.safe_load_all(_MANIFEST.read_text(encoding="utf-8")) if d
+    ]
+    deployment = next(d for d in documents if d["kind"] == "Deployment")
+    service = next(d for d in documents if d["kind"] == "Service")
     (container,) = deployment["spec"]["template"]["spec"]["containers"]
+    return container, service
+
+
+def _get_collector_env() -> list[dict[str, Any]]:
+    container, _ = _get_collector_container_and_service()
     return container["env"]
 
 
@@ -120,12 +128,7 @@ def test_each_store_authenticates_as_its_own_instance() -> None:
 
 
 def test_the_service_serves_the_collectors_own_metrics_port() -> None:
-    documents = [
-        d for d in yaml.safe_load_all(_MANIFEST.read_text(encoding="utf-8")) if d
-    ]
-    deployment = next(d for d in documents if d["kind"] == "Deployment")
-    service = next(d for d in documents if d["kind"] == "Service")
-    (container,) = deployment["spec"]["template"]["spec"]["containers"]
+    container, service = _get_collector_container_and_service()
     config = yaml.safe_load(_COLLECTOR_CONFIG.read_text(encoding="utf-8"))
     (reader,) = config["service"]["telemetry"]["metrics"]["readers"]
     prometheus = reader["pull"]["exporter"]["prometheus"]
@@ -144,12 +147,7 @@ def test_the_service_serves_the_collectors_own_metrics_port() -> None:
 def test_the_service_serves_the_collectors_otlp_grpc_receiver() -> None:
     # vLLM sends its spans to the Service's otlp-grpc port; the receiver must listen
     # on every interface at the port the Service forwards to.
-    documents = [
-        d for d in yaml.safe_load_all(_MANIFEST.read_text(encoding="utf-8")) if d
-    ]
-    deployment = next(d for d in documents if d["kind"] == "Deployment")
-    service = next(d for d in documents if d["kind"] == "Service")
-    (container,) = deployment["spec"]["template"]["spec"]["containers"]
+    container, service = _get_collector_container_and_service()
     config = yaml.safe_load(_COLLECTOR_CONFIG.read_text(encoding="utf-8"))
     host, port = config["receivers"]["otlp"]["protocols"]["grpc"]["endpoint"].split(":")
 
