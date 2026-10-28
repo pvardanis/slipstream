@@ -34,6 +34,8 @@ prefix_hash="9f86d081"
 collector_model_id="test-org/test-model"
 # The replica the vLLM pod names itself as, from the downward API in the cluster.
 pod_name="vllm-gpu-test-pod"
+# A resource attribute off the allowlist, which the guard must drop like a span's.
+resource_sentinel="SECRET_RESOURCE_do_not_leak"
 
 cleanup() {
   docker rm -f "${container}" >/dev/null 2>&1 || true
@@ -151,7 +153,8 @@ payload=$(
   "resourceSpans": [{
     "resource": {"attributes": [
       {"key": "service.name", "value": {"stringValue": "vllm"}},
-      {"key": "k8s.pod.name", "value": {"stringValue": "${pod_name}"}}
+      {"key": "k8s.pod.name", "value": {"stringValue": "${pod_name}"}},
+      {"key": "host.name", "value": {"stringValue": "${resource_sentinel}"}}
     ]},
     "scopeSpans": [{
       "spans": [{
@@ -234,12 +237,25 @@ assert_span_lacks() {
 }
 
 # The resource attributes of the exported spans, one per line, as the debug
-# exporter renders them between "Resource attributes:" and "ScopeSpans #".
+# exporter renders them between "Resource attributes:" and "ScopeSpans #". Only
+# "ResourceSpans #" blocks count: the span metrics copy their spans' resource, so
+# their blocks would answer for spans that lost an attribute.
 resource_attributes() {
   awk '
-    /Resource attributes:/ { in_resource = 1; next }
-    /ScopeSpans #|ScopeMetrics #/ { in_resource = 0 }
+    /ResourceSpans #/ { in_spans = 1 }
+    /ResourceMetrics #/ { in_spans = 0 }
+    in_spans && /Resource attributes:/ { in_resource = 1; next }
+    /ScopeSpans #/ { in_resource = 0 }
     in_resource && /-> / { line = $0; sub(/.*-> /, "", line); print line }
+  ' <<<"${logs}"
+}
+
+# The unit the debug exporter renders for metric $1, from the "-> Unit:" line
+# that follows its "-> Name:" line.
+metric_unit() {
+  awk -v name="$1" '
+    /-> Name: / { line = $0; sub(/.*-> Name: /, "", line); in_metric = (line == name) }
+    in_metric && /-> Unit: / { line = $0; sub(/.*-> Unit: /, "", line); print line; exit }
   ' <<<"${logs}"
 }
 
@@ -259,7 +275,8 @@ metric_points() {
     END { flush() }
   ' <<<"${logs}"
 }
-# Some data point of metric $1 carries every space-separated term in $2.
+# Some data point of metric $1 carries every term given as the remaining
+# arguments, each matched whole.
 assert_metric_point() {
   local metric="$1" point found=""
   shift
@@ -288,7 +305,9 @@ assert_present "${prefix_hash}"
 assert_present "prompt_tokens"
 # No raw prompt content leaves the collector (acceptance criterion 3).
 assert_absent "${prompt_sentinel}"
-# The guard actually ran (it redacted exactly the one disallowed key) and does
+# Nor does a resource attribute off the allowlist.
+assert_absent "${resource_sentinel}"
+# The guard actually ran (it counted the disallowed keys it dropped) and does
 # so without emitting the redacted key names — summary: info leaks counts only,
 # never names. A regression to summary: debug would surface "redacted.keys" and
 # fail here, before a key name like "prompt" could reach a sink.
@@ -337,7 +356,7 @@ done
 # both split by slo_met and the replica. Of the eight vLLM spans three meet the
 # SLO and five miss it. The histogram's data points carry exemplars, the trace
 # a latency panel opens.
-if ! grep -qF -- "-> Unit: s" <<<"${logs}"; then
+if [[ "$(metric_unit "traces.span.metrics.duration")" != "s" ]]; then
   echo "FAIL: the spanmetrics duration histogram is not in seconds" >&2
   fail=1
 fi
