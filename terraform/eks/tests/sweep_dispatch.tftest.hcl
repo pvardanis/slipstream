@@ -63,6 +63,8 @@ override_data {
     outputs = {
       prometheus_remote_write_url      = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
       prometheus_remote_write_username = "1234567"
+      tempo_otlp_endpoint              = "tempo-prod-10-prod-eu-west-2.grafana.net:443"
+      tempo_username                   = "7654321"
     }
   }
 }
