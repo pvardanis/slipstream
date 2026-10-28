@@ -20,10 +20,11 @@ locals {
     serviceMonitor = { enabled = false }
 
     # Memory limit equals the request so the exporter cannot overcommit the g5's host
-    # RAM beside the vLLM replica; CPU is left unlimited.
+    # RAM beside the vLLM replica; CPU is left unlimited. Helm merges these over the
+    # chart's own values, so the chart's 200m CPU limit is removed by setting it to null.
     resources = {
       requests = { cpu = "100m", memory = "512Mi" }
-      limits   = { memory = "512Mi" }
+      limits   = { cpu = null, memory = "512Mi" }
     }
   }
 }

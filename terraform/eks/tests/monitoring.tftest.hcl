@@ -374,6 +374,16 @@ run "gpu_metrics_exporter_runs_only_on_gpu_nodes" {
     error_message = "dcgm-exporter must tolerate only the GPU taint."
   }
 
+  # Helm merges these values over the chart's, whose default CPU limit survives unless
+  # the key is set to null; null is what removes it.
+  assert {
+    condition = (
+      contains(keys(yamldecode(helm_release.dcgm_exporter.values[0]).resources.limits), "cpu")
+      && yamldecode(helm_release.dcgm_exporter.values[0]).resources.limits.cpu == null
+    )
+    error_message = "dcgm-exporter must null the chart's default CPU limit, or the exporter is throttled at 200m."
+  }
+
   # Karpenter does not count DaemonSet pods when it finds a node empty, unless a pod opts
   # out of disruption; the exporter must not, or the GPU node outlives scale-to-zero.
   assert {
