@@ -4,7 +4,9 @@ k8s/otel-collector.yaml takes its Grafana Cloud endpoints from the grafana-cloud
 ConfigMap (terraform/eks/otel_collector.tf) and its write token from the grafana-cloud-write
 Secret (terraform/eks/external_secrets.tf). Kubernetes only checks a reference when the pod
 starts, so a renamed key on either side would pass every plan and apply and leave the
-Collector in CreateContainerConfigError. These tests read both sides from the repo.
+Collector in CreateContainerConfigError. A variable wired to the wrong key, or one the
+Collector config names but the Deployment never sets, starts a Collector that exports with
+the wrong or an empty credential. These tests read every side from the repo.
 """
 
 import re
@@ -15,6 +17,7 @@ import yaml
 
 _REPO = Path(__file__).resolve().parents[1]
 _MANIFEST = _REPO / "k8s" / "otel-collector.yaml"
+_COLLECTOR_CONFIG = _REPO / "k8s" / "otel-collector-config.yaml"
 _CONFIG_MAP_TF = _REPO / "terraform" / "eks" / "otel_collector.tf"
 _EXTERNAL_SECRETS_TF = _REPO / "terraform" / "eks" / "external_secrets.tf"
 
@@ -63,3 +66,54 @@ def test_the_collector_reads_the_write_token_secret_eso_syncs() -> None:
     )
 
     assert _get_refs("secretKeyRef", secret[1]) == {secret[2]}
+
+
+def test_each_grafana_cloud_variable_reads_its_own_key() -> None:
+    sources = {
+        var["name"]: (ref["name"], ref["key"])
+        for var in _get_collector_env()
+        for ref in var.get("valueFrom", {}).values()
+        if var["name"].startswith("GRAFANA_CLOUD_")
+    }
+
+    assert sources == {
+        "GRAFANA_CLOUD_TRACES_ENDPOINT": ("grafana-cloud-endpoints", "traces-endpoint"),
+        "GRAFANA_CLOUD_TRACES_USERNAME": ("grafana-cloud-endpoints", "traces-username"),
+        "GRAFANA_CLOUD_METRICS_URL": ("grafana-cloud-endpoints", "metrics-url"),
+        "GRAFANA_CLOUD_METRICS_USERNAME": (
+            "grafana-cloud-endpoints",
+            "metrics-username",
+        ),
+        "GRAFANA_CLOUD_WRITE_TOKEN": ("grafana-cloud-write", "token"),
+    }
+
+
+def test_the_config_reads_only_variables_the_deployment_sets() -> None:
+    config = _COLLECTOR_CONFIG.read_text(encoding="utf-8")
+
+    assert set(re.findall(r"\$\{env:(\w+)\}", config)) == {
+        var["name"] for var in _get_collector_env()
+    }
+
+
+def test_each_store_authenticates_as_its_own_instance() -> None:
+    config = yaml.safe_load(_COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    exporters = config["exporters"]
+
+    def get_credentials(exporter: str) -> dict[str, str]:
+        authenticator = exporters[exporter]["auth"]["authenticator"]
+        return config["extensions"][authenticator]["client_auth"]
+
+    traces = get_credentials("otlp_grpc/grafana-cloud")
+    metrics = get_credentials("prometheus_remote_write/grafana-cloud")
+    assert exporters["otlp_grpc/grafana-cloud"]["endpoint"] == (
+        "${env:GRAFANA_CLOUD_TRACES_ENDPOINT}"
+    )
+    assert traces["username"] == "${env:GRAFANA_CLOUD_TRACES_USERNAME}"
+    assert exporters["prometheus_remote_write/grafana-cloud"]["endpoint"] == (
+        "${env:GRAFANA_CLOUD_METRICS_URL}"
+    )
+    assert metrics["username"] == "${env:GRAFANA_CLOUD_METRICS_USERNAME}"
+    assert (
+        traces["password"] == metrics["password"] == "${env:GRAFANA_CLOUD_WRITE_TOKEN}"
+    )
