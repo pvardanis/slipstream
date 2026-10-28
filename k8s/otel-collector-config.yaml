@@ -9,7 +9,8 @@
 #
 # This file is the single source of truth for the collector config: the local
 # integration test (test/otel_spine_test.sh) runs the real collector against it,
-# swapping only the Grafana Cloud sinks, and `just obs-up` loads it verbatim into
+# swapping the Grafana Cloud sinks for the debug exporter and flushing span metrics
+# faster (test/otel-spine-sinks.yaml), and `just obs-up` loads it verbatim into
 # the cluster ConfigMap. The GRAFANA_CLOUD_* variables come from the eks stack's
 # grafana-cloud-endpoints ConfigMap and the grafana-cloud-write Secret.
 extensions:
@@ -98,22 +99,22 @@ processors:
       - completion_tokens
       - prefix_hash
       - slo_met
-      # Resource attributes: the sending service, and the replica the vLLM pod
-      # names itself as, which spanmetrics and a trace search split by.
+      # Resource attributes: the sending service, and the vLLM replica's pod
+      # name, which spanmetrics and a trace search split by.
       - service.name
       - k8s.pod.name
     # Count redacted keys but never emit their names or values — a name list can
     # itself leak shape (spec §5.1). Counts are enough to see the guard working.
     summary: info
-  # Batch only — no tail-sampling in the spine stub (spec §5.1).
+  # Batch only — no tail-sampling (spec §5.1).
   batch: {}
 
 connectors:
   # Request counts and an e2e latency histogram from the spans, after the
   # transform and redaction, so they split by slo_met for live goodput
   # (rate(slo_met=true) / rate(all)). For vLLM's llm_request span the duration
-  # is e2e latency. k8s.pod.name is a resource attribute the vLLM pod sets from
-  # the downward API, so every panel can break down by replica. Each histogram
+  # is e2e latency. k8s.pod.name is the resource attribute naming the vLLM
+  # replica (ADR-0026), so every panel can break down by replica. Each histogram
   # data point carries exemplars, the spans' trace IDs, so a latency panel opens
   # the trace and its request_id.
   span_metrics:
@@ -128,8 +129,8 @@ connectors:
       - name: k8s.pod.name
     exemplars:
       enabled: true
-    # Once a minute: Grafana Cloud's free tier counts each series at one data
-    # point a minute.
+    # Once a minute: Grafana Cloud's free tier allows one data point per minute
+    # per series, and a faster flush is billed as extra.
     metrics_flush_interval: 60s
 
 exporters:
@@ -148,15 +149,17 @@ exporters:
     endpoint: ${env:GRAFANA_CLOUD_METRICS_URL}
     auth:
       authenticator: basicauth/grafana-cloud-metrics
-    # Only the spanmetrics series are sent: no panel reads target_info.
+    # No target_info series: no panel reads it, and it would be a billed active
+    # series.
     target_info:
       enabled: false
 
 service:
   extensions: [health_check, basicauth/grafana-cloud-traces, basicauth/grafana-cloud-metrics]
   pipelines:
-    # vLLM emits OTel traces (spec §5.1); the request_id rides as a span attribute
-    # and the debug exporter renders it to the collector's stdout.
+    # vLLM emits OTel traces (spec §5.1); the request_id rides as a span attribute.
+    # The debug exporter renders it to the collector's stdout, Grafana Cloud Traces
+    # stores it, and span_metrics derives the metrics pipeline's input from it.
     traces:
       receivers: [otlp]
       processors: [transform, redaction, batch]

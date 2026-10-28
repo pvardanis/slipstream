@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration test for the request-ID spine stub: runs the real OTel Collector
+# Integration test for the request-ID spine: runs the real OTel Collector
 # (the same k8s/otel-collector-config.yaml the cluster deploys) in a local
 # container, pushes one OTLP trace carrying a request_id plus shape-only fields
 # and a sentinel prompt attribute, then asserts the debug exporter's stdout
@@ -11,7 +11,8 @@
 # (ADR-0026). The spanmetrics connector's output is asserted too: the e2e latency
 # histogram, with exemplars, and the request counts, both split by slo_met and
 # the replica's k8s.pod.name. The Grafana Cloud exporters are swapped for the
-# debug exporter (test/otel-spine-sinks.yaml), so nothing leaves the laptop.
+# debug exporter (test/otel-spine-sinks.yaml), so nothing leaves the laptop;
+# before that, the cluster config alone must start without a warning or error.
 # Manual only: needs Docker.
 # No mocks: a real collector, real OTLP, the cluster's real config.
 set -euo pipefail
@@ -24,7 +25,7 @@ container="otel-spine-test-$$"
 http_port=14318
 
 # The prompt content that must never reach the exporter. Shape-only fields that
-# must survive. request_id is the spine the whole stub exists to carry.
+# must survive. request_id is what the spine exists to carry.
 prompt_sentinel="SECRET_PROMPT_CONTENT_do_not_leak"
 request_id="req-abc-123"
 model_id="Qwen/Qwen2.5-0.5B-Instruct"
@@ -32,7 +33,7 @@ prefix_hash="9f86d081"
 # The model the Collector stamps on vLLM spans as model_id; the cluster sets it
 # from model.yaml (just obs-up), the test from this value.
 collector_model_id="test-org/test-model"
-# The replica the vLLM pod names itself as, from the downward API in the cluster.
+# Stands in for the vLLM replica's pod name, its resource's k8s.pod.name.
 pod_name="vllm-gpu-test-pod"
 # A resource attribute off the allowlist, which the guard must drop like a span's.
 resource_sentinel="SECRET_RESOURCE_do_not_leak"
@@ -211,7 +212,9 @@ assert_absent() {
 }
 # The exported attributes of the span whose request_id is $1, one per line as
 # the debug exporter renders them ("key: Type(value)"). The detailed output
-# starts each span at a "Span #" line and lists its attributes as "-> " lines.
+# starts each span at a "Span #" line and lists its attributes as "-> " lines;
+# a "Metric #" line ends one too, so span-metric attributes never join the last
+# span's block.
 span_attributes() {
   awk -v id="$1" '
     function flush() { if (found) printf "%s", block; block = ""; found = 0 }
