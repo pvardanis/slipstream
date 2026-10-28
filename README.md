@@ -8,7 +8,7 @@
 [![ruff](https://img.shields.io/badge/ruff-0.16.7-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
 [![ty](https://img.shields.io/badge/ty-0.0.84-261230)](https://github.com/astral-sh/ty)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![terraform](https://img.shields.io/badge/terraform-%E2%89%A51.11-7B42BC?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
+[![terraform](https://img.shields.io/badge/terraform-1.16.1-7B42BC?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
 [![vLLM](https://img.shields.io/badge/vLLM-0.29.0-30A2FF)](https://github.com/vllm-project/vllm)
 [![platform](https://img.shields.io/badge/platform-AWS%20EKS-FF9900)](#architecture)
 
@@ -76,19 +76,24 @@ The CI/CD pipeline and the benchmark data path are detailed in
 
 ## Prerequisites
 
-| Tool | Version | Used for |
-| --- | --- | --- |
-| `terraform` | >= 1.11 | all infrastructure |
-| `just`, `kubectl`, `aws` CLI | — | recipes, cluster access, SSM |
-| `uv` | >= 0.5 | Python workspace, `prefect` CLI |
-| `docker` | — | local bench-image builds |
-| `prek`, `tflint` | — | git hooks |
-| `gh` | — | setting repo variables (`just gh-vars`) |
+| Tool | Used for |
+| --- | --- |
+| `terraform` | all infrastructure |
+| `just`, `kubectl`, `aws` CLI | recipes, cluster access, SSM |
+| `uv` | Python workspace, `prefect` CLI |
+| `docker` | local bench-image builds |
+| `prek`, `tflint` | git hooks |
+| `helm`, `kubeconform` | local Helm chart checks (`test/chart-render-test.sh`) |
+| `gh` | setting repo variables (`just gh-vars`) |
 
-On macOS (Homebrew core ships a frozen terraform 1.5.7, so use HashiCorp's tap):
+Every tool but Docker is pinned in [`.tool-versions`](.tool-versions), which CI installs
+from too. [mise](https://mise.jdx.dev) installs those versions and puts them on `PATH`
+inside the repo:
 
 ```sh
-brew install hashicorp/tap/terraform just tflint awscli kubectl uv prek gh   # + Docker Desktop
+brew install mise                              # + Docker Desktop
+echo 'eval "$(mise activate zsh)"' >> ~/.zshrc  # then open a new shell
+mise install                                   # in the repo root
 ```
 
 Optional: `k9s`, `stern`, `kubens` for inspecting the `slipstream` namespace.
