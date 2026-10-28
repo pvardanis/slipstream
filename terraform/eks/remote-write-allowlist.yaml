@@ -1,5 +1,5 @@
-# The series Prometheus remote-writes to Grafana Cloud (ADR-0026): only those the panels
-# read. Everything else stays in the cluster and dies with it, which keeps the free tier
+# The series Prometheus remote-writes to Grafana Cloud (ADR-0026): those the panels read
+# and the Collector's exporter counts, which no panel reads yet. Everything else stays in the cluster and dies with it, which keeps the free tier
 # under its 10k active series. A panel whose series is not listed here gets no data.
 # monitoring.tf builds the remote_write keep rule from this file.
 metrics:
