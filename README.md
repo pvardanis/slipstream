@@ -86,8 +86,7 @@ The CI/CD pipeline and the benchmark data path are detailed in
 | `helm`, `kubeconform` | local Helm chart checks (`test/chart-render-test.sh`) |
 | `gh` | setting repo variables (`just gh-vars`) |
 
-Every tool but Docker is pinned in [`.tool-versions`](.tool-versions), which CI also reads
-its tool versions from. [mise](https://mise.jdx.dev) installs those versions and puts them on `PATH`
+[`.tool-versions`](.tool-versions) pins the tools above but Docker, for local use and CI. [mise](https://mise.jdx.dev) installs those versions and puts them on `PATH`
 inside the repo:
 
 ```sh
