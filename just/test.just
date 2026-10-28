@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the Grafana MCP server launcher, and the local Helm chart render check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, and the local Helm chart render check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -44,6 +44,11 @@ orchestration-image-check-test:
 [group('test')]
 grafana-mcp-test:
     bash test/grafana-mcp-test.sh
+
+# Assert otel-collector-check.sh waits for the Collector's ConfigMap and Secret, shows why a rollout failed, and passes delivery only once both Grafana Cloud exporters sent and neither failed (kubectl, curl and sleep stubbed).
+[group('test')]
+otel-collector-check-test:
+    bash test/otel-collector-check-test.sh
 
 # Lint and render every local Helm chart under terraform/*/charts/ and validate it against the Kubernetes and CRD schemas (needs helm and kubeconform, no cluster).
 [group('test')]
