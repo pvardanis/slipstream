@@ -1,8 +1,8 @@
 # Observability lifecycle: the persistent grafana Terraform stack, and the OTel Collector deploy, teardown, and trace pivot.
 
 # Deploy the OTel Collector to the cluster. It exports to Grafana Cloud through the
-# grafana-cloud-endpoints ConfigMap and grafana-cloud-write Secret `just cluster-up`
-# creates in slipstream, and does not start without them.
+# grafana-cloud-endpoints ConfigMap `just cluster-up` creates in slipstream and the
+# grafana-cloud-write Secret ESO syncs there, and does not start without them.
 [group('obs')]
 obs-up:
     #!/usr/bin/env bash
