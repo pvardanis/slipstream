@@ -28,6 +28,12 @@ metrics:
   # kube-state-metrics: replicas available against desired.
   - kube_deployment_status_replicas_available
   - kube_deployment_spec_replicas
+  # The OTel Collector's own counts, per exporter: spans and metric points sent to Grafana
+  # Cloud and those it failed to send.
+  - otelcol_exporter_sent_spans
+  - otelcol_exporter_send_failed_spans
+  - otelcol_exporter_sent_metric_points
+  - otelcol_exporter_send_failed_metric_points
 # The price gauge has one series per instance type, zone and capacity type; only these
 # instance types, the GPU NodePool's (k8s/gpu-node-pool.yaml), are sent.
 price_instance_types:

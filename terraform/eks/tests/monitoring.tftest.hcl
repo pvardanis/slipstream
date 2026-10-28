@@ -1,6 +1,6 @@
 # Plan-level tests for the in-cluster metrics stack on the eks stack (ADR-0026, #367, #368):
-# the kube-prometheus-stack release, its ServiceMonitors for vLLM, Karpenter and
-# dcgm-exporter, the dcgm-exporter DaemonSet on the GPU nodes, the remote_write that
+# the kube-prometheus-stack release, its ServiceMonitors for vLLM, Karpenter,
+# dcgm-exporter and the OTel Collector, the dcgm-exporter DaemonSet on the GPU nodes, the remote_write that
 # sends only the allowlisted series to Grafana Cloud, and the ConfigMap naming where the
 # Collector sends traces and span metrics in Grafana Cloud (#369). They run offline — the
 # aws, helm, and kubernetes providers are mocked and both remote states overridden — so
@@ -235,6 +235,21 @@ run "remote_write_keeps_only_the_allowlist" {
     error_message = "The remote_write keep rule must send DCGM_FI_DEV_GPU_UTIL and DCGM_FI_PROF_DRAM_ACTIVE."
   }
 
+  # The Collector's sent and failed counts for each export, so Grafana Cloud shows when it
+  # stops taking what the Collector sends.
+  assert {
+    condition = alltrue([
+      for s in [
+        "otelcol_exporter_sent_spans;",
+        "otelcol_exporter_send_failed_spans;",
+        "otelcol_exporter_sent_metric_points;",
+        "otelcol_exporter_send_failed_metric_points;",
+      ] :
+      can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].writeRelabelConfigs[0].regex})$", s))
+    ])
+    error_message = "The remote_write keep rule must send the Collector's otelcol_exporter_sent_* and otelcol_exporter_send_failed_* spans and metric points."
+  }
+
   # Anything off the list stays local, and the price gauge of any other instance type is
   # dropped. g5Xxlarge catches an unescaped dot in the instance type.
   assert {
@@ -261,7 +276,7 @@ run "remote_write_keeps_only_the_allowlist" {
   }
 }
 
-run "service_monitors_scrape_vllm_karpenter_and_dcgm_exporter" {
+run "service_monitors_scrape_vllm_karpenter_dcgm_exporter_and_the_collector" {
   command = plan
 
   # Both vLLM Services (CPU and GPU replica), so whichever is deployed is scraped; every
@@ -344,6 +359,51 @@ run "service_monitors_scrape_vllm_karpenter_and_dcgm_exporter" {
       ]
     ]))
     error_message = "The dcgm-exporter ServiceMonitor's last relabeling must drop exported_pod, exported_namespace and exported_container, and keep pod, namespace and container."
+  }
+
+  # The Collector's Service (k8s/otel-collector.yaml), on the port serving its own
+  # metrics, read against the manifest so a label, port or namespace renamed on one side
+  # fails here.
+  assert {
+    condition = alltrue([
+      for d in [for doc in split("\n---\n", file("../../k8s/otel-collector.yaml")) : yamldecode(doc)] : (
+        yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.namespaceSelector == { matchNames = [d.metadata.namespace] }
+        && yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.selector == { matchLabels = { app = d.metadata.labels.app } }
+        && [for e in yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.endpoints : e.port] == ["metrics"]
+        && contains([for p in d.spec.ports : p.name], "metrics")
+      ) if d.kind == "Service"
+    ])
+    error_message = "The Collector's ServiceMonitor must select the Service in k8s/otel-collector.yaml by its app label and namespace and scrape its metrics port."
+  }
+
+  # Of the Collector's own metrics only the exporters' sent and failed counts are kept,
+  # the series the delivery checks read.
+  assert {
+    condition = (
+      [for r in yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.endpoints[0].metricRelabelings : {
+        action       = r.action
+        sourceLabels = r.sourceLabels
+      }] == [{ action = "keep", sourceLabels = ["__name__"] }]
+      && alltrue([
+        for m in [
+          "otelcol_exporter_sent_spans",
+          "otelcol_exporter_send_failed_spans",
+          "otelcol_exporter_sent_metric_points",
+          "otelcol_exporter_send_failed_metric_points",
+        ] :
+        can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.endpoints[0].metricRelabelings[0].regex})$", m))
+      ])
+      && alltrue([
+        for m in [
+          "otelcol_exporter_queue_size",
+          "otelcol_exporter_sent_log_records",
+          "otelcol_process_cpu_seconds",
+          "otelcol_exporter_sent_spans_extra",
+        ] :
+        !can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.endpoints[0].metricRelabelings[0].regex})$", m))
+      ])
+    )
+    error_message = "The Collector's ServiceMonitor must keep only otelcol_exporter_sent_* and otelcol_exporter_send_failed_* for spans and metric points."
   }
 }
 
