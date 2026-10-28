@@ -53,7 +53,10 @@ obs-pivot:
         cat "${pf_log}" >&2
         exit 1
       fi
-      if grep -q -- '-> 8888' "${pf_log}" && curl -s -o /dev/null -X POST http://localhost:4318/v1/traces \
+      # A port that failed to bind is reported before the metrics port's line, so it is
+      # read again once that line is in.
+      if grep -q -- '-> 8888' "${pf_log}" && ! grep -q 'Unable to listen' "${pf_log}" &&
+        curl -s --max-time 5 -o /dev/null -X POST http://localhost:4318/v1/traces \
         -H 'Content-Type: application/json' -d '{}'; then
         ready=1
         break
@@ -61,25 +64,27 @@ obs-pivot:
       sleep 1
     done
     if [[ -z "${ready}" ]]; then
-      echo "port-forward to svc/otel-collector never came up" >&2
+      echo "port-forward to svc/otel-collector never came up:" >&2
+      cat "${pf_log}" >&2
       exit 1
     fi
     # The exporters' counts before the demo trace, so only what is sent after it counts.
-    if ! baseline="$(curl -sSf http://localhost:18888/metrics)"; then
+    if ! baseline="$(curl -sSf --max-time 5 http://localhost:18888/metrics)"; then
       echo "cannot read the Collector's metrics through the port-forward to svc/otel-collector" >&2
       exit 1
     fi
     # The demo trace's model_id names the served model; read it from model.yaml, the
     # source of truth the serving manifest is held to.
     model="$({{ image_tag_tool }} hf-id)"
-    if ! curl -sSf -o /dev/null -X POST http://localhost:4318/v1/traces \
+    if ! curl -sSf --max-time 5 -o /dev/null -X POST http://localhost:4318/v1/traces \
       -H 'Content-Type: application/json' \
       -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"'"${model}"'"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'; then
       echo "the Collector's OTLP receiver did not take the demo span" >&2
       exit 1
     fi
     {{ otel_check_tool }} delivery http://localhost:18888/metrics <<<"${baseline}"
-    if ! kubectl -n slipstream logs deploy/otel-collector | grep -A12 'req-demo-001'; then
+    logs="$(kubectl -n slipstream logs deploy/otel-collector)"
+    if ! grep -A12 'req-demo-001' <<<"${logs}"; then
       echo "the Collector's log lacks the demo span's request_id req-demo-001: check the debug exporter in {{ otel_config }}" >&2
       exit 1
     fi
