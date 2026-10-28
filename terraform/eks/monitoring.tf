@@ -1,8 +1,8 @@
 # The in-cluster metrics stack (ADR-0026, "Metrics"): kube-prometheus-stack scraping vLLM,
-# Karpenter and kube-state-metrics, and remote-writing only the allowlisted series to
-# Grafana Cloud, so dashboards and 14 days of history outlive `cluster-down`. Like
-# Karpenter and Prefect it rides the cluster's duty-cycle: up with `cluster-up`, gone with
-# `cluster-down`.
+# Karpenter, dcgm-exporter and kube-state-metrics, and remote-writing only the allowlisted
+# series to Grafana Cloud, so dashboards and 14 days of history outlive `cluster-down`.
+# Like Karpenter and Prefect it rides the cluster's duty-cycle: up with `cluster-up`, gone
+# with `cluster-down`.
 
 # The persistent grafana stack's outputs: the hosted Prometheus push endpoint and the
 # instance ID remote_write authenticates as. Read from that stack's state because it reads
