@@ -2,11 +2,13 @@
 
 # Deploy the OTel Collector to the cluster. It exports to Grafana Cloud through the
 # grafana-cloud-endpoints ConfigMap `just cluster-up` creates in slipstream and the
-# grafana-cloud-write Secret ESO syncs there, and does not start without them.
+# grafana-cloud-write Secret ESO syncs there, and does not start without them, so
+# both are checked for, the Secret waited for, before the deploy.
 [group('obs')]
 obs-up:
     #!/usr/bin/env bash
     set -euo pipefail
+    {{ otel_check_tool }} preflight
     kubectl create namespace slipstream --dry-run=client -o yaml | kubectl apply -f -
     # The Collector stamps model_id on vLLM spans from model-id; model.yaml is its
     # source of truth, as for the serving manifest.
@@ -19,7 +21,7 @@ obs-up:
     # The Collector reads config.yaml and its env only at start, and an unchanged
     # Deployment does not roll; restart so a changed config or model takes effect.
     kubectl -n slipstream rollout restart deploy/otel-collector
-    kubectl -n slipstream rollout status deploy/otel-collector --timeout=120s
+    {{ otel_check_tool }} rollout
 
 # Remove the OTel Collector (leaves the cluster running).
 [group('obs')]
@@ -27,13 +29,15 @@ obs-down:
     kubectl delete configmap otel-collector-config -n slipstream --ignore-not-found
     kubectl delete -f {{ otel_manifests }} --ignore-not-found
 
-# Send one shape-only OTLP trace through the cluster collector and show its request_id log line.
+# Send one shape-only OTLP trace through the cluster collector, check Grafana Cloud took
+# the trace and its span metrics, and show its request_id log line. Takes up to 100 s,
+# for the span metrics' 60 s flush.
 [group('obs')]
 obs-pivot:
     #!/usr/bin/env bash
     set -euo pipefail
-    kubectl -n slipstream rollout status deploy/otel-collector --timeout=120s
-    kubectl -n slipstream port-forward svc/otel-collector 4318:4318 >/dev/null 2>&1 &
+    {{ otel_check_tool }} rollout
+    kubectl -n slipstream port-forward svc/otel-collector 4318:4318 8888:8888 >/dev/null 2>&1 &
     pf_pid=$!
     trap 'kill "${pf_pid}" 2>/dev/null || true' EXIT
     ready=""
@@ -49,13 +53,18 @@ obs-pivot:
       echo "port-forward to svc/otel-collector never came up" >&2
       exit 1
     fi
+    # The exporters' counts before the demo trace, so only what it sends counts.
+    if ! baseline="$(curl -sf http://localhost:8888/metrics)"; then
+      echo "cannot read the Collector's metrics through the port-forward to svc/otel-collector" >&2
+      exit 1
+    fi
     # The demo trace's model_id names the served model; read it from model.yaml, the
     # source of truth the serving manifest is held to.
     model="$({{ image_tag_tool }} hf-id)"
     curl -sf -X POST http://localhost:4318/v1/traces \
       -H 'Content-Type: application/json' \
       -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"vllm"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"'"${model}"'"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
-    sleep 3
+    {{ otel_check_tool }} delivery http://localhost:8888/metrics <<<"${baseline}"
     kubectl -n slipstream logs deploy/otel-collector | grep -A12 'request_id'
 
 # The Terraform stack outlives `just cluster-down`, so it has no down recipe. Requires
