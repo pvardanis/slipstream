@@ -80,3 +80,9 @@ variable "kube_prometheus_stack_chart_version" {
   type        = string
   default     = "92.14.0"
 }
+
+variable "dcgm_exporter_chart_version" {
+  description = "Pinned dcgm-exporter Helm chart version from the https://nvidia.github.io/dcgm-exporter/helm-charts repo (appVersion 4.8.4, image 4.6.1-4.8.4)."
+  type        = string
+  default     = "4.8.4"
+}

@@ -287,6 +287,60 @@ run "service_monitors_scrape_vllm_and_karpenter" {
   }
 }
 
+# dcgm-exporter (#368) is one DaemonSet on the GPU nodes only, read against the GPU
+# NodePool's own label and taint (k8s/gpu-node-pool.yaml), so a renamed label or taint on
+# either side fails here rather than leaving the exporter Pending or on the wrong nodes.
+run "gpu_metrics_exporter_runs_only_on_gpu_nodes" {
+  command = plan
+
+  # An exact x.y.z, like every other chart the stack installs.
+  assert {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", helm_release.dcgm_exporter.version))
+    error_message = "The dcgm-exporter chart must be pinned to an exact x.y.z version."
+  }
+  assert {
+    condition     = helm_release.dcgm_exporter.repository == "https://nvidia.github.io/dcgm-exporter/helm-charts" && helm_release.dcgm_exporter.chart == "dcgm-exporter"
+    error_message = "The GPU exporter must be NVIDIA's dcgm-exporter chart."
+  }
+  assert {
+    condition     = helm_release.dcgm_exporter.namespace == "monitoring"
+    error_message = "dcgm-exporter must run in monitoring, beside the Prometheus that scrapes it."
+  }
+
+  # The nodeSelector is the label the GPU NodePool stamps on its nodes.
+  assert {
+    condition = yamldecode(helm_release.dcgm_exporter.values[0]).nodeSelector == one([
+      for d in [for doc in split("\n---\n", file("../../k8s/gpu-node-pool.yaml")) : yamldecode(doc)] :
+      d.spec.template.metadata.labels if d.kind == "NodePool"
+    ])
+    error_message = "dcgm-exporter's nodeSelector must equal the GPU NodePool's node labels (k8s/gpu-node-pool.yaml)."
+  }
+
+  # Each of the GPU NodePool's taints is tolerated, and nothing else is: the chart's
+  # default control-plane toleration is replaced, not extended.
+  assert {
+    condition = alltrue([
+      for t in one([
+        for d in [for doc in split("\n---\n", file("../../k8s/gpu-node-pool.yaml")) : yamldecode(doc)] :
+        d.spec.template.spec.taints if d.kind == "NodePool"
+      ]) :
+      contains(yamldecode(helm_release.dcgm_exporter.values[0]).tolerations, { key = t.key, operator = "Exists", effect = t.effect })
+    ])
+    error_message = "dcgm-exporter must tolerate every taint of the GPU NodePool (k8s/gpu-node-pool.yaml)."
+  }
+  assert {
+    condition     = length(yamldecode(helm_release.dcgm_exporter.values[0]).tolerations) == 1
+    error_message = "dcgm-exporter must tolerate only the GPU taint."
+  }
+
+  # Karpenter does not count DaemonSet pods when it finds a node empty, unless a pod opts
+  # out of disruption; the exporter must not, or the GPU node outlives scale-to-zero.
+  assert {
+    condition     = !contains(keys(try(yamldecode(helm_release.dcgm_exporter.values[0]).podAnnotations, {})), "karpenter.sh/do-not-disrupt")
+    error_message = "dcgm-exporter's pods must not carry karpenter.sh/do-not-disrupt, or the GPU node is never reaped."
+  }
+}
+
 # A grafana stack not yet applied, or applied before it published the remote_write
 # outputs, fails the plan with the step that fixes it.
 run "metrics_stack_rejects_a_grafana_stack_without_remote_write_outputs" {
