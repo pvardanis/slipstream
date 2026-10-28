@@ -1,6 +1,8 @@
-# Observability lifecycle: the persistent grafana Terraform stack, and the OTel Collector spine stub deploy, teardown, and trace pivot.
+# Observability lifecycle: the persistent grafana Terraform stack, and the OTel Collector deploy, teardown, and trace pivot.
 
-# Deploy the OTel Collector spine stub to the cluster.
+# Deploy the OTel Collector to the cluster. It exports to Grafana Cloud through the
+# grafana-cloud-endpoints ConfigMap and grafana-cloud-write Secret `just cluster-up`
+# creates in slipstream, and does not start without them.
 [group('obs')]
 obs-up:
     #!/usr/bin/env bash
@@ -14,7 +16,7 @@ obs-up:
       --from-literal=model-id="${model}" \
       --dry-run=client -o yaml | kubectl apply -f -
     kubectl apply -f {{ otel_manifests }}
-    # The Collector reads config.yaml and MODEL_ID only at start, and an unchanged
+    # The Collector reads config.yaml and its env only at start, and an unchanged
     # Deployment does not roll; restart so a changed config or model takes effect.
     kubectl -n slipstream rollout restart deploy/otel-collector
     kubectl -n slipstream rollout status deploy/otel-collector --timeout=120s
