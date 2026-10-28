@@ -331,7 +331,7 @@ run "service_monitors_scrape_vllm_karpenter_and_dcgm_exporter" {
   }
   assert {
     condition = alltrue(flatten([
-      for r in [element(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints[0].metricRelabelings, -1)] : [
+      for r in [for rs in [yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints[0].metricRelabelings] : rs[length(rs) - 1]] : [
         for l in ["pod", "namespace", "container"] : [
           r.action == "labeldrop",
           can(regex("^(?:${r.regex})$", "exported_${l}")),
