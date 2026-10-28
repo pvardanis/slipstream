@@ -139,3 +139,24 @@ def test_the_service_serves_the_collectors_own_metrics_port() -> None:
         "port": prometheus["port"],
         "targetPort": "metrics",
     } in service["spec"]["ports"]
+
+
+def test_the_service_serves_the_collectors_otlp_grpc_receiver() -> None:
+    # vLLM sends its spans to the Service's otlp-grpc port; the receiver must listen
+    # on every interface at the port the Service forwards to.
+    documents = [
+        d for d in yaml.safe_load_all(_MANIFEST.read_text(encoding="utf-8")) if d
+    ]
+    deployment = next(d for d in documents if d["kind"] == "Deployment")
+    service = next(d for d in documents if d["kind"] == "Service")
+    (container,) = deployment["spec"]["template"]["spec"]["containers"]
+    config = yaml.safe_load(_COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    host, port = config["receivers"]["otlp"]["protocols"]["grpc"]["endpoint"].split(":")
+
+    assert host == "0.0.0.0"
+    assert {"name": "otlp-grpc", "containerPort": int(port)} in container["ports"]
+    assert {
+        "name": "otlp-grpc",
+        "port": int(port),
+        "targetPort": "otlp-grpc",
+    } in service["spec"]["ports"]

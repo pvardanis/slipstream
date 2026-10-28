@@ -3,8 +3,8 @@
 `stack-up` runs `obs-pivot`, which posts one demo span through the Collector to Grafana
 Cloud on every bring-up. Span metrics count every span they see, split by the sending
 service's service.name, a dimension the span_metrics connector always keeps. A demo span
-sent as service vllm would count once per bring-up in every vLLM request rate selected
-by service_name.
+sent under the GPU replica's service name (OTEL_SERVICE_NAME in k8s/vllm-gpu.yaml) would
+count once per bring-up in every vLLM request rate selected by service_name.
 """
 
 import json
@@ -32,6 +32,7 @@ def _get_demo_span_resource() -> dict[str, str]:
 
 
 def _get_vllm_service_name() -> str:
+    """The service.name the GPU replica's spans carry."""
     (deployment,) = (
         doc
         for doc in yaml.safe_load_all(_VLLM_GPU_MANIFEST.read_text(encoding="utf-8"))
