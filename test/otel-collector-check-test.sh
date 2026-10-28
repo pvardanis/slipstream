@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Unit test for scripts/otel-collector-check.sh: kubectl, curl and sleep are stubbed on PATH,
-# so no cluster or Collector is read and no wait is slept. It checks that preflight passes only once the
-# grafana-cloud-endpoints ConfigMap exists in slipstream and the grafana-cloud-write
-# ExternalSecret is Ready, and otherwise fails naming the recipe or command that fixes it;
-# and that rollout passes once the Deployment rolls out, and otherwise fails printing each
-# Collector pod's waiting reason and message, which name a missing key or Secret; and that
-# delivery passes once both Grafana Cloud exporters' sent counts rise above the baseline
-# scrape on stdin, fails at the first scrape where either's failed count rises, naming
-# what to check, and fails when one still has sent nothing after its 20 scrapes, the
-# debug exporter's counts never standing in for theirs.
+# so no cluster or Collector is read and no wait is slept; the read of the rollout's pods
+# renders its template with the real kubectl over local pod fixtures. It checks that:
+# - preflight passes once the grafana-cloud-endpoints ConfigMap is in slipstream and the
+#   grafana-cloud-write ExternalSecret is Ready; a missing ConfigMap or ExternalSecret
+#   names `just cluster-up`, an unsynced one the describe command and the setup recipe,
+#   and any other kubectl failure is shown with kubectl's current context;
+# - rollout passes once the Deployment rolls out, and otherwise prints each Collector
+#   pod's waiting reason and message, its last exit and why it is unscheduled, with the
+#   describe and `logs --previous` commands;
+# - delivery passes once both Grafana Cloud exporters' sent counts, under the IDs the
+#   Collector config names, rise above the baseline scrape on stdin; it fails at the
+#   first scrape where either's failed count rises, a count is not a number, or the page
+#   lacks the Collector's uptime, and after 20 scrapes 5 s apart when one has still sent
+#   nothing; the debug exporter's counts never stand in for theirs.
 set -euo pipefail
-unset KUBECTL_FAIL CURL_EXIT BASELINE DEBUG_SENT LABELS EXTRA_SERIES
+unset KUBECTL_FAIL CURL_EXIT BASELINE DEBUG_SENT LABELS EXTRA_SERIES WHOLE_LINE
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/otel-collector-check.sh"
@@ -21,26 +26,93 @@ spans_exporter="$(yq '.service.pipelines.traces.exporters[] | select(test("grafa
 points_exporter="$(yq '.service.pipelines.metrics.exporters[] | select(test("grafana-cloud"))' "${config}")"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
-mkdir -p "${tmp}/bin"
+mkdir -p "${tmp}/bin" "${tmp}/pods"
+real_kubectl="$(command -v kubectl)"
+
+# The Collector pods a failed rollout leaves, as the API server returns them: one whose
+# env names a missing ConfigMap key, one crash-looping, one running again after it ran out
+# of memory, one no node has room for.
+cat >"${tmp}/pods/config-error.yaml" <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: {name: otel-collector-7d9f}
+spec: {containers: [{name: otel-collector, image: otel}]}
+status:
+  conditions:
+    - {type: Ready, status: "False", reason: ContainersNotReady, message: "containers with unready status: [otel-collector]"}
+  containerStatuses:
+    - name: otel-collector
+      state: {waiting: {reason: CreateContainerConfigError, message: "couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints"}}
+EOF
+cat >"${tmp}/pods/crash-loop.yaml" <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: {name: otel-collector-8c2a}
+spec: {containers: [{name: otel-collector, image: otel}]}
+status:
+  containerStatuses:
+    - name: otel-collector
+      state: {waiting: {reason: CrashLoopBackOff, message: "back-off 40s restarting failed container=otel-collector"}}
+      lastState: {terminated: {reason: Error, exitCode: 1}}
+EOF
+cat >"${tmp}/pods/oom-restarted.yaml" <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: {name: otel-collector-5f6d}
+spec: {containers: [{name: otel-collector, image: otel}]}
+status:
+  containerStatuses:
+    - name: otel-collector
+      state: {running: {startedAt: "2026-10-28T10:00:00Z"}}
+      lastState: {terminated: {reason: OOMKilled, exitCode: 137}}
+EOF
+cat >"${tmp}/pods/unschedulable.yaml" <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: {name: otel-collector-1b3e}
+spec: {containers: [{name: otel-collector, image: otel}]}
+status:
+  conditions:
+    - {type: PodScheduled, status: "False", reason: Unschedulable, message: "0/2 nodes are available: 2 Insufficient memory."}
+EOF
 
 # Stub kubectl: every call's arguments are logged; KUBECTL_FAIL names the one call, by its
-# first words after `-n slipstream`, that fails as the real one would.
+# first words after `-n slipstream`, that fails as the real one would, and how: "missing"
+# as when the object or its kind is not there, "unreachable" as when the cluster is not;
+# "rollout and get pods" fails the rollout and then the pods' read.
+# `get pods -o jsonpath` renders its template with the real kubectl over the pods above,
+# one at a time, as kubectl renders a List.
 cat >"${tmp}/bin/kubectl" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"${tmp}/kubectl-calls"
+unreachable() { echo 'Unable to connect to the server: dial tcp: lookup example.eks.amazonaws.com: no such host' >&2; exit 1; }
+[[ "\$*" != "config current-context" ]] || { echo arn:aws:eks:eu-west-1:123456789012:cluster/slipstream; exit 0; }
 [[ "\$1 \$2" == "-n slipstream" ]] || { echo "unexpected call: \$*" >&2; exit 2; }
 shift 2
 case "\$*" in
   "get configmap grafana-cloud-endpoints -o name")
-    [[ "\${KUBECTL_FAIL:-}" != "get configmap" ]] || { echo 'Error from server (NotFound): configmaps "grafana-cloud-endpoints" not found' >&2; exit 1; }
+    case "\${KUBECTL_FAIL:-}" in
+      "get configmap missing") echo 'Error from server (NotFound): configmaps "grafana-cloud-endpoints" not found' >&2; exit 1 ;;
+      "get configmap unreachable") unreachable ;;
+    esac
     echo configmap/grafana-cloud-endpoints ;;
   "wait --for=condition=Ready externalsecret/grafana-cloud-write --timeout=120s")
-    [[ "\${KUBECTL_FAIL:-}" != "wait" ]] || { echo 'error: timed out waiting for the condition on externalsecrets/grafana-cloud-write' >&2; exit 1; }
+    case "\${KUBECTL_FAIL:-}" in
+      "wait") echo 'error: timed out waiting for the condition on externalsecrets/grafana-cloud-write' >&2; exit 1 ;;
+      "wait missing") echo 'error: the server doesn'"'"'t have a resource type "externalsecret"' >&2; exit 1 ;;
+      "wait unreachable") unreachable ;;
+    esac
     echo externalsecret.external-secrets.io/grafana-cloud-write condition met ;;
   "rollout status deploy/otel-collector --timeout=120s")
-    [[ "\${KUBECTL_FAIL:-}" != "rollout" ]] || { echo 'error: timed out waiting for the condition' >&2; exit 1; } ;;
+    [[ "\${KUBECTL_FAIL:-}" != rollout* ]] || { echo 'error: timed out waiting for the condition' >&2; exit 1; } ;;
   "get pods -l app=otel-collector -o jsonpath="*)
-    echo "otel-collector-7d9f: CreateContainerConfigError couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints" ;;
+    [[ "\${KUBECTL_FAIL:-}" != "rollout and get pods" ]] || unreachable
+    template="\${6#jsonpath=}"
+    [[ "\${template}" == '{range .items[*]}'*'{end}' ]] || { echo "template not over .items: \${template}" >&2; exit 2; }
+    template="\${template#'{range .items[*]}'}"
+    for pod in "${tmp}"/pods/*.yaml; do
+      KUBECONFIG=/dev/null "${real_kubectl}" annotate --local -f "\${pod}" probe=1 -o jsonpath="\${template%'{end}'}"
+    done ;;
   *) echo "unexpected call: -n slipstream \$*" >&2; exit 2 ;;
 esac
 EOF
@@ -114,13 +186,13 @@ bad() {
   fail=1
 }
 # Runs the script with the arguments after the label and expected stderr; it must exit
-# non-zero with that text on stderr.
+# non-zero with that text on stderr, as a whole line when WHOLE_LINE is set.
 check_fails() {
   local label="$1" want_err="$2"
   shift 2
   if run "$@"; then
     bad "${label}: script exited 0"
-  elif ! grep -qF -- "${want_err}" "${tmp}/stderr"; then
+  elif ! grep -qF${WHOLE_LINE:+x} -- "${want_err}" "${tmp}/stderr"; then
     bad "${label}: stderr lacks '${want_err}'"
   else
     ok "${label}"
@@ -134,15 +206,33 @@ if grep -qxF -- "-n slipstream wait --for=condition=Ready externalsecret/grafana
 else
   bad "preflight waits for the write token to sync"
 fi
-KUBECTL_FAIL="get configmap" check_fails "missing endpoints ConfigMap" "run \`just cluster-up\`" preflight
+KUBECTL_FAIL="get configmap missing" check_fails "missing endpoints ConfigMap" "the grafana-cloud-endpoints ConfigMap is not in slipstream: run \`just cluster-up\`" preflight
 if [[ "$(grep -c wait "${tmp}/kubectl-calls")" == 0 ]]; then ok "missing ConfigMap fails before the wait"; else bad "missing ConfigMap fails before the wait"; fi
 KUBECTL_FAIL="wait" check_fails "unsynced write token" "kubectl -n slipstream describe externalsecret grafana-cloud-write" preflight
 KUBECTL_FAIL="wait" check_fails "unsynced write token names the setup recipe" "just grafana-cloud-setup" preflight
+KUBECTL_FAIL="wait missing" check_fails "missing ExternalSecret" "the grafana-cloud-write ExternalSecret is not in slipstream: run \`just cluster-up\`" preflight
+# Any other kubectl failure is shown as kubectl gave it, with the context it ran against.
+for call in "get configmap" wait; do
+  KUBECTL_FAIL="${call} unreachable" check_fails "unreachable cluster at ${call}" "Unable to connect to the server: dial tcp: lookup example.eks.amazonaws.com: no such host" preflight
+  KUBECTL_FAIL="${call} unreachable" check_fails "unreachable cluster at ${call} names the context" "kubectl's current context is arn:aws:eks:eu-west-1:123456789012:cluster/slipstream" preflight
+  if grep -qF "just cluster-up" "${tmp}/stderr"; then bad "unreachable cluster at ${call} is not a missing object"; else ok "unreachable cluster at ${call} is not a missing object"; fi
+done
 # Rollout passes when the Deployment rolls out, and on a failed one shows why the pod waits.
 if run rollout; then ok "rollout passes"; else bad "rollout passes: $(cat "${tmp}/stderr")"; fi
+WHOLE_LINE=1
 KUBECTL_FAIL="rollout" check_fails "failed rollout shows the pod's waiting reason" \
-  "otel-collector-7d9f: CreateContainerConfigError couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints" rollout
+  "otel-collector-7d9f: waiting CreateContainerConfigError couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints" rollout
+KUBECTL_FAIL="rollout" check_fails "failed rollout shows a crashed container's last exit" \
+  "otel-collector-8c2a: waiting CrashLoopBackOff back-off 40s restarting failed container=otel-collector last exited 1 Error" rollout
+KUBECTL_FAIL="rollout" check_fails "failed rollout shows a restarted container's last exit" \
+  "otel-collector-5f6d: last exited 137 OOMKilled" rollout
+KUBECTL_FAIL="rollout" check_fails "failed rollout shows why a pod is unscheduled" \
+  "otel-collector-1b3e: unschedulable: 0/2 nodes are available: 2 Insufficient memory." rollout
+unset WHOLE_LINE
 KUBECTL_FAIL="rollout" check_fails "failed rollout names the describe command" "kubectl -n slipstream describe pod -l app=otel-collector" rollout
+KUBECTL_FAIL="rollout" check_fails "failed rollout names the crashed container's log" "kubectl -n slipstream logs -l app=otel-collector --previous" rollout
+KUBECTL_FAIL="rollout and get pods" check_fails "failed rollout says when the pods cannot be read" "(could not read the Collector pods' status)" rollout
+KUBECTL_FAIL="rollout and get pods" check_fails "failed rollout shows why the pods cannot be read" "Unable to connect to the server" rollout
 # Delivery passes once both exporters' sent counts rise, each at its own scrape.
 url=http://localhost:18888/metrics
 serve "- - - -" "1 - - -" "1 - 8 -"
