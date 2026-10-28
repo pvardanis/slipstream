@@ -40,6 +40,12 @@ output "prometheus_remote_write_url" {
 output "prometheus_remote_write_username" {
   description = "Prometheus instance ID of the Grafana Cloud stack, the eks stack's remote_write basic-auth username."
   value       = tostring(data.grafana_cloud_stack.this.prometheus_user_id)
+
+  # The Cloud API reports an unset instance ID as 0, a username Grafana Cloud rejects.
+  precondition {
+    condition     = data.grafana_cloud_stack.this.prometheus_user_id > 0
+    error_message = "The Cloud API reports no Prometheus instance ID for the stack."
+  }
 }
 
 # Grafana Cloud takes OTLP gRPC at the traces URL's host on port 443.
@@ -56,4 +62,10 @@ output "tempo_otlp_endpoint" {
 output "tempo_username" {
   description = "Tempo instance ID of the Grafana Cloud stack, the Collector's trace exporter basic-auth username."
   value       = tostring(data.grafana_cloud_stack.this.traces_user_id)
+
+  # The Cloud API reports an unset instance ID as 0, a username Grafana Cloud rejects.
+  precondition {
+    condition     = data.grafana_cloud_stack.this.traces_user_id > 0
+    error_message = "The Cloud API reports no Tempo instance ID for the stack."
+  }
 }

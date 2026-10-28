@@ -2,7 +2,7 @@
 # Walk the operator through Grafana Cloud's one-time setup (ADR-0026): create the free
 # stack, read its Grafana Assume Role external ID into the bootstrap stack's
 # terraform.tfvars, apply bootstrap, mint the three Grafana Cloud tokens, each written to
-# its Secrets Manager secret with `aws secretsmanager put-secret-value` so neither enters
+# its Secrets Manager secret with `aws secretsmanager put-secret-value` so none enters
 # the bootstrap stack's state, then write the stack URL into the grafana stack's
 # terraform.tfvars. A token is read
 # with hidden entry and handed to aws on stdin, so it never appears on screen or in a

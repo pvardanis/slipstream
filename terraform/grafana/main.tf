@@ -1,9 +1,10 @@
-# The persistent grafana Terraform stack (ADR-0026): the Grafana provider and the data
-# sources the dashboards query. It outlives `just cluster-down`, like the history it shows.
+# The persistent grafana Terraform stack (ADR-0026): the Grafana provider, the data
+# sources the dashboards query, and the stack's public send endpoints. It outlives `just cluster-down`, like the history it shows.
 
 # Read-only reference to the bootstrap stack's outputs: the IAM role the CloudWatch data
-# source assumes, the region it reads, and the name of the API token's secret. They live in
-# bootstrap because the setup wizard creates them before this stack is applied.
+# source assumes, the region it reads, and the names of the API and stack-read tokens'
+# secrets. They live in bootstrap because the setup wizard creates them before this stack
+# is applied.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"
   config = {

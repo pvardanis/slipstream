@@ -1,16 +1,19 @@
 # Plan-level tests for the Grafana Cloud data sources the persistent grafana Terraform stack owns
 # or reads (ADR-0026). They run offline: the aws and grafana providers are mocked and the
 # bootstrap stack's remote state is overridden, so the assertions check how the data
-# sources are wired without a Grafana Cloud stack. Grafana actually assuming the role is
+# sources are wired, and that the send endpoints published for the eks stack are the
+# stack's public ones, without a Grafana Cloud stack. Grafana actually assuming the role is
 # checked by the CloudWatch data source's Save & test after apply.
 mock_provider "aws" {}
-# The mocked Cloud API stack gets URL-shaped send endpoints, which the outputs parse and
-# check, instead of the mock's random strings.
+# The mocked Cloud API stack gets URL-shaped send endpoints and set instance IDs, which
+# the outputs parse and check, instead of the mock's random strings and zeros.
 mock_provider "grafana" {
   mock_data "grafana_cloud_stack" {
     defaults = {
       prometheus_remote_write_endpoint = "https://prometheus-mock.grafana.net/api/prom/push"
+      prometheus_user_id               = 1111111
       traces_url                       = "https://tempo-mock.grafana.net"
+      traces_user_id                   = 2222222
     }
   }
 }
@@ -193,6 +196,8 @@ run "send_endpoints_reject_an_internal_prometheus_host" {
   override_data {
     target = data.grafana_cloud_stack.this
     values = {
+      prometheus_user_id               = 1234567
+      traces_user_id                   = 7654321
       prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2-local-nlb.internal.grafana.net/api/prom/push"
       traces_url                       = "https://tempo-prod-10-prod-eu-west-2.grafana.net"
     }
@@ -207,10 +212,63 @@ run "send_endpoints_reject_an_internal_tempo_host" {
   override_data {
     target = data.grafana_cloud_stack.this
     values = {
+      prometheus_user_id               = 1234567
+      traces_user_id                   = 7654321
       prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
       traces_url                       = "https://tempo-prod-10-prod-eu-west-2-local-nlb.internal.grafana.net"
     }
   }
 
   expect_failures = [output.tempo_otlp_endpoint]
+}
+
+# A stack without Tempo reports no traces URL, which fails the plan rather than parsing.
+run "send_endpoints_reject_a_stack_without_a_traces_url" {
+  command = plan
+
+  override_data {
+    target = data.grafana_cloud_stack.this
+    values = {
+      prometheus_user_id               = 1234567
+      traces_user_id                   = 7654321
+      prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      traces_url                       = ""
+    }
+  }
+
+  expect_failures = [output.tempo_otlp_endpoint]
+}
+
+# The Cloud API reports an instance ID it has not set as 0, which would otherwise reach
+# the eks stack as the username "0" and fail only as 401s from Grafana Cloud.
+run "send_endpoints_reject_an_unset_prometheus_instance_id" {
+  command = plan
+
+  override_data {
+    target = data.grafana_cloud_stack.this
+    values = {
+      prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      prometheus_user_id               = 0
+      traces_url                       = "https://tempo-prod-10-prod-eu-west-2.grafana.net"
+      traces_user_id                   = 7654321
+    }
+  }
+
+  expect_failures = [output.prometheus_remote_write_username]
+}
+
+run "send_endpoints_reject_an_unset_tempo_instance_id" {
+  command = plan
+
+  override_data {
+    target = data.grafana_cloud_stack.this
+    values = {
+      prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      prometheus_user_id               = 1234567
+      traces_url                       = "https://tempo-prod-10-prod-eu-west-2.grafana.net"
+      traces_user_id                   = 0
+    }
+  }
+
+  expect_failures = [output.tempo_username]
 }

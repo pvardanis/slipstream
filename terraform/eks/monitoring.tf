@@ -5,8 +5,9 @@
 # with `cluster-down`.
 
 # The persistent grafana stack's outputs: the hosted Prometheus push endpoint and the
-# instance ID remote_write authenticates as. Read from that stack's state because it reads
-# them from Grafana Cloud's own data source, so nothing is copied by hand.
+# instance ID remote_write authenticates as, and the Tempo OTLP endpoint and instance ID
+# the Collector's endpoints ConfigMap (otel_collector.tf) holds. Read from that stack's
+# state because it reads them from the Grafana Cloud API, so nothing is copied by hand.
 data "terraform_remote_state" "grafana" {
   backend = "s3"
   config = {

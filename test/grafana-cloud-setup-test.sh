@@ -7,8 +7,9 @@
 # trailing slash and beside the values already there, only once every token is stored;
 # that the operator is told to delete the CloudWatch data source the external ID page
 # creates, so the grafana stack can create its own, and to give the service account the
-# Admin role it needs to create it, a new account or an existing one; that the stacks:read
-# token is minted in the Cloud Portal, whose access policies offer that scope; that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
+# Admin role it needs to create it, a new account or an existing one; that the
+# stacks:read token is minted in the Cloud Portal, whose access policies offer that scope;
+# that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
 # never appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that
 # an invalid external ID or an empty token is asked for again; that the data source,
 # access policy, service account and Cloud Portal pages open; that the operator email is asked for
@@ -245,6 +246,7 @@ check_file "failed write leaves the stack url as it was" "${tmp}/grafana/terrafo
 AWS_EMPTY_GET=grafana-cloud/write check_aborted "secret left empty" "grafana-cloud/write holds no value"
 AWS_FAIL_GET=grafana-cloud/api check_aborted "failed read" "cannot read grafana-cloud/api"
 AWS_EMPTY_GET=grafana-cloud/stack-read check_aborted "stack-read secret left empty" "grafana-cloud/stack-read holds no value"
+check_file "empty stack-read secret leaves the stack url as it was" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
 
 # A tfvars file the wizard can write but not read aborts before the write, so the
 # values already in it are not lost. Mode 0200 blocks reads only for a non-root user.
