@@ -176,8 +176,8 @@ fails. A green exit means the rig served and spend is back at zero.
 
 Grafana Cloud's free tier holds the dashboards, metrics and traces
 ([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). The bootstrap stack
-creates two empty Secrets Manager secrets, `grafana-cloud/write` and `grafana-cloud/api`,
-and the IAM role the stack's CloudWatch data source assumes (Grafana Assume Role). The
+creates three empty Secrets Manager secrets, `grafana-cloud/write`, `grafana-cloud/api` and
+`grafana-cloud/stack-read`, and the IAM role the stack's CloudWatch data source assumes (Grafana Assume Role). The
 tokens are minted by hand in Grafana Cloud, so a wizard walks through it once per
 environment:
 
@@ -186,7 +186,7 @@ just grafana-cloud-setup
 ```
 
 It checks `terraform` and `aws` are installed, `aws` is logged in, and AWS CLI history is
-off (history would record each token), then runs seven stages:
+off (history would record each token), then runs eight stages:
 
 1. Create a free Grafana Cloud stack and paste its URL.
 2. Copy the External ID from the CloudWatch data source's Connection Details; it is
@@ -202,12 +202,25 @@ off (history would record each token), then runs seven stages:
    `grafana-cloud/api`. The service account needs the Admin role, as only Admin can
    create data sources. If `slipstream-terraform` already exists, change its role to
    Admin and reuse it.
-7. Check both secrets hold a value, then write the stack URL as `grafana_url` into
+7. Mint the Cloud access-policy token the Grafana provider reads the stack's public send
+   endpoints with, stored in `grafana-cloud/stack-read`. The policy is made in the Cloud
+   Portal (Security → Access Policies), not in the stack: name it `slipstream-stack-read`,
+   realm this stack, scope `stacks:read` only.
+8. Check all three secrets hold a value, then write the stack URL as `grafana_url` into
    `terraform/grafana/terraform.tfvars`.
 
 The wizard pipes tokens to `aws secretsmanager put-secret-value` on stdin, so they never
 reach a file or the command line. A failed stage stops the wizard; rerun it from the
 start.
+
+On a setup made before the stack-read token existed, `just bootstrap` creates
+`grafana-cloud/stack-read` empty and `just grafana-up` fails reading it. Mint the token as
+in stage 7, then store it without rerunning the wizard:
+
+```sh
+read -rs t && printf '%s' "$t" | aws secretsmanager put-secret-value \
+  --secret-id grafana-cloud/stack-read --secret-string file:///dev/stdin; unset t
+```
 
 `grafana_external_id` and `operator_email` have no default. A later `just bootstrap` takes
 each from the gitignored tfvars file or its `TF_VAR_`; when neither sets it, as in a fresh
@@ -274,10 +287,16 @@ the stack persists across sessions, so read the plan first. It has no down recip
 - **Prometheus and Tempo** come with every Grafana Cloud stack as
   `grafanacloud-<stack>-prom` and `grafanacloud-<stack>-traces`. The stack reads them by
   name rather than managing them.
+- **Send endpoints:** where Prometheus `remote_write` and the Collector send is read from
+  the Grafana Cloud API, not from those data sources, whose URLs name Grafana-internal
+  hosts no sender can reach. The plan fails if the API reports no public
+  `https://<host>.grafana.net` endpoint or no instance ID. `just cluster-up` reads the
+  outputs and publishes the Collector's half as the ConfigMap `grafana-cloud-endpoints` in
+  `slipstream`, so run `just grafana-up` before it.
 
-The Grafana provider signs in with the `grafana-cloud/api` token, which the stack reads
-from Secrets Manager. The token is therefore held in the stack's state, in the encrypted
-state bucket. The stack URL comes from `grafana_url` in the gitignored
+The Grafana provider signs in with the `grafana-cloud/api` token and reads the Cloud API
+with the `grafana-cloud/stack-read` token, both read from Secrets Manager. Both tokens are
+therefore held in the stack's state, in the encrypted state bucket. The stack URL comes from `grafana_url` in the gitignored
 `terraform/grafana/terraform.tfvars`, or from `TF_VAR_grafana_url`; with neither set it
 defaults to `https://slipstreamobs.grafana.net`.
 
