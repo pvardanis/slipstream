@@ -1,10 +1,12 @@
-# Plan-level tests for the in-cluster metrics stack on the eks stack (ADR-0026, #367): the
-# kube-prometheus-stack release, its ServiceMonitors for vLLM and Karpenter, and the
-# remote_write that sends only the allowlisted series to Grafana Cloud. They run offline —
-# the aws, helm, and kubernetes providers are mocked and both remote states overridden —
-# so the assertions check the release's values without a cluster. The series actually
-# landing in Grafana Cloud, the system node's headroom and the active series count are the
-# manual tier: `just stack-up`, then query Grafana Cloud.
+# Plan-level tests for the in-cluster metrics stack on the eks stack (ADR-0026, #367, #368):
+# the kube-prometheus-stack release, its ServiceMonitors for vLLM, Karpenter and
+# dcgm-exporter, the dcgm-exporter DaemonSet on the GPU nodes, and the remote_write that
+# sends only the allowlisted series to Grafana Cloud. They run offline — the aws, helm,
+# and kubernetes providers are mocked and both remote states overridden — so the
+# assertions check the releases' values without a cluster. The series actually landing in
+# Grafana Cloud with the vLLM pod's name, the system node's headroom, the active series
+# count, and the GPU node still reaped at scale-to-zero are the manual tier: `just
+# stack-up` with a GPU replica, then query Grafana Cloud.
 
 # The eks module builds IAM roles whose assume_role_policy is validated as JSON at plan;
 # the mock provider's random string is not valid JSON, so every policy document gets a
@@ -219,12 +221,23 @@ run "remote_write_keeps_only_the_allowlist" {
     error_message = "Every series in remote-write-allowlist.yaml must pass the remote_write keep rule, with or without an instance_type."
   }
 
+  # The GPU panels' two series (ADR-0026, "Panels: GPU"): busy time and memory-bandwidth
+  # active, which carry no instance_type.
+  assert {
+    condition = alltrue([
+      for s in ["DCGM_FI_DEV_GPU_UTIL;", "DCGM_FI_PROF_DRAM_ACTIVE;"] :
+      can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].writeRelabelConfigs[0].regex})$", s))
+    ])
+    error_message = "The remote_write keep rule must send DCGM_FI_DEV_GPU_UTIL and DCGM_FI_PROF_DRAM_ACTIVE."
+  }
+
   # Anything off the list stays local, and the price gauge of any other instance type is
   # dropped. g5Xxlarge catches an unescaped dot in the instance type.
   assert {
     condition = alltrue([
       for s in [
         "vllm:num_requests_running;",
+        "DCGM_FI_PROF_GR_ENGINE_ACTIVE;",
         "vllm:kv_cache_usage_perc_extra;",
         "container_cpu_usage_seconds_total;",
         "karpenter_cloudprovider_instance_type_offering_price_estimate;g5.2xlarge",

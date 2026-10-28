@@ -21,6 +21,10 @@ metrics:
   - karpenter_voluntary_disruption_decisions_total
   - karpenter_nodes_allocatable
   - karpenter_cloudprovider_instance_type_offering_price_estimate
+  # dcgm-exporter 4.8.4 (dcgm_exporter.tf), per GPU with the pod using it: busy time, and
+  # memory-bandwidth active, the honest panel for memory-bound decode.
+  - DCGM_FI_DEV_GPU_UTIL
+  - DCGM_FI_PROF_DRAM_ACTIVE
   # kube-state-metrics: replicas available against desired.
   - kube_deployment_status_replicas_available
   - kube_deployment_spec_replicas
