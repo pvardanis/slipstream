@@ -211,3 +211,27 @@ routing (L3) the breakdown shows the imbalance.
 - **What `cluster-up` checks:** the operator's webhook rejects a malformed store or
   `ExternalSecret`, failing the apply. Helm does not wait on the sync, so an empty or
   unreadable secret leaves the apply green and shows only in the `ExternalSecret`'s status.
+
+## Amendment (2026-10-28, #369): the send endpoints come from the Cloud API
+
+- **Why:** the hosted Prometheus and Tempo data sources now report their URLs as
+  `<host>-local-nlb.internal.grafana.net`, which resolves to a private `10.63.x.x` address.
+  Prometheus `remote_write` and the Collector run in AWS and cannot reach it, so the data
+  sources stop being the source of where metrics and traces are sent. The dashboards still
+  query them by UID.
+- **Source:** `terraform/grafana` reads the stack through the Grafana Cloud API
+  (`data.grafana_cloud_stack`), which reports the public endpoints:
+  `prometheus_remote_write_endpoint` and `prometheus_user_id` for metrics, `traces_url` and
+  `traces_user_id` for traces. The Tempo OTLP endpoint is the `traces_url` host on port 443.
+- **Guard:** each output has a precondition: the URL must be a public
+  `https://<host>.grafana.net` endpoint and the instance ID must be above 0. An internal or
+  missing endpoint fails `just grafana-up`'s plan instead of reaching a sender.
+- **A third secret:** reading the Cloud API needs a Cloud access-policy token with
+  `stacks:read`, realm this stack. `bootstrap` creates `grafana-cloud/stack-read` empty,
+  beside `grafana-cloud/write` and `grafana-cloud/api`, and the setup wizard has the
+  operator mint the token in the Cloud Portal and store it. Like the API token, it sits in
+  the grafana stack's state as a provider credential.
+- **To the Collector:** `terraform/eks` publishes the Tempo endpoint and username and the
+  Prometheus push URL and username as the ConfigMap `grafana-cloud-endpoints` in
+  `slipstream`. `cluster-up` fails on a precondition when the grafana stack has no Tempo
+  outputs.
