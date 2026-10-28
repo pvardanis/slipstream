@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Walk the operator through Grafana Cloud's one-time setup (ADR-0026): create the free
 # stack, read its Grafana Assume Role external ID into the bootstrap stack's
-# terraform.tfvars, apply bootstrap, mint the two Grafana Cloud tokens, each written to
+# terraform.tfvars, apply bootstrap, mint the three Grafana Cloud tokens, each written to
 # its Secrets Manager secret with `aws secretsmanager put-secret-value` so neither enters
 # the bootstrap stack's state, then write the stack URL into the grafana stack's
 # terraform.tfvars. A token is read
@@ -291,7 +291,7 @@ check_secret_set() {
 
 run_wizard() {
 
-  TOTAL_STAGES=7
+  TOTAL_STAGES=8
 
   # Everything the stages need is checked before the operator starts the browser work.
   if [[ ! -d "${bootstrap_dir}" ]]; then
@@ -359,7 +359,7 @@ run_wizard() {
   fi
 
   stage "Bootstrap: apply"
-  say "Applying the bootstrap stack creates the two empty secrets and the IAM role."
+  say "Applying the bootstrap stack creates the three empty secrets and the IAM role."
   if ! confirm "Plan and apply ${bootstrap_dir} now? Terraform asks again before it changes anything."; then
     echo "bootstrap not applied; rerun the wizard when ready" >&2
     exit 1
@@ -369,6 +369,7 @@ run_wizard() {
   region="$(read_output region)"
   write_secret="$(read_output grafana_cloud_write_secret_name)"
   api_secret="$(read_output grafana_cloud_api_secret_name)"
+  stack_read_secret="$(read_output grafana_cloud_stack_read_secret_name)"
 
   stage "Write token: metrics and traces"
   say "One access-policy token lets Prometheus and the Collector write to the stack."
@@ -389,10 +390,23 @@ run_wizard() {
   note "Grafana shows the token once. It goes to ${api_secret}, not to any file."
   put_token "${api_secret}" "Paste the API token:"
 
+  stage "Stack-read token: public send endpoints"
+  say "A Cloud API token lets the terraform/grafana stack read where Prometheus and the"
+  say "Collector send: the hosted data sources name Grafana's internal hosts instead."
+  open_url "https://grafana.com/profile/org"
+  step "In the Cloud Portal, open Security, then Access Policies."
+  step "Click Create access policy; name it slipstream-stack-read, realm this stack."
+  step "Tick Read for stacks (stacks:read) only, and click Create."
+  note "stacks:read is offered only here, not on the stack's own access policy page."
+  step "Click Add token on the new policy, and copy the token (glc_...)."
+  note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
+  put_token "${stack_read_secret}" "Paste the stack-read token:"
+
   stage "Secrets: check"
   check_secret_set "${write_secret}"
   check_secret_set "${api_secret}"
-  # Written once both tokens are stored, so the URL never names a stack the stored tokens
+  check_secret_set "${stack_read_secret}"
+  # Written once every token is stored, so the URL never names a stack the stored tokens
   # do not belong to.
   write_tfvar "${grafana_tfvars}" grafana_url "${STACK_URL}"
   say "Next: \`just grafana-up\` creates the CloudWatch data source."

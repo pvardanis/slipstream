@@ -20,6 +20,13 @@ data "aws_secretsmanager_secret_version" "grafana_api" {
   secret_id = data.terraform_remote_state.bootstrap.outputs.grafana_cloud_api_secret_name
 }
 
+# The Cloud access-policy token, scoped stacks:read, that reads the stack's public send
+# endpoints from the Cloud API (data_sources.tf). The setup wizard writes it into the
+# bootstrap stack's grafana-cloud/stack-read secret; it lands in this stack's state too.
+data "aws_secretsmanager_secret_version" "grafana_stack_read" {
+  secret_id = data.terraform_remote_state.bootstrap.outputs.grafana_cloud_stack_read_secret_name
+}
+
 provider "aws" {
   region = var.region
 }
@@ -27,4 +34,6 @@ provider "aws" {
 provider "grafana" {
   url  = var.grafana_url
   auth = data.aws_secretsmanager_secret_version.grafana_api.secret_string
+
+  cloud_access_policy_token = data.aws_secretsmanager_secret_version.grafana_stack_read.secret_string
 }

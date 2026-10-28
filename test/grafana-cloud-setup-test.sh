@@ -4,13 +4,14 @@
 # browser runs. It checks that the external ID lands in terraform.tfvars beside the values
 # already there before the apply reads it, and a first run creates the file at mode 0600;
 # that the stack URL replaces the one in the grafana stack's terraform.tfvars, without its
-# trailing slash and beside the values already there, only once both tokens are stored;
+# trailing slash and beside the values already there, only once every token is stored;
 # that the operator is told to delete the CloudWatch data source the external ID page
 # creates, so the grafana stack can create its own, and to give the service account the
-# Admin role it needs to create it, a new account or an existing one; that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
+# Admin role it needs to create it, a new account or an existing one; that the stacks:read
+# token is minted in the Cloud Portal, whose access policies offer that scope; that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
 # never appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that
 # an invalid external ID or an empty token is asked for again; that the data source,
-# access policy and service account pages open; that the operator email is asked for
+# access policy, service account and Cloud Portal pages open; that the operator email is asked for
 # only when neither terraform.tfvars nor TF_VAR_operator_email sets it; that a missing
 # bootstrap or grafana dir stops the wizard before any page opens; and that a missing
 # tool, an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply, an
@@ -25,6 +26,7 @@ trap 'rm -rf "${tmp}"' EXIT
 
 write_token="glc_write-token-SECRET-1"
 api_token="glsa_api-token-SECRET-2"
+stack_read_token="glc_stack-read-token-SECRET-3"
 
 mkdir -p "${tmp}/bin" "${tmp}/bootstrap" "${tmp}/grafana" "${tmp}/empty"
 # The wizard runs under this bash by path, so it still starts when RUN_PATH hides every tool.
@@ -45,6 +47,7 @@ case "\$2" in
       region) echo eu-west-1 ;;
       grafana_cloud_write_secret_name) echo grafana-cloud/write ;;
       grafana_cloud_api_secret_name) echo grafana-cloud/api ;;
+      grafana_cloud_stack_read_secret_name) echo grafana-cloud/stack-read ;;
       *) echo "unexpected output \$4" >&2; exit 1 ;;
     esac ;;
   *) echo "unexpected call: \$*" >&2; exit 2 ;;
@@ -95,12 +98,12 @@ chmod +x "${tmp}/bin/"*
 # The operator's answers, in prompt order: start, stack created, stack URL, an invalid
 # external ID then a valid one, the operator email answers when the wizard has to ask
 # (EMAIL_ANSWERS, one per line), apply, an empty write token then the token,
-# and the API token. ANSWER_LINES cuts them short, as a closed stdin does.
+# the API token, and the stack-read token. ANSWER_LINES cuts them short, as a closed stdin does.
 answers() {
   {
     printf '%s\n' "" "" "https://slipstream.grafana.net/" "bad id!" "ext-123"
     [[ -z "${EMAIL_ANSWERS:-}" ]] || printf '%s\n' "${EMAIL_ANSWERS}"
-    printf '%s\n' "${APPLY_ANSWER:-y}" "" "${write_token}" "${api_token}"
+    printf '%s\n' "${APPLY_ANSWER:-y}" "" "${write_token}" "${api_token}" "${stack_read_token}"
   } | head -n "${ANSWER_LINES:-99}"
 }
 
@@ -132,7 +135,7 @@ check_file() {
 check_no_token() {
   local label="$1" file
   for file in "${tmp}/stdout" "${tmp}/stderr" "${tmp}/aws-calls" "${tmp}/bootstrap" "${tmp}/grafana"; do
-    if grep -rqF -e "${write_token}" -e "${api_token}" "${file}"; then
+    if grep -rqF -e "${write_token}" -e "${api_token}" -e "${stack_read_token}" "${file}"; then
       bad "${label}: a token appears in ${file##*/}"
       return
     fi
@@ -162,11 +165,15 @@ if [[ "$(grep -c '^grafana_external_id' "${tfvars}")" == 1 ]]; then ok "external
 check_file "apply read the new external id" "${tmp}/applied-with" 'grafana_external_id = "ext-123"'
 if [[ "$(cat "${tmp}/store/grafana-cloud/write")" == "${write_token}" ]]; then ok "write token stored"; else bad "write token stored"; fi
 if [[ "$(cat "${tmp}/store/grafana-cloud/api")" == "${api_token}" ]]; then ok "api token stored"; else bad "api token stored"; fi
+if [[ "$(cat "${tmp}/store/grafana-cloud/stack-read")" == "${stack_read_token}" ]]; then ok "stack-read token stored"; else bad "stack-read token stored"; fi
 check_file "write token put in region" "${tmp}/aws-calls" "secretsmanager put-secret-value --region eu-west-1 --secret-id grafana-cloud/write --secret-string file:///dev/stdin"
 check_file "api token put in region" "${tmp}/aws-calls" "secretsmanager put-secret-value --region eu-west-1 --secret-id grafana-cloud/api --secret-string file:///dev/stdin"
+check_file "stack-read token put in region" "${tmp}/aws-calls" "secretsmanager put-secret-value --region eu-west-1 --secret-id grafana-cloud/stack-read --secret-string file:///dev/stdin"
 check_file "data source page opened" "${tmp}/opened" "https://slipstream.grafana.net/connections/datasources/new"
 check_file "access policies page opened" "${tmp}/opened" "https://slipstream.grafana.net/a/grafana-auth-app"
 check_file "service accounts page opened" "${tmp}/opened" "https://slipstream.grafana.net/org/serviceaccounts"
+check_file "cloud portal page opened" "${tmp}/opened" "https://grafana.com/profile/org"
+if grep -qF "stacks:read" "${tmp}/stdout"; then ok "stack-read token scoped stacks:read"; else bad "stack-read token scoped stacks:read"; fi
 grafana_tfvars="${tmp}/grafana/terraform.tfvars"
 check_file "stack url written for the grafana stack" "${grafana_tfvars}" 'grafana_url = "https://slipstream.grafana.net"'
 check_file "other grafana tfvars kept" "${grafana_tfvars}" 'kept = "yes"'
@@ -237,6 +244,7 @@ check_no_token "failed write echoes no token"
 check_file "failed write leaves the stack url as it was" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
 AWS_EMPTY_GET=grafana-cloud/write check_aborted "secret left empty" "grafana-cloud/write holds no value"
 AWS_FAIL_GET=grafana-cloud/api check_aborted "failed read" "cannot read grafana-cloud/api"
+AWS_EMPTY_GET=grafana-cloud/stack-read check_aborted "stack-read secret left empty" "grafana-cloud/stack-read holds no value"
 
 # A tfvars file the wizard can write but not read aborts before the write, so the
 # values already in it are not lost. Mode 0200 blocks reads only for a non-root user.

@@ -29,3 +29,11 @@ data "grafana_data_source" "prometheus" {
 data "grafana_data_source" "tempo" {
   name = "grafanacloud-${local.stack_slug}-traces"
 }
+
+# The stack as the Cloud API reports it: the public endpoints Prometheus remote_write and
+# the Collector send to, and the instance IDs they authenticate as. The hosted data
+# sources above name Grafana's internal hosts instead, which resolve to private addresses
+# outside Grafana Cloud.
+data "grafana_cloud_stack" "this" {
+  slug = local.stack_slug
+}
