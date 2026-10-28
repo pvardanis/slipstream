@@ -1,0 +1,16 @@
+# Pins the repo's CLIs: mise installs them locally, and the CI jobs install the ones they
+# use through mise-action. mise.lock records each tool's download URL and checksum per
+# platform, and mise-action installs with --locked against it. kubectl matches the
+# orchestration image's (orchestration/Dockerfile) and tracks the EKS control plane
+# (terraform/eks/variables.tf kubernetes_version) within one minor version.
+[tools]
+terraform = "1.16.1"
+tflint = "0.64.0"
+kubectl = "1.36.5"
+helm = "4.3.1"
+kubeconform = "0.8.0"
+just = "1.58.0"
+uv = "0.12.1"
+prek = "0.3.11"
+gh = "2.101.0"
+aws-cli = "2.36.40"
