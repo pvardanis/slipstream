@@ -2,8 +2,9 @@
 
 `stack-up` runs `obs-pivot`, which posts one demo span through the Collector to Grafana
 Cloud on every bring-up. Span metrics count every span they see, split by the sending
-service's service.name, so a demo span sent as vLLM would add one request to vLLM's
-counts per bring-up.
+service's service.name, a dimension the span_metrics connector always keeps. A demo span
+sent as service vllm would count once per bring-up in every vLLM request rate selected
+by service_name.
 """
 
 import json
@@ -16,7 +17,9 @@ _OBS_JUST = _REPO / "just" / "obs.just"
 
 def _get_demo_span_resource() -> dict[str, str]:
     recipe = _OBS_JUST.read_text(encoding="utf-8")
-    (body,) = re.findall(r"-d '(\{\"resourceSpans\".*?)';", recipe)
+    bodies = re.findall(r"-d '(\{\"resourceSpans\".*?)';", recipe)
+    assert len(bodies) == 1, f"expected one OTLP span payload in {_OBS_JUST}: {bodies}"
+    (body,) = bodies
     payload = json.loads(body.replace("'\"${model}\"'", "model"))
     (resource_spans,) = payload["resourceSpans"]
     return {
@@ -26,4 +29,4 @@ def _get_demo_span_resource() -> dict[str, str]:
 
 
 def test_the_demo_span_is_not_sent_as_vllm() -> None:
-    assert _get_demo_span_resource()["service.name"] == "obs-pivot"
+    assert _get_demo_span_resource()["service.name"] != "vllm"
