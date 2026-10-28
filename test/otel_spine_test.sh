@@ -23,6 +23,7 @@ sinks="${repo_root}/test/otel-spine-sinks.yaml"
 image="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.160.0}"
 container="otel-spine-test-$$"
 http_port=14318
+metrics_port=18888
 
 # The prompt content that must never reach the exporter. Shape-only fields that
 # must survive. request_id is what the spine exists to carry.
@@ -96,6 +97,7 @@ cleanup
 echo "==> starting collector with the test sinks (${image})"
 docker run -d --name "${container}" "${collector_env[@]}" \
   -p "${http_port}:4318" \
+  -p "${metrics_port}:8888" \
   -v "${config}:/etc/otelcol-contrib/config.yaml:ro" \
   -v "${sinks}:/etc/otelcol-contrib/sinks.yaml:ro" \
   "${image}" \
@@ -381,10 +383,21 @@ if ! grep -q "slo_met: Bool(true) .*exemplars=[1-9]" <<<"$(metric_points "traces
   fail=1
 fi
 
+# The Collector serves its own metrics on :8888 to other hosts, as a port-forward
+# and the cluster's Prometheus need, under the names `just obs-pivot` checks: each
+# exporter's sent count, without a _total suffix.
+self_metrics="$(curl -sf "http://localhost:${metrics_port}/metrics" || true)"
+for counter in 'otelcol_exporter_sent_spans{exporter="debug"}' 'otelcol_exporter_sent_metric_points{exporter="debug"}'; do
+  if [[ ! "$(awk -v c="${counter}" '$1 == c { print $2 }' <<<"${self_metrics}")" =~ ^[1-9] ]]; then
+    echo "FAIL: the Collector's :8888 metrics lack a nonzero ${counter}" >&2
+    fail=1
+  fi
+done
+
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- collector logs ----" >&2
   echo "${logs}" >&2
   exit 1
 fi
 
-echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met, spanmetrics split by slo_met and pod"
+echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met, spanmetrics split by slo_met and pod, exporter counts on :8888"

@@ -155,6 +155,17 @@ exporters:
       enabled: false
 
 service:
+  # The Collector's own metrics, each exporter's sent and failed counts among them,
+  # on :8888 for `just obs-pivot` and the cluster's Prometheus. The default reader
+  # listens on localhost only, which neither reaches.
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
   extensions: [health_check, basicauth/grafana-cloud-traces, basicauth/grafana-cloud-metrics]
   pipelines:
     # vLLM emits OTel traces (spec §5.1); the request_id rides as a span attribute.
