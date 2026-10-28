@@ -4,12 +4,13 @@
 # sources are wired without a Grafana Cloud stack. Grafana actually assuming the role is
 # checked by the CloudWatch data source's Save & test after apply.
 mock_provider "aws" {}
-# The mocked hosted data sources get a URL-shaped url, which the Tempo OTLP endpoint
-# output parses, instead of the mock's random string.
+# The mocked Cloud API stack gets URL-shaped send endpoints, which the outputs parse and
+# check, instead of the mock's random strings.
 mock_provider "grafana" {
-  mock_data "grafana_data_source" {
+  mock_data "grafana_cloud_stack" {
     defaults = {
-      url = "https://mock.grafana.net/api"
+      prometheus_remote_write_endpoint = "https://prometheus-mock.grafana.net/api/prom/push"
+      traces_url                       = "https://tempo-mock.grafana.net"
     }
   }
 }
@@ -21,9 +22,10 @@ override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
     outputs = {
-      region                        = "eu-central-1"
-      grafana_cloud_api_secret_name = "test/grafana-api"
-      grafana_cloudwatch_role_arn   = "arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch"
+      region                               = "eu-central-1"
+      grafana_cloud_api_secret_name        = "test/grafana-api"
+      grafana_cloud_stack_read_secret_name = "test/grafana-stack-read"
+      grafana_cloudwatch_role_arn          = "arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch"
     }
   }
 }
@@ -74,13 +76,18 @@ run "hosted_prometheus_and_tempo_are_read_by_stack_name" {
 }
 
 # The Grafana provider authenticates with the service account token the setup wizard
-# writes into the bootstrap stack's grafana-cloud/api secret.
+# writes into the bootstrap stack's grafana-cloud/api secret, and to the Cloud API with the
+# stacks:read token it writes into grafana-cloud/stack-read.
 run "provider_token_is_read_from_the_bootstrap_api_secret" {
   command = plan
 
   assert {
     condition     = data.aws_secretsmanager_secret_version.grafana_api.secret_id == "test/grafana-api"
     error_message = "The Grafana provider's token must be read from the bootstrap stack's grafana_cloud_api_secret_name."
+  }
+  assert {
+    condition     = data.aws_secretsmanager_secret_version.grafana_stack_read.secret_id == "test/grafana-stack-read"
+    error_message = "The Grafana provider's Cloud API token must be read from the bootstrap stack's grafana_cloud_stack_read_secret_name."
   }
 }
 
@@ -140,51 +147,70 @@ run "grafana_url_is_published_for_the_mcp_server" {
   }
 }
 
-# Prometheus remote_write in the eks stack pushes to the hosted Prometheus this stack reads,
-# authenticating as its instance: the push endpoint is the data source's query URL plus
-# /push, and the basic-auth user is the data source's, the stack's numeric instance ID.
-run "remote_write_target_is_the_hosted_prometheus" {
+# Prometheus remote_write in the eks stack and the Collector's trace export send to the
+# stack's public endpoints, which the Cloud API reports; the hosted data sources' URLs
+# name Grafana's internal hosts. Each authenticates as its instance's numeric ID.
+run "send_endpoints_are_the_stack_s_public_ones" {
   command = plan
 
   override_data {
-    target = data.grafana_data_source.prometheus
+    target = data.grafana_cloud_stack.this
     values = {
-      url                 = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom"
-      basic_auth_username = "1234567"
+      prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      prometheus_user_id               = 1234567
+      traces_url                       = "https://tempo-prod-10-prod-eu-west-2.grafana.net"
+      traces_user_id                   = 7654321
     }
   }
 
   assert {
+    condition     = data.grafana_cloud_stack.this.slug == "slipstreamobs"
+    error_message = "The Cloud API stack must be read by the stack URL's slug."
+  }
+  assert {
     condition     = output.prometheus_remote_write_url == "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
-    error_message = "The remote_write URL must be the hosted Prometheus data source's URL plus /push."
+    error_message = "The remote_write URL must be the stack's Prometheus remote_write endpoint."
   }
   assert {
     condition     = output.prometheus_remote_write_username == "1234567"
-    error_message = "The remote_write username must be the hosted Prometheus data source's basic-auth user."
+    error_message = "The remote_write username must be the stack's Prometheus instance ID."
   }
-}
-
-# The Collector in the eks stack exports traces over OTLP gRPC to the hosted Tempo this
-# stack reads, authenticating as its instance: the gRPC endpoint is the data source URL's
-# host on port 443, without the /tempo query path, and the basic-auth user is the data
-# source's, the stack's numeric Tempo instance ID.
-run "trace_export_target_is_the_hosted_tempo" {
-  command = plan
-
-  override_data {
-    target = data.grafana_data_source.tempo
-    values = {
-      url                 = "https://tempo-prod-10-prod-eu-west-2.grafana.net/tempo"
-      basic_auth_username = "7654321"
-    }
-  }
-
   assert {
     condition     = output.tempo_otlp_endpoint == "tempo-prod-10-prod-eu-west-2.grafana.net:443"
-    error_message = "The OTLP endpoint must be the hosted Tempo data source URL's host on port 443."
+    error_message = "The OTLP endpoint must be the stack's traces URL host on port 443."
   }
   assert {
     condition     = output.tempo_username == "7654321"
-    error_message = "The OTLP username must be the hosted Tempo data source's basic-auth user."
+    error_message = "The OTLP username must be the stack's Tempo instance ID."
   }
+}
+
+# An endpoint on a Grafana-internal host resolves to a private address no sender can
+# reach, so it fails the plan instead of reaching the eks stack.
+run "send_endpoints_reject_an_internal_prometheus_host" {
+  command = plan
+
+  override_data {
+    target = data.grafana_cloud_stack.this
+    values = {
+      prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2-local-nlb.internal.grafana.net/api/prom/push"
+      traces_url                       = "https://tempo-prod-10-prod-eu-west-2.grafana.net"
+    }
+  }
+
+  expect_failures = [output.prometheus_remote_write_url]
+}
+
+run "send_endpoints_reject_an_internal_tempo_host" {
+  command = plan
+
+  override_data {
+    target = data.grafana_cloud_stack.this
+    values = {
+      prometheus_remote_write_endpoint = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+      traces_url                       = "https://tempo-prod-10-prod-eu-west-2-local-nlb.internal.grafana.net"
+    }
+  }
+
+  expect_failures = [output.tempo_otlp_endpoint]
 }

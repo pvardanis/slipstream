@@ -64,6 +64,11 @@ output "grafana_cloud_api_secret_name" {
   value       = aws_secretsmanager_secret.grafana_cloud_api.name
 }
 
+output "grafana_cloud_stack_read_secret_name" {
+  description = "Name of the Secrets Manager secret holding the Grafana Cloud stacks:read token; the setup wizard writes it and the terraform/grafana stack reads it."
+  value       = aws_secretsmanager_secret.grafana_cloud_stack_read.name
+}
+
 output "grafana_cloudwatch_role_arn" {
   description = "ARN of the IAM role Grafana Cloud's CloudWatch data source assumes; pasted into the data source's Assume Role ARN field."
   value       = aws_iam_role.grafana_cloudwatch.arn

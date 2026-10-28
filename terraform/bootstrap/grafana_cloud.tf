@@ -3,7 +3,7 @@
 # live in the bootstrap stack because they must exist before anything consumes them and
 # outlive `just cluster-down`, like the dashboards and history they back.
 
-# Both secrets are created empty: no secret version is managed here, so no token enters
+# The secrets are created empty: no secret version is managed here, so no token enters
 # Terraform state. scripts/grafana-cloud-setup.sh has the operator mint each token in
 # Grafana Cloud and writes it with `aws secretsmanager put-secret-value`.
 
@@ -18,6 +18,15 @@ resource "aws_secretsmanager_secret" "grafana_cloud_write" {
 resource "aws_secretsmanager_secret" "grafana_cloud_api" {
   name        = "grafana-cloud/api"
   description = "Grafana Cloud token for the Grafana Terraform provider that pushes the dashboards."
+}
+
+# A Cloud access-policy token scoped stacks:read, for the terraform/grafana stack to read
+# the stack's public send endpoints and instance IDs from the Cloud API (ADR-0026). The
+# hosted data sources' URLs name Grafana's internal hosts, which nothing outside Grafana
+# Cloud can reach.
+resource "aws_secretsmanager_secret" "grafana_cloud_stack_read" {
+  name        = "grafana-cloud/stack-read"
+  description = "Grafana Cloud access-policy token scoped stacks:read, for the Grafana Terraform provider to read the stack's send endpoints."
 }
 
 # Grafana Assume Role: Grafana Cloud's CloudWatch data source assumes this role from

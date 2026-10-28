@@ -23,30 +23,37 @@ output "grafana_url" {
   value       = var.grafana_url
 }
 
-# Read by the eks stack's Prometheus remote_write (ADR-0026). Grafana Cloud's push
-# endpoint sits at /push under the hosted data source's query URL, and the data source's
-# basic-auth user is the stack's Prometheus instance ID, the username the write token
-# authenticates as.
+# Read by the eks stack's Prometheus remote_write (ADR-0026) and its Collector endpoints
+# ConfigMap. Each must be a public <host>.grafana.net endpoint: a Grafana-internal host
+# such as <host>-local-nlb.internal.grafana.net resolves to a private address no sender
+# can reach.
 output "prometheus_remote_write_url" {
   description = "Grafana Cloud push endpoint for the hosted Prometheus, the eks stack's remote_write URL."
-  value       = "${data.grafana_data_source.prometheus.url}/push"
+  value       = data.grafana_cloud_stack.this.prometheus_remote_write_endpoint
+
+  precondition {
+    condition     = can(regex("^https://[a-z0-9-]+\\.grafana\\.net/", data.grafana_cloud_stack.this.prometheus_remote_write_endpoint))
+    error_message = "The Cloud API reports no public https://<host>.grafana.net Prometheus remote_write endpoint for the stack."
+  }
 }
 
 output "prometheus_remote_write_username" {
   description = "Prometheus instance ID of the Grafana Cloud stack, the eks stack's remote_write basic-auth username."
-  value       = data.grafana_data_source.prometheus.basic_auth_username
+  value       = tostring(data.grafana_cloud_stack.this.prometheus_user_id)
 }
 
-# Read by the eks stack's endpoints ConfigMap for the Collector's trace export. Grafana
-# Cloud takes OTLP gRPC at the hosted Tempo's host on port 443, not under the data
-# source's /tempo query path, and the data source's basic-auth user is the stack's Tempo
-# instance ID, the username the write token authenticates as.
+# Grafana Cloud takes OTLP gRPC at the traces URL's host on port 443.
 output "tempo_otlp_endpoint" {
   description = "Grafana Cloud OTLP gRPC endpoint for the hosted Tempo, host:443, the Collector's trace exporter endpoint."
-  value       = "${regex("^https://([^/]+)", data.grafana_data_source.tempo.url)[0]}:443"
+  value       = "${regex("^https://([^/]+)", data.grafana_cloud_stack.this.traces_url)[0]}:443"
+
+  precondition {
+    condition     = can(regex("^https://[a-z0-9-]+\\.grafana\\.net(/|$)", data.grafana_cloud_stack.this.traces_url))
+    error_message = "The Cloud API reports no public https://<host>.grafana.net traces URL for the stack."
+  }
 }
 
 output "tempo_username" {
   description = "Tempo instance ID of the Grafana Cloud stack, the Collector's trace exporter basic-auth username."
-  value       = data.grafana_data_source.tempo.basic_auth_username
+  value       = tostring(data.grafana_cloud_stack.this.traces_user_id)
 }
