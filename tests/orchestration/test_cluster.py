@@ -339,12 +339,18 @@ def _get_collector_otlp_grpc_address() -> str:
     return f"{metadata['name']}.{metadata['namespace']}.svc:{port}"
 
 
-def test_render_keeps_the_replica_s_traces_flowing_to_the_collector() -> None:
-    # Every point the worker redeploys still sends one span per request to the
-    # Collector, named after its own pod: Kubernetes, not the render, expands the
-    # $(POD_NAME) reference, and only from a variable declared earlier in env, so
-    # the render must leave it intact and POD_NAME must come first.
-    container = _vllm_container(_render_committed_manifest(kv_cache_offload=False))
+@pytest.mark.parametrize("kv_cache_offload", [False, True])
+def test_render_keeps_the_replica_s_traces_flowing_to_the_collector(
+    kv_cache_offload: bool,
+) -> None:
+    # Every point the worker redeploys sends one span per request to the Collector,
+    # tagged with its own pod's name as k8s.pod.name: Kubernetes, not the render,
+    # expands the $(POD_NAME) reference, and only from a variable declared earlier
+    # in env, so the render must leave it intact and POD_NAME must precede
+    # OTEL_RESOURCE_ATTRIBUTES.
+    container = _vllm_container(
+        _render_committed_manifest(kv_cache_offload=kv_cache_offload)
+    )
     args = container["args"]
     env_names = [var["name"] for var in container["env"]]
     env = {var["name"]: var for var in container["env"]}

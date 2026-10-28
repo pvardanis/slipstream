@@ -136,10 +136,11 @@ spec:
             - --kv-transfer-config
             - '${KV_TRANSFER_CONFIG}'
             # One llm_request span per request to the OTel Collector (#369), which
-            # exports it to Grafana Cloud Traces and derives the latency histogram.
-            # Plaintext gRPC, in-cluster only (OTEL_EXPORTER_OTLP_TRACES_INSECURE
-            # below). --collect-detailed-traces stays off: its per-step timings
-            # cost the hot path, and nothing reads them.
+            # exports it to Grafana Cloud Traces and derives the e2e latency histogram
+            # and request counts. Plaintext gRPC, in-cluster only
+            # (OTEL_EXPORTER_OTLP_TRACES_INSECURE below). --collect-detailed-traces
+            # stays off: vLLM documents its model timings as possibly costly or
+            # blocking, and nothing reads them.
             - --otlp-traces-endpoint
             - grpc://otel-collector.slipstream.svc:4317
           env:
@@ -161,11 +162,13 @@ spec:
               value: "4.0"
             - name: LMCACHE_CHUNK_SIZE
               value: "256"
-            # The span's resource: service.name vllm, and the replica as
-            # k8s.pod.name, which span metrics and a trace search split by.
-            # Kubernetes expands $(POD_NAME), so POD_NAME is declared first.
+            # Plaintext OTLP to the in-cluster Collector (--otlp-traces-endpoint).
             - name: OTEL_EXPORTER_OTLP_TRACES_INSECURE
               value: "true"
+            # The span's resource: service.name vllm, and the replica as
+            # k8s.pod.name, which span metrics and a trace search split by.
+            # Kubernetes expands $(POD_NAME) only from a variable declared earlier in
+            # env, so POD_NAME precedes OTEL_RESOURCE_ATTRIBUTES.
             - name: OTEL_SERVICE_NAME
               value: vllm
             - name: POD_NAME
