@@ -118,8 +118,7 @@ esac
 EOF
 # Stub curl: `curl -sSf <url>` prints the next scrape, scrape.1, scrape.2 and so on,
 # repeating the last; CURL_EXIT fails it, with curl's error, as an unreachable
-# port-forward does. Stub sleep:
-# log each wait.
+# port-forward does. Stub sleep: log each wait.
 cat >"${tmp}/bin/curl" <<EOF
 #!/usr/bin/env bash
 [[ "\$*" == "-sSf http://localhost:18888/metrics" ]] || { echo "unexpected call: \$*" >&2; exit 2; }
@@ -185,6 +184,12 @@ bad() {
   echo "FAIL $1" >&2
   fail=1
 }
+# Runs the script with the arguments after the label; it must exit 0.
+check_passes() {
+  local label="$1"
+  shift
+  if run "$@"; then ok "${label}"; else bad "${label}: $(cat "${tmp}/stderr")"; fi
+}
 # Runs the script with the arguments after the label and expected stderr; it must exit
 # non-zero with that text on stderr, as a whole line when WHOLE_LINE is set.
 check_fails() {
@@ -200,7 +205,7 @@ check_fails() {
 }
 
 # Preflight passes with the ConfigMap present and the ExternalSecret Ready.
-if run preflight; then ok "preflight passes"; else bad "preflight passes: $(cat "${tmp}/stderr")"; fi
+check_passes "preflight passes" preflight
 if grep -qxF -- "-n slipstream wait --for=condition=Ready externalsecret/grafana-cloud-write --timeout=120s" "${tmp}/kubectl-calls"; then
   ok "preflight waits for the write token to sync"
 else
@@ -218,7 +223,7 @@ for call in "get configmap" wait; do
   if grep -qF "just cluster-up" "${tmp}/stderr"; then bad "unreachable cluster at ${call} is not a missing object"; else ok "unreachable cluster at ${call} is not a missing object"; fi
 done
 # Rollout passes when the Deployment rolls out, and on a failed one shows why the pod waits.
-if run rollout; then ok "rollout passes"; else bad "rollout passes: $(cat "${tmp}/stderr")"; fi
+check_passes "rollout passes" rollout
 WHOLE_LINE=1
 KUBECTL_FAIL="rollout" check_fails "failed rollout shows the pod's waiting reason" \
   "otel-collector-7d9f: waiting CreateContainerConfigError couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints" rollout
@@ -236,7 +241,7 @@ KUBECTL_FAIL="rollout and get pods" check_fails "failed rollout shows why the po
 # Delivery passes once both exporters' sent counts rise, each at its own scrape.
 url=http://localhost:18888/metrics
 serve "- - - -" "1 - - -" "1 - 8 -"
-if run delivery "${url}"; then ok "delivery passes"; else bad "delivery passes: $(cat "${tmp}/stderr")"; fi
+check_passes "delivery passes" delivery "${url}"
 if [[ "$(cat "${tmp}/stdout")" == "Grafana Cloud's endpoints accepted the Collector's spans and metric points" ]]; then
   ok "delivery says what Grafana Cloud accepted"
 else
@@ -245,24 +250,20 @@ fi
 if [[ "$(cat "${tmp}/curl-count")" == 3 ]]; then ok "delivery scrapes until both exporters sent"; else bad "delivery scrapes until both exporters sent"; fi
 # Counts from before the baseline do not count, sent or failed.
 serve "5 2 40 3" "6 2 40 3" "6 2 48 3"
-if BASELINE="5 2 40 3" run delivery "${url}"; then ok "earlier counts do not count"; else bad "earlier counts do not count: $(cat "${tmp}/stderr")"; fi
+BASELINE="5 2 40 3" check_passes "earlier counts do not count" delivery "${url}"
 # A long-running Collector renders large counts in exponent form; one that has not moved
 # is no send.
 serve "1.234567e+06 - 2.5e+07 -"
 BASELINE="1.234567e+06 - 2.5e+07 -" check_fails "an unchanged large count is not a send" "nothing from ${spans_exporter}" delivery "${url}"
 serve "1.234567e+06 - 2.5e+07 -"
-if BASELINE="1.234566e+06 - 2.4e+07 -" run delivery "${url}"; then ok "a risen large count is a send"; else bad "a risen large count is a send: $(cat "${tmp}/stderr")"; fi
+BASELINE="1.234566e+06 - 2.4e+07 -" check_passes "a risen large count is a send" delivery "${url}"
 # A series carrying more labels than the exporter's still counts, and an exporter's
 # count split across series is their sum.
 LABELS='service_name="otelcol-contrib",' serve "- - - -" "1 - 8 -"
-if LABELS='service_name="otelcol-contrib",' run delivery "${url}"; then ok "a series with more labels counts"; else bad "a series with more labels counts: $(cat "${tmp}/stderr")"; fi
+LABELS='service_name="otelcol-contrib",' check_passes "a series with more labels counts" delivery "${url}"
 split="otelcol_exporter_sent_spans{exporter=\"${spans_exporter}\",pipeline=\"traces/b\"} 5"
 EXTRA_SERIES="${split}" serve "1 - 8 -"
-if EXTRA_SERIES="${split}" run delivery "${url}"; then
-  ok "an exporter's split count is its series' sum"
-else
-  bad "an exporter's split count is its series' sum: $(cat "${tmp}/stderr")"
-fi
+EXTRA_SERIES="${split}" check_passes "an exporter's split count is its series' sum" delivery "${url}"
 # A count that is not a number fails, naming the series.
 serve "1 - x -"
 check_fails "a count that is not a number fails delivery" "the Collector's otelcol_exporter_sent_metric_points for ${points_exporter} reads 'x', not a count" delivery "${url}"
