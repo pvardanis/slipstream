@@ -244,7 +244,7 @@ run "remote_write_keeps_only_the_allowlist" {
   }
 }
 
-run "service_monitors_scrape_vllm_and_karpenter" {
+run "service_monitors_scrape_vllm_karpenter_and_dcgm_exporter" {
   command = plan
 
   # Both vLLM Services (CPU and GPU replica), so whichever is deployed is scraped; every
@@ -284,6 +284,34 @@ run "service_monitors_scrape_vllm_and_karpenter" {
       endpoints         = [{ port = "http-metrics" }]
     }
     error_message = "The Karpenter ServiceMonitor must scrape the http-metrics port of the karpenter Service in the controller's namespace."
+  }
+
+  # The dcgm-exporter chart's Service, in its release's namespace, selected by the labels
+  # the chart puts on it (app.kubernetes.io/name and instance, the release name).
+  assert {
+    condition = (
+      yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.namespaceSelector == { matchNames = [helm_release.dcgm_exporter.namespace] }
+      && yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.selector == {
+        matchLabels = { "app.kubernetes.io/name" = "dcgm-exporter", "app.kubernetes.io/instance" = helm_release.dcgm_exporter.name }
+      }
+    )
+    error_message = "The dcgm-exporter ServiceMonitor must select the dcgm-exporter release's Service in its namespace."
+  }
+
+  # The exporter labels a GPU's series with the pod, namespace and container using it.
+  # Prometheus renames those to exported_* under the exporter's own target labels, so
+  # each is moved back, and a GPU no pod holds carries none rather than the exporter's.
+  assert {
+    condition = yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.dcgm-exporter.endpoints == [{
+      port = "metrics"
+      metricRelabelings = [
+        { sourceLabels = ["exported_pod"], targetLabel = "pod", regex = "(.*)", replacement = "$1", action = "replace" },
+        { sourceLabels = ["exported_namespace"], targetLabel = "namespace", regex = "(.*)", replacement = "$1", action = "replace" },
+        { sourceLabels = ["exported_container"], targetLabel = "container", regex = "(.*)", replacement = "$1", action = "replace" },
+        { regex = "exported_(pod|namespace|container)", action = "labeldrop" },
+      ]
+    }]
+    error_message = "The dcgm-exporter ServiceMonitor must scrape the metrics port and put the GPU's own pod, namespace and container back on its series."
   }
 }
 

@@ -101,6 +101,31 @@ locals {
           selector          = { matchLabels = { "app.kubernetes.io/name" = "karpenter" } }
           endpoints         = [{ port = "http-metrics" }]
         }
+        # The dcgm-exporter chart's Service (dcgm_exporter.tf). The exporter labels each
+        # GPU's series with the pod, namespace and container using it; Prometheus renames
+        # those exported_* beneath the exporter's own target labels, so each is moved
+        # back. A GPU no pod holds has no exported_pod, so its series carry no pod rather
+        # than the exporter's.
+        dcgm-exporter = {
+          namespaceSelector = { matchNames = [helm_release.dcgm_exporter.namespace] }
+          selector = { matchLabels = {
+            "app.kubernetes.io/name"     = "dcgm-exporter"
+            "app.kubernetes.io/instance" = helm_release.dcgm_exporter.name
+          } }
+          endpoints = [{
+            port = "metrics"
+            metricRelabelings = concat(
+              [for l in ["pod", "namespace", "container"] : {
+                sourceLabels = ["exported_${l}"]
+                targetLabel  = l
+                regex        = "(.*)"
+                replacement  = "$1"
+                action       = "replace"
+              }],
+              [{ regex = "exported_(pod|namespace|container)", action = "labeldrop" }],
+            )
+          }]
+        }
       }
 
       prometheusSpec = {
