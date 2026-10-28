@@ -14,6 +14,11 @@ unset KUBECTL_FAIL CURL_EXIT BASELINE DEBUG_SENT
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/otel-collector-check.sh"
+# The Grafana Cloud exporters as the Collector's config names them, so the scrapes below
+# carry the IDs the Collector counts under.
+config="${repo_root}/k8s/otel-collector-config.yaml"
+spans_exporter="$(yq '.service.pipelines.traces.exporters[] | select(test("grafana-cloud"))' "${config}")"
+points_exporter="$(yq '.service.pipelines.metrics.exporters[] | select(test("grafana-cloud"))' "${config}")"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 mkdir -p "${tmp}/bin"
@@ -62,7 +67,7 @@ chmod +x "${tmp}/bin/"*
 # the Collector does before its first count. The debug exporter's counts are DEBUG_SENT.
 scrape() {
   local sent_spans="$1" failed_spans="$2" sent_points="$3" failed_points="$4"
-  local spans='{exporter="otlp_grpc/grafana-cloud"}' points='{exporter="prometheus_remote_write/grafana-cloud"}'
+  local spans="{exporter=\"${spans_exporter}\"}" points="{exporter=\"${points_exporter}\"}"
   echo '# HELP otelcol_exporter_sent_spans Number of spans successfully sent to destination.'
   echo '# TYPE otelcol_exporter_sent_spans counter'
   echo "otelcol_exporter_sent_spans{exporter=\"debug\"} ${DEBUG_SENT:-1}"
@@ -71,7 +76,7 @@ scrape() {
   echo "otelcol_exporter_sent_metric_points{exporter=\"debug\"} ${DEBUG_SENT:-1}"
   [[ "${sent_points}" == - ]] || echo "otelcol_exporter_sent_metric_points${points} ${sent_points}"
   [[ "${failed_points}" == - ]] || echo "otelcol_exporter_send_failed_metric_points${points} ${failed_points}"
-  echo "otelcol_exporter_queue_size{data_type=\"traces\",exporter=\"otlp_grpc/grafana-cloud\"} 0"
+  echo "otelcol_exporter_queue_size{data_type=\"traces\",exporter=\"${spans_exporter}\"} 0"
 }
 # The scrapes the stub curl serves, one argument each, in scrape's four counts.
 serve() {
@@ -139,29 +144,35 @@ if BASELINE="5 2 40 3" run delivery "${url}"; then ok "earlier counts do not cou
 # A long-running Collector renders large counts in exponent form; one that has not moved
 # is no send.
 serve "1.234567e+06 - 2.5e+07 -"
-BASELINE="1.234567e+06 - 2.5e+07 -" check_fails "an unchanged large count is not a send" "nothing from otlp_grpc/grafana-cloud" delivery "${url}"
+BASELINE="1.234567e+06 - 2.5e+07 -" check_fails "an unchanged large count is not a send" "nothing from ${spans_exporter}" delivery "${url}"
 serve "1.234567e+06 - 2.5e+07 -"
 if BASELINE="1.234566e+06 - 2.4e+07 -" run delivery "${url}"; then ok "a risen large count is a send"; else bad "a risen large count is a send: $(cat "${tmp}/stderr")"; fi
 # A failed send fails at the scrape it shows on, naming the exporter and what to check.
 serve "- 1 - -"
-check_fails "failed spans fail delivery" "otlp_grpc/grafana-cloud failed to send 1 spans" delivery "${url}"
+check_fails "failed spans fail delivery" "${spans_exporter} failed to send 1 spans" delivery "${url}"
 if [[ ! -s "${tmp}/sleeps" ]]; then ok "failed spans fail at the first scrape"; else bad "failed spans fail at the first scrape"; fi
 check_fails "failed spans point at the token and endpoints" "grafana-cloud-endpoints" delivery "${url}"
 check_fails "failed spans point at the Collector's log" "kubectl -n slipstream logs deploy/otel-collector | grep 'Exporting failed'" delivery "${url}"
 serve "1 - - 2"
-BASELINE="- - - 1" check_fails "failed metric points fail delivery" "prometheus_remote_write/grafana-cloud failed to send 1 metric points" delivery "${url}"
+BASELINE="- - - 1" check_fails "failed metric points fail delivery" "${points_exporter} failed to send 1 metric points" delivery "${url}"
+serve "- - - -" "1 - - -" "1 - - 1"
+check_fails "a failure at a later scrape fails delivery" "${points_exporter} failed to send 1 metric points" delivery "${url}"
+if [[ "$(cat "${tmp}/curl-count")" == 3 ]]; then ok "a later failure fails at the scrape it shows on"; else bad "a later failure fails at the scrape it shows on"; fi
+# A failure fails delivery even when the same scrape shows sends.
+serve "1 - 8 2"
+check_fails "a failure beside sends fails delivery" "${points_exporter} failed to send 2 metric points" delivery "${url}"
 # Nothing sent within the scrapes fails, naming only the exporter that sent nothing.
 serve "- - - -" "1 - - -"
-check_fails "undelivered metric points fail delivery" "nothing from prometheus_remote_write/grafana-cloud reached Grafana Cloud" delivery "${url}"
+check_fails "undelivered metric points fail delivery" "nothing from ${points_exporter} reached Grafana Cloud" delivery "${url}"
 if [[ "$(cat "${tmp}/curl-count")" == 20 && "$(sort -u "${tmp}/sleeps")" == 5 ]]; then
   ok "delivery scrapes 20 times, 5 s apart"
 else
   bad "delivery scrapes 20 times, 5 s apart: $(cat "${tmp}/curl-count") scrapes"
 fi
-if grep -qF "otlp_grpc/grafana-cloud" "${tmp}/stderr"; then bad "a delivered exporter is not named undelivered"; else ok "a delivered exporter is not named undelivered"; fi
+if grep -qF "${spans_exporter}" "${tmp}/stderr"; then bad "a delivered exporter is not named undelivered"; else ok "a delivered exporter is not named undelivered"; fi
 # The debug exporter's counts never count as delivery.
 serve "- - - -"
-DEBUG_SENT=9 check_fails "the debug exporter's sends are not delivery" "nothing from otlp_grpc/grafana-cloud" delivery "${url}"
+DEBUG_SENT=9 check_fails "the debug exporter's sends are not delivery" "nothing from ${spans_exporter}" delivery "${url}"
 CURL_EXIT=7 check_fails "an unreadable metrics endpoint fails delivery" "cannot read the Collector's metrics at ${url}" delivery "${url}"
 check_fails "delivery without a url" "usage: otel-collector-check.sh" delivery
 check_fails "unknown subcommand" "usage: otel-collector-check.sh" bogus
