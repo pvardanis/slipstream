@@ -40,15 +40,43 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> starting collector (${image})"
-docker run -d --name "${container}" \
+# The Grafana Cloud exporters and auth extensions resolve their ${env:...} at
+# start; placeholders let the config load, and nothing is sent to them.
+collector_env=(
+  -e "MODEL_ID=${collector_model_id}"
+  -e "GRAFANA_CLOUD_TRACES_ENDPOINT=unused.invalid:443"
+  -e "GRAFANA_CLOUD_TRACES_USERNAME=unused"
+  -e "GRAFANA_CLOUD_METRICS_URL=https://unused.invalid/api/prom/push"
+  -e "GRAFANA_CLOUD_METRICS_USERNAME=unused"
+  -e "GRAFANA_CLOUD_WRITE_TOKEN=unused"
+)
+
+# The overlay below replaces the exporter and extension lists, so the cluster's
+# own pipelines, auth extensions and Grafana Cloud exporters start only here: the
+# config must come up and log no warning or error doing so.
+echo "==> starting collector on the cluster config alone (${image})"
+docker run -d --name "${container}" "${collector_env[@]}" \
+  -v "${config}:/etc/otelcol-contrib/config.yaml:ro" \
+  "${image}" --config=/etc/otelcol-contrib/config.yaml >/dev/null
+started=""
+for _ in $(seq 30); do
+  if docker logs "${container}" 2>&1 | grep -qF "Everything is ready"; then
+    started=1
+    break
+  fi
+  sleep 1
+done
+startup_logs="$(docker logs "${container}" 2>&1)"
+if [[ -z "${started}" ]] || grep -qE $'\t(warn|error)\t' <<<"${startup_logs}"; then
+  echo "FAIL: the cluster config did not start cleanly" >&2
+  echo "${startup_logs}" >&2
+  exit 1
+fi
+cleanup
+
+echo "==> starting collector with the test sinks (${image})"
+docker run -d --name "${container}" "${collector_env[@]}" \
   -p "${http_port}:4318" \
-  -e "MODEL_ID=${collector_model_id}" \
-  -e "GRAFANA_CLOUD_TRACES_ENDPOINT=unused.invalid:443" \
-  -e "GRAFANA_CLOUD_TRACES_USERNAME=unused" \
-  -e "GRAFANA_CLOUD_METRICS_URL=https://unused.invalid/api/prom/push" \
-  -e "GRAFANA_CLOUD_METRICS_USERNAME=unused" \
-  -e "GRAFANA_CLOUD_WRITE_TOKEN=unused" \
   -v "${config}:/etc/otelcol-contrib/config.yaml:ro" \
   -v "${sinks}:/etc/otelcol-contrib/sinks.yaml:ro" \
   "${image}" \
