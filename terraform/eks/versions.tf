@@ -1,6 +1,6 @@
 # Provider and Terraform version pins for the eks stack.
-# required_version >= 1.16, the Terraform .tool-versions pins and CI tests, which also
-# covers the GA native S3 state lockfile (use_lockfile, 1.11+).
+# required_version >= 1.16, the Terraform version pinned in .tool-versions and tested in
+# CI; this also covers the GA native S3 state lockfile (use_lockfile, 1.11+).
 terraform {
   required_version = ">= 1.16"
 
@@ -17,11 +17,9 @@ terraform {
     }
     # Creates the default gp3 StorageClass the EBS CSI driver provisions against
     # (the cluster ships no default class), so the Prefect PVC binds (#185).
-    # Held below 3.4: under Terraform 1.11.4, 3.4.0 leaves the worker Role's
-    # rules unknown at plan, so tests/worker.tftest.hcl cannot evaluate its RBAC asserts.
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 3.2, < 3.4"
+      version = "~> 3.2"
     }
   }
 }
