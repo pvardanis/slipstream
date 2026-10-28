@@ -5,10 +5,11 @@
 # checks neither until the pod starts, and a pod that starts without them waits in
 # CreateContainerConfigError until the rollout times out. rollout waits for the
 # Deployment to roll out and, when it does not, prints why each Collector pod waits.
-# delivery reads the Collector's own metrics at <metrics-url> until both Grafana Cloud
-# exporters have sent more than in the baseline scrape on stdin, and fails as soon as
-# either has failed to send more: the Collector stays ready while Grafana Cloud rejects
-# what it sends.
+# delivery reads the Collector's own metrics at <metrics-url> every 5 s and passes when
+# both Grafana Cloud exporters have sent more than in the baseline scrape on stdin. It
+# fails as soon as either has failed to send more, or when one has still sent nothing
+# after 95 s: the Collector stays ready while Grafana Cloud rejects what it sends or
+# never answers.
 # Usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline
 set -euo pipefail
 
@@ -38,29 +39,52 @@ rollout() {
   return 1
 }
 
+# require_collector_metrics SCRAPE SOURCE fails unless SCRAPE, read from SOURCE, is the
+# Collector's own metrics, which always carry its uptime.
+require_collector_metrics() {
+  grep -qF otelcol_process_uptime <<<"$1" && return 0
+  echo "$2 is not the Collector's metrics: it lacks otelcol_process_uptime; check that the port-forward to svc/otel-collector holds the local port" >&2
+  return 1
+}
+
 # get_count SCRAPE NAME EXPORTER prints counter NAME of EXPORTER in SCRAPE as an
-# integer, 0 when the Collector has not counted one yet. The client renders large
-# counts in exponent form.
+# integer, summed over every series of NAME labelled with EXPORTER, 0 when the Collector
+# has not counted one yet. The Collector renders large counts in exponent form.
 get_count() {
-  awk -v series="$2{exporter=\"$3\"}" '$1 == series { v = $2 } END { print v + 0 }' <<<"$1"
+  local count
+  if ! count="$(awk -v name="$2{" -v exporter="exporter=\"$3\"" '
+    index($1, name) == 1 && index($1, exporter) {
+      if ($2 !~ /^[0-9]+(\.[0-9]+)?(e\+[0-9]+)?$/) { bad = $2; exit }
+      v += $2
+    }
+    END { if (bad != "") { print bad; exit 1 } print v + 0 }' <<<"$1")"; then
+    echo "the Collector's $2 for $3 reads '${count}', not a count" >&2
+    return 1
+  fi
+  echo "${count}"
 }
 
 # get_increase NAME EXPORTER prints how far counter NAME of EXPORTER rose from delivery's
 # baseline scrape to its latest.
 get_increase() {
-  echo $(($(get_count "${scrape}" "$1" "$2") - $(get_count "${baseline}" "$1" "$2")))
+  local now before
+  now="$(get_count "${scrape}" "$1" "$2")" || return 1
+  before="$(get_count "${baseline}" "$1" "$2")" || return 1
+  echo $((now - before))
 }
 
 delivery() {
-  local url="$1" baseline scrape exporter kind failed pending
+  local url="$1" baseline scrape attempt exporter kind failed sent pending
   baseline="$(cat)"
+  require_collector_metrics "${baseline}" "the baseline scrape on stdin"
   # Spans leave on the batch processor's timeout, metric points on span_metrics' 60 s
-  # flush; 20 scrapes 5 s apart cover both.
-  for _ in $(seq 20); do
-    if ! scrape="$(curl -sf "${url}")"; then
+  # flush; 20 scrapes 5 s apart, over 95 s, cover both.
+  for attempt in $(seq 20); do
+    if ! scrape="$(curl -sSf "${url}")"; then
       echo "cannot read the Collector's metrics at ${url}; check the port-forward to svc/otel-collector" >&2
       return 1
     fi
+    require_collector_metrics "${scrape}" "${url}"
     pending=()
     for exporter in otlp_grpc/grafana-cloud:spans prometheus_remote_write/grafana-cloud:metric_points; do
       kind="${exporter#*:}"
@@ -70,17 +94,18 @@ delivery() {
         echo "${exporter} failed to send ${failed} ${kind//_/ } to Grafana Cloud. Check the write token in the grafana-cloud-write Secret and the instance IDs and endpoints in the grafana-cloud-endpoints ConfigMap; the Collector logs why: kubectl -n ${namespace} logs deploy/otel-collector | grep 'Exporting failed'" >&2
         return 1
       fi
-      (($(get_increase "otelcol_exporter_sent_${kind}" "${exporter}") > 0)) || pending+=("${exporter}")
+      sent="$(get_increase "otelcol_exporter_sent_${kind}" "${exporter}")"
+      ((sent > 0)) || pending+=("${exporter}")
     done
     if ((${#pending[@]} == 0)); then
-      echo "Grafana Cloud took the Collector's spans and metric points"
+      echo "Grafana Cloud's endpoints accepted the Collector's spans and metric points"
       return 0
     fi
-    sleep 5
+    ((attempt == 20)) || sleep 5
   done
-  # An exporter that cannot reach its endpoint retries, counting neither a send nor a
-  # failure until it gives up.
-  echo "nothing from ${pending[*]} reached Grafana Cloud in 100 s, and nothing failed: an unreachable endpoint keeps the exporter retrying. Check the endpoints in the grafana-cloud-endpoints ConfigMap and kubectl -n ${namespace} logs deploy/otel-collector" >&2
+  # An exporter whose endpoint is unreachable, or answers 429 or 5xx, retries, counting
+  # neither a send nor a failure until it gives up.
+  echo "nothing from ${pending[*]} reached Grafana Cloud in 95 s, and nothing failed: an exporter whose endpoint is unreachable, or answering 429 or 5xx, retries without counting a failure. Check the endpoints in the grafana-cloud-endpoints ConfigMap, and the retries in kubectl -n ${namespace} logs deploy/otel-collector | grep 'will retry'" >&2
   return 1
 }
 

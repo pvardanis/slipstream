@@ -10,7 +10,7 @@
 # what to check, and fails when one still has sent nothing after its 20 scrapes, the
 # debug exporter's counts never standing in for theirs.
 set -euo pipefail
-unset KUBECTL_FAIL CURL_EXIT BASELINE DEBUG_SENT
+unset KUBECTL_FAIL CURL_EXIT BASELINE DEBUG_SENT LABELS EXTRA_SERIES
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/otel-collector-check.sh"
@@ -44,13 +44,14 @@ case "\$*" in
   *) echo "unexpected call: -n slipstream \$*" >&2; exit 2 ;;
 esac
 EOF
-# Stub curl: `curl -sf <url>` prints the next scrape, scrape.1, scrape.2 and so on,
-# repeating the last; CURL_EXIT fails it as an unreachable port-forward does. Stub sleep:
+# Stub curl: `curl -sSf <url>` prints the next scrape, scrape.1, scrape.2 and so on,
+# repeating the last; CURL_EXIT fails it, with curl's error, as an unreachable
+# port-forward does. Stub sleep:
 # log each wait.
 cat >"${tmp}/bin/curl" <<EOF
 #!/usr/bin/env bash
-[[ "\$*" == "-sf http://localhost:8888/metrics" ]] || { echo "unexpected call: \$*" >&2; exit 2; }
-[[ -z "\${CURL_EXIT:-}" ]] || exit "\${CURL_EXIT}"
+[[ "\$*" == "-sSf http://localhost:18888/metrics" ]] || { echo "unexpected call: \$*" >&2; exit 2; }
+[[ -z "\${CURL_EXIT:-}" ]] || { echo "curl: (\${CURL_EXIT}) Failed to connect to localhost port 18888" >&2; exit "\${CURL_EXIT}"; }
 n=\$((\$(cat "${tmp}/curl-count") + 1))
 echo "\${n}" >"${tmp}/curl-count"
 [[ -f "${tmp}/scrape.\${n}" ]] || n=\$(find "${tmp}" -name 'scrape.*' | wc -l | tr -d ' ')
@@ -65,9 +66,17 @@ chmod +x "${tmp}/bin/"*
 # A scrape of the Collector's :8888 as 0.160.0 renders it, from "sent_spans failed_spans
 # sent_points failed_points" for the Grafana Cloud exporters; "-" leaves a counter out, as
 # the Collector does before its first count. The debug exporter's counts are DEBUG_SENT.
+# "not-collector" is a page from some other process holding the port. LABELS goes before
+# the exporter label on the Grafana Cloud exporters' series, and EXTRA_SERIES ends every
+# scrape.
 scrape() {
+  if [[ "$1" == not-collector ]]; then
+    echo 'http_requests_total{code="200"} 3'
+    return
+  fi
   local sent_spans="$1" failed_spans="$2" sent_points="$3" failed_points="$4"
-  local spans="{exporter=\"${spans_exporter}\"}" points="{exporter=\"${points_exporter}\"}"
+  local spans="{${LABELS:-}exporter=\"${spans_exporter}\"}" points="{${LABELS:-}exporter=\"${points_exporter}\"}"
+  echo 'otelcol_process_uptime 42.5'
   echo '# HELP otelcol_exporter_sent_spans Number of spans successfully sent to destination.'
   echo '# TYPE otelcol_exporter_sent_spans counter'
   echo "otelcol_exporter_sent_spans{exporter=\"debug\"} ${DEBUG_SENT:-1}"
@@ -77,6 +86,7 @@ scrape() {
   [[ "${sent_points}" == - ]] || echo "otelcol_exporter_sent_metric_points${points} ${sent_points}"
   [[ "${failed_points}" == - ]] || echo "otelcol_exporter_send_failed_metric_points${points} ${failed_points}"
   echo "otelcol_exporter_queue_size{data_type=\"traces\",exporter=\"${spans_exporter}\"} 0"
+  [[ -z "${EXTRA_SERIES:-}" ]] || echo "${EXTRA_SERIES}"
 }
 # The scrapes the stub curl serves, one argument each, in scrape's four counts.
 serve() {
@@ -134,9 +144,14 @@ KUBECTL_FAIL="rollout" check_fails "failed rollout shows the pod's waiting reaso
   "otel-collector-7d9f: CreateContainerConfigError couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints" rollout
 KUBECTL_FAIL="rollout" check_fails "failed rollout names the describe command" "kubectl -n slipstream describe pod -l app=otel-collector" rollout
 # Delivery passes once both exporters' sent counts rise, each at its own scrape.
-url=http://localhost:8888/metrics
+url=http://localhost:18888/metrics
 serve "- - - -" "1 - - -" "1 - 8 -"
 if run delivery "${url}"; then ok "delivery passes"; else bad "delivery passes: $(cat "${tmp}/stderr")"; fi
+if [[ "$(cat "${tmp}/stdout")" == "Grafana Cloud's endpoints accepted the Collector's spans and metric points" ]]; then
+  ok "delivery says what Grafana Cloud accepted"
+else
+  bad "delivery says what Grafana Cloud accepted: $(cat "${tmp}/stdout")"
+fi
 if [[ "$(cat "${tmp}/curl-count")" == 3 ]]; then ok "delivery scrapes until both exporters sent"; else bad "delivery scrapes until both exporters sent"; fi
 # Counts from before the baseline do not count, sent or failed.
 serve "5 2 40 3" "6 2 40 3" "6 2 48 3"
@@ -147,6 +162,21 @@ serve "1.234567e+06 - 2.5e+07 -"
 BASELINE="1.234567e+06 - 2.5e+07 -" check_fails "an unchanged large count is not a send" "nothing from ${spans_exporter}" delivery "${url}"
 serve "1.234567e+06 - 2.5e+07 -"
 if BASELINE="1.234566e+06 - 2.4e+07 -" run delivery "${url}"; then ok "a risen large count is a send"; else bad "a risen large count is a send: $(cat "${tmp}/stderr")"; fi
+# A series carrying more labels than the exporter's still counts, and an exporter's
+# count split across series is their sum.
+LABELS='service_name="otelcol-contrib",' serve "- - - -" "1 - 8 -"
+if LABELS='service_name="otelcol-contrib",' run delivery "${url}"; then ok "a series with more labels counts"; else bad "a series with more labels counts: $(cat "${tmp}/stderr")"; fi
+split="otelcol_exporter_sent_spans{exporter=\"${spans_exporter}\",pipeline=\"traces/b\"} 5"
+EXTRA_SERIES="${split}" serve "1 - 8 -"
+if EXTRA_SERIES="${split}" run delivery "${url}"; then
+  ok "an exporter's split count is its series' sum"
+else
+  bad "an exporter's split count is its series' sum: $(cat "${tmp}/stderr")"
+fi
+# A count that is not a number fails, naming the series.
+serve "1 - x -"
+check_fails "a count that is not a number fails delivery" "the Collector's otelcol_exporter_sent_metric_points for ${points_exporter} reads 'x', not a count" delivery "${url}"
+if [[ "$(cat "${tmp}/curl-count")" == 1 ]]; then ok "a count that is not a number fails at its scrape"; else bad "a count that is not a number fails at its scrape"; fi
 # A failed send fails at the scrape it shows on, naming the exporter and what to check.
 serve "- 1 - -"
 check_fails "failed spans fail delivery" "${spans_exporter} failed to send 1 spans" delivery "${url}"
@@ -164,16 +194,25 @@ check_fails "a failure beside sends fails delivery" "${points_exporter} failed t
 # Nothing sent within the scrapes fails, naming only the exporter that sent nothing.
 serve "- - - -" "1 - - -"
 check_fails "undelivered metric points fail delivery" "nothing from ${points_exporter} reached Grafana Cloud" delivery "${url}"
-if [[ "$(cat "${tmp}/curl-count")" == 20 && "$(sort -u "${tmp}/sleeps")" == 5 ]]; then
+if [[ "$(cat "${tmp}/curl-count")" == 20 && "$(wc -l <"${tmp}/sleeps" | tr -d ' ')" == 19 && "$(sort -u "${tmp}/sleeps")" == 5 ]]; then
   ok "delivery scrapes 20 times, 5 s apart"
 else
-  bad "delivery scrapes 20 times, 5 s apart: $(cat "${tmp}/curl-count") scrapes"
+  bad "delivery scrapes 20 times, 5 s apart: $(cat "${tmp}/curl-count") scrapes, $(wc -l <"${tmp}/sleeps" | tr -d ' ') waits"
 fi
+check_fails "undelivered sends name the retrying causes" "unreachable, or answering 429 or 5xx" delivery "${url}"
+check_fails "undelivered sends point at the retry log" "kubectl -n slipstream logs deploy/otel-collector | grep 'will retry'" delivery "${url}"
 if grep -qF "${spans_exporter}" "${tmp}/stderr"; then bad "a delivered exporter is not named undelivered"; else ok "a delivered exporter is not named undelivered"; fi
 # The debug exporter's counts never count as delivery.
-serve "- - - -"
-DEBUG_SENT=9 check_fails "the debug exporter's sends are not delivery" "nothing from ${spans_exporter}" delivery "${url}"
+DEBUG_SENT=9 serve "- - - -"
+check_fails "the debug exporter's sends are not delivery" "nothing from ${spans_exporter}" delivery "${url}"
+# A page without the Collector's uptime is some other process's, baseline or scrape.
+serve "1 - 8 -"
+BASELINE=not-collector check_fails "a baseline from another process fails delivery" "the baseline scrape on stdin is not the Collector's metrics" delivery "${url}"
+serve "- - - -" not-collector
+check_fails "a scrape from another process fails delivery" "${url} is not the Collector's metrics" delivery "${url}"
+if [[ "$(cat "${tmp}/curl-count")" == 2 ]]; then ok "another process's page fails at the scrape it shows on"; else bad "another process's page fails at the scrape it shows on"; fi
 CURL_EXIT=7 check_fails "an unreadable metrics endpoint fails delivery" "cannot read the Collector's metrics at ${url}" delivery "${url}"
+CURL_EXIT=7 check_fails "an unreadable metrics endpoint shows curl's error" "curl: (7) Failed to connect" delivery "${url}"
 check_fails "delivery without a url" "usage: otel-collector-check.sh" delivery
 check_fails "unknown subcommand" "usage: otel-collector-check.sh" bogus
 
