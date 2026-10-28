@@ -1,6 +1,7 @@
-# The one pin for every CLI the repo runs: mise installs these locally and in CI, and
-# setup-uv reads uv's version from here. kubectl tracks the EKS control plane
-# (terraform/eks/variables.tf kubernetes_version) within one minor version.
+# Pins the repo's CLIs (all but Docker): mise installs them locally, each CI job installs
+# the ones it needs through mise-action, and setup-uv reads uv's version from here.
+# kubectl tracks the EKS control plane (terraform/eks/variables.tf kubernetes_version)
+# within one minor version.
 terraform 1.16.1
 tflint 0.64.0
 kubectl 1.36.1
