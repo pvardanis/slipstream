@@ -23,6 +23,8 @@ bench_image_tag := ""
 cpu_model := "Qwen/Qwen2.5-0.5B-Instruct"
 otel_manifests := "k8s/otel-collector.yaml"
 otel_config := "k8s/otel-collector-config.yaml"
+# Checks the Collector's deploy needs and its delivery to Grafana Cloud.
+otel_check_tool := "scripts/otel-collector-check.sh"
 # The process work pool the sweep worker polls, and the local port the Prefect UI/API
 # port-forward binds (the in-cluster server listens on 4200; ADR-0015 amendment).
 prefect_work_pool := "sweep-pool"
