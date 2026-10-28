@@ -43,6 +43,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Runs the command given as arguments once a second until it succeeds, for up to 30 s.
+wait_for() {
+  local _
+  for _ in $(seq 30); do
+    if "$@"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+# The collector has logged that its pipelines are running.
+collector_started() {
+  grep -qF "Everything is ready" <<<"$(docker logs "${container}" 2>&1)"
+}
+# The OTLP/HTTP receiver accepts connections. A 400 (bad body) still proves the
+# port is live and serving; connection refused means not ready yet.
+otlp_receiver_live() {
+  curl -s -o /dev/null -X POST "http://localhost:${http_port}/v1/traces" \
+    -H 'Content-Type: application/json' -d '{}'
+}
+
 # The Grafana Cloud exporters and auth extensions resolve their ${env:...} at
 # start; placeholders let the config load, and nothing is sent to them.
 collector_env=(
@@ -61,14 +83,8 @@ echo "==> starting collector on the cluster config alone (${image})"
 docker run -d --name "${container}" "${collector_env[@]}" \
   -v "${config}:/etc/otelcol-contrib/config.yaml:ro" \
   "${image}" --config=/etc/otelcol-contrib/config.yaml >/dev/null
-started=""
-for _ in $(seq 30); do
-  if docker logs "${container}" 2>&1 | grep -qF "Everything is ready"; then
-    started=1
-    break
-  fi
-  sleep 1
-done
+started=1
+wait_for collector_started || started=""
 startup_logs="$(docker logs "${container}" 2>&1)"
 if [[ -z "${started}" ]] || grep -qE $'\t(warn|error)\t' <<<"${startup_logs}"; then
   echo "FAIL: the cluster config did not start cleanly" >&2
@@ -86,19 +102,8 @@ docker run -d --name "${container}" "${collector_env[@]}" \
   --config=/etc/otelcol-contrib/config.yaml \
   --config=/etc/otelcol-contrib/sinks.yaml >/dev/null
 
-# Wait for the OTLP/HTTP receiver to accept connections. A 400 (bad body) still
-# proves the port is live and serving; connection refused means not ready yet.
 echo "==> waiting for OTLP/HTTP receiver"
-ready=""
-for _ in $(seq 30); do
-  if curl -s -o /dev/null -X POST "http://localhost:${http_port}/v1/traces" \
-    -H 'Content-Type: application/json' -d '{}'; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-if [[ -z "${ready}" ]]; then
+if ! wait_for otlp_receiver_live; then
   echo "FAIL: collector OTLP/HTTP receiver never came up" >&2
   docker logs "${container}" >&2 || true
   exit 1
@@ -371,7 +376,7 @@ assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)"
   "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(true)" "Count: 3"
 assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)" \
   "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(false)" "Count: 5"
-if ! metric_points "traces.span.metrics.duration" | grep -q "slo_met: Bool(true) .*exemplars=[1-9]"; then
+if ! grep -q "slo_met: Bool(true) .*exemplars=[1-9]" <<<"$(metric_points "traces.span.metrics.duration")"; then
   echo "FAIL: the spanmetrics duration histogram carries no exemplars" >&2
   fail=1
 fi

@@ -130,7 +130,7 @@ connectors:
     exemplars:
       enabled: true
     # Once a minute: Grafana Cloud's free tier allows one data point per minute
-    # per series, and a faster flush is billed as extra.
+    # per series, and a faster flush counts against its quota as extra.
     metrics_flush_interval: 60s
 
 exporters:
@@ -149,8 +149,8 @@ exporters:
     endpoint: ${env:GRAFANA_CLOUD_METRICS_URL}
     auth:
       authenticator: basicauth/grafana-cloud-metrics
-    # No target_info series: no panel reads it, and it would be a billed active
-    # series.
+    # No target_info series: no panel reads it, and it would take an active
+    # series from the free tier's quota.
     target_info:
       enabled: false
 
