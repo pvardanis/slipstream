@@ -8,12 +8,17 @@
 # The same trace carries vLLM-shaped llm_request spans (vLLM's gen_ai.* names
 # and chatcmpl- prefix); the test asserts the Collector maps them onto the
 # spine's names, adds model_id and sets slo_met per span at the goodput gates
-# (ADR-0026). Manual only: needs Docker.
+# (ADR-0026). The spanmetrics connector's output is asserted too: the e2e latency
+# histogram, with exemplars, and the request counts, both split by slo_met and
+# the replica's k8s.pod.name. The Grafana Cloud exporters are swapped for the
+# debug exporter (test/otel-spine-sinks.yaml), so nothing leaves the laptop.
+# Manual only: needs Docker.
 # No mocks: a real collector, real OTLP, the cluster's real config.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 config="${repo_root}/k8s/otel-collector-config.yaml"
+sinks="${repo_root}/test/otel-spine-sinks.yaml"
 image="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.160.0}"
 container="otel-spine-test-$$"
 http_port=14318
@@ -27,6 +32,8 @@ prefix_hash="9f86d081"
 # The model the Collector stamps on vLLM spans as model_id; the cluster sets it
 # from model.yaml (just obs-up), the test from this value.
 collector_model_id="test-org/test-model"
+# The replica the vLLM pod names itself as, from the downward API in the cluster.
+pod_name="vllm-gpu-test-pod"
 
 cleanup() {
   docker rm -f "${container}" >/dev/null 2>&1 || true
@@ -37,8 +44,16 @@ echo "==> starting collector (${image})"
 docker run -d --name "${container}" \
   -p "${http_port}:4318" \
   -e "MODEL_ID=${collector_model_id}" \
+  -e "GRAFANA_CLOUD_TRACES_ENDPOINT=unused.invalid:443" \
+  -e "GRAFANA_CLOUD_TRACES_USERNAME=unused" \
+  -e "GRAFANA_CLOUD_METRICS_URL=https://unused.invalid/api/prom/push" \
+  -e "GRAFANA_CLOUD_METRICS_USERNAME=unused" \
+  -e "GRAFANA_CLOUD_WRITE_TOKEN=unused" \
   -v "${config}:/etc/otelcol-contrib/config.yaml:ro" \
-  "${image}" >/dev/null
+  -v "${sinks}:/etc/otelcol-contrib/sinks.yaml:ro" \
+  "${image}" \
+  --config=/etc/otelcol-contrib/config.yaml \
+  --config=/etc/otelcol-contrib/sinks.yaml >/dev/null
 
 # Wait for the OTLP/HTTP receiver to accept connections. A 400 (bad body) still
 # proves the port is live and serving; connection refused means not ready yet.
@@ -107,7 +122,8 @@ payload=$(
 {
   "resourceSpans": [{
     "resource": {"attributes": [
-      {"key": "service.name", "value": {"stringValue": "vllm"}}
+      {"key": "service.name", "value": {"stringValue": "vllm"}},
+      {"key": "k8s.pod.name", "value": {"stringValue": "${pod_name}"}}
     ]},
     "scopeSpans": [{
       "spans": [{
@@ -144,8 +160,9 @@ JSON
 curl -sf -X POST "http://localhost:${http_port}/v1/traces" \
   -H 'Content-Type: application/json' -d "${payload}" >/dev/null
 
-# The batch processor flushes on its timeout; give it room before reading logs.
-sleep 3
+# The batch processor flushes on its timeout, then spanmetrics on its 1 s
+# interval; give both room before reading logs.
+sleep 5
 logs="$(docker logs "${container}" 2>&1)"
 
 fail=0
@@ -167,7 +184,7 @@ assert_absent() {
 span_attributes() {
   awk -v id="$1" '
     function flush() { if (found) printf "%s", block; block = ""; found = 0 }
-    /Span #/ { flush() }
+    /Span #|Metric #/ { flush() }
     /-> / { line = $0; sub(/.*-> /, "", line); block = block line "\n" }
     index($0, "-> request_id: Str(" id ")") { found = 1 }
     END { flush() }
@@ -184,6 +201,52 @@ assert_span_attribute() {
 assert_span_lacks() {
   if grep -q "^$2: " <<<"$(span_attributes "$1")"; then
     echo "FAIL: span ${1} carries '$2' on the exporter output" >&2
+    fail=1
+  fi
+}
+
+# The resource attributes of the exported spans, one per line, as the debug
+# exporter renders them between "Resource attributes:" and "ScopeSpans #".
+resource_attributes() {
+  awk '
+    /Resource attributes:/ { in_resource = 1; next }
+    /ScopeSpans #|ScopeMetrics #/ { in_resource = 0 }
+    in_resource && /-> / { line = $0; sub(/.*-> /, "", line); print line }
+  ' <<<"${logs}"
+}
+
+# One line per spanmetrics data point of metric $1, as the debug exporter renders
+# it: its attributes, then its value (a sum's "Value:", a histogram's "Count:")
+# and, last, "exemplars=<n>", all space-separated. Each data point starts at a
+# "DataPoints #" line inside a "Metric #" block named by its "-> Name:" line.
+metric_points() {
+  awk -v name="$1" '
+    function flush() { if (in_point) print point " exemplars=" exemplars; in_point = 0 }
+    /Metric #|ResourceMetrics #|ResourceSpans #/ { flush(); metric = "" }
+    /-> Name: / { line = $0; sub(/.*-> Name: /, "", line); metric = line }
+    /DataPoints #/ { flush(); if (metric == name) { in_point = 1; point = ""; exemplars = 0 } ; next }
+    in_point && /-> / { line = $0; sub(/.*-> /, "", line); point = point line " " }
+    in_point && /^(Value|Count): / { point = point $0 " " }
+    in_point && /Exemplar #/ { exemplars++ }
+    END { flush() }
+  ' <<<"${logs}"
+}
+# Some data point of metric $1 carries every space-separated term in $2.
+assert_metric_point() {
+  local metric="$1" point found=""
+  shift
+  while IFS= read -r point; do
+    local term matched=1
+    for term in "$@"; do
+      [[ " ${point} " == *" ${term} "* ]] || matched=""
+    done
+    if [[ -n "${matched}" ]]; then
+      found=1
+      break
+    fi
+  done <<<"$(metric_points "${metric}")"
+  if [[ -z "${found}" ]]; then
+    echo "FAIL: no ${metric} data point carries: $*" >&2
     fail=1
   fi
 }
@@ -233,10 +296,40 @@ assert_span_attribute "${vllm_one_token_no_ttft}" "slo_met: Bool(false)"
 assert_span_attribute "${request_id}" "prefix_hash: Str(${prefix_hash})"
 assert_span_lacks "${request_id}" "slo_met"
 
+# The service and replica survive redaction on the resource, so Grafana Cloud
+# Traces finds a trace by its replica and spanmetrics splits by it.
+for attribute in "service.name: Str(vllm)" "k8s.pod.name: Str(${pod_name})"; do
+  if ! grep -qxF "${attribute}" <<<"$(resource_attributes)"; then
+    echo "FAIL: the exported resource lacks '${attribute}'" >&2
+    fail=1
+  fi
+done
+
+# spanmetrics: the e2e latency histogram, in seconds, and the request counts,
+# both split by slo_met and the replica. Of the eight vLLM spans three meet the
+# SLO and five miss it. The histogram's data points carry exemplars, the trace
+# a latency panel opens.
+if ! grep -qF -- "-> Unit: s" <<<"${logs}"; then
+  echo "FAIL: the spanmetrics duration histogram is not in seconds" >&2
+  fail=1
+fi
+assert_metric_point "traces.span.metrics.calls" "span.name: Str(llm_request)" \
+  "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(true)" "Value: 3"
+assert_metric_point "traces.span.metrics.calls" "span.name: Str(llm_request)" \
+  "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(false)" "Value: 5"
+assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)" \
+  "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(true)" "Count: 3"
+assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)" \
+  "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(false)" "Count: 5"
+if ! metric_points "traces.span.metrics.duration" | grep -q "slo_met: Bool(true) .*exemplars=[1-9]"; then
+  echo "FAIL: the spanmetrics duration histogram carries no exemplars" >&2
+  fail=1
+fi
+
 if [[ "${fail}" -ne 0 ]]; then
   echo "---- collector logs ----" >&2
   echo "${logs}" >&2
   exit 1
 fi
 
-echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met"
+echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met, spanmetrics split by slo_met and pod"
