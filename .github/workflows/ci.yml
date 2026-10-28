@@ -28,19 +28,18 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version-file: .tool-versions
           python-version: "3.11"
           enable-cache: true
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      # terraform, tflint and prek at the versions pinned in .tool-versions.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
-          terraform_version: "1.11.4"
-          terraform_wrapper: false
-      - uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+          version: 2026.10.21
+          install_args: terraform tflint prek
       - name: Install tflint plugins
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: tflint --init --config="${GITHUB_WORKSPACE}/.tflint.hcl"
-      - name: Install prek
-        run: uv tool install prek
       - name: Run prek
         run: prek run --all-files --show-diff-on-failure --color=always
 
@@ -54,6 +53,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version-file: .tool-versions
           python-version: "3.11"
           enable-cache: true
       - name: Run pytest
@@ -77,10 +77,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      # terraform at the version pinned in .tool-versions.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
-          terraform_version: "1.11.4"
-          terraform_wrapper: false
+          version: 2026.10.21
+          install_args: terraform
       - name: terraform init (no backend)
         run: terraform init -backend=false
       - name: terraform test
@@ -226,24 +227,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # helm and kubeconform at the versions pinned in .tool-versions; mise checks each
+      # release download against its published checksum.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
-          version: v4.3.1
-      # kubeconform ships no setup action; the release tarball is checked against the
-      # sha256 published in that release's CHECKSUMS before it is unpacked.
-      - name: Install kubeconform
-        env:
-          KUBECONFORM_VERSION: v0.8.0
-          KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
-        run: |
-          set -euo pipefail
-          tarball="kubeconform-linux-amd64.tar.gz"
-          curl -fsSLo "${RUNNER_TEMP}/${tarball}" \
-            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/${tarball}"
-          echo "${KUBECONFORM_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum --check --strict
-          mkdir -p "${RUNNER_TEMP}/kubeconform"
-          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}/kubeconform" kubeconform
-          echo "${RUNNER_TEMP}/kubeconform" >> "${GITHUB_PATH}"
+          version: 2026.10.21
+          install_args: helm kubeconform
       # Lints and renders every local chart under terraform/*/charts/ and validates the
       # output against the Kubernetes and CRD schemas, so a chart Terraform installs at
       # cluster-up fails here, not at cluster-up, on a template that fails to render or a
