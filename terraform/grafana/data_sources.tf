@@ -1,4 +1,5 @@
-# The data sources the dashboards query (ADR-0026).
+# The data sources the dashboards query, and the stack's public send endpoints as the
+# Cloud API reports them (ADR-0026).
 
 # CloudWatch through Grafana Assume Role: Grafana Cloud assumes the bootstrap stack's
 # read-only IAM role, so no AWS key is stored in Grafana. A spend panel reads AWS/Usage

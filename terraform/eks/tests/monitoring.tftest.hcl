@@ -2,9 +2,9 @@
 # the kube-prometheus-stack release, its ServiceMonitors for vLLM, Karpenter and
 # dcgm-exporter, the dcgm-exporter DaemonSet on the GPU nodes, the remote_write that
 # sends only the allowlisted series to Grafana Cloud, and the ConfigMap naming where the
-# Collector sends traces and span metrics in Grafana Cloud (#369). They run offline — the aws, helm,
-# and kubernetes providers are mocked and both remote states overridden — so the
-# assertions check the releases' values without a cluster. The series actually landing in
+# Collector sends traces and span metrics in Grafana Cloud (#369). They run offline — the
+# aws, helm, and kubernetes providers are mocked and both remote states overridden — so
+# the assertions check the releases' values without a cluster. The series actually landing in
 # Grafana Cloud with the vLLM pod's name, the system node's headroom, the active series
 # count, and the GPU node still reaped at scale-to-zero are the manual tier: `just
 # stack-up` with a GPU replica, then query Grafana Cloud.
