@@ -117,3 +117,25 @@ def test_each_store_authenticates_as_its_own_instance() -> None:
     assert (
         traces["password"] == metrics["password"] == "${env:GRAFANA_CLOUD_WRITE_TOKEN}"
     )
+
+
+def test_the_service_serves_the_collectors_own_metrics_port() -> None:
+    documents = [
+        d for d in yaml.safe_load_all(_MANIFEST.read_text(encoding="utf-8")) if d
+    ]
+    deployment = next(d for d in documents if d["kind"] == "Deployment")
+    service = next(d for d in documents if d["kind"] == "Service")
+    (container,) = deployment["spec"]["template"]["spec"]["containers"]
+    config = yaml.safe_load(_COLLECTOR_CONFIG.read_text(encoding="utf-8"))
+    (reader,) = config["service"]["telemetry"]["metrics"]["readers"]
+    prometheus = reader["pull"]["exporter"]["prometheus"]
+
+    assert prometheus["host"] == "0.0.0.0"
+    assert {"name": "metrics", "containerPort": prometheus["port"]} in container[
+        "ports"
+    ]
+    assert {
+        "name": "metrics",
+        "port": prometheus["port"],
+        "targetPort": "metrics",
+    } in service["spec"]["ports"]

@@ -2,10 +2,10 @@
 # OTLP (gRPC 4317 / HTTP 4318), enforces the shape-only guard, batches, writes the
 # telemetry — request_id and all — to its stdout, readable with `kubectl logs`, and
 # exports the traces to Grafana Cloud Traces and their span metrics to Grafana
-# Cloud's Prometheus. The collector config is a separate file
-# (k8s/otel-collector-config.yaml) loaded into a ConfigMap by `just obs-up`, so the
-# same config the local test exercises is what the cluster runs. Reachable
-# in-cluster as otel-collector.slipstream.svc:4317; no public endpoint.
+# Cloud's Prometheus, and serves its own metrics on 8888. The collector config is a
+# separate file (k8s/otel-collector-config.yaml) loaded into a ConfigMap by `just
+# obs-up`, so the same config the local test exercises is what the cluster runs.
+# Reachable in-cluster as otel-collector.slipstream.svc:4317; no public endpoint.
 #
 # The slipstream namespace is created by the eks stack (`just cluster-up`), and
 # `just obs-up` and k8s/vllm.yaml apply it too; it is deliberately not declared
@@ -88,6 +88,9 @@ spec:
               containerPort: 4317
             - name: otlp-http
               containerPort: 4318
+            # The Collector's own metrics (service.telemetry in its config).
+            - name: metrics
+              containerPort: 8888
           volumeMounts:
             - name: config
               mountPath: /etc/otelcol-contrib/config.yaml
@@ -134,3 +137,7 @@ spec:
     - name: otlp-http
       port: 4318
       targetPort: otlp-http
+    # Scraped by the cluster's Prometheus and read by `just obs-pivot`.
+    - name: metrics
+      port: 8888
+      targetPort: metrics
