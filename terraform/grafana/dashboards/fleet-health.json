@@ -125,7 +125,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "TTFT p95",
-      "description": "p95 time to first token from vLLM's histogram, fleet-wide and per pod. Goodput's TTFT gate is 1 s. vLLM's histograms carry no exemplars; the Slowest TTFT requests table lists the requests over the gate by request_id.",
+      "description": "p95 time to first token from vLLM's histogram, fleet-wide and per pod. Goodput's TTFT gate is 1 s. vLLM's histograms carry no exemplars; the Requests over the TTFT gate table lists them by request_id.",
       "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "s", "min": 0 } },
@@ -265,8 +265,8 @@
     {
       "id": 12,
       "type": "table",
-      "title": "Slowest TTFT requests",
-      "description": "vLLM's llm_request spans whose TTFT exceeded goodput's 1 s gate, slowest first, from a Tempo trace search: up to 100 per window, by request_id. Select a row's trace to open it.",
+      "title": "Requests over the TTFT gate",
+      "description": "vLLM's llm_request spans whose TTFT exceeded goodput's 1 s gate, by request_id, sorted slowest first. A Tempo trace search returns the first 100 matching requests in the window, not the 100 slowest. Select a row's trace to open it.",
       "gridPos": { "x": 0, "y": 48, "w": 24, "h": 8 },
       "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
       "options": {

@@ -207,8 +207,8 @@ jobs:
       # orchestration-image-check-test stubs terraform and aws, so no build, GitHub write
       # or AWS call runs). Wiring them here is what makes them more
       # than decorative — a regression in the shared build command fails CI.
-      # goodput-parity-test stubs nothing: it reads the real Collector config and
-      # bench configs with yq and fails when their goodput gates differ (ADR-0026).
+      # goodput-parity-test stubs nothing: it reads the real Collector config, bench configs
+      # and dashboards with yq and jq and fails when their goodput gates differ (ADR-0026).
       # grafana-cloud-setup-test stubs terraform, aws and the browser openers, so no apply,
       # AWS call or browser runs. bootstrap-test stubs terraform and aws, so no apply or
       # AWS call runs. grafana-mcp-test stubs terraform, aws and uvx, so no terraform read,

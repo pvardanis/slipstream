@@ -86,7 +86,7 @@ run "panels_query_the_hosted_data_sources_by_uid" {
     ]))
     error_message = "Every dashboard panel and query must read the hosted Prometheus or Tempo data source, whichever its type names, by its UID."
   }
-  # The slowest-TTFT table searches traces, so fleet health reads Tempo as well.
+  # The requests-over-the-TTFT-gate table searches traces, so fleet health reads Tempo as well.
   assert {
     condition = anytrue([
       for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :

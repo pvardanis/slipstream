@@ -2,13 +2,15 @@
 # Static goodput parity check: the Collector's slo_met gates
 # (k8s/otel-collector-config.yaml, in seconds) must equal the goodput gates every
 # bench config passes to `vllm bench serve` (["ttft:1000", "tpot:50"], in ms), so
-# live and offline goodput cannot drift apart (ADR-0026). Reads both configs
-# with yq; needs no running Collector.
+# live and offline goodput cannot drift apart (ADR-0026). Every dashboard TraceQL
+# query that filters on ttft_ms must cut at the same TTFT gate, in ms. Reads the
+# configs with yq and the dashboards with jq; needs no running Collector.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 collector_config="${OTEL_COLLECTOR_CONFIG:-${repo_root}/k8s/otel-collector-config.yaml}"
 bench_configs_dir="${BENCH_CONFIGS_DIR:-${repo_root}/bench/configs}"
+dashboards_dir="${DASHBOARDS_DIR:-${repo_root}/terraform/grafana/dashboards}"
 
 fail=0
 
@@ -126,8 +128,34 @@ while IFS= read -r config; do
   done
 done <<<"$(bench_configs)"
 
+# Every "<dashboard>: <ms>" TTFT threshold a dashboard's TraceQL query cuts at,
+# from each span.ttft_ms comparison in a query string.
+dashboard_ttft_thresholds() {
+  find "${dashboards_dir}" -name '*.json' -exec jq -r \
+    '.. | objects | select(has("query")) | .query | strings
+      | scan("span\\.ttft_ms\\s*[<>]=?\\s*([0-9.]+)")[0] | input_filename + ": " + .' {} + |
+    sed "s|^${repo_root}/||" | sort
+}
+
+thresholds="$(dashboard_ttft_thresholds)"
+if [[ -z "${thresholds}" ]]; then
+  echo "FAIL: no dashboard query under ${dashboards_dir} filters on span.ttft_ms;" \
+    "the requests-over-the-TTFT-gate table must cut at the TTFT gate" >&2
+  fail=1
+fi
+while IFS= read -r threshold; do
+  [[ -n "${threshold}" ]] || continue
+  dashboard="${threshold%%: *}"
+  ms="${threshold#*: }"
+  if [[ -z "${ttft_s}" ]] || ! awk -v ms="${ms}" -v s="${ttft_s}" 'BEGIN { exit !(ms / 1000 == s) }'; then
+    echo "FAIL: ${dashboard} cuts span.ttft_ms at ${ms} ms but the Collector's slo_met" \
+      "TTFT gate is ${ttft_s:-nothing} s (${collector_config}); make them equal" >&2
+    fail=1
+  fi
+done <<<"${thresholds}"
+
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "PASS: Collector slo_met gates (ttft ${ttft_s} s, tpot ${tpot_s} s) equal every bench config's goodput gates"
+echo "PASS: Collector slo_met gates (ttft ${ttft_s} s, tpot ${tpot_s} s) equal every bench config's goodput gates and every dashboard's ttft_ms threshold"
