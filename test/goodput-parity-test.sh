@@ -5,8 +5,8 @@
 # live and offline goodput cannot drift apart (ADR-0026). Dashboard queries may
 # compare ttft_ms only as span.ttft_ms > <ms>, at the same TTFT gate, and at least
 # one must. <ms> must be a decimal literal: the Collector writes ttft_ms as a
-# double, and Tempo matches no double against an integer literal. Reads the configs with yq and the dashboards with jq; needs no
-# running Collector.
+# double, and Tempo matches no double against an integer literal. Reads the
+# configs with yq and the dashboards with jq; needs no running Collector.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
