@@ -88,9 +88,9 @@ processors:
           - set(span.attributes["slo_met"], false)
           - set(span.attributes["slo_met"], true) where span.attributes["gen_ai.latency.time_to_first_token"] <= span.cache["ttft_gate_s"] and span.cache["tpot_s"] <= span.cache["tpot_gate_s"]
           # TTFT under the spine's name, in milliseconds as spec §5.2's
-          # first_token event carries it, so a trace search lists the slowest
-          # requests by request_id. A span without TTFT gets none, and loses
-          # any ttft_ms it arrives with.
+          # first_token event carries it, so a trace search lists the requests
+          # over the TTFT gate by request_id. A span without TTFT gets none,
+          # and loses any ttft_ms it arrives with.
           - delete_key(span.attributes, "ttft_ms")
           - set(span.attributes["ttft_ms"], span.attributes["gen_ai.latency.time_to_first_token"] * 1000) where span.attributes["gen_ai.latency.time_to_first_token"] != nil
   # Shape-only guard, fail-closed: only these keys survive on a span or its
