@@ -14,15 +14,16 @@
 # appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that an
 # invalid external ID or an empty token is asked for again; that the data source, access
 # policy, service account and Cloud Portal pages open; that the operator email is asked
-# for only when neither terraform.tfvars nor TF_VAR_operator_email sets it, and that a
-# TF_VAR_grafana_external_id reaches the apply without being asked for when
-# terraform.tfvars holds none, a stored one taking precedence; that a re-run
+# for only when neither terraform.tfvars nor TF_VAR_operator_email sets it; that beside a
+# stored stack URL a TF_VAR_grafana_external_id reaches the apply without being asked for
+# when terraform.tfvars holds none, and a valid stored one is used over it while an
+# invalid one is asked for again, saying why; that a re-run
 # over a stored stack URL waits for the operator to keep it, then skips it and the stored
 # external ID, opening no page, builds the token pages from it, and keeps each stored
 # token, naming its stack, unless the operator answers yes
 # to replacing it, Enter keeping it, opening no page for a kept one and still checking a
 # kept secret holds a value; that a stack URL asked for in the run asks for the external
-# ID and every token again; that a missing bootstrap or grafana dir, or an unreadable
+# ID and every token again, setting a TF_VAR_grafana_external_id aside and saying so; that a missing bootstrap or grafana dir, or an unreadable
 # grafana terraform.tfvars, stops the wizard before any page opens; and that a missing
 # tool, an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply,
 # an unreadable bootstrap output, a failed write, a failed read, a failed or unexpected
@@ -157,9 +158,11 @@ run() {
   : >"${tmp}/opened"
   rm -f "${tmp}/bootstrap/"* "${tmp}/grafana/"*
   if [[ -z "${NO_TFVARS:-}" ]]; then
-    # TFVARS_SET adds the external ID, and STORED_URL the stack URL, a previous run wrote.
+    # TFVARS_SET adds the external ID, and STORED_URL the stack URL, a previous run wrote;
+    # EXTERNAL_ID_LINE adds a raw external ID line.
     printf 'operator_email = "op@example.com"\n' >"${tmp}/bootstrap/terraform.tfvars"
     [[ -z "${TFVARS_SET:-}" ]] || printf 'grafana_external_id = "ext-old"\n' >>"${tmp}/bootstrap/terraform.tfvars"
+    [[ -z "${EXTERNAL_ID_LINE:-}" ]] || printf '%s\n' "${EXTERNAL_ID_LINE}" >>"${tmp}/bootstrap/terraform.tfvars"
     chmod "${TFVARS_MODE:-600}" "${tmp}/bootstrap/terraform.tfvars"
     printf 'kept = "yes"\n' >"${tmp}/grafana/terraform.tfvars"
     [[ -z "${STORED_URL:-}" ]] || printf 'grafana_url = "%s"\n' "${STORED_URL}" >>"${tmp}/grafana/terraform.tfvars"
@@ -327,8 +330,32 @@ if grep -qF "⚠ grafana_url in ${tmp}/grafana/terraform.tfvars is not a stack U
 if [[ "$(grep -c '^grafana_url' "${tmp}/grafana/terraform.tfvars")" == 1 ]]; then ok "invalid stored stack url replaced, not duplicated"; else bad "invalid stored stack url replaced, not duplicated"; fi
 check_file "invalid stored stack url asked for again" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://slipstream.grafana.net"'
 
-# An external ID exported as TF_VAR_grafana_external_id is used as is, not asked for.
-ANSWERS=$'\n\nhttps://slipstream.grafana.net\ny\n'"${write_token}"$'\n'"${api_token}"$'\n'"${stack_read_token}" \
+# A stored stack URL with no stored external ID asks for the external ID.
+ANSWERS=$'\n\next-123\ny\nn\nn\nn' STORED_URL="${stored_url}" PRESET_TOKENS="${all_secrets}" run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+check_file "stored stack url with no external id opens the data source page" "${tmp}/opened" "${stored_url}/connections/datasources/new"
+check_file "stored stack url with no external id writes the one asked for" "${tmp}/applied-with" 'grafana_external_id = "ext-123"'
+
+# A stored external ID that is not a valid one is asked for again, saying why, and
+# replaced, even with TF_VAR_grafana_external_id set, since the line would outrank it.
+ANSWERS=$'\n\next-123\ny\nn\nn\nn' EXTERNAL_ID_LINE='grafana_external_id = ""' STORED_URL="${stored_url}" \
+  PRESET_TOKENS="${all_secrets}" TF_VAR_grafana_external_id=ext-env run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if grep -qF "⚠ grafana_external_id in ${tmp}/bootstrap/terraform.tfvars is not a valid external ID" "${tmp}/stdout"; then
+  ok "invalid stored external id reported"
+else
+  bad "invalid stored external id reported"
+fi
+check_file "invalid stored external id replaced" "${tmp}/applied-with" 'grafana_external_id = "ext-123"'
+if [[ "$(grep -c '^grafana_external_id' "${tmp}/bootstrap/terraform.tfvars")" == 1 ]]; then ok "invalid stored external id not duplicated"; else bad "invalid stored external id not duplicated"; fi
+
+# Beside a stored stack URL, an external ID exported as TF_VAR_grafana_external_id with
+# none in terraform.tfvars is used as is, not asked for.
+ANSWERS="${rerun_answers}"$'\nn\nn\nn' STORED_URL="${stored_url}" PRESET_TOKENS="${all_secrets}" \
   TF_VAR_grafana_external_id=ext-env run || {
   cat "${tmp}/stderr" >&2
   exit 1
@@ -338,15 +365,28 @@ if grep -qF "connections/datasources/new" "${tmp}/opened"; then bad "TF_VAR exte
 check_file "apply ran with the TF_VAR external id" "${tmp}/applied-with" "TF_VAR_grafana_external_id=ext-env"
 if grep -qF "unset TF_VAR_grafana_external_id to set it again" "${tmp}/stdout"; then ok "TF_VAR external id says how to set it again"; else bad "TF_VAR external id says how to set it again"; fi
 
-# terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply, so a stored
-# external ID beside a stack URL asked for in the run is asked for again and replaced,
-# not reported as coming from TF_VAR.
-TF_VAR_grafana_external_id=ext-env TFVARS_SET=1 run || {
+# terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply, so beside a
+# stored stack URL a stored external ID is the one reported and used.
+ANSWERS="${rerun_answers}"$'\nn\nn\nn' TFVARS_SET=1 STORED_URL="${stored_url}" PRESET_TOKENS="${all_secrets}" \
+  TF_VAR_grafana_external_id=ext-env run || {
   cat "${tmp}/stderr" >&2
   exit 1
 }
-check_file "stored external id beside TF_VAR replaced" "${tmp}/bootstrap/terraform.tfvars" 'grafana_external_id = "ext-123"'
-if grep -qF "comes from TF_VAR_grafana_external_id" "${tmp}/stdout"; then bad "stored external id not reported as TF_VAR"; else ok "stored external id not reported as TF_VAR"; fi
+if grep -qF "grafana_external_id is already set" "${tmp}/stdout" && ! grep -qF "comes from TF_VAR_grafana_external_id" "${tmp}/stdout"; then
+  ok "stored external id reported over TF_VAR"
+else
+  bad "stored external id reported over TF_VAR"
+fi
+check_file "apply read the stored external id over TF_VAR" "${tmp}/applied-with" 'grafana_external_id = "ext-old"'
+
+# An external ID belongs to its stack, so beside a stack URL asked for in the run a
+# TF_VAR_grafana_external_id is set aside, saying so, and the one asked for is written.
+TF_VAR_grafana_external_id=ext-env run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+check_file "asked stack url asks the external id over TF_VAR" "${tmp}/bootstrap/terraform.tfvars" 'grafana_external_id = "ext-123"'
+if grep -qF "⚠ TF_VAR_grafana_external_id is set aside" "${tmp}/stdout"; then ok "TF_VAR set aside says so"; else bad "TF_VAR set aside says so"; fi
 
 # Under xtrace the wizard turns tracing off, so no token reaches the trace on stderr.
 TRACE=1 run || {
