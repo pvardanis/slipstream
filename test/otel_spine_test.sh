@@ -7,8 +7,8 @@
 # redacts without emitting the redacted key names (summary: info).
 # The same trace carries vLLM-shaped llm_request spans (vLLM's gen_ai.* names
 # and chatcmpl- prefix); the test asserts the Collector maps them onto the
-# spine's names, adds model_id and sets slo_met per span at the goodput gates
-# (ADR-0026). The spanmetrics connector's output is asserted too: the e2e latency
+# spine's names, adds model_id, sets slo_met per span at the goodput gates and
+# carries TTFT as ttft_ms (ADR-0026). The spanmetrics connector's output is asserted too: the e2e latency
 # histogram, with exemplars, and the request counts, both split by slo_met and
 # the replica's k8s.pod.name. The Collector's own metrics on :8888 must count what the
 # debug exporter sent, spans and metric points. The Grafana Cloud exporters are swapped for the
@@ -180,6 +180,7 @@ payload=$(
           {"key": "completion_tokens", "value": {"intValue": "128"}},
           {"key": "prefix_hash", "value": {"stringValue": "${prefix_hash}"}},
           {"key": "slo_met", "value": {"boolValue": true}},
+          {"key": "ttft_ms", "value": {"doubleValue": 1.0}},
           {"key": "prompt", "value": {"stringValue": "${prompt_sentinel}"}}
         ]
       },
@@ -354,10 +355,11 @@ assert_span_attribute "${vllm_met}" "ttft_ms: Double(1000)"
 assert_span_attribute "${vllm_tpot_miss}" "ttft_ms: Double(500)"
 assert_span_lacks "${vllm_one_token_no_ttft}" "ttft_ms"
 # Spans already in the spine's names are not vLLM spans: they pass through
-# unchanged, and an slo_met they arrive with is dropped, since only the
-# Collector sets it.
+# unchanged, and an slo_met or ttft_ms they arrive with is dropped, since
+# only the Collector sets them.
 assert_span_attribute "${request_id}" "prefix_hash: Str(${prefix_hash})"
 assert_span_lacks "${request_id}" "slo_met"
+assert_span_lacks "${request_id}" "ttft_ms"
 
 # The service and replica survive redaction on the resource, so Grafana Cloud
 # Traces finds a trace by its replica and spanmetrics splits by it.
