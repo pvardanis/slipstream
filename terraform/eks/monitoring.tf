@@ -159,6 +159,13 @@ locals {
         # remote_write's 1m flush on shutdown; the emptyDir has nothing else to save.
         terminationGracePeriodSeconds = 120
 
+        # Grafana Cloud's Mimir rejects names outside the legacy character set
+        # (err-mimir-label-invalid), and Prometheus 3 otherwise scrapes UTF-8 names such as
+        # the OTel Collector's server.address. Legacy validation requests underscore-escaped
+        # names at scrape (server_address) and refuses the rest, so nothing Prometheus holds
+        # is lost at remote_write.
+        nameValidationScheme = "Legacy"
+
         resources = {
           requests = { cpu = "100m", memory = "768Mi" }
           limits   = { memory = "768Mi" }
