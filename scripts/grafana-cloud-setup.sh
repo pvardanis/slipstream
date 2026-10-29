@@ -340,11 +340,9 @@ check_secret_set() {
   printf '  %s✓%s %s holds a value\n' "$GREEN" "$RESET" "$1"
 }
 
-run_wizard() {
-
-  TOTAL_STAGES=8
-
-  # Everything the stages need is checked before the operator starts the browser work.
+# check_prerequisites stops the wizard on anything the stages need that is missing,
+# before the operator starts the browser work.
+check_prerequisites() {
   if [[ ! -d "${bootstrap_dir}" ]]; then
     echo "bootstrap dir ${bootstrap_dir} not found; pass the terraform/bootstrap directory" >&2
     exit 1
@@ -387,9 +385,11 @@ run_wizard() {
       exit 1
     fi
   done
+}
 
-  banner "Grafana Cloud setup"
-
+# set_stack_url sets STACK_URL, read from the grafana stack's terraform.tfvars or asked
+# for, and sets stack_stored when it was read.
+set_stack_url() {
   stage "Grafana Cloud: free stack"
   say "Grafana Cloud's free tier holds the dashboards, metrics and traces (ADR-0026)."
   stack_stored=""
@@ -411,7 +411,10 @@ run_wizard() {
       "not a https://<stack>.grafana.net URL"
   fi
   STACK_URL="${STACK_URL%/}"
+}
 
+# set_external_id settles the external ID the bootstrap apply reads.
+set_external_id() {
   stage "Grafana Assume Role: external ID"
   say "The bootstrap stack's IAM role trusts Grafana's AWS account only with this ID."
   # terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply. The external
@@ -443,7 +446,10 @@ run_wizard() {
     note "Picking the type created the data source; \`just grafana-up\` creates its own"
     note "CloudWatch data source with the role ARN, and two of the same name would clash."
   fi
+}
 
+# set_operator_email settles the operator email the bootstrap apply reads.
+set_operator_email() {
   stage "Bootstrap: operator email"
   say "The bootstrap stack's spend-leak alarms page this address (ADR-0025)."
   if [[ -n "${TF_VAR_operator_email:-}" ]] || has_tfvar "${tfvars}" operator_email; then
@@ -454,7 +460,11 @@ run_wizard() {
     write_tfvar "${tfvars}" operator_email "${OPERATOR_EMAIL}"
     note "AWS emails a confirmation link on apply; click it, or no alert is delivered."
   fi
+}
 
+# apply_bootstrap applies the bootstrap stack and reads the region and secret names it
+# outputs.
+apply_bootstrap() {
   stage "Bootstrap: apply"
   say "Applying the bootstrap stack creates the three secrets, empty until the token stages"
   say "fill them, and the IAM role; it leaves tokens already stored untouched."
@@ -468,45 +478,53 @@ run_wizard() {
   write_secret="$(read_output grafana_cloud_write_secret_name)"
   api_secret="$(read_output grafana_cloud_api_secret_name)"
   stack_read_secret="$(read_output grafana_cloud_stack_read_secret_name)"
+}
 
-  stage "Write token: metrics and traces"
-  say "One access-policy token lets Prometheus and the Collector write to the stack."
-  if ! keep_token "${write_secret}"; then
-    open_url "${STACK_URL}/a/grafana-auth-app"
-    step "Click Create access policy; name it slipstream-write."
-    step "Tick Write for metrics and traces only; a policy made here covers this stack alone."
-    step "Click Create, then Add token on the new policy, and copy the token (glc_...)."
-    note "Grafana shows the token once. It goes to ${write_secret}, not to any file."
-    put_token "${write_secret}" "Paste the write token:"
-  fi
+# store_token SECRET_ID PROMPT SHOW_STEPS keeps the token SECRET_ID holds, or runs SHOW_STEPS
+# to walk the operator through minting a new one and stores it.
+store_token() {
+  keep_token "$1" && return 0
+  "$3"
+  put_token "$1" "$2"
+}
 
-  stage "API token: Grafana Terraform provider"
-  say "A service account token lets the terraform/grafana stack manage data sources and dashboards."
-  if ! keep_token "${api_secret}"; then
-    open_url "${STACK_URL}/org/serviceaccounts"
-    step "Click Add service account; name it slipstream-terraform, role Admin."
-    note "Admin, because creating the CloudWatch data source needs it; Editor cannot."
-    note "If slipstream-terraform already exists, change its role to Admin and reuse it."
-    step "Click Add service account token, generate it, and copy the token (glsa_...)."
-    note "Grafana shows the token once. It goes to ${api_secret}, not to any file."
-    put_token "${api_secret}" "Paste the API token:"
-  fi
+# show_write_token_steps walks the operator through minting the write token.
+# shellcheck disable=SC2317,SC2329 # called by name through store_token
+show_write_token_steps() {
+  open_url "${STACK_URL}/a/grafana-auth-app"
+  step "Click Create access policy; name it slipstream-write."
+  step "Tick Write for metrics and traces only; a policy made here covers this stack alone."
+  step "Click Create, then Add token on the new policy, and copy the token (glc_...)."
+  note "Grafana shows the token once. It goes to ${write_secret}, not to any file."
+}
 
-  stage "Stack-read token: public send endpoints"
-  say "A Cloud API token lets the terraform/grafana stack read where Prometheus and the"
-  say "Collector send: the hosted data sources name Grafana's internal hosts instead."
-  if ! keep_token "${stack_read_secret}"; then
-    open_url "https://grafana.com/profile/org"
-    step "In the Cloud Portal, open Security, then Access Policies."
-    step "Click Create access policy; name it slipstream-stack-read, realm this stack."
-    step "Open the Add scope drop-down at the bottom of the dialog and pick stacks; it is not in the scope list by default."
-    step "On the stacks row tick Read (stacks:read), and nothing else; click Create."
-    note "stacks:read is offered only here, not on the stack's own access policy page."
-    step "Click Add token on the new policy, and copy the token (glc_...)."
-    note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
-    put_token "${stack_read_secret}" "Paste the stack-read token:"
-  fi
+# show_api_token_steps walks the operator through minting the API token.
+# shellcheck disable=SC2317,SC2329 # called by name through store_token
+show_api_token_steps() {
+  open_url "${STACK_URL}/org/serviceaccounts"
+  step "Click Add service account; name it slipstream-terraform, role Admin."
+  note "Admin, because creating the CloudWatch data source needs it; Editor cannot."
+  note "If slipstream-terraform already exists, change its role to Admin and reuse it."
+  step "Click Add service account token, generate it, and copy the token (glsa_...)."
+  note "Grafana shows the token once. It goes to ${api_secret}, not to any file."
+}
 
+# show_stack_read_token_steps walks the operator through minting the stack-read token.
+# shellcheck disable=SC2317,SC2329 # called by name through store_token
+show_stack_read_token_steps() {
+  open_url "https://grafana.com/profile/org"
+  step "In the Cloud Portal, open Security, then Access Policies."
+  step "Click Create access policy; name it slipstream-stack-read, realm this stack."
+  step "Open the Add scope drop-down at the bottom of the dialog and pick stacks; it is not in the scope list by default."
+  step "On the stacks row tick Read (stacks:read), and nothing else; click Create."
+  note "stacks:read is offered only here, not on the stack's own access policy page."
+  step "Click Add token on the new policy, and copy the token (glc_...)."
+  note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
+}
+
+# check_secrets_and_write_stack_url checks every secret holds a token, then writes the
+# stack URL.
+check_secrets_and_write_stack_url() {
   stage "Secrets: check"
   check_secret_set "${write_secret}"
   check_secret_set "${api_secret}"
@@ -516,6 +534,33 @@ run_wizard() {
   write_tfvar "${grafana_tfvars}" grafana_url "${STACK_URL}"
   say "Next: \`just grafana-up\` creates the CloudWatch data source."
   pause "Press Enter to finish."
+}
+
+run_wizard() {
+
+  TOTAL_STAGES=8
+
+  check_prerequisites
+  banner "Grafana Cloud setup"
+  set_stack_url
+  set_external_id
+  set_operator_email
+  apply_bootstrap
+
+  stage "Write token: metrics and traces"
+  say "One access-policy token lets Prometheus and the Collector write to the stack."
+  store_token "${write_secret}" "Paste the write token:" show_write_token_steps
+
+  stage "API token: Grafana Terraform provider"
+  say "A service account token lets the terraform/grafana stack manage data sources and dashboards."
+  store_token "${api_secret}" "Paste the API token:" show_api_token_steps
+
+  stage "Stack-read token: public send endpoints"
+  say "A Cloud API token lets the terraform/grafana stack read where Prometheus and the"
+  say "Collector send: the hosted data sources name Grafana's internal hosts instead."
+  store_token "${stack_read_secret}" "Paste the stack-read token:" show_stack_read_token_steps
+
+  check_secrets_and_write_stack_url
 
   finish
 }
