@@ -6,7 +6,9 @@
 # the bootstrap stack's state, then write the stack URL into the grafana stack's
 # terraform.tfvars. A token is read
 # with hidden entry and handed to aws on stdin, so it never appears on screen or in a
-# process's arguments.
+# process's arguments. A re-run skips what is already set: a stack URL or external ID in
+# terraform.tfvars, and each token whose secret already holds one, unless the operator
+# chooses to replace it.
 # Usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>
 #
 # A wizard walks a human through a manual procedure, step by step.
@@ -190,8 +192,8 @@ tfvars="${bootstrap_dir}/terraform.tfvars"
 grafana_tfvars="${grafana_dir}/terraform.tfvars"
 
 # The wizard keeps nothing in a .env file: the stack URL and external ID go to
-# terraform.tfvars files and each token straight to Secrets Manager, so no saved value is
-# offered back on a re-run.
+# terraform.tfvars files and each token straight to Secrets Manager, so ask offers no
+# saved value; a re-run reads those instead and skips the stages they already settle.
 ENV_FILE=/dev/null
 
 # is_stack_url VALUE succeeds for a Grafana Cloud stack URL, with or without a trailing
@@ -228,6 +230,15 @@ read_output() {
     return 1
   fi
   printf '%s' "${value}"
+}
+
+# read_tfvar FILE KEY prints the value of the KEY = "VALUE" line write_tfvar writes,
+# failing when FILE holds no such line.
+read_tfvar() {
+  local line
+  line="$(grep -E "^$2[[:space:]]*=" "$1" 2>/dev/null | tail -n 1 || true)"
+  [[ "${line}" =~ ^$2[[:space:]]*=[[:space:]]*\"([^\"]*)\"[[:space:]]*$ ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
 }
 
 # write_tfvar FILE KEY VALUE upserts KEY = "VALUE" into the terraform.tfvars FILE, keeping
@@ -271,6 +282,21 @@ put_token() {
     return 1
   fi
   printf '  %s✓ wrote%s token → Secrets Manager %s\n' "$GREEN" "$RESET" "${secret_id}"
+}
+
+# keep_token SECRET_ID succeeds when SECRET_ID already holds a token and the operator keeps
+# it. It reads only whether the secret has an AWSCURRENT version, never the value, and
+# stops the wizard when that cannot be read.
+keep_token() {
+  local current
+  if ! current="$(aws secretsmanager describe-secret --region "${region}" --secret-id "$1" \
+    --query "contains(values(VersionIdsToStages || \`{}\`)[], 'AWSCURRENT')" --output text)"; then
+    echo "cannot check $1 in Secrets Manager; check the AWS identity can describe it and rerun the wizard" >&2
+    exit 1
+  fi
+  [[ "${current}" == True ]] || return 1
+  note "$1 already holds a token."
+  ! confirm "Replace it with a new token?"
 }
 
 # check_secret_set SECRET_ID fails unless the secret holds a non-empty value, reading only
@@ -324,28 +350,36 @@ run_wizard() {
 
   stage "Grafana Cloud: free stack"
   say "Grafana Cloud's free tier holds the dashboards, metrics and traces (ADR-0026)."
-  open_url "https://grafana.com/auth/sign-up/create-user"
-  step "Sign up, or sign in, and create a stack on the Free plan in an EU region."
-  step "Open the stack: its URL looks like https://<stack>.grafana.net."
-  pause "Press Enter once the stack exists."
-  ask_valid STACK_URL "Paste the stack URL (https://<stack>.grafana.net):" is_stack_url \
-    "not a https://<stack>.grafana.net URL"
+  if STACK_URL="$(read_tfvar "${grafana_tfvars}" grafana_url)" && is_stack_url "${STACK_URL}"; then
+    note "grafana_url is already set to ${STACK_URL}; remove it from ${grafana_tfvars} to set it again."
+  else
+    open_url "https://grafana.com/auth/sign-up/create-user"
+    step "Sign up, or sign in, and create a stack on the Free plan in an EU region."
+    step "Open the stack: its URL looks like https://<stack>.grafana.net."
+    pause "Press Enter once the stack exists."
+    ask_valid STACK_URL "Paste the stack URL (https://<stack>.grafana.net):" is_stack_url \
+      "not a https://<stack>.grafana.net URL"
+  fi
   STACK_URL="${STACK_URL%/}"
 
   stage "Grafana Assume Role: external ID"
   say "The bootstrap stack's IAM role trusts Grafana's AWS account only with this ID."
-  open_url "${STACK_URL}/connections/datasources/new"
-  step "Pick Amazon CloudWatch."
-  step "Under Connection Details, set Authentication Provider to Grafana Assume Role."
-  step "The instructions box shows Grafana's account ID and your External ID."
-  note "The role trusts account 008923505280. If the box shows another account, set"
-  note "grafana_account_id in ${tfvars} to it before the apply."
-  ask_valid GRAFANA_EXTERNAL_ID "Paste the External ID:" is_external_id \
-    "not a valid external ID; copy it from the instructions box"
-  write_tfvar "${tfvars}" grafana_external_id "${GRAFANA_EXTERNAL_ID}"
-  step "Back on that page, click Delete at the bottom, and Delete again to confirm."
-  note "Picking the type created the data source; \`just grafana-up\` creates its own"
-  note "CloudWatch data source with the role ARN, and two of the same name would clash."
+  if [[ -n "${TF_VAR_grafana_external_id:-}" ]] || grep -qE '^grafana_external_id[[:space:]]*=' "${tfvars}" 2>/dev/null; then
+    note "grafana_external_id is already set; the apply uses it. Remove it from ${tfvars} to set it again."
+  else
+    open_url "${STACK_URL}/connections/datasources/new"
+    step "Pick Amazon CloudWatch."
+    step "Under Connection Details, set Authentication Provider to Grafana Assume Role."
+    step "The instructions box shows Grafana's account ID and your External ID."
+    note "The role trusts account 008923505280. If the box shows another account, set"
+    note "grafana_account_id in ${tfvars} to it before the apply."
+    ask_valid GRAFANA_EXTERNAL_ID "Paste the External ID:" is_external_id \
+      "not a valid external ID; copy it from the instructions box"
+    write_tfvar "${tfvars}" grafana_external_id "${GRAFANA_EXTERNAL_ID}"
+    step "Back on that page, click Delete at the bottom, and Delete again to confirm."
+    note "Picking the type created the data source; \`just grafana-up\` creates its own"
+    note "CloudWatch data source with the role ARN, and two of the same name would clash."
+  fi
 
   stage "Bootstrap: operator email"
   say "The bootstrap stack's spend-leak alarms page this address (ADR-0025)."
@@ -373,34 +407,41 @@ run_wizard() {
 
   stage "Write token: metrics and traces"
   say "One access-policy token lets Prometheus and the Collector write to the stack."
-  open_url "${STACK_URL}/a/grafana-auth-app"
-  step "Click Create access policy; name it slipstream-write."
-  step "Tick Write for metrics and traces only; a policy made here covers this stack alone."
-  step "Click Create, then Add token on the new policy, and copy the token (glc_...)."
-  note "Grafana shows the token once. It goes to ${write_secret}, not to any file."
-  put_token "${write_secret}" "Paste the write token:"
+  if ! keep_token "${write_secret}"; then
+    open_url "${STACK_URL}/a/grafana-auth-app"
+    step "Click Create access policy; name it slipstream-write."
+    step "Tick Write for metrics and traces only; a policy made here covers this stack alone."
+    step "Click Create, then Add token on the new policy, and copy the token (glc_...)."
+    note "Grafana shows the token once. It goes to ${write_secret}, not to any file."
+    put_token "${write_secret}" "Paste the write token:"
+  fi
 
   stage "API token: Grafana Terraform provider"
   say "A service account token lets the terraform/grafana stack manage data sources and dashboards."
-  open_url "${STACK_URL}/org/serviceaccounts"
-  step "Click Add service account; name it slipstream-terraform, role Admin."
-  note "Admin, because creating the CloudWatch data source needs it; Editor cannot."
-  note "If slipstream-terraform already exists, change its role to Admin and reuse it."
-  step "Click Add service account token, generate it, and copy the token (glsa_...)."
-  note "Grafana shows the token once. It goes to ${api_secret}, not to any file."
-  put_token "${api_secret}" "Paste the API token:"
+  if ! keep_token "${api_secret}"; then
+    open_url "${STACK_URL}/org/serviceaccounts"
+    step "Click Add service account; name it slipstream-terraform, role Admin."
+    note "Admin, because creating the CloudWatch data source needs it; Editor cannot."
+    note "If slipstream-terraform already exists, change its role to Admin and reuse it."
+    step "Click Add service account token, generate it, and copy the token (glsa_...)."
+    note "Grafana shows the token once. It goes to ${api_secret}, not to any file."
+    put_token "${api_secret}" "Paste the API token:"
+  fi
 
   stage "Stack-read token: public send endpoints"
   say "A Cloud API token lets the terraform/grafana stack read where Prometheus and the"
   say "Collector send: the hosted data sources name Grafana's internal hosts instead."
-  open_url "https://grafana.com/profile/org"
-  step "In the Cloud Portal, open Security, then Access Policies."
-  step "Click Create access policy; name it slipstream-stack-read, realm this stack."
-  step "Tick Read for stacks (stacks:read) only, and click Create."
-  note "stacks:read is offered only here, not on the stack's own access policy page."
-  step "Click Add token on the new policy, and copy the token (glc_...)."
-  note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
-  put_token "${stack_read_secret}" "Paste the stack-read token:"
+  if ! keep_token "${stack_read_secret}"; then
+    open_url "https://grafana.com/profile/org"
+    step "In the Cloud Portal, open Security, then Access Policies."
+    step "Click Create access policy; name it slipstream-stack-read, realm this stack."
+    step "The scope table hides stacks: open Add scope at the bottom of the dialog, pick stacks."
+    step "Tick Read on the stacks row only (stacks:read), and click Create."
+    note "stacks:read is offered only here, not on the stack's own access policy page."
+    step "Click Add token on the new policy, and copy the token (glc_...)."
+    note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
+    put_token "${stack_read_secret}" "Paste the stack-read token:"
+  fi
 
   stage "Secrets: check"
   check_secret_set "${write_secret}"

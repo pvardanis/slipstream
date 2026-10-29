@@ -3,20 +3,26 @@
 # stubbed on PATH and the operator's answers are piped on stdin, so no apply, AWS call or
 # browser runs. It checks that the external ID lands in terraform.tfvars beside the values
 # already there before the apply reads it, and a first run creates the file at mode 0600;
-# that the stack URL replaces the one in the grafana stack's terraform.tfvars, without its
-# trailing slash and beside the values already there, only once every token is stored;
+# that the stack URL is written into the grafana stack's terraform.tfvars, without its
+# trailing slash and beside the values already there, only once every token is stored,
+# replacing a stored one that is not a stack URL;
 # that the operator is told to delete the CloudWatch data source the external ID page
 # creates, so the grafana stack can create its own, and to give the service account the
 # Admin role it needs to create it, a new account or an existing one; that the
-# stacks:read token is minted in the Cloud Portal, whose access policies offer that scope;
+# stacks:read token is minted in the Cloud Portal, whose access policies offer that scope
+# under Add scope;
 # that each token reaches its Secrets Manager secret in the bootstrap region on stdin and
 # never appears in an argument, stdout, stderr, xtrace or a file the wizard writes; that
 # an invalid external ID or an empty token is asked for again; that the data source,
 # access policy, service account and Cloud Portal pages open; that the operator email is asked for
-# only when neither terraform.tfvars nor TF_VAR_operator_email sets it; that a missing
+# only when neither terraform.tfvars nor TF_VAR_operator_email sets it, and the external
+# ID likewise; that a re-run skips a stored stack URL, opening no page, and keeps each
+# stored token unless the operator answers yes to replacing it, opening no page for a
+# kept one, and still checks a kept secret holds a value; that a missing
 # bootstrap or grafana dir stops the wizard before any page opens; and that a missing
 # tool, an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply, an
-# unreadable bootstrap output, a failed write, a failed read, a secret left empty or an
+# unreadable bootstrap output, a failed write, a failed read, a failed token check, a
+# secret left empty or an
 # unreadable terraform.tfvars exits non-zero, the last leaving the file intact.
 set -euo pipefail
 
@@ -41,7 +47,7 @@ cat >"${tmp}/bin/terraform" <<EOF
 dir="\${1#-chdir=}"
 case "\$2" in
   init) exit 0 ;;
-  apply) grep '^grafana_external_id' "\${dir}/terraform.tfvars" >"${tmp}/applied-with" ;;
+  apply) grep '^grafana_external_id' "\${dir}/terraform.tfvars" >"${tmp}/applied-with" || true ;;
   output)
     [[ "\$4" == "\${TF_EMPTY_OUTPUT:-}" ]] && exit 0
     case "\$4" in
@@ -59,6 +65,8 @@ EOF
 # get-secret-value answers the stored value's length. AWS_STS_EXIT fails the identity
 # check, AWS_CLI_HISTORY answers the cli_history setting, AWS_FAIL_PUT fails one secret's
 # write, AWS_EMPTY_GET reports one secret empty and AWS_FAIL_GET fails one secret's read.
+# describe-secret answers True when the store holds the secret, as the wizard's query
+# answers for a secret with an AWSCURRENT version; AWS_FAIL_DESCRIBE fails one secret's.
 cat >"${tmp}/bin/aws" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"${tmp}/aws-calls"
@@ -84,6 +92,9 @@ case "\$1 \$2" in
     [[ "\${id}" == "\${AWS_EMPTY_GET:-}" ]] && { echo 0; exit 0; }
     [[ "\${id}" == "\${AWS_FAIL_GET:-}" ]] && { echo "AccessDeniedException" >&2; exit 254; }
     wc -c <"\${store}/\${id}" | tr -d ' ' ;;
+  "secretsmanager describe-secret")
+    [[ "\${id}" == "\${AWS_FAIL_DESCRIBE:-}" ]] && { echo "AccessDeniedException" >&2; exit 254; }
+    if [[ -e "\${store}/\${id}" ]]; then echo True; else echo False; fi ;;
   *) echo "unexpected call: \$*" >&2; exit 2 ;;
 esac
 EOF
@@ -99,25 +110,49 @@ chmod +x "${tmp}/bin/"*
 # The operator's answers, in prompt order: start, stack created, stack URL, an invalid
 # external ID then a valid one, the operator email answers when the wizard has to ask
 # (EMAIL_ANSWERS, one per line), apply, an empty write token then the token,
-# the API token, and the stack-read token. ANSWER_LINES cuts them short, as a closed stdin does.
+# the API token, and the stack-read token. ANSWERS replaces them all, one per line.
+# ANSWER_LINES cuts them short, as a closed stdin does.
 answers() {
   {
-    printf '%s\n' "" "" "https://slipstream.grafana.net/" "bad id!" "ext-123"
-    [[ -z "${EMAIL_ANSWERS:-}" ]] || printf '%s\n' "${EMAIL_ANSWERS}"
-    printf '%s\n' "${APPLY_ANSWER:-y}" "" "${write_token}" "${api_token}" "${stack_read_token}"
+    if [[ -n "${ANSWERS:-}" ]]; then
+      printf '%s\n' "${ANSWERS}"
+    else
+      printf '%s\n' "" "" "https://slipstream.grafana.net/" "bad id!" "ext-123"
+      [[ -z "${EMAIL_ANSWERS:-}" ]] || printf '%s\n' "${EMAIL_ANSWERS}"
+      printf '%s\n' "${APPLY_ANSWER:-y}" "" "${write_token}" "${api_token}" "${stack_read_token}"
+    fi
   } | head -n "${ANSWER_LINES:-99}"
 }
+
+# The answers of a re-run up to the first token stage: start, stack created, stack URL,
+# external ID, apply.
+rerun_answers=$'\n\nhttps://slipstream.grafana.net\next-123\ny'
+old_token="glc_old-token-SECRET-0"
 
 fail=0
 run() {
   rm -rf "${tmp}/store" "${tmp}/applied-with"
+  # PRESET_TOKENS names secrets that already hold old_token, PRESET_EMPTY one that holds
+  # an empty value.
+  local id
+  for id in ${PRESET_TOKENS:-}; do
+    mkdir -p "${tmp}/store/${id%/*}"
+    printf '%s' "${old_token}" >"${tmp}/store/${id}"
+  done
+  if [[ -n "${PRESET_EMPTY:-}" ]]; then
+    mkdir -p "${tmp}/store/${PRESET_EMPTY%/*}"
+    : >"${tmp}/store/${PRESET_EMPTY}"
+  fi
   : >"${tmp}/aws-calls"
   : >"${tmp}/opened"
   rm -f "${tmp}/bootstrap/"* "${tmp}/grafana/"*
   if [[ -z "${NO_TFVARS:-}" ]]; then
-    printf 'operator_email = "op@example.com"\ngrafana_external_id = "stale"\n' >"${tmp}/bootstrap/terraform.tfvars"
+    # TFVARS_SET adds the external ID, and STORED_URL the stack URL, a previous run wrote.
+    printf 'operator_email = "op@example.com"\n' >"${tmp}/bootstrap/terraform.tfvars"
+    [[ -z "${TFVARS_SET:-}" ]] || printf 'grafana_external_id = "ext-old"\n' >>"${tmp}/bootstrap/terraform.tfvars"
     chmod "${TFVARS_MODE:-600}" "${tmp}/bootstrap/terraform.tfvars"
-    printf 'grafana_url = "https://old.grafana.net"\nkept = "yes"\n' >"${tmp}/grafana/terraform.tfvars"
+    printf 'kept = "yes"\n' >"${tmp}/grafana/terraform.tfvars"
+    [[ -z "${STORED_URL:-}" ]] || printf 'grafana_url = "%s"\n' "${STORED_URL}" >>"${tmp}/grafana/terraform.tfvars"
   fi
   # TRACE runs the wizard under bash -x; RUN_PATH replaces PATH, hiding the stubs.
   answers | PATH="${RUN_PATH:-${tmp}/bin:${PATH}}" "${bash_bin}" ${TRACE:+-x} "${script}" "${BOOTSTRAP_ARG:-${tmp}/bootstrap}" \
@@ -162,7 +197,7 @@ run || {
 tfvars="${tmp}/bootstrap/terraform.tfvars"
 check_file "external id written" "${tfvars}" 'grafana_external_id = "ext-123"'
 check_file "other tfvars kept" "${tfvars}" 'operator_email = "op@example.com"'
-if [[ "$(grep -c '^grafana_external_id' "${tfvars}")" == 1 ]]; then ok "external id replaced, not duplicated"; else bad "external id replaced, not duplicated"; fi
+if [[ "$(grep -c '^grafana_external_id' "${tfvars}")" == 1 ]]; then ok "external id written once"; else bad "external id written once"; fi
 check_file "apply read the new external id" "${tmp}/applied-with" 'grafana_external_id = "ext-123"'
 if [[ "$(cat "${tmp}/store/grafana-cloud/write")" == "${write_token}" ]]; then ok "write token stored"; else bad "write token stored"; fi
 if [[ "$(cat "${tmp}/store/grafana-cloud/api")" == "${api_token}" ]]; then ok "api token stored"; else bad "api token stored"; fi
@@ -175,15 +210,17 @@ check_file "access policies page opened" "${tmp}/opened" "https://slipstream.gra
 check_file "service accounts page opened" "${tmp}/opened" "https://slipstream.grafana.net/org/serviceaccounts"
 check_file "cloud portal page opened" "${tmp}/opened" "https://grafana.com/profile/org"
 if grep -qF "stacks:read" "${tmp}/stdout"; then ok "stack-read token scoped stacks:read"; else bad "stack-read token scoped stacks:read"; fi
+if grep -qF "Add scope" "${tmp}/stdout"; then ok "stacks scope found under Add scope"; else bad "stacks scope found under Add scope"; fi
 grafana_tfvars="${tmp}/grafana/terraform.tfvars"
 check_file "stack url written for the grafana stack" "${grafana_tfvars}" 'grafana_url = "https://slipstream.grafana.net"'
 check_file "other grafana tfvars kept" "${grafana_tfvars}" 'kept = "yes"'
-if [[ "$(grep -c '^grafana_url' "${grafana_tfvars}")" == 1 ]]; then ok "stack url replaced, not duplicated"; else bad "stack url replaced, not duplicated"; fi
+if [[ "$(grep -c '^grafana_url' "${grafana_tfvars}")" == 1 ]]; then ok "stack url written once"; else bad "stack url written once"; fi
 if grep -qF "Save & test" "${tmp}/stdout"; then bad "cloudwatch data source not saved by hand"; else ok "cloudwatch data source not saved by hand"; fi
 if grep -qF "click Delete" "${tmp}/stdout"; then ok "cloudwatch data source the page creates is deleted"; else bad "cloudwatch data source the page creates is deleted"; fi
 if grep -qF "role Admin" "${tmp}/stdout"; then ok "service account given the Admin role"; else bad "service account given the Admin role"; fi
 if grep -qF "already exists, change its role to Admin" "${tmp}/stdout"; then ok "existing service account moved to Admin"; else bad "existing service account moved to Admin"; fi
 check_no_token "tokens never echoed, passed as arguments or written to a file"
+if grep -qF "already holds a token" "${tmp}/stdout"; then bad "empty secrets not offered to keep"; else ok "empty secrets not offered to keep"; fi
 if [[ "$(ls "${tmp}/grafana")" == terraform.tfvars ]]; then ok "no temp file left beside the grafana tfvars"; else bad "no temp file left beside the grafana tfvars"; fi
 if [[ "$(ls "${tmp}/bootstrap")" == terraform.tfvars ]]; then ok "no temp file left beside tfvars"; else bad "no temp file left beside tfvars"; fi
 if grep -qF "not a valid external ID" "${tmp}/stdout" && grep -qF "token is empty" "${tmp}/stdout"; then
@@ -191,6 +228,66 @@ if grep -qF "not a valid external ID" "${tmp}/stdout" && grep -qF "token is empt
 else
   bad "invalid external id and empty token asked again"
 fi
+
+# A re-run with every token already stored keeps each one the operator declines to
+# replace: no token is asked for or written, and no token page opens.
+all_secrets="grafana-cloud/write grafana-cloud/api grafana-cloud/stack-read"
+ANSWERS="${rerun_answers}"$'\nn\nn\nn' PRESET_TOKENS="${all_secrets}" run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if grep -qF "put-secret-value" "${tmp}/aws-calls"; then bad "kept tokens not written"; else ok "kept tokens not written"; fi
+for id in ${all_secrets}; do
+  if [[ "$(cat "${tmp}/store/${id}")" == "${old_token}" ]]; then ok "${id} kept"; else bad "${id} kept"; fi
+  if grep -qF "${id} already holds a token" "${tmp}/stdout"; then ok "${id} reported set"; else bad "${id} reported set"; fi
+  check_file "${id} checked by its AWSCURRENT version" "${tmp}/aws-calls" \
+    "secretsmanager describe-secret --region eu-west-1 --secret-id ${id} --query contains(values(VersionIdsToStages || \`{}\`)[], 'AWSCURRENT') --output text"
+done
+if grep -qE "grafana-auth-app|serviceaccounts|profile/org" "${tmp}/opened"; then bad "kept tokens open no page"; else ok "kept tokens open no page"; fi
+check_file "kept tokens still checked for a value" "${tmp}/stdout" "  ✓ grafana-cloud/stack-read holds a value"
+
+# Answering yes replaces a stored token; a secret with no token is asked for as before.
+ANSWERS="${rerun_answers}"$'\ny\n'"${write_token}"$'\nn\n'"${stack_read_token}" \
+  PRESET_TOKENS="grafana-cloud/write grafana-cloud/api" run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if [[ "$(cat "${tmp}/store/grafana-cloud/write")" == "${write_token}" ]]; then ok "replaced token stored"; else bad "replaced token stored"; fi
+if [[ "$(cat "${tmp}/store/grafana-cloud/api")" == "${old_token}" ]]; then ok "declined token kept beside a replaced one"; else bad "declined token kept beside a replaced one"; fi
+if [[ "$(cat "${tmp}/store/grafana-cloud/stack-read")" == "${stack_read_token}" ]]; then ok "missing token asked for on a re-run"; else bad "missing token asked for on a re-run"; fi
+if grep -qF "grafana-cloud/stack-read already holds a token" "${tmp}/stdout"; then bad "missing token not reported set"; else ok "missing token not reported set"; fi
+check_no_token "re-run tokens never echoed, passed as arguments or written to a file"
+
+# A re-run whose stack URL and external ID a previous run wrote skips both stages: no
+# page opens, nothing about them is asked, the apply reads the stored external ID and
+# the stored URL stays as it was.
+ANSWERS=$'\ny\nn\nn\nn' TFVARS_SET=1 STORED_URL="https://old.grafana.net" PRESET_TOKENS="${all_secrets}" run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if [[ ! -s "${tmp}/opened" ]]; then ok "stored stack url and external id open no page"; else bad "stored stack url and external id open no page"; fi
+if grep -qF "grafana_url is already set to https://old.grafana.net" "${tmp}/stdout"; then ok "stored stack url reported"; else bad "stored stack url reported"; fi
+if grep -qF "grafana_external_id is already set" "${tmp}/stdout"; then ok "stored external id reported"; else bad "stored external id reported"; fi
+check_file "apply read the stored external id" "${tmp}/applied-with" 'grafana_external_id = "ext-old"'
+if [[ "$(grep -c '^grafana_url' "${tmp}/grafana/terraform.tfvars")" == 1 ]]; then ok "stored stack url written once"; else bad "stored stack url written once"; fi
+check_file "stored stack url kept" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
+
+# A stored stack URL that is not a stack URL is asked for again and replaced.
+STORED_URL="http://not-a-stack" run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if [[ "$(grep -c '^grafana_url' "${tmp}/grafana/terraform.tfvars")" == 1 ]]; then ok "invalid stored stack url replaced, not duplicated"; else bad "invalid stored stack url replaced, not duplicated"; fi
+check_file "invalid stored stack url asked for again" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://slipstream.grafana.net"'
+
+# An external ID exported as TF_VAR_grafana_external_id is used as is, not asked for.
+ANSWERS=$'\n\nhttps://slipstream.grafana.net\ny\n'"${write_token}"$'\n'"${api_token}"$'\n'"${stack_read_token}" \
+  TF_VAR_grafana_external_id=ext-env run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if grep -q '^grafana_external_id' "${tmp}/bootstrap/terraform.tfvars"; then bad "TF_VAR external id not asked for"; else ok "TF_VAR external id not asked for"; fi
+if grep -qF "connections/datasources/new" "${tmp}/opened"; then bad "TF_VAR external id opens no data source page"; else ok "TF_VAR external id opens no data source page"; fi
 
 # Under xtrace the wizard turns tracing off, so no token reaches the trace on stderr.
 TRACE=1 run || {
@@ -242,11 +339,14 @@ if [[ ! -e "${tmp}/applied-with" ]]; then ok "declined apply never runs terrafor
 TF_EMPTY_OUTPUT=region check_aborted "empty bootstrap output" "cannot read bootstrap output region"
 AWS_FAIL_PUT=grafana-cloud/api check_aborted "failed write" "writing grafana-cloud/api failed"
 check_no_token "failed write echoes no token"
-check_file "failed write leaves the stack url as it was" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
+if grep -q '^grafana_url' "${tmp}/grafana/terraform.tfvars"; then bad "failed write writes no stack url"; else ok "failed write writes no stack url"; fi
 AWS_EMPTY_GET=grafana-cloud/write check_aborted "secret left empty" "grafana-cloud/write holds no value"
 AWS_FAIL_GET=grafana-cloud/api check_aborted "failed read" "cannot read grafana-cloud/api"
+AWS_FAIL_DESCRIBE=grafana-cloud/write check_aborted "failed token check" "cannot check grafana-cloud/write"
+ANSWERS="${rerun_answers}"$'\nn\nn\nn' PRESET_TOKENS="grafana-cloud/write grafana-cloud/stack-read" \
+  PRESET_EMPTY=grafana-cloud/api check_aborted "kept empty secret" "grafana-cloud/api holds no value"
 AWS_EMPTY_GET=grafana-cloud/stack-read check_aborted "stack-read secret left empty" "grafana-cloud/stack-read holds no value"
-check_file "empty stack-read secret leaves the stack url as it was" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
+if grep -q '^grafana_url' "${tmp}/grafana/terraform.tfvars"; then bad "empty stack-read secret writes no stack url"; else ok "empty stack-read secret writes no stack url"; fi
 
 # A tfvars file the wizard can write but not read aborts before the write, so the
 # values already in it are not lost. Mode 0200 blocks reads only for a non-root user.
