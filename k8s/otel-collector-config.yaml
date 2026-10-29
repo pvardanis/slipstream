@@ -45,14 +45,15 @@ processors:
   transform:
     error_mode: ignore
     trace_statements:
-      # Only the Collector sets slo_met: a span that is not vLLM's loses any
-      # slo_met it arrives with, so no client can report its own goodput.
-      # Runs first, while gen_ai.request.id still marks vLLM's spans.
+      # Only the Collector sets slo_met and ttft_ms: a span that is not vLLM's
+      # loses any it arrives with, so no client can report its own goodput or
+      # TTFT. Runs first, while gen_ai.request.id still marks vLLM's spans.
       - context: span
         conditions:
           - span.attributes["gen_ai.request.id"] == nil
         statements:
           - delete_key(span.attributes, "slo_met")
+          - delete_key(span.attributes, "ttft_ms")
       - context: span
         conditions:
           - span.attributes["gen_ai.request.id"] != nil
