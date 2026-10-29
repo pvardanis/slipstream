@@ -48,7 +48,8 @@ run "one_dashboard_per_dashboard_file" {
 }
 
 # Panels name their data source as ${DS_PROMETHEUS}, which the stack replaces with the
-# hosted Prometheus data source's UID; the mocked UID shows it is the one read by name.
+# hosted Prometheus data source's UID; overriding that data source's UID shows the panels
+# take it from there, not from a literal.
 run "panels_query_the_hosted_prometheus_by_uid" {
   command = plan
 
@@ -65,12 +66,16 @@ run "panels_query_the_hosted_prometheus_by_uid" {
     ])
     error_message = "Every $${DS_PROMETHEUS} placeholder must be replaced with the hosted Prometheus data source's UID."
   }
+  # Every panel that runs queries, including those nested in a collapsed row, and each of
+  # its queries; a row itself runs none.
   assert {
     condition = alltrue(flatten([
-      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels : [
-        for t in concat([p], p.targets) : t.datasource.uid == "prom-uid-test"
+      for d in values(grafana_dashboard.this) : [
+        for p in flatten([for p in jsondecode(d.config_json).panels : concat([p], try(p.panels, []))]) : [
+          for q in concat([p], p.targets) : q.datasource.uid == "prom-uid-test"
+        ] if length(try(p.targets, [])) > 0
       ]
     ]))
-    error_message = "Every fleet health panel and query must read the hosted Prometheus data source by its UID."
+    error_message = "Every dashboard panel and query must read the hosted Prometheus data source by its UID."
   }
 }
