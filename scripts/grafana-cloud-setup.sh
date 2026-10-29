@@ -311,7 +311,7 @@ keep_token() {
     exit 1
     ;;
   esac
-  note "$1 already holds a token."
+  note "$1 already holds a token for ${STACK_URL}."
   ! confirm "Replace it with a new token?"
 }
 
@@ -381,6 +381,7 @@ run_wizard() {
     stack_stored=1
     note "grafana_url is already set to ${STACK_URL%/}. To set up another stack, remove it from"
     note "${grafana_tfvars}; the wizard then asks for every token and the external ID again."
+    pause "Press Enter to keep this stack, or Ctrl-C to stop."
   else
     if grep -qE '^grafana_url[[:space:]]*=' "${grafana_tfvars}" 2>/dev/null; then
       warn "grafana_url in ${grafana_tfvars} is not a stack URL; asking for it again."

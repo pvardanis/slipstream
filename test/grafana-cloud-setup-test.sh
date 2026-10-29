@@ -17,8 +17,9 @@
 # for only when neither terraform.tfvars nor TF_VAR_operator_email sets it, and that a
 # TF_VAR_grafana_external_id reaches the apply without being asked for when
 # terraform.tfvars holds none, a stored one taking precedence; that a re-run
-# over a stored stack URL skips it and the stored external ID, opening no page, builds
-# the token pages from it, and keeps each stored token unless the operator answers yes
+# over a stored stack URL waits for the operator to keep it, then skips it and the stored
+# external ID, opening no page, builds the token pages from it, and keeps each stored
+# token, naming its stack, unless the operator answers yes
 # to replacing it, Enter keeping it, opening no page for a kept one and still checking a
 # kept secret holds a value; that a stack URL asked for in the run asks for the external
 # ID and every token again; that a missing bootstrap or grafana dir, or an unreadable
@@ -133,8 +134,8 @@ answers() {
 }
 
 # The answers up to the first token stage of a re-run whose stack URL and external ID
-# are stored (TFVARS_SET and STORED_URL): start, apply.
-rerun_answers=$'\ny'
+# are stored (TFVARS_SET and STORED_URL): start, keep the stored stack, apply.
+rerun_answers=$'\n\ny'
 stored_url="https://slipstream.grafana.net"
 old_token="glc_old-token-SECRET-0"
 
@@ -272,7 +273,7 @@ check_no_token "re-run tokens never echoed, passed as arguments or written to a 
 # A re-run whose stack URL and external ID a previous run wrote skips both stages: no
 # page opens, nothing about them is asked, the apply reads the stored external ID and
 # the stored URL stays as it was.
-ANSWERS=$'\ny\nn\nn\nn' TFVARS_SET=1 STORED_URL="https://old.grafana.net" PRESET_TOKENS="${all_secrets}" run || {
+ANSWERS="${rerun_answers}"$'\nn\nn\nn' TFVARS_SET=1 STORED_URL="https://old.grafana.net" PRESET_TOKENS="${all_secrets}" run || {
   cat "${tmp}/stderr" >&2
   exit 1
 }
@@ -282,6 +283,8 @@ if grep -qF "grafana_external_id is already set" "${tmp}/stdout"; then ok "store
 check_file "apply read the stored external id" "${tmp}/applied-with" 'grafana_external_id = "ext-old"'
 if [[ "$(grep -c '^grafana_url' "${tmp}/grafana/terraform.tfvars")" == 1 ]]; then ok "stored stack url written once"; else bad "stored stack url written once"; fi
 check_file "stored stack url kept" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
+if grep -qF "Press Enter to keep this stack, or Ctrl-C to stop." "${tmp}/stdout"; then ok "stored stack url waits for the operator"; else bad "stored stack url waits for the operator"; fi
+if grep -qF "grafana-cloud/write already holds a token for https://old.grafana.net." "${tmp}/stdout"; then ok "kept token names its stack"; else bad "kept token names its stack"; fi
 
 # Enter at each replace prompt keeps the stored token.
 ANSWERS="${rerun_answers}"$'\n\n\n' TFVARS_SET=1 STORED_URL="${stored_url}" PRESET_TOKENS="${all_secrets}" run || {
