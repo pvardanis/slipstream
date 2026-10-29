@@ -10,9 +10,10 @@
 # terraform.tfvars skips the steps already done: the stack, the external ID in the
 # bootstrap stack's terraform.tfvars, and each token whose secret has a current version,
 # unless the operator replaces it. A stack URL asked for in the run may name another
-# stack, so the external ID and every token are then asked for again. An external ID
-# exported as TF_VAR_grafana_external_id, with none in terraform.tfvars, and an operator
-# email in terraform.tfvars or TF_VAR_operator_email are never asked for.
+# stack, so the external ID, even one exported as TF_VAR_grafana_external_id, and every
+# token are then asked for again. Beside a stored stack URL, an external ID exported as
+# TF_VAR_grafana_external_id with none in terraform.tfvars is not asked for, nor ever is
+# an operator email in terraform.tfvars or TF_VAR_operator_email.
 # Usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>
 #
 # A wizard walks a human through a manual procedure, step by step.
@@ -246,6 +247,9 @@ read_tfvar() {
   printf '%s' "${BASH_REMATCH[1]}"
 }
 
+# has_tfvar FILE KEY succeeds when FILE holds a KEY line, whatever its value.
+has_tfvar() { grep -qE "^$2[[:space:]]*=" "$1" 2>/dev/null; }
+
 # write_tfvar FILE KEY VALUE upserts KEY = "VALUE" into the terraform.tfvars FILE, keeping
 # every other line. Creates the file at mode 0600; VALUE is validated by the caller, so it
 # needs no HCL escaping.
@@ -383,7 +387,7 @@ run_wizard() {
     note "${grafana_tfvars}; the wizard then asks for every token and the external ID again."
     pause "Press Enter to keep this stack, or Ctrl-C to stop."
   else
-    if grep -qE '^grafana_url[[:space:]]*=' "${grafana_tfvars}" 2>/dev/null; then
+    if has_tfvar "${grafana_tfvars}" grafana_url; then
       warn "grafana_url in ${grafana_tfvars} is not a stack URL; asking for it again."
     fi
     open_url "https://grafana.com/auth/sign-up/create-user"
@@ -397,19 +401,22 @@ run_wizard() {
 
   stage "Grafana Assume Role: external ID"
   say "The bootstrap stack's IAM role trusts Grafana's AWS account only with this ID."
-  # terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply, so a stored
-  # external ID is kept or replaced on its own terms and TF_VAR counts only without one.
-  if grep -qE '^grafana_external_id[[:space:]]*=' "${tfvars}" 2>/dev/null; then
-    external_id_stored=1
-  else
-    external_id_stored=""
-  fi
-  if [[ -n "${stack_stored}" && -n "${external_id_stored}" ]]; then
-    note "grafana_external_id is already set; the apply uses it. Remove it from ${tfvars} to set it again."
-  elif [[ -n "${TF_VAR_grafana_external_id:-}" && -z "${external_id_stored}" ]]; then
+  # terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply. The external
+  # ID belongs to its stack, so a stored one, or TF_VAR's, is used only beside a stored
+  # stack URL.
+  if [[ -n "${stack_stored}" ]] && is_external_id "$(read_tfvar "${tfvars}" grafana_external_id || true)"; then
+    note "grafana_external_id is already set; the apply uses it. To set it again, remove it"
+    note "from ${tfvars} and leave TF_VAR_grafana_external_id unset."
+  elif [[ -n "${stack_stored}" && -n "${TF_VAR_grafana_external_id:-}" ]] && ! has_tfvar "${tfvars}" grafana_external_id; then
     note "grafana_external_id comes from TF_VAR_grafana_external_id, which the apply uses;"
     note "unset TF_VAR_grafana_external_id to set it again."
   else
+    if [[ -n "${stack_stored}" ]] && has_tfvar "${tfvars}" grafana_external_id; then
+      warn "grafana_external_id in ${tfvars} is not a valid external ID; asking for it again."
+    elif [[ -n "${TF_VAR_grafana_external_id:-}" ]]; then
+      warn "TF_VAR_grafana_external_id is set aside: the stack URL entered here needs its own"
+      warn "external ID, and the one entered below goes to ${tfvars}, which the apply uses."
+    fi
     open_url "${STACK_URL}/connections/datasources/new"
     step "Pick Amazon CloudWatch."
     step "Under Connection Details, set Authentication Provider to Grafana Assume Role."
@@ -426,7 +433,7 @@ run_wizard() {
 
   stage "Bootstrap: operator email"
   say "The bootstrap stack's spend-leak alarms page this address (ADR-0025)."
-  if [[ -n "${TF_VAR_operator_email:-}" ]] || grep -qE '^operator_email[[:space:]]*=' "${tfvars}" 2>/dev/null; then
+  if [[ -n "${TF_VAR_operator_email:-}" ]] || has_tfvar "${tfvars}" operator_email; then
     note "operator_email is already set; the apply uses it."
   else
     ask_valid OPERATOR_EMAIL "Email address for spend-leak alerts:" is_email \
