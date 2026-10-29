@@ -132,16 +132,17 @@ done <<<"$(bench_configs)"
 # One "<dashboard><TAB>cut<TAB><ms>" line per span.ttft_ms > <ms> comparison in a
 # dashboard query, and one "<dashboard><TAB>unrecognised<TAB><query>" line per query
 # that mentions ttft_ms anywhere other than that form or a select() list, so a
-# reversed, unscoped or differently-directed comparison cannot go unchecked.
+# reversed, unscoped or differently-directed comparison cannot go unchecked. A
+# comparison the query negates, as in !(span.ttft_ms > 1000), still reads as a cut.
 dashboard_ttft_cuts() {
   find "${dashboards_dir}" -name '*.json' -exec jq -r \
     '.. | objects | select(has("query")) | .query | strings | select(test("ttft_ms")) as $q
-      | ([$q | scan("ttft_ms")] | length) as $mentions
-      | [$q | scan("span\\.ttft_ms\\s*>\\s*([0-9]+(?:\\.[0-9]+)?)(?![\\w.])")[0]] as $cuts
-      | ([$q | scan("span\\.ttft_ms\\s*[,)]")] | length) as $selected
+      | ([$q | scan("ttft_ms\\b")] | length) as $mentions
+      | [$q | scan("(?<![\\w.])span\\.ttft_ms\\s*>\\s*([0-9]+(?:\\.[0-9]+)?)(?![\\w.])")[0]] as $cuts
+      | ([$q | scan("select\\([^)]*(?<![\\w.])span\\.ttft_ms\\s*[,)]")] | length) as $selected
       | if $mentions == ($cuts | length) + $selected
         then $cuts[] | input_filename + "\tcut\t" + .
-        else input_filename + "\tunrecognised\t" + $q end' {} + |
+        else input_filename + "\tunrecognised\t" + ($q | gsub("\\s+"; " ")) end' {} + |
     sed "s|^${repo_root}/||" | sort
 }
 
