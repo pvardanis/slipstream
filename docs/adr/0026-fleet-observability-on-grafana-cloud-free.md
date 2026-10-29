@@ -245,3 +245,18 @@ routing (L3) the breakdown shows the imbalance.
   requires. A GPU no pod holds carries no `pod` label and is in neither.
 - **Other panels:** counters and histograms keep `sum`, and `histogram_quantile` over
   `sum by (le)`.
+
+## Amendment (2026-10-29, #370): neither GPU panel tracks load
+
+- **Measured:** a staged load of 1, 4, 16 and 64 concurrent short requests raised output
+  from 81 to 2,495 tok/s. Busy time held at 97–99% from one request in flight. Memory-
+  bandwidth active held at 0.75 up to 16, then fell to 0.58 at 64. KV-cache usage peaked
+  at 5.5%.
+- **Busy time:** near 100% whenever any request is in flight, so it shows idle against
+  serving, not how much load.
+- **Memory-bandwidth active:** each decode step reads the model weights and every running
+  sequence's KV cache. Batching shares the weight reads, so with short contexts it falls
+  as concurrency rises, and it climbs as long contexts fill the KV cache. It is not "the
+  honest one" for load, as "Panels" has it.
+- **Load:** read from the Serving and Throughput panels: KV-cache usage, requests waiting
+  and output tok/s.
