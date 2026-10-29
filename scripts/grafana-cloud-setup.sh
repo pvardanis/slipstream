@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # Walk the operator through Grafana Cloud's one-time setup (ADR-0026): create the free
-# stack, read its Grafana Assume Role external ID into the bootstrap stack's
-# terraform.tfvars, apply bootstrap, mint the three Grafana Cloud tokens, each written to
-# its Secrets Manager secret with `aws secretsmanager put-secret-value` so none enters
-# the bootstrap stack's state, then write the stack URL into the grafana stack's
-# terraform.tfvars. A token is read
-# with hidden entry and handed to aws on stdin, so it never appears on screen or in a
-# process's arguments. A re-run over a stack URL already in the grafana stack's
+# stack, read its Grafana Assume Role external ID and the operator email into the
+# bootstrap stack's terraform.tfvars, apply bootstrap, mint the three Grafana Cloud
+# tokens, each written to its Secrets Manager secret with `aws secretsmanager
+# put-secret-value` so none enters the bootstrap stack's state, check all three hold a
+# value, then write the stack URL into the grafana stack's terraform.tfvars. A token is
+# read with hidden entry and handed to aws on stdin, so it never appears on screen or in
+# a process's arguments. A re-run over a stack URL already in the grafana stack's
 # terraform.tfvars skips the steps already done: the stack, the external ID in the
 # bootstrap stack's terraform.tfvars, and each token whose secret has a current version,
 # unless the operator replaces it. A stack URL asked for in the run may name another
 # stack, so the external ID and every token are then asked for again. An external ID
-# exported as TF_VAR_grafana_external_id is never asked for.
+# exported as TF_VAR_grafana_external_id, with none in terraform.tfvars, and an operator
+# email in terraform.tfvars or TF_VAR_operator_email are never asked for.
 # Usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>
 #
 # A wizard walks a human through a manual procedure, step by step.
@@ -236,8 +237,8 @@ read_output() {
   printf '%s' "${value}"
 }
 
-# read_tfvar FILE KEY prints the value of the last KEY = "VALUE" line write_tfvar writes,
-# failing when FILE holds no such line.
+# read_tfvar FILE KEY prints the value of the last KEY line in FILE, failing unless that
+# line has the KEY = "VALUE" form write_tfvar writes.
 read_tfvar() {
   local line
   line="$(grep -E "^$2[[:space:]]*=" "$1" 2>/dev/null | tail -n 1 || true)"
@@ -360,8 +361,8 @@ run_wizard() {
     echo "cli_history is enabled in the AWS config, so aws would record each token; disable it and rerun the wizard" >&2
     exit 1
   fi
-  # A tfvars file that cannot be read would pass for one holding nothing and fail only at
-  # its write, after the walkthrough.
+  # A tfvars file that cannot be read would pass for one holding nothing: its values would
+  # be asked for again and the wizard would fail only when it writes the file.
   local file
   for file in "${tfvars}" "${grafana_tfvars}"; do
     if [[ -e "${file}" && ! -r "${file}" ]]; then
@@ -379,9 +380,11 @@ run_wizard() {
   if is_stack_url "${STACK_URL}"; then
     stack_stored=1
     note "grafana_url is already set to ${STACK_URL%/}. To set up another stack, remove it from"
-    note "${grafana_tfvars}; the wizard then asks for the external ID and every token again."
+    note "${grafana_tfvars}; the wizard then asks for every token and the external ID again."
   else
-    [[ -z "${STACK_URL}" ]] || warn "grafana_url in ${grafana_tfvars} is not a stack URL; asking for it again."
+    if grep -qE '^grafana_url[[:space:]]*=' "${grafana_tfvars}" 2>/dev/null; then
+      warn "grafana_url in ${grafana_tfvars} is not a stack URL; asking for it again."
+    fi
     open_url "https://grafana.com/auth/sign-up/create-user"
     step "Sign up, or sign in, and create a stack on the Free plan in an EU region."
     step "Open the stack: its URL looks like https://<stack>.grafana.net."
@@ -393,11 +396,18 @@ run_wizard() {
 
   stage "Grafana Assume Role: external ID"
   say "The bootstrap stack's IAM role trusts Grafana's AWS account only with this ID."
-  if [[ -n "${TF_VAR_grafana_external_id:-}" ]]; then
+  # terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply, so a stored
+  # external ID is kept or replaced on its own terms and TF_VAR counts only without one.
+  if grep -qE '^grafana_external_id[[:space:]]*=' "${tfvars}" 2>/dev/null; then
+    external_id_stored=1
+  else
+    external_id_stored=""
+  fi
+  if [[ -n "${stack_stored}" && -n "${external_id_stored}" ]]; then
+    note "grafana_external_id is already set; the apply uses it. Remove it from ${tfvars} to set it again."
+  elif [[ -n "${TF_VAR_grafana_external_id:-}" && -z "${external_id_stored}" ]]; then
     note "grafana_external_id comes from TF_VAR_grafana_external_id, which the apply uses;"
     note "unset TF_VAR_grafana_external_id to set it again."
-  elif [[ -n "${stack_stored}" ]] && grep -qE '^grafana_external_id[[:space:]]*=' "${tfvars}"; then
-    note "grafana_external_id is already set; the apply uses it. Remove it from ${tfvars} to set it again."
   else
     open_url "${STACK_URL}/connections/datasources/new"
     step "Pick Amazon CloudWatch."
