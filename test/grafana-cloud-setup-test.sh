@@ -23,12 +23,13 @@
 # token, naming its stack, unless the operator answers yes
 # to replacing it, Enter keeping it, opening no page for a kept one and still checking a
 # kept secret holds a value; that a stack URL asked for in the run asks for the external
-# ID and every token again, setting a TF_VAR_grafana_external_id aside and saying so; that a missing bootstrap or grafana dir, or an unreadable
-# grafana terraform.tfvars, stops the wizard before any page opens; and that a missing
-# tool, an unauthenticated aws, AWS CLI history being on, closed stdin, a declined apply,
-# an unreadable bootstrap output, a failed write, a failed read, a failed or unexpected
-# token check, a secret left empty or an unreadable terraform.tfvars exits non-zero, the
-# last leaving the file intact.
+# ID and every token again, setting a TF_VAR_grafana_external_id aside and saying so;
+# that a missing bootstrap or grafana dir, one the wizard cannot write to, or an
+# unreadable terraform.tfvars of either stack stops the wizard before any page opens,
+# leaving the file intact; and that a missing tool, an unauthenticated aws, AWS CLI
+# history being on, closed stdin, a declined apply, an unreadable bootstrap output, a
+# failed write, a failed read, a failed or unexpected token check or a secret left empty
+# exits non-zero.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -156,6 +157,7 @@ run() {
   fi
   : >"${tmp}/aws-calls"
   : >"${tmp}/opened"
+  chmod 700 "${tmp}/bootstrap" "${tmp}/grafana"
   rm -f "${tmp}/bootstrap/"* "${tmp}/grafana/"*
   if [[ -z "${NO_TFVARS:-}" ]]; then
     # TFVARS_SET adds the external ID, and STORED_URL the stack URL, a previous run wrote;
@@ -168,6 +170,9 @@ run() {
     [[ -z "${STORED_URL:-}" ]] || printf 'grafana_url = "%s"\n' "${STORED_URL}" >>"${tmp}/grafana/terraform.tfvars"
     chmod "${GRAFANA_TFVARS_MODE:-600}" "${tmp}/grafana/terraform.tfvars"
   fi
+  # BOOTSTRAP_DIR_MODE and GRAFANA_DIR_MODE set the stack dirs' modes; the next run resets them.
+  chmod "${BOOTSTRAP_DIR_MODE:-700}" "${tmp}/bootstrap"
+  chmod "${GRAFANA_DIR_MODE:-700}" "${tmp}/grafana"
   # TRACE runs the wizard under bash -x; RUN_PATH replaces PATH, hiding the stubs.
   answers | PATH="${RUN_PATH:-${tmp}/bin:${PATH}}" "${bash_bin}" ${TRACE:+-x} "${script}" "${BOOTSTRAP_ARG:-${tmp}/bootstrap}" \
     "${GRAFANA_ARG:-${tmp}/grafana}" \
@@ -454,14 +459,22 @@ ANSWERS="${rerun_answers}"$'\nn\nn\nn' TFVARS_SET=1 STORED_URL="${stored_url}" P
 AWS_EMPTY_GET=grafana-cloud/stack-read check_aborted "stack-read secret left empty" "grafana-cloud/stack-read holds no value"
 if grep -q '^grafana_url' "${tmp}/grafana/terraform.tfvars"; then bad "empty stack-read secret writes no stack url"; else ok "empty stack-read secret writes no stack url"; fi
 
-# A tfvars file the wizard can write but not read aborts before the write, so the
-# values already in it are not lost. Mode 0200 blocks reads only for a non-root user.
+# A tfvars file the wizard cannot read stops it before the walkthrough, and the values
+# already in it are not lost. Mode 0200 blocks reads only for a non-root user.
 TFVARS_MODE=200 check_aborted "unreadable tfvars" "cannot read ${tfvars}"
+if [[ ! -s "${tmp}/opened" ]]; then ok "unreadable tfvars stops before any page opens"; else bad "unreadable tfvars stops before any page opens"; fi
 chmod 600 "${tfvars}"
 check_file "unreadable tfvars left intact" "${tfvars}" 'operator_email = "op@example.com"'
 # An unreadable grafana tfvars stops the wizard before the walkthrough, not after it.
 GRAFANA_TFVARS_MODE=200 check_aborted "unreadable grafana tfvars" "cannot read ${tmp}/grafana/terraform.tfvars"
 if [[ ! -s "${tmp}/opened" ]]; then ok "unreadable grafana tfvars stops before any page opens"; else bad "unreadable grafana tfvars stops before any page opens"; fi
 chmod 600 "${tmp}/grafana/terraform.tfvars"
+# A stack dir the wizard cannot write to stops it before the walkthrough, not at the
+# final write, after every token is stored. Mode 0500 blocks writes only for a non-root user.
+BOOTSTRAP_DIR_MODE=500 check_aborted "unwritable bootstrap dir" "cannot write to ${tmp}/bootstrap"
+if [[ ! -s "${tmp}/opened" ]]; then ok "unwritable bootstrap dir stops before any page opens"; else bad "unwritable bootstrap dir stops before any page opens"; fi
+GRAFANA_DIR_MODE=500 check_aborted "unwritable grafana dir" "cannot write to ${tmp}/grafana"
+if [[ ! -s "${tmp}/opened" ]]; then ok "unwritable grafana dir stops before any page opens"; else bad "unwritable grafana dir stops before any page opens"; fi
+chmod 700 "${tmp}/bootstrap" "${tmp}/grafana"
 
 exit "${fail}"

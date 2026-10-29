@@ -366,11 +366,19 @@ run_wizard() {
     exit 1
   fi
   # A tfvars file that cannot be read would pass for one holding nothing: its values would
-  # be asked for again and the wizard would fail only when it writes the file.
-  local file
+  # be asked for again and the wizard would fail only when it writes the file. write_tfvar
+  # builds each file beside it, so a stack dir that cannot be written to would fail the
+  # final write, after every token is stored.
+  local file dir
   for file in "${tfvars}" "${grafana_tfvars}"; do
     if [[ -e "${file}" && ! -r "${file}" ]]; then
       echo "cannot read ${file}; check its permissions and rerun the wizard" >&2
+      exit 1
+    fi
+  done
+  for dir in "${bootstrap_dir}" "${grafana_dir}"; do
+    if [[ ! -w "${dir}" ]]; then
+      echo "cannot write to ${dir}; check its permissions and rerun the wizard" >&2
       exit 1
     fi
   done
