@@ -162,8 +162,9 @@ locals {
         # Grafana Cloud's Mimir rejects names outside the legacy character set
         # (err-mimir-label-invalid), and Prometheus 3 otherwise scrapes UTF-8 names such as
         # the OTel Collector's server.address. Legacy validation requests underscore-escaped
-        # names at scrape (server_address) and refuses the rest, so nothing Prometheus holds
-        # is lost at remote_write.
+        # names at scrape (server_address), so nothing Prometheus holds is lost at
+        # remote_write. A target that still serves a non-legacy name past its
+        # metricRelabelings fails its whole scrape (up=0).
         nameValidationScheme = "Legacy"
 
         resources = {
