@@ -224,7 +224,8 @@ check_file "access policies page opened" "${tmp}/opened" "https://slipstream.gra
 check_file "service accounts page opened" "${tmp}/opened" "https://slipstream.grafana.net/org/serviceaccounts"
 check_file "cloud portal page opened" "${tmp}/opened" "https://grafana.com/profile/org"
 if grep -qF "stacks:read" "${tmp}/stdout"; then ok "stack-read token scoped stacks:read"; else bad "stack-read token scoped stacks:read"; fi
-if grep -qF "Add scope" "${tmp}/stdout"; then ok "stacks scope found under Add scope"; else bad "stacks scope found under Add scope"; fi
+check_file "stacks scope found under Add scope" "${tmp}/stdout" \
+  "  • Open the Add scope drop-down at the bottom of the dialog and pick stacks; it is not in the scope list by default."
 grafana_tfvars="${tmp}/grafana/terraform.tfvars"
 check_file "stack url written for the grafana stack" "${grafana_tfvars}" 'grafana_url = "https://slipstream.grafana.net"'
 check_file "other grafana tfvars kept" "${grafana_tfvars}" 'kept = "yes"'
