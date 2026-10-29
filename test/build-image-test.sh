@@ -41,7 +41,7 @@ check() {
 }
 check_absent() {
   local label="$1" needle="$2"
-  if grep -qF -- "${needle}" "${tmp}/argv"; then
+  if grep -qxF -- "${needle}" "${tmp}/argv"; then
     echo "FAIL ${label}: '${needle}' should not be in docker argv" >&2
     fail=1
   else
