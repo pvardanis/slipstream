@@ -137,6 +137,12 @@ vllm_span() {
 JSON
 }
 
+# Adds a client-sent ttft_ms to the vLLM span JSON on stdin, which the
+# Collector must replace or drop, since only it sets ttft_ms.
+forge_ttft_ms() {
+  awk '{ print } /"gen_ai.request.id"/ { print "    {\"key\": \"ttft_ms\", \"value\": {\"doubleValue\": 1.0}}," }'
+}
+
 # Goodput cases at the gates (TTFT <= 1.0 s and TPOT <= 0.05 s, TPOT =
 # (e2e - TTFT) / (completion_tokens - 1)), each keyed by its X-Request-Id.
 # Both gates exactly on the boundary: TTFT 1.0 s, TPOT 1.0 / 20 = 0.05 s.
@@ -153,6 +159,7 @@ vllm_no_e2e="vllm-no-e2e-006"
 # No completion tokens counts as one: TPOT 0, TTFT 0.5 s holds.
 vllm_zero_token_met="vllm-zero-token-met-007"
 # One completion token and no TTFT latency: TTFT alone decides, and fails closed.
+# It and vllm_met arrive with a forged ttft_ms that must not survive.
 vllm_one_token_no_ttft="vllm-one-token-no-ttft-008"
 
 echo "==> sending OTLP trace with request_id + shape-only fields + prompt sentinel + vLLM spans"
@@ -184,14 +191,14 @@ payload=$(
           {"key": "prompt", "value": {"stringValue": "${prompt_sentinel}"}}
         ]
       },
-      $(vllm_span "${vllm_met}" "0000000000000001" 1.0 2.0 21),
+      $(vllm_span "${vllm_met}" "0000000000000001" 1.0 2.0 21 | forge_ttft_ms),
       $(vllm_span "${vllm_ttft_miss}" "0000000000000002" 1.2 2.0 21),
       $(vllm_span "${vllm_tpot_miss}" "0000000000000003" 0.5 1.6 21),
       $(vllm_span "${vllm_one_token_met}" "0000000000000004" 0.5 3.0 1),
       $(vllm_span "${vllm_one_token_miss}" "0000000000000005" 1.5 3.0 1),
       $(vllm_span "${vllm_no_e2e}" "0000000000000006" 0.5 2.0 21 | grep -vF '"gen_ai.latency.e2e"'),
       $(vllm_span "${vllm_zero_token_met}" "0000000000000007" 0.5 2.0 0),
-      $(vllm_span "${vllm_one_token_no_ttft}" "0000000000000008" 0.5 2.0 1 | grep -vF '"gen_ai.latency.time_to_first_token"')]
+      $(vllm_span "${vllm_one_token_no_ttft}" "0000000000000008" 0.5 2.0 1 | grep -vF '"gen_ai.latency.time_to_first_token"' | forge_ttft_ms)]
     }]
   }]
 }
@@ -408,4 +415,4 @@ if [[ "${fail}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met, spanmetrics split by slo_met and pod, exporter counts on :8888"
+echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met and ttft_ms, spanmetrics split by slo_met and pod, exporter counts on :8888"
