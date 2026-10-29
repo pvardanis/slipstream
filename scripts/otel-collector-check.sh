@@ -10,7 +10,9 @@
 # Grafana Cloud exporters have sent more. It fails as soon as either exporter has failed
 # to send more, or when after 95 s no span was received or one has still sent nothing:
 # the Collector stays ready while Grafana Cloud rejects what it sends or never answers.
-# Usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline
+# demo-span prints the shape-only OTLP demo trace `just obs-pivot` sends, for <model>,
+# timed at the run so a time-ranged trace search finds it.
+# Usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline|demo-span <model>
 set -euo pipefail
 
 namespace=slipstream
@@ -131,8 +133,16 @@ delivery() {
   return 1
 }
 
+# demo_span MODEL prints the demo trace: one 100 ms chat.completion span from service
+# obs-pivot, so span metrics count it apart from vLLM's requests, starting now.
+demo_span() {
+  local now
+  now="$(date +%s)"
+  printf '%s' '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"obs-pivot"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"'"${now}"'000000000","endTimeUnixNano":"'"${now}"'100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"'"$1"'"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'
+}
+
 usage() {
-  echo "usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline" >&2
+  echo "usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline|demo-span <model>" >&2
   exit 2
 }
 
@@ -142,6 +152,10 @@ rollout) rollout ;;
 delivery)
   [[ "$#" == 2 ]] || usage
   delivery "$2"
+  ;;
+demo-span)
+  [[ "$#" == 2 ]] || usage
+  demo_span "$2"
   ;;
 *) usage ;;
 esac

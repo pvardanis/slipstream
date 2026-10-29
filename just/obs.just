@@ -77,9 +77,9 @@ obs-pivot:
     # source of truth the serving manifest is held to.
     model="$({{ image_tag_tool }} hf-id)"
     # Sent as service obs-pivot, so span metrics count it apart from vLLM's requests.
+    payload="$({{ otel_check_tool }} demo-span "${model}")"
     if ! curl -sSf --max-time 5 -o /dev/null -X POST http://localhost:4318/v1/traces \
-      -H 'Content-Type: application/json' \
-      -d '{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"obs-pivot"}}]},"scopeSpans":[{"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"chat.completion","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000100000000","attributes":[{"key":"request_id","value":{"stringValue":"req-demo-001"}},{"key":"model_id","value":{"stringValue":"'"${model}"'"}},{"key":"prompt_tokens","value":{"intValue":"42"}},{"key":"completion_tokens","value":{"intValue":"128"}},{"key":"prefix_hash","value":{"stringValue":"9f86d081"}}]}]}]}]}'; then
+      -H 'Content-Type: application/json' -d "${payload}"; then
       echo "the Collector's OTLP receiver did not take the demo span" >&2
       exit 1
     fi

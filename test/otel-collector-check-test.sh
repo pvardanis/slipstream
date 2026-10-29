@@ -14,7 +14,9 @@
 #   baseline scrape on stdin; it fails at the first scrape where either's failed count
 #   rises, a count is not a number, or the page lacks the Collector's uptime, and after
 #   20 scrapes 5 s apart when no span was received or one has still sent nothing; the
-#   debug exporter's counts never stand in for theirs.
+#   debug exporter's counts never stand in for theirs;
+# - demo-span prints the demo trace for the model it is given, carrying the request_id
+#   obs-pivot greps for, starting at the run in nanoseconds and lasting 100 ms.
 set -euo pipefail
 unset KUBECTL_FAIL CURL_EXIT BASELINE DEBUG_SENT LABELS EXTRA_SERIES WHOLE_LINE
 
@@ -315,5 +317,35 @@ CURL_EXIT=7 check_fails "an unreadable metrics endpoint fails delivery" "cannot 
 CURL_EXIT=7 check_fails "an unreadable metrics endpoint shows curl's error" "curl: (7) Failed to connect" delivery "${url}"
 check_fails "delivery without a url" "usage: otel-collector-check.sh" delivery
 check_fails "unknown subcommand" "usage: otel-collector-check.sh" bogus
+
+# demo-span prints the OTLP demo trace for the model it is given, timed at the run, so a
+# time-ranged trace search finds it.
+before="$(date +%s)"
+check_passes "demo-span passes" demo-span Qwen/Qwen3-8B-AWQ
+after="$(date +%s)"
+span() { yq -p json -oy ".resourceSpans[0].scopeSpans[0].spans[0]$1" "${tmp}/stdout"; }
+start_ns="$(span .startTimeUnixNano)"
+end_ns="$(span .endTimeUnixNano)"
+if [[ "${start_ns}" =~ ^[0-9]{19}$ ]] && ((${start_ns:0:10} >= before && ${start_ns:0:10} <= after)); then
+  ok "demo span starts at the run, in nanoseconds"
+else
+  bad "demo span starts at the run, in nanoseconds: ${start_ns} not within ${before}..${after} s"
+fi
+if [[ "${end_ns}" =~ ^[0-9]+$ ]] && ((end_ns - start_ns == 100000000)); then
+  ok "demo span lasts 100 ms"
+else
+  bad "demo span lasts 100 ms: ${start_ns}..${end_ns}"
+fi
+if [[ "$(span '.attributes[] | select(.key == "model_id") | .value.stringValue')" == Qwen/Qwen3-8B-AWQ ]]; then
+  ok "demo span names the model"
+else
+  bad "demo span names the model"
+fi
+if [[ "$(span '.attributes[] | select(.key == "request_id") | .value.stringValue')" == req-demo-001 ]]; then
+  ok "demo span carries the request_id obs-pivot greps for"
+else
+  bad "demo span carries the request_id obs-pivot greps for"
+fi
+check_fails "demo-span without a model" "usage: otel-collector-check.sh" demo-span
 
 exit "${fail}"
