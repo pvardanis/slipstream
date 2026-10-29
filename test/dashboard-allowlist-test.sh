@@ -4,17 +4,19 @@
 # (terraform/eks/remote-write-allowlist.yaml), since a series Prometheus does not send
 # to Grafana Cloud leaves its panel showing "no data" (ADR-0026). Reads both with jq
 # and yq; needs no cluster or Grafana.
+# shellcheck disable=SC2016 # $ in the jq programs is jq's, not the shell's.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dashboards_dir="${DASHBOARDS_DIR:-${repo_root}/terraform/grafana/dashboards}"
 allowlist="${REMOTE_WRITE_ALLOWLIST:-${repo_root}/terraform/eks/remote-write-allowlist.yaml}"
 
-# Every "expr" anywhere in a dashboard: the PromQL queries its panels run.
-queries='.. | objects | select(has("expr")) | .expr | strings'
+# Every "expr" anywhere in a dashboard, and those that are strings: the PromQL queries
+# its panels run.
+exprs='.. | objects | select(has("expr")) | .expr'
+queries="${exprs} | strings"
 
 # Removes PromQL's double-, single- and back-quoted strings from a query.
-# shellcheck disable=SC2016 # $ in the jq programs is jq's, not the shell's.
 strip_strings='def strip_strings:
   gsub("\"([^\"\\\\]|\\\\.)*\"|'"'"'([^'"'"'\\\\]|\\\\.)*'"'"'|`[^`]*`"; "");'
 
@@ -23,7 +25,6 @@ strip_strings='def strip_strings:
 # aggregation calls; the identifiers left, other than PromQL's keywords, are metric
 # names. An identifier preceded by a digit, dot or $ is a duration unit, exponent or
 # Grafana variable, not a metric.
-# shellcheck disable=SC2016
 metric_extraction="${strip_strings}"'
   ['"${queries}"'
     | strip_strings
@@ -40,9 +41,8 @@ metric_extraction="${strip_strings}"'
 # What in a dashboard names metrics the extraction above cannot read, one per line: an
 # expr that is not a string, a query that mentions __name__, a Grafana variable followed
 # by a label matcher or range (standing for the metric name), and a query variable.
-# shellcheck disable=SC2016
 unreadable_queries="${strip_strings}"'
-  (.. | objects | select(has("expr")) | .expr | select(type != "string")
+  ('"${exprs}"' | select(type != "string")
     | "an expr that is not a string: \(tojson)"),
   ('"${queries}"' | select(test("__name__"))
     | "a query that mentions __name__: \(.)"),
