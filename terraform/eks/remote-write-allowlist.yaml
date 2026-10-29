@@ -23,7 +23,8 @@ metrics:
   - karpenter_nodes_allocatable
   - karpenter_cloudprovider_instance_type_offering_price_estimate
   # dcgm-exporter (dcgm_exporter.tf), per GPU with the pod using it: busy time, and
-  # memory-bandwidth active, which tracks memory-bound decode better than busy time.
+  # memory-bandwidth active, the share of cycles decode's weight and KV-cache reads keep
+  # the memory interface busy.
   - DCGM_FI_DEV_GPU_UTIL
   - DCGM_FI_PROF_DRAM_ACTIVE
   # kube-state-metrics: replicas available against desired.
