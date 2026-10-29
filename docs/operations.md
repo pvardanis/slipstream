@@ -1,7 +1,7 @@
 # Operations
 
 Runbooks for the live rig. All but cloud verify, the Grafana Cloud setup, the Grafana data
-sources and the spend-leak alert assume the stack is up (`just stack-up`) and end with
+sources and dashboards, and the spend-leak alert assume the stack is up (`just stack-up`) and end with
 `just stack-down`.
 
 ## Knob sweep
@@ -303,6 +303,32 @@ from `grafana_url` in the gitignored `terraform/grafana/terraform.tfvars`, or fr
 After the apply, open the CloudWatch data source and click Save & test. The role reads
 CloudWatch metrics only, so the test reports the metrics query as working and the logs
 query as failing; that is expected.
+
+## Grafana dashboards
+
+`just grafana-up` also applies every dashboard in `terraform/grafana/dashboards/`, one per
+JSON file, keyed by file name: adding, editing or deleting a file creates, updates or
+deletes that dashboard on the next apply. The dashboards are read-only in the Grafana UI,
+and the next apply overwrites any change made there. Panels name their data source as
+`${DS_PROMETHEUS}`, which the stack replaces with the hosted Prometheus data source's UID.
+
+- **Fleet health** (`fleet-health.json`,
+  [`/d/fleet-health`](https://slipstreamobs.grafana.net/d/fleet-health)): `vllm-gpu`
+  replicas available against desired, and GPU busy time and memory-bandwidth active,
+  each as a fleet average and per pod. Neither GPU panel tracks load: busy time is near
+  100% whenever a request is in flight, and memory-bandwidth active falls as batching
+  shares the weight reads.
+
+A panel shows "no data" when it queries a metric Prometheus does not send to Grafana
+Cloud. Check a dashboard's queries against `terraform/eks/remote-write-allowlist.yaml`:
+
+```sh
+just dashboard-allowlist-test
+```
+
+It fails on a dashboard that does not parse, on a metric missing from the allowlist, and on
+a query whose metrics it cannot read: a `__name__` matcher, a Grafana variable as the
+metric name, or a query variable. CI runs it in the shell-tests job.
 
 ## Spend-leak alert
 
