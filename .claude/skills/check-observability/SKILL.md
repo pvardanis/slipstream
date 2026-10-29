@@ -13,7 +13,8 @@ The target is one of: a change to QA, a symptom (an empty panel, a missing serie
 
 ## Preconditions
 
-- `mcp__grafana__user_info` answers. If the MCP tools are missing or fail, stop and say so: `.mcp.json` runs `just grafana-mcp`, which needs `just grafana-cloud-setup` done.
+- `mcp__grafana__user_info` answers. If the MCP tools are missing, `.mcp.json` runs `just grafana-mcp`, which needs `just grafana-cloud-setup` done. If they return HTTP 401, Grafana rejects the token in the bootstrap secret, or the stack URL `scripts/grafana-mcp.sh` resolved names another stack; the user re-runs `just grafana-cloud-setup` and restarts the MCP. Either way, report every Grafana Cloud item as unverified, still run the in-cluster checks under "Debug a missing signal", and stop there.
+- `list_datasources` gives the Prometheus and Tempo data sources' UIDs, which every query takes.
 - `kubectl get nodes` answers. If the cluster is down, every cluster panel shows a gap by design (in-cluster Prometheus uses `emptyDir` and dies with `just cluster-down`), and only the CloudWatch spend panel and the 14-day history are live. Report that and check only what is still live.
 
 ## The signal path
@@ -30,13 +31,13 @@ Gotchas:
 - vLLM's own histograms carry no exemplars; only the span-metrics histogram does. A TTFT panel without exemplars is correct.
 - A series missing from the allowlist never reaches Grafana Cloud, and that is by design: the free tier allows 10k active series. The price gauge is also filtered to the allowlist's `price_instance_types`.
 - `just obs-pivot` sends one known span as service `obs-pivot`. Use it to test the Collector → Grafana Cloud hops, and exclude `obs-pivot` from any count of vLLM requests.
-- Every panel is replica-aware: check the per-pod breakdown as well as the fleet aggregate.
+- Every panel is replica-aware: check the per-pod breakdown as well as the fleet aggregate. Scraped series carry the pod in the `pod` label, span metrics in `k8s_pod_name`; compare their values with the live pods (`kubectl -n slipstream get pods -l app=vllm-gpu`). With one replica running, the breakdown is untestable: say so.
 - A `remote_write` that cannot authenticate shows only in Prometheus's logs and in empty panels. The CloudWatch data source's health check reports its logs half as failing, which is expected (no logs actions are granted).
 - Look up metric names with `list_prometheus_metric_names` rather than guessing them; the span metrics' names come from the connector.
 
 ## QA a change
 
-1. List the items: diff the branch against `origin/main` on the signal-path files above. Every changed series, panel and span attribute is one item. For "the dashboard", the items are every panel of the dashboards `search_dashboards` returns for the target.
+1. List the items. A target that names series, panels or attributes is the item list. Otherwise diff the branch against `origin/main` on the signal-path files above and the dashboard JSON under `terraform/grafana`: every changed series, panel and span attribute is one item. For "the dashboard", the items are every panel of the dashboards `search_dashboards` returns for the target.
 2. For each item, query Grafana Cloud over a window after the change was deployed: `query_prometheus` for series, `search_tempo_traces` for span attributes, and for panels `get_dashboard_panel_queries`, then run each panel's query.
 3. If an item comes back empty, debug it as below.
 
@@ -46,7 +47,7 @@ Done when every item has its query and a non-empty result quoted, or a dark-hop 
 
 Walk the signal path backwards from Grafana Cloud until the signal is lit. The finding is the **first dark hop**.
 
-- **Metrics:** port-forward the in-cluster Prometheus (`kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090`) and query the series (`curl -fsS 'http://localhost:9090/api/v1/query?query=<series>'`). If it is lit there and dark in Grafana Cloud, the hop is the allowlist, the keep rule or `remote_write` (check Prometheus's logs). If it is dark there too, check the target's scrape health in `/api/v1/targets`.
+- **Metrics:** port-forward the in-cluster Prometheus (`kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090`) and query the series (`curl -fsS 'http://localhost:9090/api/v1/query?query=<series>'`). If it is lit there and dark in Grafana Cloud, the hop is the allowlist, the keep rule or `remote_write`: a non-zero `rate(prometheus_remote_storage_samples_failed_total[10m])` means Grafana Cloud rejects samples, and Prometheus's logs (`kubectl -n monitoring logs prometheus-kube-prometheus-stack-prometheus-0 -c prometheus`) name the series and the `err-mimir-*` reason. If it is dark there too, check the target's scrape health in `/api/v1/targets`.
 - **Traces:** read the Collector's `otelcol_exporter_sent_spans` and `otelcol_exporter_send_failed_spans` in Grafana Cloud and its logs for the `request_id`, then run `just obs-pivot` to prove the Collector → Grafana Cloud hops with a known span.
 
 Done when you name the last lit hop and the first dark hop, each with the command or query you ran and its output.
