@@ -41,7 +41,8 @@ processors:
   # guard sees it, and sets per-request goodput (ADR-0026). vLLM v0.29.0 names
   # its attributes gen_ai.*, which the redaction allowlist would drop wholesale.
   # Only spans carrying gen_ai.request.id are mapped; spans already in the
-  # spine's names pass through, losing only an slo_met they arrive with.
+  # spine's names pass through, losing only an slo_met or ttft_ms they arrive
+  # with.
   transform:
     error_mode: ignore
     trace_statements:
@@ -88,7 +89,9 @@ processors:
           - set(span.attributes["slo_met"], true) where span.attributes["gen_ai.latency.time_to_first_token"] <= span.cache["ttft_gate_s"] and span.cache["tpot_s"] <= span.cache["tpot_gate_s"]
           # TTFT under the spine's name, in milliseconds as spec §5.2's
           # first_token event carries it, so a trace search lists the slowest
-          # requests by request_id. A span without TTFT gets none.
+          # requests by request_id. A span without TTFT gets none, and loses
+          # any ttft_ms it arrives with.
+          - delete_key(span.attributes, "ttft_ms")
           - set(span.attributes["ttft_ms"], span.attributes["gen_ai.latency.time_to_first_token"] * 1000) where span.attributes["gen_ai.latency.time_to_first_token"] != nil
   # Shape-only guard, fail-closed: only these keys survive on a span or its
   # resource; every other attribute (a raw prompt, a completion, anything vLLM or
