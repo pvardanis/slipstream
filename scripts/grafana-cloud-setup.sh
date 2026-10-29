@@ -196,8 +196,8 @@ grafana_dir="${2:?usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>}"
 tfvars="${bootstrap_dir}/terraform.tfvars"
 grafana_tfvars="${grafana_dir}/terraform.tfvars"
 
-# The wizard keeps nothing in a .env file: the stack URL and external ID go to
-# terraform.tfvars files and each token straight to Secrets Manager, so ask offers no
+# The wizard keeps nothing in a .env file: the stack URL, external ID and operator email
+# go to terraform.tfvars files and each token straight to Secrets Manager, so ask offers no
 # saved value; a re-run reads the tfvars files and the secrets instead and skips the
 # steps they already settle.
 ENV_FILE=/dev/null
@@ -297,12 +297,13 @@ put_token() {
   printf '  %s✓ wrote%s token → Secrets Manager %s\n' "$GREEN" "$RESET" "${secret_id}"
 }
 
-# keep_token SECRET_ID succeeds when the stack URL was read from terraform.tfvars, so the
-# stored tokens belong to it, SECRET_ID has a current version, and the operator keeps it.
-# It reads only whether the secret has an AWSCURRENT version, never the value; an empty
-# current value is caught by check_secret_set. It runs as an if condition, where set -e
-# does not apply and a return 1 would read as "ask for a token", so an unreadable or
-# unexpected answer exits.
+# keep_token SECRET_ID succeeds when the stack URL was read from terraform.tfvars,
+# SECRET_ID has an AWSCURRENT version, and the operator declines to replace it. A stored
+# stack URL means the stored tokens belong to that stack, since grafana_url is written
+# only once every token is stored. It reads only whether the secret has an AWSCURRENT
+# version, never the value; an empty current value is caught by check_secret_set. It runs
+# as an if condition, where set -e does not apply and a return 1 would read as "ask for a
+# token", so an unreadable or unexpected answer exits.
 keep_token() {
   local current
   [[ -n "${stack_stored}" ]] || return 1

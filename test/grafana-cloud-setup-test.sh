@@ -242,7 +242,7 @@ if grep -qF "click Delete" "${tmp}/stdout"; then ok "cloudwatch data source the 
 if grep -qF "role Admin" "${tmp}/stdout"; then ok "service account given the Admin role"; else bad "service account given the Admin role"; fi
 if grep -qF "already exists, change its role to Admin" "${tmp}/stdout"; then ok "existing service account moved to Admin"; else bad "existing service account moved to Admin"; fi
 check_no_token "tokens never echoed, passed as arguments or written to a file"
-if grep -qF "already holds a token" "${tmp}/stdout"; then bad "empty secrets not offered to keep"; else ok "empty secrets not offered to keep"; fi
+if grep -qF "already holds a token" "${tmp}/stdout"; then bad "first run offers no token to keep"; else ok "first run offers no token to keep"; fi
 if [[ "$(ls "${tmp}/grafana")" == terraform.tfvars ]]; then ok "no temp file left beside the grafana tfvars"; else bad "no temp file left beside the grafana tfvars"; fi
 if [[ "$(ls "${tmp}/bootstrap")" == terraform.tfvars ]]; then ok "no temp file left beside tfvars"; else bad "no temp file left beside tfvars"; fi
 if grep -qF "not a valid external ID" "${tmp}/stdout" && grep -qF "token is empty" "${tmp}/stdout"; then
