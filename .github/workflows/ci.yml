@@ -215,6 +215,9 @@ jobs:
       # AWS call or server runs. otel-collector-check-test stubs kubectl, curl and sleep,
       # so no cluster or network call runs; it renders pod fixtures with the real kubectl
       # offline and reads the Collector config with yq.
+      # dashboard-allowlist-test stubs nothing: it reads the real dashboards and remote-write
+      # allowlist with jq and yq and fails when a panel queries a metric the allowlist does not
+      # send (ADR-0026).
       - name: Run shell unit tests
         run: |
           set -euo pipefail
@@ -227,6 +230,7 @@ jobs:
           bash test/bootstrap-test.sh
           bash test/grafana-mcp-test.sh
           bash test/otel-collector-check-test.sh
+          bash test/dashboard-allowlist-test.sh
 
   chart-render:
     name: helm chart render (kubeconform)
