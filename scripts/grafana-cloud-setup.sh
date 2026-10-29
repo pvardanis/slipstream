@@ -6,9 +6,12 @@
 # the bootstrap stack's state, then write the stack URL into the grafana stack's
 # terraform.tfvars. A token is read
 # with hidden entry and handed to aws on stdin, so it never appears on screen or in a
-# process's arguments. A re-run skips what is already set: a stack URL or external ID in
-# terraform.tfvars, and each token whose secret already holds one, unless the operator
-# chooses to replace it.
+# process's arguments. A re-run over a stack URL already in the grafana stack's
+# terraform.tfvars skips the steps already done: the stack, the external ID in the
+# bootstrap stack's terraform.tfvars, and each token whose secret has a current version,
+# unless the operator replaces it. A stack URL asked for in the run may name another
+# stack, so the external ID and every token are then asked for again. An external ID
+# exported as TF_VAR_grafana_external_id is never asked for.
 # Usage: grafana-cloud-setup.sh <bootstrap-dir> <grafana-dir>
 #
 # A wizard walks a human through a manual procedure, step by step.
@@ -193,7 +196,8 @@ grafana_tfvars="${grafana_dir}/terraform.tfvars"
 
 # The wizard keeps nothing in a .env file: the stack URL and external ID go to
 # terraform.tfvars files and each token straight to Secrets Manager, so ask offers no
-# saved value; a re-run reads those instead and skips the stages they already settle.
+# saved value; a re-run reads the tfvars files and the secrets instead and skips the
+# steps they already settle.
 ENV_FILE=/dev/null
 
 # is_stack_url VALUE succeeds for a Grafana Cloud stack URL, with or without a trailing
@@ -232,7 +236,7 @@ read_output() {
   printf '%s' "${value}"
 }
 
-# read_tfvar FILE KEY prints the value of the KEY = "VALUE" line write_tfvar writes,
+# read_tfvar FILE KEY prints the value of the last KEY = "VALUE" line write_tfvar writes,
 # failing when FILE holds no such line.
 read_tfvar() {
   local line
@@ -284,17 +288,28 @@ put_token() {
   printf '  %s✓ wrote%s token → Secrets Manager %s\n' "$GREEN" "$RESET" "${secret_id}"
 }
 
-# keep_token SECRET_ID succeeds when SECRET_ID already holds a token and the operator keeps
-# it. It reads only whether the secret has an AWSCURRENT version, never the value, and
-# stops the wizard when that cannot be read.
+# keep_token SECRET_ID succeeds when the stack URL was read from terraform.tfvars, so the
+# stored tokens belong to it, SECRET_ID has a current version, and the operator keeps it.
+# It reads only whether the secret has an AWSCURRENT version, never the value; an empty
+# current value is caught by check_secret_set. It runs as an if condition, where set -e
+# does not apply and a return 1 would read as "ask for a token", so an unreadable or
+# unexpected answer exits.
 keep_token() {
   local current
+  [[ -n "${stack_stored}" ]] || return 1
   if ! current="$(aws secretsmanager describe-secret --region "${region}" --secret-id "$1" \
     --query "contains(values(VersionIdsToStages || \`{}\`)[], 'AWSCURRENT')" --output text)"; then
     echo "cannot check $1 in Secrets Manager; check the AWS identity can describe it and rerun the wizard" >&2
     exit 1
   fi
-  [[ "${current}" == True ]] || return 1
+  case "${current}" in
+  True) ;;
+  False) return 1 ;;
+  *)
+    echo "unexpected answer '${current}' checking $1 in Secrets Manager; rerun the wizard" >&2
+    exit 1
+    ;;
+  esac
   note "$1 already holds a token."
   ! confirm "Replace it with a new token?"
 }
@@ -309,7 +324,7 @@ check_secret_set() {
     return 1
   fi
   if [[ ! "${length}" =~ ^[0-9]+$ ]] || ((length == 0)); then
-    echo "$1 holds no value; rerun the wizard" >&2
+    echo "$1 holds no value; rerun the wizard and enter its token, answering y if asked to replace it" >&2
     return 1
   fi
   printf '  %s✓%s %s holds a value\n' "$GREEN" "$RESET" "$1"
@@ -345,14 +360,28 @@ run_wizard() {
     echo "cli_history is enabled in the AWS config, so aws would record each token; disable it and rerun the wizard" >&2
     exit 1
   fi
+  # A tfvars file that cannot be read would pass for one holding nothing and fail only at
+  # its write, after the walkthrough.
+  local file
+  for file in "${tfvars}" "${grafana_tfvars}"; do
+    if [[ -e "${file}" && ! -r "${file}" ]]; then
+      echo "cannot read ${file}; check its permissions and rerun the wizard" >&2
+      exit 1
+    fi
+  done
 
   banner "Grafana Cloud setup"
 
   stage "Grafana Cloud: free stack"
   say "Grafana Cloud's free tier holds the dashboards, metrics and traces (ADR-0026)."
-  if STACK_URL="$(read_tfvar "${grafana_tfvars}" grafana_url)" && is_stack_url "${STACK_URL}"; then
-    note "grafana_url is already set to ${STACK_URL}; remove it from ${grafana_tfvars} to set it again."
+  stack_stored=""
+  STACK_URL="$(read_tfvar "${grafana_tfvars}" grafana_url || true)"
+  if is_stack_url "${STACK_URL}"; then
+    stack_stored=1
+    note "grafana_url is already set to ${STACK_URL%/}. To set up another stack, remove it from"
+    note "${grafana_tfvars}; the wizard then asks for the external ID and every token again."
   else
+    [[ -z "${STACK_URL}" ]] || warn "grafana_url in ${grafana_tfvars} is not a stack URL; asking for it again."
     open_url "https://grafana.com/auth/sign-up/create-user"
     step "Sign up, or sign in, and create a stack on the Free plan in an EU region."
     step "Open the stack: its URL looks like https://<stack>.grafana.net."
@@ -364,7 +393,10 @@ run_wizard() {
 
   stage "Grafana Assume Role: external ID"
   say "The bootstrap stack's IAM role trusts Grafana's AWS account only with this ID."
-  if [[ -n "${TF_VAR_grafana_external_id:-}" ]] || grep -qE '^grafana_external_id[[:space:]]*=' "${tfvars}" 2>/dev/null; then
+  if [[ -n "${TF_VAR_grafana_external_id:-}" ]]; then
+    note "grafana_external_id comes from TF_VAR_grafana_external_id, which the apply uses;"
+    note "unset TF_VAR_grafana_external_id to set it again."
+  elif [[ -n "${stack_stored}" ]] && grep -qE '^grafana_external_id[[:space:]]*=' "${tfvars}"; then
     note "grafana_external_id is already set; the apply uses it. Remove it from ${tfvars} to set it again."
   else
     open_url "${STACK_URL}/connections/datasources/new"
@@ -393,7 +425,8 @@ run_wizard() {
   fi
 
   stage "Bootstrap: apply"
-  say "Applying the bootstrap stack creates the three empty secrets and the IAM role."
+  say "Applying the bootstrap stack creates the three secrets, empty until the token stages"
+  say "fill them, and the IAM role; it leaves tokens already stored untouched."
   if ! confirm "Plan and apply ${bootstrap_dir} now? Terraform asks again before it changes anything."; then
     echo "bootstrap not applied; rerun the wizard when ready" >&2
     exit 1
@@ -435,8 +468,9 @@ run_wizard() {
     open_url "https://grafana.com/profile/org"
     step "In the Cloud Portal, open Security, then Access Policies."
     step "Click Create access policy; name it slipstream-stack-read, realm this stack."
-    step "The scope table hides stacks: open Add scope at the bottom of the dialog, pick stacks."
-    step "Tick Read on the stacks row only (stacks:read), and click Create."
+    step "stacks is not in the scope list by default: open the Add scope drop-down at the"
+    step "bottom of the dialog and pick stacks."
+    step "On the stacks row tick Read (stacks:read), and nothing else; click Create."
     note "stacks:read is offered only here, not on the stack's own access policy page."
     step "Click Add token on the new policy, and copy the token (glc_...)."
     note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
