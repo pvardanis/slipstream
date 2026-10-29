@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, and the local Helm chart render check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, and the local Helm chart render check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -14,6 +14,11 @@ obs-test:
 [group('test')]
 goodput-parity-test:
     bash test/goodput-parity-test.sh
+
+# Assert every Grafana dashboard file parses and every metric its queries read is in the remote-write allowlist (static, no Grafana).
+[group('test')]
+dashboard-allowlist-test:
+    bash test/dashboard-allowlist-test.sh
 
 # Assert the bench image's slug and content tags derive from model.yaml as expected (no cluster).
 [group('test')]
