@@ -92,7 +92,7 @@ obs-pivot:
 
 # The Terraform stack outlives `just cluster-down`, so it has no down recipe. Requires
 # `just grafana-cloud-setup` done.
-# Apply the persistent grafana Terraform stack: its data sources (ADR-0026).
+# Apply the persistent grafana Terraform stack: its data sources and dashboards (ADR-0026).
 [group('obs')]
 grafana-up: _bootstrap-init
     #!/usr/bin/env bash
