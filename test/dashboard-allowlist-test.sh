@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Static dashboard check: every dashboard file in terraform/grafana/dashboards must parse
 # as JSON, and every metric its queries read must be in the remote-write allowlist
-# (terraform/eks/remote-write-allowlist.yaml), since a series Prometheus does not send
-# to Grafana Cloud leaves its panel showing "no data" (ADR-0026). Reads both with jq
-# and yq; needs no cluster or Grafana.
+# (terraform/eks/remote-write-allowlist.yaml), either its metrics, which Prometheus
+# sends, or its collector_metrics, which the OTel Collector sends itself, since a series
+# neither sends to Grafana Cloud leaves its panel showing "no data" (ADR-0026). Reads
+# both with jq and yq; needs no cluster or Grafana.
 # shellcheck disable=SC2016 # $ in the jq programs is jq's, not the shell's.
 set -euo pipefail
 
@@ -54,11 +55,16 @@ unreadable_queries="${strip_strings}"'
 
 fail=0
 
+# metrics is required; collector_metrics may be absent, but if present is a list of names.
 allowlist_is_name_list='(.metrics | tag == "!!seq") and (.metrics | length > 0)
-  and ([.metrics[] | select(tag != "!!str")] | length == 0)'
+  and ([.metrics[] | select(tag != "!!str")] | length == 0)
+  and (has("collector_metrics") | not
+    or ((.collector_metrics | tag == "!!seq")
+      and ([.collector_metrics[] | select(tag != "!!str")] | length == 0)))'
 if ! yq -e "${allowlist_is_name_list}" "${allowlist}" >/dev/null ||
-  ! allowed="$(yq '.metrics[]' "${allowlist}")"; then
-  echo "FAIL: no metrics read from ${allowlist}; expected metrics to be a non-empty list of names" >&2
+  ! allowed="$(yq '(.metrics + (.collector_metrics // []))[]' "${allowlist}")"; then
+  echo "FAIL: no metrics read from ${allowlist}; expected metrics to be a non-empty list" \
+    "of names, and collector_metrics, if present, a list of names" >&2
   exit 1
 fi
 
@@ -97,7 +103,8 @@ while IFS= read -r dashboard; do
     checked=$((checked + 1))
     if ! grep -qxF "${metric}" <<<"${allowed}"; then
       echo "FAIL: ${name} queries ${metric}, which is not in ${allowlist#"${repo_root}/"};" \
-        "add it to the allowlist's metrics or the panel shows no data" >&2
+        "add it to the allowlist's metrics, or collector_metrics if the OTel Collector" \
+        "sends it, or the panel shows no data" >&2
       fail=1
     fi
   done <<<"${metrics}"

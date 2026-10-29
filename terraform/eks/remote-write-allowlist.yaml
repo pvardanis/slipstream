@@ -36,6 +36,14 @@ metrics:
   - otelcol_exporter_send_failed_spans
   - otelcol_exporter_sent_metric_points
   - otelcol_exporter_send_failed_metric_points
+# The series the OTel Collector's span_metrics connector remote-writes to Grafana Cloud
+# itself (k8s/otel-collector-config.yaml), bypassing Prometheus and so this file's keep
+# rule: request counts split by slo_met for live goodput, and the exemplar-bearing e2e
+# latency histogram. Listed so test/dashboard-allowlist-test.sh knows the panels reading
+# them get data; monitoring.tf does not read this list.
+collector_metrics:
+  - traces_span_metrics_calls_total
+  - traces_span_metrics_duration_seconds_bucket
 # The price gauge has one series per instance type, zone and capacity type; only these
 # instance types, the GPU NodePool's (k8s/gpu-node-pool.yaml), are sent.
 price_instance_types:
