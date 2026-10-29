@@ -1,0 +1,79 @@
+{
+  "uid": "fleet-health",
+  "title": "Fleet health",
+  "description": "Replicas and GPU state of the vllm-gpu serving fleet (ADR-0026, \"Panels\"). Each GPU panel shows the fleet aggregate beside a per-pod breakdown.",
+  "editable": false,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Replicas",
+      "description": "vllm-gpu replicas available against desired, from kube-state-metrics.",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0 } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(kube_deployment_status_replicas_available{namespace=\"slipstream\", deployment=\"vllm-gpu\"})",
+          "legendFormat": "available"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(kube_deployment_spec_replicas{namespace=\"slipstream\", deployment=\"vllm-gpu\"})",
+          "legendFormat": "desired"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "GPU busy time",
+      "description": "DCGM_FI_DEV_GPU_UTIL: the share of time a kernel was running on the GPU, averaged over every GPU and per pod.",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "avg(DCGM_FI_DEV_GPU_UTIL)",
+          "legendFormat": "fleet"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "avg by (pod) (DCGM_FI_DEV_GPU_UTIL{pod!=\"\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "GPU memory-bandwidth active",
+      "description": "DCGM_FI_PROF_DRAM_ACTIVE: the share of cycles the device memory interface was busy, averaged over every GPU and per pod. Decode is memory-bound, so this tracks serving load better than busy time.",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "avg(DCGM_FI_PROF_DRAM_ACTIVE)",
+          "legendFormat": "fleet"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "avg by (pod) (DCGM_FI_PROF_DRAM_ACTIVE{pod!=\"\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ]
+    }
+  ]
+}
