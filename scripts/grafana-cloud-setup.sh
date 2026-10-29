@@ -238,17 +238,21 @@ read_output() {
   printf '%s' "${value}"
 }
 
+# tfvar_key_pattern KEY prints the extended regex that starts a KEY line, indented or not.
+tfvar_key_pattern() { printf '^[[:space:]]*%s[[:space:]]*=' "$1"; }
+
 # read_tfvar FILE KEY prints the value of the last KEY line in FILE, failing unless that
-# line has the KEY = "VALUE" form write_tfvar writes.
+# line has the KEY = "VALUE" form write_tfvar writes, optionally indented or followed by a
+# comment.
 read_tfvar() {
   local line
-  line="$(grep -E "^$2[[:space:]]*=" "$1" 2>/dev/null | tail -n 1 || true)"
-  [[ "${line}" =~ ^$2[[:space:]]*=[[:space:]]*\"([^\"]*)\"[[:space:]]*$ ]] || return 1
+  line="$(grep -E "$(tfvar_key_pattern "$2")" "$1" 2>/dev/null | tail -n 1 || true)"
+  [[ "${line}" =~ $(tfvar_key_pattern "$2")[[:space:]]*\"([^\"]*)\"[[:space:]]*(#.*)?$ ]] || return 1
   printf '%s' "${BASH_REMATCH[1]}"
 }
 
 # has_tfvar FILE KEY succeeds when FILE holds a KEY line, whatever its value.
-has_tfvar() { grep -qE "^$2[[:space:]]*=" "$1" 2>/dev/null; }
+has_tfvar() { grep -qE "$(tfvar_key_pattern "$2")" "$1" 2>/dev/null; }
 
 # write_tfvar FILE KEY VALUE upserts KEY = "VALUE" into the terraform.tfvars FILE, keeping
 # every other line. Creates the file at mode 0600; VALUE is validated by the caller, so it
@@ -261,7 +265,7 @@ write_tfvar() {
   tmp=$(mktemp "${file}.XXXXXX")
   # grep exits 1 when no other line is left, which is fine; above 1 it could not read the
   # file, and writing on would replace every value in it with KEY alone.
-  grep -vE "^${key}[[:space:]]*=" "${file}" >"${tmp}" || rc=$?
+  grep -vE "$(tfvar_key_pattern "${key}")" "${file}" >"${tmp}" || rc=$?
   if ((rc > 1)); then
     rm -f "${tmp}"
     echo "cannot read ${file}; check its permissions and rerun the wizard" >&2
