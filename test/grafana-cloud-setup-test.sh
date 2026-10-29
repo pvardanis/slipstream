@@ -22,7 +22,8 @@
 # external ID, opening no page, builds the token pages from it, and keeps each stored
 # token, naming its stack, unless the operator answers yes
 # to replacing it, Enter keeping it, opening no page for a kept one and still checking a
-# kept secret holds a value; that a stack URL asked for in the run asks for the external
+# kept secret holds a value, a stored value indented or followed by a comment counting as
+# stored; that a stack URL asked for in the run asks for the external
 # ID and every token again, setting a TF_VAR_grafana_external_id aside and saying so;
 # that a missing bootstrap or grafana dir, one the wizard cannot write to, or an
 # unreadable terraform.tfvars of either stack stops the wizard before any page opens,
@@ -161,13 +162,14 @@ run() {
   rm -f "${tmp}/bootstrap/"* "${tmp}/grafana/"*
   if [[ -z "${NO_TFVARS:-}" ]]; then
     # TFVARS_SET adds the external ID, and STORED_URL the stack URL, a previous run wrote;
-    # EXTERNAL_ID_LINE adds a raw external ID line.
+    # EXTERNAL_ID_LINE and STACK_URL_LINE add a raw external ID and stack URL line.
     printf 'operator_email = "op@example.com"\n' >"${tmp}/bootstrap/terraform.tfvars"
     [[ -z "${TFVARS_SET:-}" ]] || printf 'grafana_external_id = "ext-old"\n' >>"${tmp}/bootstrap/terraform.tfvars"
     [[ -z "${EXTERNAL_ID_LINE:-}" ]] || printf '%s\n' "${EXTERNAL_ID_LINE}" >>"${tmp}/bootstrap/terraform.tfvars"
     chmod "${TFVARS_MODE:-600}" "${tmp}/bootstrap/terraform.tfvars"
     printf 'kept = "yes"\n' >"${tmp}/grafana/terraform.tfvars"
     [[ -z "${STORED_URL:-}" ]] || printf 'grafana_url = "%s"\n' "${STORED_URL}" >>"${tmp}/grafana/terraform.tfvars"
+    [[ -z "${STACK_URL_LINE:-}" ]] || printf '%s\n' "${STACK_URL_LINE}" >>"${tmp}/grafana/terraform.tfvars"
     chmod "${GRAFANA_TFVARS_MODE:-600}" "${tmp}/grafana/terraform.tfvars"
   fi
   # BOOTSTRAP_DIR_MODE and GRAFANA_DIR_MODE set the stack dirs' modes; the next run resets them.
@@ -294,6 +296,21 @@ if [[ "$(grep -c '^grafana_url' "${tmp}/grafana/terraform.tfvars")" == 1 ]]; the
 check_file "stored stack url kept" "${tmp}/grafana/terraform.tfvars" 'grafana_url = "https://old.grafana.net"'
 if grep -qF "Press Enter to keep this stack, or Ctrl-C to stop." "${tmp}/stdout"; then ok "stored stack url waits for the operator"; else bad "stored stack url waits for the operator"; fi
 if grep -qF "grafana-cloud/write already holds a token for https://old.grafana.net." "${tmp}/stdout"; then ok "kept token names its stack"; else bad "kept token names its stack"; fi
+
+# Stored values on an indented line or with a trailing comment are read as stored, and
+# the stack URL is written back on one line.
+ANSWERS="${rerun_answers}"$'\nn\nn\nn' EXTERNAL_ID_LINE='  grafana_external_id = "ext-old"  # data source page' \
+  STACK_URL_LINE='  grafana_url = "https://old.grafana.net"  # free stack' PRESET_TOKENS="${all_secrets}" run || {
+  cat "${tmp}/stderr" >&2
+  exit 1
+}
+if [[ ! -s "${tmp}/opened" ]] && grep -qF "grafana_url is already set to https://old.grafana.net" "${tmp}/stdout" &&
+  grep -qF "grafana_external_id is already set" "${tmp}/stdout"; then
+  ok "indented and commented stored values read as stored"
+else
+  bad "indented and commented stored values read as stored"
+fi
+if [[ "$(grep -c 'grafana_url' "${tmp}/grafana/terraform.tfvars")" == 1 ]]; then ok "indented stored stack url written once"; else bad "indented stored stack url written once"; fi
 
 # Enter at each replace prompt keeps the stored token.
 ANSWERS="${rerun_answers}"$'\n\n\n' TFVARS_SET=1 STORED_URL="${stored_url}" PRESET_TOKENS="${all_secrets}" run || {
