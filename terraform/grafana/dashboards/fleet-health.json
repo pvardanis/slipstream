@@ -290,7 +290,7 @@
           "refId": "A",
           "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
           "queryType": "traceql",
-          "query": "{ resource.service.name = \"vllm\" && name = \"llm_request\" && span.ttft_ms > 1000 } | select(span.request_id, span.ttft_ms)",
+          "query": "{ resource.service.name = \"vllm\" && name = \"llm_request\" && span.ttft_ms > 1000.0 } | select(span.request_id, span.ttft_ms)",
           "tableType": "spans",
           "limit": 100,
           "spss": 1

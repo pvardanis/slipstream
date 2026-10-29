@@ -4,7 +4,8 @@
 # bench config passes to `vllm bench serve` (["ttft:1000", "tpot:50"], in ms), so
 # live and offline goodput cannot drift apart (ADR-0026). Dashboard queries may
 # compare ttft_ms only as span.ttft_ms > <ms>, at the same TTFT gate, and at least
-# one must. Reads the configs with yq and the dashboards with jq; needs no
+# one must. <ms> must be a decimal literal: the Collector writes ttft_ms as a
+# double, and Tempo matches no double against an integer literal. Reads the configs with yq and the dashboards with jq; needs no
 # running Collector.
 set -euo pipefail
 
@@ -133,7 +134,7 @@ done <<<"$(bench_configs)"
 # dashboard query, and one "<dashboard><TAB>unrecognised<TAB><query>" line per query
 # that mentions ttft_ms anywhere other than that form or a select() list, so a
 # reversed, unscoped or differently-directed comparison cannot go unchecked. A
-# comparison the query negates, as in !(span.ttft_ms > 1000), still reads as a cut.
+# comparison the query negates, as in !(span.ttft_ms > 1000.0), still reads as a cut.
 dashboard_ttft_cuts() {
   find "${dashboards_dir}" -name '*.json' -exec jq -r \
     '.. | objects | select(has("query")) | .query | strings | select(test("ttft_ms")) as $q
@@ -160,6 +161,10 @@ while IFS=$'\t' read -r dashboard kind value; do
   if [[ "${kind}" == unrecognised ]]; then
     echo "FAIL: ${dashboard} compares ttft_ms other than as span.ttft_ms > <ms>, the" \
       "requests over the Collector's TTFT gate: ${value}" >&2
+    fail=1
+  elif [[ "${value}" != *.* ]]; then
+    echo "FAIL: ${dashboard} cuts span.ttft_ms at the integer ${value}; ttft_ms is a" \
+      "double and Tempo matches no double against an integer literal, so write ${value}.0" >&2
     fail=1
   elif [[ -z "${ttft_s}" ]] || ! awk -v ms="${value}" -v s="${ttft_s}" 'BEGIN { exit !(ms / 1000 == s) }'; then
     echo "FAIL: ${dashboard} cuts span.ttft_ms at ${value} ms but the Collector's slo_met" \
