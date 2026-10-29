@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks around the OTel Collector's deploy in slipstream (`just obs-up`). preflight
+# Checks around the OTel Collector in slipstream (`just obs-up`, `just obs-pivot`). preflight
 # passes once what the Collector reads at start exists: the grafana-cloud-endpoints
 # ConfigMap the eks stack creates and the grafana-cloud-write Secret ESO syncs. Kubernetes
 # checks neither until the pod starts, and a pod that starts without them waits in
@@ -12,7 +12,7 @@
 # the Collector stays ready while Grafana Cloud rejects what it sends or never answers.
 # demo-span prints the shape-only OTLP demo trace `just obs-pivot` sends, for <model>,
 # timed at the run so a time-ranged trace search finds it.
-# Usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline|demo-span <model>
+# Usage: otel-collector-check.sh preflight | rollout | delivery <metrics-url> < baseline | demo-span <model>
 set -euo pipefail
 
 namespace=slipstream
@@ -133,8 +133,9 @@ delivery() {
   return 1
 }
 
-# demo_span MODEL prints the demo trace: one 100 ms chat.completion span from service
-# obs-pivot, so span metrics count it apart from vLLM's requests, starting now.
+# demo_span MODEL prints the demo trace: one 100 ms chat.completion span for MODEL,
+# starting at the current second, from service obs-pivot so span metrics count it apart
+# from vLLM's requests.
 demo_span() {
   local now
   now="$(date +%s)"
@@ -142,7 +143,7 @@ demo_span() {
 }
 
 usage() {
-  echo "usage: otel-collector-check.sh preflight|rollout|delivery <metrics-url> <baseline|demo-span <model>" >&2
+  echo "usage: otel-collector-check.sh preflight | rollout | delivery <metrics-url> < baseline | demo-span <model>" >&2
   exit 2
 }
 
