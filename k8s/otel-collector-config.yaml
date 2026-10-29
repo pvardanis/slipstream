@@ -85,6 +85,10 @@ processors:
           # slo_met: TTFT <= 1.0 s and TPOT <= 0.05 s, both gates inclusive.
           - set(span.attributes["slo_met"], false)
           - set(span.attributes["slo_met"], true) where span.attributes["gen_ai.latency.time_to_first_token"] <= span.cache["ttft_gate_s"] and span.cache["tpot_s"] <= span.cache["tpot_gate_s"]
+          # TTFT under the spine's name, in milliseconds as spec §5.2's
+          # first_token event carries it, so a trace search lists the slowest
+          # requests by request_id. A span without TTFT gets none.
+          - set(span.attributes["ttft_ms"], span.attributes["gen_ai.latency.time_to_first_token"] * 1000) where span.attributes["gen_ai.latency.time_to_first_token"] != nil
   # Shape-only guard, fail-closed: only these keys survive on a span or its
   # resource; every other attribute (a raw prompt, a completion, anything vLLM or
   # a future gateway attaches) is dropped before it can reach a sink — the
@@ -99,6 +103,7 @@ processors:
       - completion_tokens
       - prefix_hash
       - slo_met
+      - ttft_ms
       # Resource attributes: the sending service, and the vLLM replica's pod
       # name, which spanmetrics and a trace search split by.
       - service.name

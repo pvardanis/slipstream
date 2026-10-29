@@ -348,6 +348,11 @@ assert_span_attribute "${vllm_one_token_miss}" "slo_met: Bool(false)"
 assert_span_attribute "${vllm_no_e2e}" "slo_met: Bool(false)"
 assert_span_attribute "${vllm_zero_token_met}" "slo_met: Bool(true)"
 assert_span_attribute "${vllm_one_token_no_ttft}" "slo_met: Bool(false)"
+# TTFT reaches the exporter as ttft_ms, vLLM's seconds in milliseconds, so a
+# trace search lists the slow requests; a span without TTFT gets none.
+assert_span_attribute "${vllm_met}" "ttft_ms: Double(1000)"
+assert_span_attribute "${vllm_tpot_miss}" "ttft_ms: Double(500)"
+assert_span_lacks "${vllm_one_token_no_ttft}" "ttft_ms"
 # Spans already in the spine's names are not vLLM spans: they pass through
 # unchanged, and an slo_met they arrive with is dropped, since only the
 # Collector sets it.
