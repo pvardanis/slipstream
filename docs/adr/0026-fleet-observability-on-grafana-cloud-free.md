@@ -234,3 +234,14 @@ routing (L3) the breakdown shows the imbalance.
   Prometheus push URL and username as the ConfigMap `grafana-cloud-endpoints` in
   `slipstream`. `cluster-up` fails on a precondition when the grafana stack has no Tempo
   outputs.
+
+## Amendment (2026-10-29, #370): the GPU panels' fleet line is an average
+
+- **Why:** both GPU metrics are per-GPU ratios: `DCGM_FI_DEV_GPU_UTIL` a percentage from 0
+  to 100, `DCGM_FI_PROF_DRAM_ACTIVE` a fraction from 0 to 1. Their `sum` grows with the GPU
+  count and passes 100%, so it does not say how busy the fleet is.
+- **Fleet line:** `avg` over the GPUs `slipstream` pods hold. The breakdown is
+  `avg by (pod)` over the same GPUs, so with one GPU replica the two agree, as "Panels"
+  requires. A GPU no pod holds carries no `pod` label and is in neither.
+- **Other panels:** counters and histograms keep `sum`, and `histogram_quantile` over
+  `sum by (le)`.
