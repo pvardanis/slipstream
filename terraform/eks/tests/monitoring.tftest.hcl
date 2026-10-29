@@ -175,7 +175,8 @@ run "remote_write_targets_grafana_cloud_with_the_write_token" {
   # Grafana Cloud's Mimir rejects a series whose metric or label name holds a character
   # outside the legacy set (err-mimir-label-invalid), such as the OTel Collector's
   # server.address. Legacy validation has Prometheus request underscore-escaped names at
-  # scrape and refuse the rest, so it never holds a series remote_write would lose.
+  # scrape, and fail the scrape of a target that serves one anyway, so it never holds a
+  # series remote_write would lose.
   assert {
     condition     = try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.nameValidationScheme, "") == "Legacy"
     error_message = "Prometheus must validate metric and label names with the Legacy scheme, the one Grafana Cloud accepts."
