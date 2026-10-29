@@ -71,7 +71,7 @@ run "panels_query_the_hosted_prometheus_by_uid" {
   assert {
     condition = alltrue(flatten([
       for d in values(grafana_dashboard.this) : [
-        for p in flatten([for p in jsondecode(d.config_json).panels : concat([p], try(p.panels, []))]) : [
+        for p in flatten([for top in jsondecode(d.config_json).panels : concat([top], try(top.panels, []))]) : [
           for q in concat([p], p.targets) : q.datasource.uid == "prom-uid-test"
         ] if length(try(p.targets, [])) > 0
       ]
