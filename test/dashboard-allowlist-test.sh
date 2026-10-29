@@ -13,14 +13,20 @@ allowlist="${REMOTE_WRITE_ALLOWLIST:-${repo_root}/terraform/eks/remote-write-all
 # Every "expr" anywhere in a dashboard: the PromQL queries its panels run.
 queries='.. | objects | select(has("expr")) | .expr | strings'
 
+# Removes PromQL's double-, single- and back-quoted strings from a query.
+# shellcheck disable=SC2016 # $ in the jq programs is jq's, not the shell's.
+strip_strings='def strip_strings:
+  gsub("\"([^\"\\\\]|\\\\.)*\"|'"'"'([^'"'"'\\\\]|\\\\.)*'"'"'|`[^`]*`"; "");'
+
 # The metric names a dashboard's queries read, one per line. Strings, label matchers,
 # range and subquery brackets and grouping label lists are dropped, then function and
-# aggregation calls; the identifiers left, other than PromQL's keywords, are metric names. An identifier preceded by a digit,
-# dot or $ is a duration unit, exponent or Grafana variable, not a metric.
-# shellcheck disable=SC2016 # $ in the jq program is jq's, not the shell's.
-metric_extraction='
+# aggregation calls; the identifiers left, other than PromQL's keywords, are metric
+# names. An identifier preceded by a digit, dot or $ is a duration unit, exponent or
+# Grafana variable, not a metric.
+# shellcheck disable=SC2016
+metric_extraction="${strip_strings}"'
   ['"${queries}"'
-    | gsub("\"([^\"\\\\]|\\\\.)*\"|'"'"'([^'"'"'\\\\]|\\\\.)*'"'"'|`[^`]*`"; "")
+    | strip_strings
     | gsub("\\{[^}]*\\}"; "")
     | gsub("\\[[^\\]]*\\]"; "")
     | gsub("\\b(by|without|on|ignoring|group_left|group_right)\\s*\\([^)]*\\)"; "")
@@ -31,14 +37,28 @@ metric_extraction='
           "group_left", "group_right", "inf", "nan") | not))
   | unique[]'
 
-# Every query that selects its metric by a __name__ matcher, which the extraction above
-# cannot read.
-name_matcher_queries="${queries}"' | select(test("__name__"))'
+# What in a dashboard names metrics the extraction above cannot read, one per line: an
+# expr that is not a string, a query that mentions __name__, a Grafana variable followed
+# by a label matcher or range (standing for the metric name), and a query variable.
+# shellcheck disable=SC2016
+unreadable_queries="${strip_strings}"'
+  (.. | objects | select(has("expr")) | .expr | select(type != "string")
+    | "an expr that is not a string: \(tojson)"),
+  ('"${queries}"' | select(test("__name__"))
+    | "a query that mentions __name__: \(.)"),
+  ('"${queries}"'
+    | select(strip_strings | test("\\$(\\{[^}]*\\}|\\w+)\\s*[{\\[]|\\[\\["))
+    | "a query whose metric name is a Grafana variable: \(.)"),
+  (.templating.list[]? | select(.type == "query")
+    | "a query variable: \(.name)")'
 
 fail=0
 
-if ! allowed="$(yq '.metrics[]' "${allowlist}")" || [[ -z "${allowed}" ]]; then
-  echo "FAIL: no metrics read from ${allowlist}; expected a non-empty metrics list" >&2
+allowlist_is_name_list='(.metrics | tag == "!!seq") and (.metrics | length > 0)
+  and ([.metrics[] | select(tag != "!!str")] | length == 0)'
+if ! yq -e "${allowlist_is_name_list}" "${allowlist}" >/dev/null ||
+  ! allowed="$(yq '.metrics[]' "${allowlist}")"; then
+  echo "FAIL: no metrics read from ${allowlist}; expected metrics to be a non-empty list of names" >&2
   exit 1
 fi
 
@@ -56,12 +76,22 @@ while IFS= read -r dashboard; do
     fail=1
     continue
   fi
-  while IFS= read -r query; do
-    [[ -n "${query}" ]] || continue
-    echo "FAIL: ${name} selects a metric by __name__, which this check cannot read;" \
-      "name the metric before its braces: ${query}" >&2
+  if ! unreadable="$(jq -r "${unreadable_queries}" "${dashboard}" 2>&1)"; then
+    echo "FAIL: ${name}: reading its queries failed: ${unreadable}" >&2
     fail=1
-  done <<<"$(jq -r "${name_matcher_queries}" "${dashboard}")"
+    continue
+  fi
+  if ! metrics="$(jq -r "${metric_extraction}" "${dashboard}" 2>&1)"; then
+    echo "FAIL: ${name}: reading its metrics failed: ${metrics}" >&2
+    fail=1
+    continue
+  fi
+  while IFS= read -r reason; do
+    [[ -n "${reason}" ]] || continue
+    echo "FAIL: ${name} has ${reason}; this check cannot read which metrics it needs," \
+      "so name each metric literally in a panel's expr or extend this check" >&2
+    fail=1
+  done <<<"${unreadable}"
   while IFS= read -r metric; do
     [[ -n "${metric}" ]] || continue
     checked=$((checked + 1))
@@ -70,7 +100,7 @@ while IFS= read -r dashboard; do
         "add it to the allowlist's metrics or the panel shows no data" >&2
       fail=1
     fi
-  done <<<"$(jq -r "${metric_extraction}" "${dashboard}")"
+  done <<<"${metrics}"
 done <<<"${dashboards}"
 
 if [[ "${fail}" -ne 0 ]]; then
