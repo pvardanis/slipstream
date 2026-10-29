@@ -58,7 +58,7 @@ fail=0
 # metrics is required; collector_metrics may be absent, but if present is a list of names.
 allowlist_is_name_list='(.metrics | tag == "!!seq") and (.metrics | length > 0)
   and ([.metrics[] | select(tag != "!!str")] | length == 0)
-  and (has("collector_metrics") | not
+  and ((has("collector_metrics") | not)
     or ((.collector_metrics | tag == "!!seq")
       and ([.collector_metrics[] | select(tag != "!!str")] | length == 0)))'
 if ! yq -e "${allowlist_is_name_list}" "${allowlist}" >/dev/null ||
