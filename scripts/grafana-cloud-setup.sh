@@ -302,8 +302,8 @@ put_token() {
 # stack URL means the stored tokens belong to that stack, since grafana_url is written
 # only once every token is stored. It reads only whether the secret has an AWSCURRENT
 # version, never the value; an empty current value is caught by check_secret_set. It runs
-# as an if condition, where set -e does not apply and a return 1 would read as "ask for a
-# token", so an unreadable or unexpected answer exits.
+# on the left of && in store_token, where set -e does not apply and a return 1 would read
+# as "ask for a token", so an unreadable or unexpected answer exits.
 keep_token() {
   local current
   [[ -n "${stack_stored}" ]] || return 1
@@ -340,32 +340,16 @@ check_secret_set() {
   printf '  %s✓%s %s holds a value\n' "$GREEN" "$RESET" "$1"
 }
 
-# check_prerequisites stops the wizard on anything the stages need that is missing,
-# before the operator starts the browser work.
-check_prerequisites() {
+# check_stack_files stops the wizard on a stack dir that is missing or cannot be written
+# to, or a terraform.tfvars that cannot be read, before the operator starts the browser
+# work.
+check_stack_files() {
   if [[ ! -d "${bootstrap_dir}" ]]; then
     echo "bootstrap dir ${bootstrap_dir} not found; pass the terraform/bootstrap directory" >&2
     exit 1
   fi
   if [[ ! -d "${grafana_dir}" ]]; then
     echo "grafana dir ${grafana_dir} not found; pass the terraform/grafana directory" >&2
-    exit 1
-  fi
-  local tool
-  for tool in terraform aws; do
-    if ! command -v "${tool}" >/dev/null; then
-      echo "${tool} not found on PATH; install it and rerun the wizard" >&2
-      exit 1
-    fi
-  done
-  if ! aws sts get-caller-identity >/dev/null; then
-    echo "aws is not authenticated: set AWS_PROFILE to the bootstrap account and log in" >&2
-    exit 1
-  fi
-  # With AWS CLI history on, aws records each call's parameters, the token included, in
-  # ~/.aws/cli/history. `configure get` exits 1 when the setting is unset.
-  if [[ "$(aws configure get cli_history || true)" == enabled ]]; then
-    echo "cli_history is enabled in the AWS config, so aws would record each token; disable it and rerun the wizard" >&2
     exit 1
   fi
   # A tfvars file that cannot be read would pass for one holding nothing: its values would
@@ -385,6 +369,28 @@ check_prerequisites() {
       exit 1
     fi
   done
+}
+
+# check_prerequisites stops the wizard on a missing tool, an unauthenticated aws or AWS
+# CLI history being on, before the operator starts the browser work.
+check_prerequisites() {
+  local tool
+  for tool in terraform aws; do
+    if ! command -v "${tool}" >/dev/null; then
+      echo "${tool} not found on PATH; install it and rerun the wizard" >&2
+      exit 1
+    fi
+  done
+  if ! aws sts get-caller-identity >/dev/null; then
+    echo "aws is not authenticated: set AWS_PROFILE to the bootstrap account and log in" >&2
+    exit 1
+  fi
+  # With AWS CLI history on, aws records each call's parameters, the token included, in
+  # ~/.aws/cli/history. `configure get` exits 1 when the setting is unset.
+  if [[ "$(aws configure get cli_history || true)" == enabled ]]; then
+    echo "cli_history is enabled in the AWS config, so aws would record each token; disable it and rerun the wizard" >&2
+    exit 1
+  fi
 }
 
 # set_stack_url sets STACK_URL, read from the grafana stack's terraform.tfvars or asked
@@ -413,6 +419,19 @@ set_stack_url() {
   STACK_URL="${STACK_URL%/}"
 }
 
+# has_stored_external_id succeeds when the stack URL is stored and terraform.tfvars holds a
+# valid external ID beside it.
+has_stored_external_id() {
+  [[ -n "${stack_stored}" ]] && is_external_id "$(read_tfvar "${tfvars}" grafana_external_id || true)"
+}
+
+# uses_exported_external_id succeeds when the stack URL is stored and
+# TF_VAR_grafana_external_id sets the external ID, with no line in terraform.tfvars to
+# outrank it.
+uses_exported_external_id() {
+  [[ -n "${stack_stored}" && -n "${TF_VAR_grafana_external_id:-}" ]] && ! has_tfvar "${tfvars}" grafana_external_id
+}
+
 # set_external_id settles the external ID the bootstrap apply reads.
 set_external_id() {
   stage "Grafana Assume Role: external ID"
@@ -420,10 +439,10 @@ set_external_id() {
   # terraform.tfvars takes precedence over TF_VAR_grafana_external_id at apply. The external
   # ID belongs to its stack, so a stored one, or TF_VAR's, is used only beside a stored
   # stack URL.
-  if [[ -n "${stack_stored}" ]] && is_external_id "$(read_tfvar "${tfvars}" grafana_external_id || true)"; then
+  if has_stored_external_id; then
     note "grafana_external_id is already set; the apply uses it. To set it again, remove it"
     note "from ${tfvars} and leave TF_VAR_grafana_external_id unset."
-  elif [[ -n "${stack_stored}" && -n "${TF_VAR_grafana_external_id:-}" ]] && ! has_tfvar "${tfvars}" grafana_external_id; then
+  elif uses_exported_external_id; then
     note "grafana_external_id comes from TF_VAR_grafana_external_id, which the apply uses;"
     note "unset TF_VAR_grafana_external_id to set it again."
   else
@@ -540,6 +559,7 @@ run_wizard() {
 
   TOTAL_STAGES=8
 
+  check_stack_files
   check_prerequisites
   banner "Grafana Cloud setup"
   set_stack_url
