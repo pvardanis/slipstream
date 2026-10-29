@@ -10,14 +10,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dashboards_dir="${DASHBOARDS_DIR:-${repo_root}/terraform/grafana/dashboards}"
 allowlist="${REMOTE_WRITE_ALLOWLIST:-${repo_root}/terraform/eks/remote-write-allowlist.yaml}"
 
-# The metric names a dashboard's PromQL queries read, one per line, from every "expr"
-# anywhere in it. Strings, label matchers, range and subquery brackets and grouping
-# label lists are dropped, then function and aggregation calls; the identifiers left,
-# other than PromQL's keywords, are metric names. An identifier preceded by a digit,
+# Every "expr" anywhere in a dashboard: the PromQL queries its panels run.
+queries='.. | objects | select(has("expr")) | .expr | strings'
+
+# The metric names a dashboard's queries read, one per line. Strings, label matchers,
+# range and subquery brackets and grouping label lists are dropped, then function and
+# aggregation calls; the identifiers left, other than PromQL's keywords, are metric names. An identifier preceded by a digit,
 # dot or $ is a duration unit, exponent or Grafana variable, not a metric.
 # shellcheck disable=SC2016 # $ in the jq program is jq's, not the shell's.
 metric_extraction='
-  [.. | objects | select(has("expr")) | .expr | strings
+  ['"${queries}"'
     | gsub("\"([^\"\\\\]|\\\\.)*\"|'"'"'([^'"'"'\\\\]|\\\\.)*'"'"'|`[^`]*`"; "")
     | gsub("\\{[^}]*\\}"; "")
     | gsub("\\[[^\\]]*\\]"; "")
@@ -31,7 +33,7 @@ metric_extraction='
 
 # Every query that selects its metric by a __name__ matcher, which the extraction above
 # cannot read.
-name_matcher_queries='.. | objects | select(has("expr")) | .expr | strings | select(test("__name__"))'
+name_matcher_queries="${queries}"' | select(test("__name__"))'
 
 fail=0
 
