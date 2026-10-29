@@ -2,9 +2,10 @@
 # Static goodput parity check: the Collector's slo_met gates
 # (k8s/otel-collector-config.yaml, in seconds) must equal the goodput gates every
 # bench config passes to `vllm bench serve` (["ttft:1000", "tpot:50"], in ms), so
-# live and offline goodput cannot drift apart (ADR-0026). Every dashboard TraceQL
-# query that filters on ttft_ms must cut at the same TTFT gate, in ms. Reads the
-# configs with yq and the dashboards with jq; needs no running Collector.
+# live and offline goodput cannot drift apart (ADR-0026). Dashboard queries may
+# compare ttft_ms only as span.ttft_ms > <ms>, at the same TTFT gate, and at least
+# one must. Reads the configs with yq and the dashboards with jq; needs no
+# running Collector.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -128,31 +129,43 @@ while IFS= read -r config; do
   done
 done <<<"$(bench_configs)"
 
-# Every "<dashboard>: <ms>" TTFT threshold a dashboard's TraceQL query cuts at,
-# from each span.ttft_ms comparison in a query string.
-dashboard_ttft_thresholds() {
+# One "<dashboard><TAB>cut<TAB><ms>" line per span.ttft_ms > <ms> comparison in a
+# dashboard query, and one "<dashboard><TAB>unrecognised<TAB><query>" line per query
+# that mentions ttft_ms anywhere other than that form or a select() list, so a
+# reversed, unscoped or differently-directed comparison cannot go unchecked.
+dashboard_ttft_cuts() {
   find "${dashboards_dir}" -name '*.json' -exec jq -r \
-    '.. | objects | select(has("query")) | .query | strings
-      | scan("span\\.ttft_ms\\s*[<>]=?\\s*([0-9.]+)")[0] | input_filename + ": " + .' {} + |
+    '.. | objects | select(has("query")) | .query | strings | select(test("ttft_ms")) as $q
+      | ([$q | scan("ttft_ms")] | length) as $mentions
+      | [$q | scan("span\\.ttft_ms\\s*>\\s*([0-9]+(?:\\.[0-9]+)?)(?![\\w.])")[0]] as $cuts
+      | ([$q | scan("span\\.ttft_ms\\s*[,)]")] | length) as $selected
+      | if $mentions == ($cuts | length) + $selected
+        then $cuts[] | input_filename + "\tcut\t" + .
+        else input_filename + "\tunrecognised\t" + $q end' {} + |
     sed "s|^${repo_root}/||" | sort
 }
 
-thresholds="$(dashboard_ttft_thresholds)"
-if [[ -z "${thresholds}" ]]; then
-  echo "FAIL: no dashboard query under ${dashboards_dir} filters on span.ttft_ms;" \
+cuts="$(dashboard_ttft_cuts)" || {
+  echo "FAIL: cannot read the dashboards under ${dashboards_dir}; every one must be valid JSON" >&2
+  exit 1
+}
+if ! grep -q $'\tcut\t' <<<"${cuts}"; then
+  echo "FAIL: no dashboard query under ${dashboards_dir} filters span.ttft_ms > <ms>;" \
     "the requests-over-the-TTFT-gate table must cut at the TTFT gate" >&2
   fail=1
 fi
-while IFS= read -r threshold; do
-  [[ -n "${threshold}" ]] || continue
-  dashboard="${threshold%%: *}"
-  ms="${threshold#*: }"
-  if [[ -z "${ttft_s}" ]] || ! awk -v ms="${ms}" -v s="${ttft_s}" 'BEGIN { exit !(ms / 1000 == s) }'; then
-    echo "FAIL: ${dashboard} cuts span.ttft_ms at ${ms} ms but the Collector's slo_met" \
+while IFS=$'\t' read -r dashboard kind value; do
+  [[ -n "${dashboard}" ]] || continue
+  if [[ "${kind}" == unrecognised ]]; then
+    echo "FAIL: ${dashboard} compares ttft_ms other than as span.ttft_ms > <ms>, the" \
+      "requests over the Collector's TTFT gate: ${value}" >&2
+    fail=1
+  elif [[ -z "${ttft_s}" ]] || ! awk -v ms="${value}" -v s="${ttft_s}" 'BEGIN { exit !(ms / 1000 == s) }'; then
+    echo "FAIL: ${dashboard} cuts span.ttft_ms at ${value} ms but the Collector's slo_met" \
       "TTFT gate is ${ttft_s:-nothing} s (${collector_config}); make them equal" >&2
     fail=1
   fi
-done <<<"${thresholds}"
+done <<<"${cuts}"
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
