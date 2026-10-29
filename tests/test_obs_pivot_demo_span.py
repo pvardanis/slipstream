@@ -8,22 +8,25 @@ count once per bring-up in every vLLM request rate selected by service_name.
 """
 
 import json
-import re
+import subprocess
 from pathlib import Path
 
 import yaml
 
 _REPO = Path(__file__).resolve().parents[1]
-_OBS_JUST = _REPO / "just" / "obs.just"
+_OTEL_CHECK = _REPO / "scripts" / "otel-collector-check.sh"
 _VLLM_GPU_MANIFEST = _REPO / "k8s" / "vllm-gpu.yaml"
 
 
 def _get_demo_span_resource() -> dict[str, str]:
-    recipe = _OBS_JUST.read_text(encoding="utf-8")
-    bodies = re.findall(r"-d '(\{\"resourceSpans\".*?)';", recipe)
-    assert len(bodies) == 1, f"expected one OTLP span payload in {_OBS_JUST}: {bodies}"
-    (body,) = bodies
-    payload = json.loads(body.replace("'\"${model}\"'", "model"))
+    """The resource attributes of the demo trace `obs-pivot` sends."""
+    body = subprocess.run(
+        ["bash", str(_OTEL_CHECK), "demo-span", "model"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    payload = json.loads(body)
     (resource_spans,) = payload["resourceSpans"]
     return {
         attribute["key"]: attribute["value"]["stringValue"]
