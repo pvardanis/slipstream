@@ -132,8 +132,8 @@ connectors:
       unit: s
       # LLM requests run from well under a second to minutes, past the
       # connector's default buckets (2 ms to 15 s). A p95 interpolates inside
-      # its bucket, so from 15 s to 120 s, where loaded requests finish, each
-      # bound is at most 1.5 times the one before.
+      # its bucket, so from 15 s to 120 s each bound is at most 1.5 times the
+      # one before.
       explicit:
         buckets: [250ms, 500ms, 1s, 2s, 4s, 8s, 15s, 20s, 30s, 45s, 60s, 90s, 120s, 300s]
     dimensions:
