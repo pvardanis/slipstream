@@ -13,12 +13,12 @@ metrics:
   - vllm:generation_tokens_total
   - vllm:request_success_total
   # Karpenter 1.8: node count, create/terminate annotations, pod-provisioning cold start (a
-  # summary, so its quantiles are series of the base name), voluntary disruptions, and the
+  # histogram, so its quantiles come from _bucket), voluntary disruptions, and the
   # scoreboard's price with the allocatable GPUs that tell which node it applies to.
   - karpenter_cluster_state_node_count
   - karpenter_nodes_created_total
   - karpenter_nodes_terminated_total
-  - karpenter_pods_startup_duration_seconds
+  - karpenter_pods_provisioning_startup_duration_seconds_bucket
   - karpenter_voluntary_disruption_decisions_total
   - karpenter_nodes_allocatable
   - karpenter_cloudprovider_instance_type_offering_price_estimate
