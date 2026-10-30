@@ -69,3 +69,29 @@ tests:
         ref: A
         eval_time: 60m
         exp_samples: []
+
+  # Cold start, buckets born in range: the histogram's buckets first appear at 5m, with
+  # one pod start in (150, 300] s. No bucket exists 60m before, so only the born-in-range
+  # branch counts them. The quantile interpolates inside (150, 300]:
+  # p50 = 150 + 150 x 0.5 = 225; p95 = 150 + 150 x 0.95 = 292.5.
+  - interval: 30s
+    input_series:
+      - series: 'karpenter_pods_provisioning_startup_duration_seconds_bucket{le="150"}'
+        values: '_x10 0x110'
+      - series: 'karpenter_pods_provisioning_startup_duration_seconds_bucket{le="300"}'
+        values: '_x10 1x110'
+      - series: 'karpenter_pods_provisioning_startup_duration_seconds_bucket{le="+Inf"}'
+        values: '_x10 1x110'
+    promql_expr_test:
+      - panel: 14
+        ref: A
+        eval_time: 60m
+        exp_samples:
+          - labels: '{}'
+            value: 225
+      - panel: 14
+        ref: B
+        eval_time: 60m
+        exp_samples:
+          - labels: '{}'
+            value: 292.5

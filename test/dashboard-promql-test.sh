@@ -77,6 +77,11 @@ for panel in 17 18; do
 done
 check_mutation_fails 17 A ' > 0\) \* 1e6$' ') * 1e6' 'no > 0 filter on the token count'
 
+# The Karpenter panels' counters, which Karpenter creates at their first increment: the
+# branch that counts a series born inside the range.
+born_in_range=' or \(last_over_time\([^)]*\) unless [^)]*\)'
+check_mutation_fails 14 B "${born_in_range}" '' 'no branch for buckets born in range'
+
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
 fi
