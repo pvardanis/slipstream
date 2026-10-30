@@ -322,3 +322,27 @@ routing (L3) the breakdown shows the imbalance.
 - **Effect:** a `request_id` still resolves to one trace, since vLLM's ids are unique, but
   it does not join to a client's logs, Sentry or PostHog. #430 tracks joining it to the
   client's id.
+
+## Amendment (2026-10-30, #372): the Karpenter, spend and scoreboard panels' queries
+
+- **Cold start:** the panel reads `karpenter_pods_provisioning_startup_duration_seconds`,
+  a histogram from when Karpenter first sees a schedulable pending pod until it runs, as
+  p50 and p95 over the dashboard's time range. The allowlist sends its `_bucket` series in
+  place of `karpenter_pods_startup_duration_seconds`, a summary no panel reads. Karpenter's
+  buckets are 2x wide from 150 s to 300 s, so a p95 there can be off by up to a factor
+  of 2.
+- **Counters Karpenter creates late:** Karpenter's node-created, node-terminated and
+  disruption-decision counters and the cold-start histogram are labelled series created at
+  their first increment, and `just cluster-up` starts a fresh Karpenter, so `increase()`
+  misses each series' first increment, often the session's only one. The range panels take
+  `increase()` for a series alive at the range's start and its last value for one born
+  inside it. The annotations do the same over 2 minutes, so an increment falls between two
+  30 s scrapes in the window, and one event can mark two adjacent minutes.
+- **Scoreboard dollars:** each minute of the range, every node with an allocatable
+  `nvidia.com/gpu` costs the price gauge for its instance type, capacity type and zone,
+  divided by 60. A subquery at a one-minute step sums them, so idle GPU minutes count.
+- **Tokens/sec/$:** read as tokens served per second over the range divided by GPU dollars
+  per hour over the range, "tokens/s per $/h".
+- **Spend:** `AWS/Usage` publishes no datapoint while no G-class vCPU runs, so the panel
+  fills those minutes with 0 (`FILL`). It reads on-demand vCPUs only, as the GPU NodePool
+  launches on-demand capacity only.
