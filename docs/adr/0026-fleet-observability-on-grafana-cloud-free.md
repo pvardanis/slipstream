@@ -380,7 +380,8 @@ routing (L3) the breakdown shows the imbalance.
     for the node with an allocatable `nvidia.com/gpu`.
 - **No throttling panel:** the pod has no CPU limit, so CFS never throttles it.
 - **Sent cluster-wide:** `container_cpu_usage_seconds_total` comes from cAdvisor through
-  the kubelet, one series per container, pod and node cgroup. The allowlist is one keep
+  the kubelet, one series per container and one per pod; the chart's default cAdvisor
+  relabelling drops cgroups with no pod, such as the node's own. The allowlist is one keep
   rule over the metric name and `instance_type`; filtering this metric by namespace or
   container would add a second rule for one metric. A system node and a GPU node hold
   tens of pods, so the metric adds at most a few hundred series against the free tier's
