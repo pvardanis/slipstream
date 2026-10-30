@@ -327,9 +327,14 @@ routing (L3) the breakdown shows the imbalance.
 
 - **Cold start:** the panel reads `karpenter_pods_provisioning_startup_duration_seconds`,
   a histogram from when Karpenter's scheduling simulation last started placing a pending
-  pod until it runs, as p50 and p95 over the dashboard's time range. A simulation that
-  finds no capacity for the pod restarts that clock (`MarkPodSchedulingDecisions`), so
-  time spent waiting out capacity shortages before the last attempt is left out: on
+  pod until it is Ready, as p50 and p95 over the dashboard's time range. Karpenter's help
+  text says until the pod is running, but it observes the `PodReady` condition's
+  transition (Karpenter v1.8, `pkg/controllers/metrics/pod/controller.go`), so for vLLM
+  the figure includes pulling the image and loading the model until the readiness probe
+  first passes, after the startup probe: on 2026-10-30 a pod Running about 5.4 min after
+  it was created was Ready, and observed, at about 9.7 min. A simulation that finds no
+  capacity for the pod restarts that clock (`MarkPodSchedulingDecisions`), so time spent
+  waiting out capacity shortages before the last attempt is left out: on
   2026-10-30 a pod that waited 1,089 s through four g5.xlarge shortages read about 525 s.
   The allowlist sends its `_bucket` series in
   place of `karpenter_pods_startup_duration_seconds`, a summary no panel reads. Karpenter's
@@ -359,7 +364,17 @@ routing (L3) the breakdown shows the imbalance.
 - **Spend:** `AWS/Usage` publishes a datapoint every 5 minutes while a G-class vCPU runs
   and none while none do, so the panel reads 5-minute periods, as the spend-leak alarm
   does, and fills the empty ones with 0 (`FILL`). It reads on-demand vCPUs only, as the GPU NodePool
-  launches on-demand capacity only.
+  launches on-demand capacity only. Each period shows its maximum, so a GPU gap shorter
+  than a period, such as a node replacement, usually does not reach 0 on this panel; the
+  Nodes panel shows node churn.
+- **Nodes:** the panel plots each step's lowest `karpenter_cluster_state_node_count`
+  (`min_over_time` over `$__interval`, at least the 30 s scrape interval), so a gap a
+  scrape catches shows as a dip even when it is shorter than the step: on 2026-10-30 a
+  GPU node replaced by hand left one node for about 30 s. A gap shorter than the scrape
+  interval can fall between scrapes and not show.
+- **Disruptions:** a stat with one figure per reason, its text mode set to value and name,
+  as Grafana hides the name of a lone value and a range often holds one reason. Not a bar
+  gauge: it scales each bar to the largest value, so the top reason would always fill it.
 
 ## Amendment (2026-10-30, #436): a CPU panel on the vLLM GPU pods
 
