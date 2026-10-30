@@ -3,8 +3,9 @@
 # (k8s/otel-collector-config.yaml, in seconds) must equal the goodput gates every
 # bench config passes to `vllm bench serve` (["ttft:1000", "tpot:50"], in ms), so
 # live and offline goodput cannot drift apart (ADR-0026). Dashboard queries may
-# compare ttft_ms only as span.ttft_ms > <ms>, at the same TTFT gate, and at least
-# one must. <ms> must be a decimal literal: the Collector writes ttft_ms as a
+# compare ttft_ms only as span.ttft_ms > <ms>, at the same TTFT gate, in a query of
+# vLLM's llm_request spans piped at most to select(), and a Tempo table panel must
+# hold one. <ms> must be a decimal literal: the Collector writes ttft_ms as a
 # double, and Tempo matches no double against an integer literal. Reads the
 # configs with yq and the dashboards with jq; needs no running Collector.
 set -euo pipefail
@@ -130,20 +131,32 @@ while IFS= read -r config; do
   done
 done <<<"$(bench_configs)"
 
-# One "<dashboard><TAB>cut<TAB><ms>" line per span.ttft_ms > <ms> comparison in a
-# dashboard query, and one "<dashboard><TAB>unrecognised<TAB><query>" line per query
-# that mentions ttft_ms anywhere other than that form or a select() list, so a
-# reversed, unscoped or differently-directed comparison cannot go unchecked. A
-# comparison the query negates, as in !(span.ttft_ms > 1000.0), still reads as a cut.
+# One "<dashboard><TAB><kind><TAB><ms>" line per span.ttft_ms > <ms> comparison in
+# a dashboard query, <kind> being table-cut in a Tempo table panel and cut anywhere
+# else. A query that cuts ttft_ms must be exactly
+#   { resource.service.name = "vllm" && name = "llm_request" && span.ttft_ms > <ms> }
+# with at most a select() after it, so a negated cut, an || beside it, another
+# service or a pipeline stage that drops rows cannot empty the table unchecked;
+# such a query gives one "<dashboard><TAB>unshaped<TAB><query>" line. A query that
+# mentions ttft_ms anywhere other than that cut or a select() list gives one
+# "<dashboard><TAB>unrecognised<TAB><query>" line, so a reversed, unscoped or
+# differently-directed comparison cannot go unchecked either.
 dashboard_ttft_cuts() {
   find "${dashboards_dir}" -name '*.json' -exec jq -r \
-    '.. | objects | select(has("query")) | .query | strings | select(test("ttft_ms")) as $q
+    'def ms: "[0-9]+(?:\\.[0-9]+)?";
+    . as $root | paths(objects and has("query")) as $path | getpath($path) as $target
+      | $target.query | strings | select(test("ttft_ms")) as $q
+      | (if $path[-2] == "targets" then $root | getpath($path[:-2]) else {} end) as $panel
+      | ($panel.type == "table" and ($target.datasource.type // $panel.datasource.type) == "tempo") as $table
       | ([$q | scan("ttft_ms\\b")] | length) as $mentions
-      | [$q | scan("(?<![\\w.])span\\.ttft_ms\\s*>\\s*([0-9]+(?:\\.[0-9]+)?)(?![\\w.])")[0]] as $cuts
+      | [$q | scan("(?<![\\w.])span\\.ttft_ms\\s*>\\s*(" + ms + ")(?![\\w.])")[0]] as $cuts
       | ([$q | scan("select\\([^)]*(?<![\\w.])span\\.ttft_ms\\s*[,)]")] | length) as $selected
-      | if $mentions == ($cuts | length) + $selected
-        then $cuts[] | input_filename + "\tcut\t" + .
-        else input_filename + "\tunrecognised\t" + ($q | gsub("\\s+"; " ")) end' {} + |
+      | ($q | test("^\\s*\\{\\s*resource\\.service\\.name\\s*=\\s*\"vllm\"\\s*&&\\s*name\\s*=\\s*\"llm_request\"\\s*&&\\s*span\\.ttft_ms\\s*>\\s*" + ms + "\\s*\\}(?:\\s*\\|\\s*select\\([^()|]*\\))?\\s*$")) as $shaped
+      | if $mentions != ($cuts | length) + $selected
+        then input_filename + "\tunrecognised\t" + ($q | gsub("\\s+"; " "))
+        elif ($cuts | length) > 0 and ($shaped | not)
+        then input_filename + "\tunshaped\t" + ($q | gsub("\\s+"; " "))
+        else $cuts[] | input_filename + "\t" + (if $table then "table-cut" else "cut" end) + "\t" + . end' {} + |
     sed "s|^${repo_root}/||" | sort
 }
 
@@ -151,8 +164,8 @@ cuts="$(dashboard_ttft_cuts)" || {
   echo "FAIL: cannot read the dashboards under ${dashboards_dir}; every one must be valid JSON" >&2
   exit 1
 }
-if ! grep -q $'\tcut\t' <<<"${cuts}"; then
-  echo "FAIL: no dashboard query under ${dashboards_dir} filters span.ttft_ms > <ms>;" \
+if ! grep -q $'\ttable-cut\t' <<<"${cuts}"; then
+  echo "FAIL: no Tempo table panel under ${dashboards_dir} filters span.ttft_ms > <ms>;" \
     "the requests-over-the-TTFT-gate table must cut at the TTFT gate" >&2
   fail=1
 fi
@@ -161,6 +174,11 @@ while IFS=$'\t' read -r dashboard kind value; do
   if [[ "${kind}" == unrecognised ]]; then
     echo "FAIL: ${dashboard} compares ttft_ms other than as span.ttft_ms > <ms>, the" \
       "requests over the Collector's TTFT gate: ${value}" >&2
+    fail=1
+  elif [[ "${kind}" == unshaped ]]; then
+    echo "FAIL: ${dashboard} queries span.ttft_ms other than as { resource.service.name =" \
+      "\"vllm\" && name = \"llm_request\" && span.ttft_ms > <ms> }, optionally piped to" \
+      "select(), so its rows may not be vLLM's requests over the TTFT gate: ${value}" >&2
     fail=1
   elif [[ "${value}" != *.* ]]; then
     echo "FAIL: ${dashboard} cuts span.ttft_ms at the integer ${value}; ttft_ms is a" \
