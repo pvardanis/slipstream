@@ -5,7 +5,11 @@
 # are worked by hand from the input series, not recomputed the way the query does.
 tests:
   # Scoreboard, one GPU node: a g5.xlarge on-demand node with a GPU for the first 30m at
-  # $1.20/h, and 3000 prompt + 1500 generation tokens per 30 s scrape.
+  # $1.20/h, and 3000 prompt + 1500 generation tokens per 30 s scrape. A t3.large system
+  # node with 0 GPUs is priced but not counted. The g5.xlarge spot and eu-central-1b
+  # prices match the GPU node on all but one of the price join's labels, and the t3.large
+  # price on all but instance_type, so a join that ignores any one label matches two
+  # prices and fails.
   #
   # Spend: the [60m:1m] subquery steps at 1m..60m; the GPU series' last sample is at 30m,
   # so it is visible at steps 1m..34m (5m lookback, left-open): 34 steps x $1.20 / 60 =
@@ -16,8 +20,18 @@ tests:
     input_series:
       - series: 'karpenter_nodes_allocatable{resource_type="nvidia.com/gpu",instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1a",node_name="gpu1"}'
         values: '1x60'
+      - series: 'karpenter_nodes_allocatable{resource_type="cpu",instance_type="t3.large",capacity_type="on-demand",zone="eu-central-1a",node_name="sys1"}'
+        values: '2x120'
+      - series: 'karpenter_nodes_allocatable{resource_type="nvidia.com/gpu",instance_type="t3.large",capacity_type="on-demand",zone="eu-central-1a",node_name="sys1"}'
+        values: '0x120'
       - series: 'karpenter_cloudprovider_instance_type_offering_price_estimate{instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1a"}'
         values: '1.2x120'
+      - series: 'karpenter_cloudprovider_instance_type_offering_price_estimate{instance_type="t3.large",capacity_type="on-demand",zone="eu-central-1a"}'
+        values: '0.1x120'
+      - series: 'karpenter_cloudprovider_instance_type_offering_price_estimate{instance_type="g5.xlarge",capacity_type="spot",zone="eu-central-1a"}'
+        values: '0.5x120'
+      - series: 'karpenter_cloudprovider_instance_type_offering_price_estimate{instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1b"}'
+        values: '1.3x120'
       - series: 'vllm:prompt_tokens_total{namespace="slipstream",pod="v1"}'
         values: '0+3000x120'
       - series: 'vllm:generation_tokens_total{namespace="slipstream",pod="v1"}'
