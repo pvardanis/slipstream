@@ -317,7 +317,8 @@ routing (L3) the breakdown shows the imbalance.
 - **Why:** `/v1/completions`, which the bench calls, names a request `cmpl-` plus the
   `X-Request-Id` or a random id, plus `-<prompt index>`. The `transform` strips only
   `chatcmpl-`, and the bench's `prefix_repetition` dataset sends no `X-Request-Id`. So
-  "Traces and `request_id`" holds for `/v1/chat/completions` only.
+  what "Context" and "Traces and `request_id`" say of the request id holds for
+  `/v1/chat/completions` only.
 - **Effect:** a `request_id` still resolves to one trace, since vLLM's ids are unique, but
-  it does not join to a client's logs, Sentry or PostHog. #430 tracks the fix, which the
-  pivot demo needs.
+  it does not join to a client's logs, Sentry or PostHog. #430 tracks joining it to the
+  client's id.

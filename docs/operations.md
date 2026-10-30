@@ -310,7 +310,8 @@ query as failing; that is expected.
 JSON file, keyed by file name: adding, editing or deleting a file creates, updates or
 deletes that dashboard on the next apply. The dashboards are read-only in the Grafana UI,
 and the next apply overwrites any change made there. Panels name their data source as
-`${DS_PROMETHEUS}`, which the stack replaces with the hosted Prometheus data source's UID.
+`${DS_PROMETHEUS}` or `${DS_TEMPO}`, which the stack replaces with the hosted Prometheus or
+Tempo data source's UID.
 
 - **Fleet health** (`fleet-health.json`,
   [`/d/fleet-health`](https://slipstreamobs.grafana.net/d/fleet-health)): `vllm-gpu`
@@ -336,8 +337,8 @@ and the next apply overwrites any change made there. Panels name their data sour
   Collector flushes its span metrics, and read series the Collector sends to Grafana Cloud
   itself, listed under `collector_metrics` in the allowlist.
 
-A panel shows "no data" when it queries a metric Prometheus does not send to Grafana
-Cloud. Check a dashboard's queries against `terraform/eks/remote-write-allowlist.yaml`:
+A panel shows "no data" when it queries a metric neither Prometheus nor the Collector
+sends to Grafana Cloud. Check a dashboard's queries against `terraform/eks/remote-write-allowlist.yaml`:
 
 ```sh
 just dashboard-allowlist-test
