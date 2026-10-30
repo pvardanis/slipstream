@@ -23,8 +23,8 @@ done
 tmp="$(mktemp -d)"
 trap 'rm -r "${tmp}"' EXIT
 
-# Fills in each case's expr from the dashboard at $DASHBOARD, with $__range set to 60m,
-# keeping the panel, ref or annotation it names.
+# Fills in each case's expr from the dashboard at $DASHBOARD, with $__range set to 60m and
+# $__interval to 1m, keeping the panel, ref or annotation it names.
 resolve_queries='load(strenv(DASHBOARD)) as $d
   | (.tests[].promql_expr_test[] | select(has("panel"))) |= (
       . as $t
@@ -33,7 +33,8 @@ resolve_queries='load(strenv(DASHBOARD)) as $d
   | (.tests[].promql_expr_test[] | select(has("annotation"))) |= (
       . as $t
       | .expr = ([$d.annotations.list[] | select(.name == $t.annotation) | .expr] | .[0]))
-  | (.tests[].promql_expr_test[].expr | select(tag == "!!str")) |= sub("\$__range"; "60m")'
+  | (.tests[].promql_expr_test[].expr | select(tag == "!!str")) |= sub("\$__range"; "60m")
+  | (.tests[].promql_expr_test[].expr | select(tag == "!!str")) |= sub("\$__interval"; "1m")'
 
 # Drops the names resolve_queries keeps, which promtool does not accept.
 drop_query_names='del(.tests[].promql_expr_test[] | (.panel, .ref, .annotation))'
@@ -51,7 +52,7 @@ unresolved_queries='.tests[].promql_expr_test[]
       "\($name) names no query in the dashboard, or an empty one; name a panel id and"
       + " refId, or an annotation, that the dashboard has"
     elif (.expr | test("\\$")) then
-      "\($name) still holds a $ variable after $__range is set: \(.expr); set that"
+      "\($name) still holds a $ variable after $__range and $__interval are set: \(.expr); set that"
       + " variable in this script, or test a query without it"
     else empty end'
 
@@ -137,6 +138,10 @@ check_mutation_fails 15 A "${born_in_range_branch}" '' 'no branch for disruption
 for ref in A B; do
   check_mutation_fails 14 "${ref}" '\) >= 0$' ')' 'no >= 0 filter on the quantile'
 done
+
+# The Nodes panel: each step's lowest count, so a gap shorter than the step shows.
+check_mutation_fails 13 A 'min_over_time\(karpenter_cluster_state_node_count\[\$__interval\]\)' \
+  'karpenter_cluster_state_node_count' 'the latest node count in each step, not its lowest'
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1

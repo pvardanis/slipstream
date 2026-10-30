@@ -311,3 +311,51 @@ run "fleet_health_karpenter_rows_pair_nodes_with_spend_and_disruptions_with_cold
     error_message = "Nodes and GPU vCPUs running must share one row, and voluntary disruptions and pod-provisioning cold start the next, half width each."
   }
 }
+
+# The Nodes panel plots each step's lowest node count, over a window no shorter than the
+# 30 s scrape interval, so a node gap shorter than the step still shows as a dip.
+run "nodes_panel_shows_the_lowest_count_in_each_step" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = [
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      [try(p.interval, null), [for t in p.targets : t.expr]] if p.title == "Nodes"
+      ] == [
+      ["30s", ["max(min_over_time(karpenter_cluster_state_node_count[$__interval]))"]]
+    ]
+    error_message = "The Nodes panel must plot min_over_time of karpenter_cluster_state_node_count over $__interval, with a 30s minimum interval."
+  }
+}
+
+# Each disruption reason is a figure named by its reason. A stat hides the name of a lone
+# value unless the text mode asks for it, and a range often holds one reason; the legend
+# names the figure, so without it the stat shows the series' labels, not the reason.
+run "disruptions_panel_names_each_reason" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = [
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      [p.type, try(p.options.textMode, null), [for t in p.targets : try(t.legendFormat, null)]]
+      if p.title == "Voluntary disruptions by reason"
+    ] == [["stat", "value_and_name", ["{{reason}}"]]]
+    error_message = "The voluntary disruptions panel must be a stat with textMode value_and_name and legend {{reason}}, so each reason's count is named by its reason."
+  }
+}
