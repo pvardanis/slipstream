@@ -148,7 +148,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "E2E latency p95",
-      "description": "p95 end-to-end latency of vLLM's llm_request spans, from the Collector's span metrics, fleet-wide and per pod. Exemplars on the fleet line open the trace, which carries the request_id. Span metrics flush once a minute.",
+      "description": "p95 end-to-end latency of vLLM's llm_request spans, from the Collector's span metrics, fleet-wide and per pod. Exemplars on the fleet line open the trace, which carries the request_id. The p95 is interpolated inside a latency bucket, so from 15 s to 120 s it can be off by up to a factor of 1.5. Span metrics flush once a minute.",
       "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
       "interval": "1m",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
