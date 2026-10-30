@@ -12,6 +12,14 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dashboard="${repo_root}/terraform/grafana/dashboards/fleet-health.json"
 cases="${PROMQL_CASES:-${repo_root}/test/dashboard-promql-cases.yaml}"
 
+for tool in yq jq promtool; do
+  if ! command -v "${tool}" >/dev/null; then
+    echo "FAIL: ${tool} is not on PATH; this test needs yq, jq and promtool, and" \
+      "'mise install' installs the ones mise.toml pins" >&2
+    exit 1
+  fi
+done
+
 tmp="$(mktemp -d)"
 trap 'rm -r "${tmp}"' EXIT
 
