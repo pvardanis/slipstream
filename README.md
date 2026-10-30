@@ -225,6 +225,82 @@ the SLO. It measures the mechanism on the capped pool, not a gain on the uncappe
 full verdict is in
 [`reports/kv-cache-ab-20261022T131457Z/`](reports/kv-cache-ab-20261022T131457Z/RECOMMENDATION.md).
 
+## Observability
+
+The fleet's metrics and traces live in Grafana Cloud's free tier, so dashboards and 14
+days of history outlive every `just stack-down`
+([ADR-0026](docs/adr/0026-fleet-observability-on-grafana-cloud-free.md)):
+
+- **Metrics:** an in-cluster Prometheus scrapes vLLM, `dcgm-exporter`, Karpenter,
+  kube-state-metrics and the kubelet's cAdvisor, and remote-writes only the series the
+  panels read
+  ([`terraform/eks/remote-write-allowlist.yaml`](terraform/eks/remote-write-allowlist.yaml)),
+  which keeps the fleet under the free tier's 10k active series.
+- **Traces:** vLLM emits one `llm_request` span per request to the OTel Collector
+  ([`k8s/otel-collector-config.yaml`](k8s/otel-collector-config.yaml)). The Collector
+  renames vLLM's attributes to `request_id`, `prompt_tokens` and `completion_tokens`,
+  adds `model_id` and the request's `ttft_ms`, and marks each request `slo_met` against
+  the bench's goodput gates (TTFT ≤ 1 s and TPOT ≤ 50 ms). Its span metrics give live
+  goodput and an e2e latency histogram whose exemplars open the request's trace.
+- **Dashboard as code:** the Fleet health dashboard is
+  [`terraform/grafana/dashboards/fleet-health.json`](terraform/grafana/dashboards/fleet-health.json),
+  pushed by `just grafana-up`. Every serving and GPU graph draws the fleet aggregate
+  beside a per-replica breakdown; with the one replica below, the two lines coincide.
+
+The panels below are from a closed-loop load ramp against the g5.xlarge replica
+(`max_num_seqs` 64), 15:55–16:17 UTC on 2026-10-30: 4, 16, 48, 96 and then 8 concurrent
+clients, each request about 1,700 unique prompt tokens and 64–256 output tokens.
+
+Output throughput levels off at about 310 tokens/s from 48 clients. At 96, the 64 batch
+slots are full and the extra clients only queue, about 30 requests deep:
+
+<p>
+<img src="docs/images/grafana-output-tokens.png" alt="Output tokens/s panel" width="49%">
+<img src="docs/images/grafana-requests-waiting.png" alt="Requests waiting panel" width="49%">
+</p>
+
+The SLO breaks well before the throughput plateau. TTFT p95 is about the 1 s gate at
+4 clients, about 2 s at 16 and 12 s at 48. Live goodput, the share of requests meeting
+both gates, falls from about 97% at 4 clients to zero by the end of the 48 rung, and
+recovers when the ramp drops back to 8:
+
+<p>
+<img src="docs/images/grafana-ttft-p95.png" alt="TTFT p95 panel" width="49%">
+<img src="docs/images/grafana-live-goodput.png" alt="Live goodput panel" width="49%">
+</p>
+
+GPU busy time reads 97–100% from the first rung, so it cannot tell 4 clients from 96.
+Memory-bandwidth active, which decode leans on, stays at 45–64%, falling as more clients
+share each decode step's weight reads, so neither GPU metric shows the saturation the
+queue does:
+
+<p>
+<img src="docs/images/grafana-gpu-busy-time.png" alt="GPU busy time panel" width="49%">
+<img src="docs/images/grafana-gpu-memory-bandwidth.png" alt="GPU memory-bandwidth active panel" width="49%">
+</p>
+
+vLLM's TTFT histogram carries no exemplars, so a Tempo table answers "which request was
+slow?" for TTFT: vLLM's spans over the 1 s gate, by `request_id`, the first 100 Tempo
+returns sorted slowest first. Selecting a row's Span ID opens its trace:
+
+![Requests over the TTFT gate panel](docs/images/grafana-requests-over-ttft-gate.png)
+
+The cost scoreboard prices the running GPU node from Karpenter's price estimate, idle time
+included, over the served prompt and output tokens, here over the panels' 15:52–16:19
+range, a few idle minutes either side of the ramp included:
+
+<p>
+<img src="docs/images/grafana-dollars-per-1m-tokens.png" alt="$ per 1M tokens panel" width="49%">
+<img src="docs/images/grafana-tokens-per-dollar-hour.png" alt="Tokens/s per $/h panel" width="49%">
+</p>
+
+The dashboard also tracks replicas, vLLM pod CPU, KV-cache usage, e2e latency p95,
+prompt tokens/s, requests/s, Karpenter's nodes, cold start and voluntary disruptions, and
+the G-class vCPUs CloudWatch reports running, which reads zero after `just stack-down`.
+
+The [`check-observability`](.claude/skills/check-observability/SKILL.md) skill checks these
+signals through the Grafana MCP server below.
+
 ## Skills
 
 Two Claude Code skills analyse a finished run. Each reads the run's artifacts from the
