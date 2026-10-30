@@ -368,7 +368,7 @@
       "id": 15,
       "type": "bargauge",
       "title": "Voluntary disruptions by reason",
-      "description": "karpenter_voluntary_disruption_decisions_total over the dashboard's time range, by reason: the decisions Karpenter made to delete or replace nodes because they were empty, underutilized, drifted or expired. Karpenter creates each reason's counter at its first decision, so a counter that starts inside the range counts in full.",
+      "description": "karpenter_voluntary_disruption_decisions_total over the dashboard's time range, by reason: the decisions Karpenter made to delete or replace nodes because they were empty, underutilized or drifted. Karpenter creates each reason's counter at its first decision, so a counter that starts inside the range counts in full.",
       "gridPos": { "x": 0, "y": 64, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0, "noValue": "No disruption decision in the range" } },
