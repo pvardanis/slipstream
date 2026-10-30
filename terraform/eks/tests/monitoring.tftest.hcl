@@ -156,6 +156,16 @@ run "metrics_stack_shape" {
     error_message = "kube-state-metrics and node-exporter must stay enabled."
   }
 
+  # The kubelet's cAdvisor endpoint emits container_cpu_usage_seconds_total, the vLLM pod
+  # CPU panel's series. The chart scrapes it by default.
+  assert {
+    condition = (
+      try(yamldecode(helm_release.kube_prometheus_stack.values[0]).kubelet.enabled, true)
+      && try(yamldecode(helm_release.kube_prometheus_stack.values[0]).kubelet.serviceMonitor.cAdvisor, true)
+    )
+    error_message = "The kubelet's cAdvisor endpoint must stay scraped."
+  }
+
   # Nothing Prometheus scrapes emits exemplars (ADR-0026).
   assert {
     condition     = !contains(try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.enableFeatures, []), "exemplar-storage")
@@ -245,6 +255,13 @@ run "remote_write_keeps_only_the_allowlist" {
     error_message = "The remote_write keep rule must send DCGM_FI_DEV_GPU_UTIL and DCGM_FI_PROF_DRAM_ACTIVE."
   }
 
+  # The vLLM pod CPU panel's series (ADR-0026, "Panels: CPU"), sent cluster-wide with no
+  # label filter: cAdvisor's per-container CPU time carries no instance_type.
+  assert {
+    condition     = can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].writeRelabelConfigs[0].regex})$", "container_cpu_usage_seconds_total;"))
+    error_message = "The remote_write keep rule must send container_cpu_usage_seconds_total."
+  }
+
   # The Collector's sent and failed counts for each export, so Grafana Cloud shows when it
   # stops taking what the Collector sends.
   assert {
@@ -268,7 +285,7 @@ run "remote_write_keeps_only_the_allowlist" {
         "vllm:num_requests_running;",
         "DCGM_FI_PROF_GR_ENGINE_ACTIVE;",
         "vllm:kv_cache_usage_perc_extra;",
-        "container_cpu_usage_seconds_total;",
+        "container_memory_working_set_bytes;",
         "karpenter_cloudprovider_instance_type_offering_price_estimate;g5.2xlarge",
         "karpenter_cloudprovider_instance_type_offering_price_estimate;g5Xxlarge",
         "karpenter_cloudprovider_instance_type_offering_price_estimate;",

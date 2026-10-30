@@ -1,7 +1,7 @@
 {
   "uid": "fleet-health",
   "title": "Fleet health",
-  "description": "Replicas, GPU state, serving, throughput and goodput of the vllm-gpu serving fleet, Karpenter's scaling, GPU spend and the cost scoreboard (ADR-0026, \"Panels\"). Each GPU, serving, throughput and goodput panel shows the fleet aggregate beside a per-pod breakdown.",
+  "description": "Replicas, vLLM pod CPU, GPU state, serving, throughput and goodput of the vllm-gpu serving fleet, Karpenter's scaling, GPU spend and the cost scoreboard (ADR-0026, \"Panels\"). Each GPU, serving, throughput and goodput panel shows the fleet aggregate beside a per-pod breakdown.",
   "editable": false,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
@@ -35,7 +35,7 @@
       "type": "timeseries",
       "title": "Replicas",
       "description": "vllm-gpu replicas available against desired, from kube-state-metrics.",
-      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0 } },
       "targets": [
@@ -50,6 +50,57 @@
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "expr": "sum(kube_deployment_spec_replicas{namespace=\"slipstream\", deployment=\"vllm-gpu\"})",
           "legendFormat": "desired"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "vLLM pod CPU used",
+      "description": "container_cpu_usage_seconds_total: CPU cores the vllm container uses, per vllm-gpu pod and summed over the fleet. Read against GPU busy time: low busy time with CPU near the 1 core line means a CPU-bound engine, since vLLM's engine-core loop is mostly one thread; low busy time with CPU low means light traffic. Dashed lines: 1 core, the pod's CPU request, and the GPU node's allocatable CPU. The pod has no CPU limit, so it is not throttled short of allocatable.",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 2, "min": 0 },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "^(1 core|request|node allocatable)$" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"slipstream\", pod=~\"vllm-gpu-.*\", container=\"vllm\"}[$__rate_interval]))",
+          "legendFormat": "fleet"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"slipstream\", pod=~\"vllm-gpu-.*\", container=\"vllm\"}[$__rate_interval]))",
+          "legendFormat": "{{pod}}"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "vector(1)",
+          "legendFormat": "1 core"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "vector(2)",
+          "legendFormat": "request"
+        },
+        {
+          "refId": "E",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "max(karpenter_nodes_allocatable{resource_type=\"cpu\"} and on (node_name) (karpenter_nodes_allocatable{resource_type=\"nvidia.com/gpu\"} > 0))",
+          "legendFormat": "node allocatable"
         }
       ]
     },

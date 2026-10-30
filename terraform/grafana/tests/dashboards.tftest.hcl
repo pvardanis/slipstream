@@ -172,3 +172,61 @@ run "stat_panels_show_their_figure_in_full_and_uncoloured" {
     error_message = "No stat panel may use the short unit, which rounds its figure to thousands."
   }
 }
+
+# The top row reads Replicas beside the vLLM pods' CPU, both half width, directly above the
+# GPU panels, so CPU is read against GPU busy time (ADR-0026, "Panels: CPU").
+run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = {
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      p.title => p.gridPos if p.gridPos.y == 0
+      } == {
+      "Replicas"          = { x = 0, y = 0, w = 12, h = 8 }
+      "vLLM pod CPU used" = { x = 12, y = 0, w = 12, h = 8 }
+    }
+    error_message = "The fleet health dashboard's top row must be Replicas and vLLM pod CPU used, half width each."
+  }
+  assert {
+    condition = {
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      p.title => p.gridPos if p.gridPos.y == 8
+      } == {
+      "GPU busy time"               = { x = 0, y = 8, w = 12, h = 8 }
+      "GPU memory-bandwidth active" = { x = 12, y = 8, w = 12, h = 8 }
+    }
+    error_message = "The GPU panels must sit directly below the top row, half width each."
+  }
+}
+
+# The CPU panel's request line is the vllm-gpu container's CPU request, so it moves with
+# the manifest.
+run "vllm_pod_cpu_request_line_is_the_manifest_request" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = [
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels : [
+        for q in p.targets : q.expr if q.legendFormat == "request"
+      ] if p.title == "vLLM pod CPU used"
+    ] == [["vector(${regex("requests:\\s+(?:#[^\\n]*\\n\\s*)*cpu:\\s+\"([0-9.]+)\"", file("../../k8s/vllm-gpu.yaml"))[0]})"]]
+    error_message = "The vLLM pod CPU panel's request line must be vector(<cpu request>), the vllm-gpu container's CPU request in k8s/vllm-gpu.yaml."
+  }
+}

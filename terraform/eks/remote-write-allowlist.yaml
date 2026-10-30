@@ -30,6 +30,9 @@ metrics:
   # kube-state-metrics: replicas available against desired.
   - kube_deployment_status_replicas_available
   - kube_deployment_spec_replicas
+  # cAdvisor, through the kubelet: CPU time per container, for the vLLM pod CPU panel.
+  # Sent cluster-wide with no label filter: one series per container, pod and node cgroup.
+  - container_cpu_usage_seconds_total
   # The OTel Collector's own counts, per exporter: spans and metric points sent to Grafana
   # Cloud and those it failed to send.
   - otelcol_exporter_sent_spans
