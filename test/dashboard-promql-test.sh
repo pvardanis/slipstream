@@ -9,27 +9,53 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dashboard="${repo_root}/terraform/grafana/dashboards/fleet-health.json"
-cases="${repo_root}/test/dashboard-promql-cases.yaml"
+cases="${PROMQL_CASES:-${repo_root}/test/dashboard-promql-cases.yaml}"
 
 tmp="$(mktemp -d)"
 trap 'rm -r "${tmp}"' EXIT
 
-# Fills in each case's expr from the dashboard at $DASHBOARD, with $__range set to 60m.
+# Fills in each case's expr from the dashboard at $DASHBOARD, with $__range set to 60m,
+# keeping the panel, ref or annotation it names.
 resolve_queries='load(strenv(DASHBOARD)) as $d
   | (.tests[].promql_expr_test[] | select(has("panel"))) |= (
       . as $t
       | .expr = ([$d.panels[] | select(.id == $t.panel)
-          | .targets[] | select(.refId == $t.ref) | .expr] | .[0])
-      | del(.panel, .ref))
+          | .targets[] | select(.refId == $t.ref) | .expr] | .[0]))
   | (.tests[].promql_expr_test[] | select(has("annotation"))) |= (
       . as $t
-      | .expr = ([$d.annotations.list[] | select(.name == $t.annotation) | .expr] | .[0])
-      | del(.annotation))
-  | (.tests[].promql_expr_test[].expr) |= sub("\$__range"; "60m")'
+      | .expr = ([$d.annotations.list[] | select(.name == $t.annotation) | .expr] | .[0]))
+  | (.tests[].promql_expr_test[].expr | select(tag == "!!str")) |= sub("\$__range"; "60m")'
+
+# Drops the names resolve_queries keeps, which promtool does not accept.
+drop_query_names='del(.tests[].promql_expr_test[] | (.panel, .ref, .annotation))'
+
+# Each resolved case whose query is missing, empty or still holds a $ variable, one per
+# line (a jq program, as yq has no if-then-else).
+unresolved_queries='.tests[].promql_expr_test[]
+  | (if has("panel") then "panel \(.panel) refId \(.ref)"
+     elif has("annotation") then "annotation \(.annotation)"
+     else "a case naming no panel or annotation" end) as $name
+  | if (.expr // "") == "" then
+      "\($name) names no query in the dashboard, or an empty one; name a panel id and"
+      + " refId, or an annotation, that the dashboard has"
+    elif (.expr | test("\\$")) then
+      "\($name) still holds a $ variable after $__range is set: \(.expr); set that"
+      + " variable in this script, or test a query without it"
+    else empty end'
+
+DASHBOARD="${dashboard}" yq -o json "${resolve_queries}" "${cases}" >"${tmp}/resolved.json"
+unresolved="$(jq -r "${unresolved_queries}" "${tmp}/resolved.json")"
+if [[ -n "${unresolved}" ]]; then
+  while IFS= read -r reason; do
+    echo "FAIL: in ${cases#"${repo_root}/"}, ${reason}" >&2
+  done <<<"${unresolved}"
+  exit 1
+fi
 
 # Runs the cases against the queries in the dashboard file $1, printing promtool's output.
 run_cases() {
-  DASHBOARD="$1" yq "${resolve_queries}" "${cases}" >"${tmp}/tests.yaml" &&
+  DASHBOARD="$1" yq "${resolve_queries} | ${drop_query_names}" "${cases}" \
+    >"${tmp}/tests.yaml" &&
     promtool test rules "${tmp}/tests.yaml" 2>&1
 }
 
