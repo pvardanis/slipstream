@@ -3,8 +3,9 @@
 # test/dashboard-promql-cases.yaml against the queries in
 # terraform/grafana/dashboards/fleet-health.json. The cases name each query by panel id
 # and refId, or by annotation name, so the queries are read from the dashboard, never
-# copied. Needs yq and promtool; needs no cluster or Grafana.
-# shellcheck disable=SC2016 # $ in the yq programs is yq's, not the shell's.
+# copied. PROMQL_CASES points it at another cases file. Needs yq, jq and promtool; needs
+# no cluster or Grafana.
+# shellcheck disable=SC2016 # $ in the yq and jq programs is theirs, not the shell's.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -83,9 +84,11 @@ check_mutation_fails() {
   fi
   jq "${args[@]}" --arg to "${replacement}" "(${query}) |= sub(\$re; \$to)" \
     "${dashboard}" >"${tmp}/mutant.json"
-  if run_cases "${tmp}/mutant.json" >/dev/null; then
+  local mutant_output
+  if mutant_output="$(run_cases "${tmp}/mutant.json")"; then
     echo "FAIL: the cases still pass with ${defect} in panel ${panel} ${ref}; add a case" \
-      "to ${cases#"${repo_root}/"} that catches it" >&2
+      "to ${cases#"${repo_root}/"} that catches it. promtool's output:" >&2
+    echo "${mutant_output}" >&2
     fail=1
   fi
 }
@@ -105,9 +108,9 @@ check_mutation_fails 17 A ' > 0\) \* 1e6$' ') * 1e6' 'no > 0 filter on the token
 
 # The Karpenter panels' counters, which Karpenter creates at their first increment: the
 # branch that counts a series born inside the range.
-born_in_range=' or \(last_over_time\([^)]*\) unless [^)]*\)'
-check_mutation_fails 14 B "${born_in_range}" '' 'no branch for buckets born in range'
-check_mutation_fails 15 A "${born_in_range}" '' 'no branch for disruption reasons born in range'
+born_in_range_branch=' or \(last_over_time\([^)]*\) unless [^)]*\)'
+check_mutation_fails 14 B "${born_in_range_branch}" '' 'no branch for buckets born in range'
+check_mutation_fails 15 A "${born_in_range_branch}" '' 'no branch for disruption reasons born in range'
 for ref in A B; do
   check_mutation_fails 14 "${ref}" '\) >= 0$' ')' 'no >= 0 filter on the quantile'
 done
