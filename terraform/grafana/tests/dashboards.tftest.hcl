@@ -47,9 +47,10 @@ run "one_dashboard_per_dashboard_file" {
   }
 }
 
-# Panels name their data source as ${DS_PROMETHEUS} or ${DS_TEMPO}, which the stack
-# replaces with the hosted Prometheus or Tempo data source's UID; overriding those data
-# sources' UIDs shows the panels take them from there, not from a literal.
+# Panels name their data source as ${DS_PROMETHEUS}, ${DS_TEMPO} or ${DS_CLOUDWATCH}, which
+# the stack replaces with the hosted Prometheus or Tempo data source's UID or the managed
+# CloudWatch data source's; overriding those UIDs shows the panels take them from there,
+# not from a literal.
 run "panels_query_the_hosted_data_sources_by_uid" {
   command = plan
 
@@ -65,13 +66,20 @@ run "panels_query_the_hosted_data_sources_by_uid" {
       uid = "tempo-uid-test"
     }
   }
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
 
   assert {
     condition = alltrue([
       for d in values(grafana_dashboard.this) :
-      !strcontains(d.config_json, "DS_PROMETHEUS") && !strcontains(d.config_json, "DS_TEMPO")
+      !strcontains(d.config_json, "DS_PROMETHEUS") && !strcontains(d.config_json, "DS_TEMPO") && !strcontains(d.config_json, "DS_CLOUDWATCH")
     ])
-    error_message = "Every $${DS_PROMETHEUS} and $${DS_TEMPO} placeholder must be replaced with the hosted data source's UID."
+    error_message = "Every $${DS_PROMETHEUS}, $${DS_TEMPO} and $${DS_CLOUDWATCH} placeholder must be replaced with its data source's UID."
   }
   # Every panel that runs queries, including those nested in a collapsed row, and each of
   # its queries; a row itself runs none. A query reads the data source its type names.
@@ -80,11 +88,11 @@ run "panels_query_the_hosted_data_sources_by_uid" {
       for d in values(grafana_dashboard.this) : [
         for p in flatten([for top in jsondecode(d.config_json).panels : concat([top], try(top.panels, []))]) : [
           for q in concat([p], p.targets) :
-          q.datasource.uid == (q.datasource.type == "tempo" ? "tempo-uid-test" : "prom-uid-test")
+          q.datasource.uid == lookup({ tempo = "tempo-uid-test", cloudwatch = "cloudwatch-uid-test" }, q.datasource.type, "prom-uid-test")
         ] if length(try(p.targets, [])) > 0
       ]
     ]))
-    error_message = "Every dashboard panel and query must read the hosted Prometheus or Tempo data source, whichever its type names, by its UID."
+    error_message = "Every dashboard panel and query must read the hosted Prometheus or Tempo data source, or the managed CloudWatch data source, whichever its type names, by its UID."
   }
   # The requests-over-the-TTFT-gate table searches traces, so fleet health reads Tempo as well.
   assert {
@@ -93,5 +101,14 @@ run "panels_query_the_hosted_data_sources_by_uid" {
       try(p.datasource.uid, "") == "tempo-uid-test"
     ])
     error_message = "The fleet health dashboard must have a panel that reads the hosted Tempo data source."
+  }
+  # The spend panel reads AWS/Usage, which only CloudWatch holds, so fleet health reads it
+  # through the managed CloudWatch data source.
+  assert {
+    condition = anytrue([
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      try(p.datasource.uid, "") == "cloudwatch-uid-test"
+    ])
+    error_message = "The fleet health dashboard must have a panel that reads the managed CloudWatch data source."
   }
 }
