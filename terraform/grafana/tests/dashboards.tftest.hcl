@@ -139,3 +139,36 @@ run "cloudwatch_queries_use_the_aws_usage_period" {
     error_message = "Every CloudWatch query must use a 300 s period, the interval AWS/Usage publishes at."
   }
 }
+
+# A stat panel's figure is read as it is: Grafana's default thresholds would turn it red
+# above 80 whatever its unit, and the short unit would round 1,075 to 1K.
+run "stat_panels_show_their_figure_in_full_and_uncoloured" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for d in values(grafana_dashboard.this) : [
+        for p in jsondecode(d.config_json).panels :
+        try(p.fieldConfig.defaults.color.mode, "") == "fixed" if p.type == "stat"
+      ]
+    ]))
+    error_message = "Every stat panel must set a fixed colour, not Grafana's default thresholds."
+  }
+  assert {
+    condition = alltrue(flatten([
+      for d in values(grafana_dashboard.this) : [
+        for p in jsondecode(d.config_json).panels :
+        try(p.fieldConfig.defaults.unit, "short") != "short" if p.type == "stat"
+      ]
+    ]))
+    error_message = "No stat panel may use the short unit, which rounds its figure to thousands."
+  }
+}

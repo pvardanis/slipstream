@@ -345,7 +345,7 @@
       "description": "p50 and p95 over the dashboard's time range of karpenter_pods_provisioning_startup_duration_seconds: from when Karpenter's scheduling simulation last started placing a pending pod until the pod is running, so a GPU pod's figure includes launching its node. A simulation that finds no capacity for the pod restarts that clock, so time spent waiting out capacity shortages before the last attempt is left out. Karpenter creates the histogram at its first observation, so a series that starts inside the range counts in full. The quantiles are interpolated inside Karpenter's buckets, which from 150 s to 300 s are 2x wide.",
       "gridPos": { "x": 12, "y": 56, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "noValue": "No pod provisioned in the range" } },
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "text" }, "decimals": 0, "noValue": "No pod provisioned in the range" } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
       "targets": [
         {
@@ -429,7 +429,7 @@
       "description": "GPU dollars over the dashboard's time range, summed over every GPU node, divided by the prompt plus generation tokens served in that range, summed over every replica, times 1e6. Each minute a node holds a GPU it costs karpenter_cloudprovider_instance_type_offering_price_estimate for its instance type, capacity type and zone, divided by 60, so idle GPU time counts and the figure is what serving cost. There is no commercial arm and no input:output split.",
       "gridPos": { "x": 0, "y": 72, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "noValue": "No GPU node or no tokens served in the range" } },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "color": { "mode": "fixed", "fixedColor": "text" }, "decimals": 2, "noValue": "No GPU node or no tokens served in the range" } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
@@ -448,7 +448,7 @@
       "description": "Prompt plus generation tokens served per second over the dashboard's time range, divided by the GPU dollars per hour over the same range, from the same tokens and GPU dollars as $ per 1M tokens: the throughput each dollar an hour of GPU buys, idle GPU time included.",
       "gridPos": { "x": 12, "y": 72, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "noValue": "No GPU node or no tokens served in the range" } },
+      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "text" }, "decimals": 0, "noValue": "No GPU node or no tokens served in the range" } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
