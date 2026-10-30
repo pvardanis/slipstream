@@ -255,8 +255,8 @@ run "remote_write_keeps_only_the_allowlist" {
     error_message = "The remote_write keep rule must send DCGM_FI_DEV_GPU_UTIL and DCGM_FI_PROF_DRAM_ACTIVE."
   }
 
-  # The vLLM pod CPU panel's series (ADR-0026, "Panels: CPU"), sent cluster-wide with no
-  # label filter: cAdvisor's per-container CPU time carries no instance_type.
+  # The vLLM pod CPU panel's series (ADR-0026, the #436 amendment), sent cluster-wide with
+  # no label filter: cAdvisor's per-container CPU time carries no instance_type.
   assert {
     condition     = can(regex("^(?:${yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.remoteWrite[0].writeRelabelConfigs[0].regex})$", "container_cpu_usage_seconds_total;"))
     error_message = "The remote_write keep rule must send container_cpu_usage_seconds_total."
