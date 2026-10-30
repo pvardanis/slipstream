@@ -310,8 +310,8 @@ query as failing; that is expected.
 JSON file, keyed by file name: adding, editing or deleting a file creates, updates or
 deletes that dashboard on the next apply. The dashboards are read-only in the Grafana UI,
 and the next apply overwrites any change made there. Panels name their data source as
-`${DS_PROMETHEUS}` or `${DS_TEMPO}`, which the stack replaces with the hosted Prometheus or
-Tempo data source's UID.
+`${DS_PROMETHEUS}`, `${DS_TEMPO}` or `${DS_CLOUDWATCH}`, which the stack replaces with the
+hosted Prometheus or Tempo data source's UID or the managed CloudWatch data source's.
 
 - **Fleet health** (`fleet-health.json`,
   [`/d/fleet-health`](https://slipstreamobs.grafana.net/d/fleet-health)): `vllm-gpu`
@@ -336,6 +336,23 @@ Tempo data source's UID.
   The span-metric panels (e2e latency, live goodput) update once a minute, when the
   Collector flushes its span metrics, and read series the Collector sends to Grafana Cloud
   itself, listed under `collector_metrics` in the allowlist.
+
+  - **Karpenter:** node count, with annotations at the minutes Karpenter created or
+    terminated a node; pod-provisioning cold start p50 and p95 over the dashboard's time
+    range, from when Karpenter first sees a schedulable pending pod until it runs; and
+    voluntary disruption decisions over the range by reason. Karpenter creates these
+    counters and the histogram at their first increment, so the queries count a series
+    born inside the range in full.
+  - **Spend:** the account's running on-demand G-class vCPUs from CloudWatch `AWS/Usage`,
+    the series the spend-leak alarm watches; a g5.xlarge is 4. It reads AWS, so after
+    `just cluster-down` it shows 0 with the history from before the teardown.
+  - **Cost scoreboard:** $ per 1M tokens and tokens/s per $/h over the dashboard's time
+    range. GPU dollars are each minute a node holds a GPU, priced at Karpenter's
+    `karpenter_cloudprovider_instance_type_offering_price_estimate` for its instance type,
+    capacity type and zone; tokens are prompt plus generation tokens served by every
+    replica. Idle GPU time counts. To check it by hand for a bench window, set the time
+    range to the window and compare against node-hours × the hourly price ÷ tokens served
+    × 1e6.
 
 A panel shows "no data" when it queries a metric neither Prometheus nor the Collector
 sends to Grafana Cloud. Check a dashboard's queries against `terraform/eks/remote-write-allowlist.yaml`:
