@@ -326,8 +326,12 @@ routing (L3) the breakdown shows the imbalance.
 ## Amendment (2026-10-30, #372): the Karpenter, spend and scoreboard panels' queries
 
 - **Cold start:** the panel reads `karpenter_pods_provisioning_startup_duration_seconds`,
-  a histogram from when Karpenter first sees a schedulable pending pod until it runs, as
-  p50 and p95 over the dashboard's time range. The allowlist sends its `_bucket` series in
+  a histogram from when Karpenter's scheduling simulation last started placing a pending
+  pod until it runs, as p50 and p95 over the dashboard's time range. A simulation that
+  finds no capacity for the pod restarts that clock (`MarkPodSchedulingDecisions`), so
+  time spent waiting out capacity shortages before the last attempt is left out: on
+  2026-10-30 a pod that waited 1,089 s through four g5.xlarge shortages read about 525 s.
+  The allowlist sends its `_bucket` series in
   place of `karpenter_pods_startup_duration_seconds`, a summary no panel reads. Karpenter's
   buckets are 2x wide from 150 s to 300 s, so a p95 there can be off by up to a factor
   of 2.
@@ -348,6 +352,7 @@ routing (L3) the breakdown shows the imbalance.
   calculation from EC2 node-hours can differ by those minutes.
 - **Tokens/sec/$:** read as tokens served per second over the range divided by GPU dollars
   per hour over the range, "tokens/s per $/h".
-- **Spend:** `AWS/Usage` publishes no datapoint while no G-class vCPU runs, so the panel
-  fills those minutes with 0 (`FILL`). It reads on-demand vCPUs only, as the GPU NodePool
+- **Spend:** `AWS/Usage` publishes a datapoint every 5 minutes while a G-class vCPU runs
+  and none while none do, so the panel reads 5-minute periods, as the spend-leak alarm
+  does, and fills the empty ones with 0 (`FILL`). It reads on-demand vCPUs only, as the GPU NodePool
   launches on-demand capacity only.
