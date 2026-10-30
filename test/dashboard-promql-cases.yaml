@@ -47,7 +47,7 @@ tests:
         exp_samples:
           - labels: '{}'
             value: 1.259259259259259
-      # 540000 tokens / 3600 s / $0.68 per hour of spend.
+      # 540000 tokens / 3600 s / $0.68/h ($0.68 spent over the 1h range).
       - panel: 18
         ref: A
         eval_time: 60m
