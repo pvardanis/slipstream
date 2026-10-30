@@ -166,6 +166,14 @@ run "metrics_stack_shape" {
     error_message = "The kubelet's cAdvisor endpoint must stay scraped."
   }
 
+  # The chart's default cAdvisor relabelling drops cgroups with no pod, which keeps the
+  # cluster-wide container_cpu_usage_seconds_total to one series per container and pod.
+  # Setting cAdvisorMetricRelabelings replaces that default.
+  assert {
+    condition     = try(yamldecode(helm_release.kube_prometheus_stack.values[0]).kubelet.serviceMonitor.cAdvisorMetricRelabelings, null) == null
+    error_message = "kubelet.serviceMonitor.cAdvisorMetricRelabelings must stay unset, so the chart's default drops cgroups with no pod before they reach Grafana Cloud."
+  }
+
   # Nothing Prometheus scrapes emits exemplars (ADR-0026).
   assert {
     condition     = !contains(try(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.prometheusSpec.enableFeatures, []), "exemplar-storage")
