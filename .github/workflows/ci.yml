@@ -201,7 +201,7 @@ jobs:
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.10.21
-          install_args: kubectl
+          install_args: kubectl promtool
       # The image-identity and repo-variable scripts' unit tests (yq preinstalled;
       # build-image-test stubs docker, gh-vars-test stubs terraform and gh, and
       # orchestration-image-check-test stubs terraform and aws, so no build, GitHub write
@@ -218,6 +218,8 @@ jobs:
       # dashboard-allowlist-test stubs nothing: it reads the real dashboards and remote-write
       # allowlist with jq and yq and fails when a panel queries a metric in neither the
       # allowlist's metrics nor its collector_metrics (ADR-0026).
+      # dashboard-promql-test stubs nothing: it runs promtool's unit tests against the Fleet
+      # health dashboard's real queries, and against mutated copies of them that must fail.
       - name: Run shell unit tests
         run: |
           set -euo pipefail
@@ -231,6 +233,7 @@ jobs:
           bash test/grafana-mcp-test.sh
           bash test/otel-collector-check-test.sh
           bash test/dashboard-allowlist-test.sh
+          bash test/dashboard-promql-test.sh
 
   chart-render:
     name: helm chart render (kubeconform)
