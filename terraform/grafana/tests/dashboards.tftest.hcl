@@ -230,3 +230,30 @@ run "vllm_pod_cpu_request_line_is_the_manifest_request" {
     error_message = "The vLLM pod CPU panel's request line must be vector(<cpu request>), the vllm-gpu container's CPU request in k8s/vllm-gpu.yaml."
   }
 }
+
+# The CPU panel's usage lines select the vllm-gpu Deployment's namespace and container, so a
+# rename in the manifest fails here rather than leaving only the reference lines drawn.
+run "vllm_pod_cpu_usage_lines_select_the_manifest_namespace_and_container" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = [
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels : [
+        for q in p.targets : strcontains(q.expr, format(
+          "{namespace=\"%s\", pod=~\"vllm-gpu-.*\", container=\"%s\"}",
+          regex("kind: Deployment\\nmetadata:\\n  name: vllm-gpu\\n  namespace: (\\S+)", file("../../k8s/vllm-gpu.yaml"))[0],
+          regex("containers:\\n\\s+- name: (\\S+)", file("../../k8s/vllm-gpu.yaml"))[0],
+        )) if strcontains(q.expr, "container_cpu_usage_seconds_total")
+      ] if p.title == "vLLM pod CPU (cores)"
+    ] == [[true, true]]
+    error_message = "The vLLM pod CPU panel's fleet and per-pod lines must select the vllm-gpu Deployment's namespace and container from k8s/vllm-gpu.yaml."
+  }
+}
