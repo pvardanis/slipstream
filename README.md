@@ -294,9 +294,29 @@ range, a few idle minutes either side of the ramp included:
 <img src="docs/images/grafana-tokens-per-dollar-hour.png" alt="Tokens/s per $/h panel" width="49%">
 </p>
 
+The Karpenter panels are from scaling `vllm-gpu` to zero and back by hand, 16:20–16:47
+UTC the same day. With no pod on it, the GPU node was empty, and at 16:29 Karpenter decided
+to delete it; `consolidateAfter` (1m) is the least time a node must be empty first. Nodes
+dips to one, the system node, until the replacement's NodeClaim appears; the annotations
+mark the minutes a node was terminated (red) and created (green):
+
+![Nodes panel](docs/images/grafana-nodes.png)
+
+Each voluntary disruption decision is counted by reason: `empty`, `underutilized` or
+`drifted`. Cold start runs from Karpenter placing the pending pod until the pod is Ready,
+so for vLLM it includes launching the node, pulling the 8.7 GB vLLM image (4.5 min here)
+and loading the model. The one pod here was Ready about 9.7 min after it was created,
+which falls in Karpenter's 7.5–10 min bucket; the panel's p50 and p95 are interpolated
+inside it:
+
+<p>
+<img src="docs/images/grafana-voluntary-disruptions.png" alt="Voluntary disruptions by reason panel" width="49%">
+<img src="docs/images/grafana-cold-start.png" alt="Pod-provisioning cold start panel" width="49%">
+</p>
+
 The dashboard also tracks replicas, vLLM pod CPU, KV-cache usage, e2e latency p95,
-prompt tokens/s, requests/s, Karpenter's nodes, cold start and voluntary disruptions, and
-the G-class vCPUs CloudWatch reports running, which reads zero after `just stack-down`.
+prompt tokens/s, requests/s, and the G-class vCPUs CloudWatch reports running, which reads
+zero after `just stack-down`.
 
 The [`check-observability`](.claude/skills/check-observability/SKILL.md) skill checks these
 signals through the Grafana MCP server below.
