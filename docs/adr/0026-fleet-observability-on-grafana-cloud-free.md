@@ -349,7 +349,11 @@ routing (L3) the breakdown shows the imbalance.
   until the device plugin advertises it, so the minute or so from launch to registration
   is not counted. A teardown sends no staleness marker for the last scrape, so the
   last node is priced for up to Prometheus's 5-minute lookback after it. A hand
-  calculation from EC2 node-hours can differ by those minutes.
+  calculation from EC2 node-hours can differ by those minutes. The token count comes from
+  `increase()`, which extrapolates to the range's edges at the range's average rate, so
+  traffic running up to an edge reads a few percent high: on 2026-10-30, 10 minutes of
+  load in an 11-minute range read 1,108,782 tokens against the 1,075,386 the responses
+  reported (+3.1%), and +1.0% in a 15-minute range whose edges fell in idle time.
 - **Tokens/sec/$:** read as tokens served per second over the range divided by GPU dollars
   per hour over the range, "tokens/s per $/h".
 - **Spend:** `AWS/Usage` publishes a datapoint every 5 minutes while a G-class vCPU runs
