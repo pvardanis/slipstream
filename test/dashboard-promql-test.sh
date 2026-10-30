@@ -30,13 +30,16 @@ resolve_queries='load(strenv(DASHBOARD)) as $d
 # Drops the names resolve_queries keeps, which promtool does not accept.
 drop_query_names='del(.tests[].promql_expr_test[] | (.panel, .ref, .annotation))'
 
-# Each resolved case whose query is missing, empty or still holds a $ variable, one per
-# line (a jq program, as yq has no if-then-else).
+# Each resolved case that names no panel or annotation, or whose query is missing, empty
+# or still holds a $ variable, one per line (a jq program, as yq has no if-then-else).
 unresolved_queries='.tests[].promql_expr_test[]
   | (if has("panel") then "panel \(.panel) refId \(.ref)"
      elif has("annotation") then "annotation \(.annotation)"
-     else "a case naming no panel or annotation" end) as $name
-  | if (.expr // "") == "" then
+     else null end) as $name
+  | if $name == null then
+      "a case at eval_time \(.eval_time) names no panel or annotation; name the dashboard"
+      + " query it tests, so its expr is read from the dashboard, not copied"
+    elif (.expr // "") == "" then
       "\($name) names no query in the dashboard, or an empty one; name a panel id and"
       + " refId, or an annotation, that the dashboard has"
     elif (.expr | test("\\$")) then
