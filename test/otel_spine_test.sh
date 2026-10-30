@@ -9,7 +9,7 @@
 # and chatcmpl- prefix); the test asserts the Collector maps them onto the
 # spine's names, adds model_id, sets slo_met per span at the goodput gates and
 # carries TTFT as ttft_ms (ADR-0026). The spanmetrics connector's output is asserted too: the e2e latency
-# histogram, with exemplars, and the request counts, both split by slo_met and
+# histogram, with exemplars and buckets at most 1.5x apart from 15 s to 120 s, and the request counts, both split by slo_met and
 # the replica's k8s.pod.name. The Collector's own metrics on :8888 must count what the
 # debug exporter sent, spans and metric points. The Grafana Cloud exporters are swapped for the
 # debug exporter (test/otel-spine-sinks.yaml), so nothing leaves the laptop;
@@ -294,6 +294,17 @@ metric_points() {
     END { flush() }
   ' <<<"${logs}"
 }
+# The bucket bounds of metric $1's first histogram data point, one per line, as
+# the debug exporter's "ExplicitBounds #<i>: <bound>" lines give them.
+metric_bounds() {
+  awk -v name="$1" '
+    /Metric #|ResourceMetrics #|ResourceSpans #/ { if (done) exit; metric = "" }
+    /-> Name: / { line = $0; sub(/.*-> Name: /, "", line); metric = line }
+    /DataPoints #/ && in_point { exit }
+    /DataPoints #/ && metric == name { in_point = 1; done = 1; next }
+    in_point && /^ExplicitBounds #/ { sub(/^ExplicitBounds #[0-9]+: /, ""); print }
+  ' <<<"${logs}"
+}
 # Some data point of metric $1 carries every term given as the remaining
 # arguments, each matched whole.
 assert_metric_point() {
@@ -393,6 +404,15 @@ assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)"
   "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(true)" "Count: 3"
 assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)" \
   "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(false)" "Count: 5"
+# The latency panel's p95 interpolates inside a bucket, so from 15 s to 120 s,
+# where loaded requests finish, each bound is at most 1.5 times the one before.
+bounds="$(metric_bounds "traces.span.metrics.duration")"
+if ! awk 'NR > 1 && $1 > 15 && $1 <= 120 && $1 > 1.5 * prev { bad = 1 } { prev = $1 }
+  END { exit bad || NR == 0 }' <<<"${bounds}"; then
+  echo "FAIL: the spanmetrics duration histogram has a bucket wider than 1.5x between" \
+    "15 s and 120 s, or no bounds; got: $(paste -sd ' ' - <<<"${bounds}")" >&2
+  fail=1
+fi
 if ! grep -q "slo_met: Bool(true) .*exemplars=[1-9]" <<<"$(metric_points "traces.span.metrics.duration")"; then
   echo "FAIL: the spanmetrics duration histogram carries no exemplars" >&2
   fail=1
@@ -415,4 +435,4 @@ if [[ "${fail}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met and ttft_ms, spanmetrics split by slo_met and pod, exporter counts on :8888"
+echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met and ttft_ms, spanmetrics split by slo_met and pod with 1.5x latency buckets, exporter counts on :8888"
