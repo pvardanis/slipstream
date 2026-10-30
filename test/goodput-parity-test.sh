@@ -133,7 +133,11 @@ done <<<"$(bench_configs)"
 
 # One "<dashboard><TAB><kind><TAB><ms>" line per span.ttft_ms > <ms> comparison in
 # a dashboard query, <kind> being table-cut in a Tempo table panel and cut anywhere
-# else. A query that cuts ttft_ms must be exactly
+# else. A table panel and its target count as Tempo only when both name a tempo
+# datasource. The table's cut must be visible and run as TraceQL, or it gives one
+# "<dashboard><TAB>inactive<TAB><refId>" line, and every other visible target on
+# that table gives one "<dashboard><TAB>extra<TAB><refId>" line, since its rows
+# would mix into the table's. A query that cuts ttft_ms must be exactly
 #   { resource.service.name = "vllm" && name = "llm_request" && span.ttft_ms > <ms> }
 # with at most a select() after it, so a negated cut, an || beside it, another
 # service or a pipeline stage that drops rows cannot empty the table unchecked;
@@ -147,7 +151,8 @@ dashboard_ttft_cuts() {
     . as $root | paths(objects and has("query")) as $path | getpath($path) as $target
       | $target.query | strings | select(test("ttft_ms")) as $q
       | (if $path[-2] == "targets" then $root | getpath($path[:-2]) else {} end) as $panel
-      | ($panel.type == "table" and ($target.datasource.type // $panel.datasource.type) == "tempo") as $table
+      | ($panel.type == "table" and (($panel.datasource | objects | .type) // null) == "tempo"
+        and (($target.datasource | objects | .type) // "tempo") == "tempo") as $table
       | ([$q | scan("ttft_ms\\b")] | length) as $mentions
       | [$q | scan("(?<![\\w.])span\\.ttft_ms\\s*>\\s*(" + ms + ")(?![\\w.])")[0]] as $cuts
       | ([$q | scan("select\\([^)]*(?<![\\w.])span\\.ttft_ms\\s*[,)]")] | length) as $selected
@@ -156,7 +161,13 @@ dashboard_ttft_cuts() {
         then input_filename + "\tunrecognised\t" + ($q | gsub("\\s+"; " "))
         elif ($cuts | length) > 0 and ($shaped | not)
         then input_filename + "\tunshaped\t" + ($q | gsub("\\s+"; " "))
-        else $cuts[] | input_filename + "\t" + (if $table then "table-cut" else "cut" end) + "\t" + . end' {} + |
+        elif ($cuts | length) > 0 and $table and ($target.hide == true or $target.queryType != "traceql")
+        then input_filename + "\tinactive\t" + ($target.refId // "?")
+        else $cuts[] | input_filename + "\t" + (if $table then "table-cut" else "cut" end) + "\t" + . end,
+    ($root | .. | objects | select(.type == "table" and (.targets | type) == "array") | .targets
+      | select(any(.[]; .query | strings | test("ttft_ms")))
+      | .[] | select(.hide != true and (.query | strings | test("ttft_ms") | not))
+      | input_filename + "\textra\t" + (.refId // "?"))' {} + |
     sed "s|^${repo_root}/||" | sort
 }
 
@@ -174,6 +185,14 @@ while IFS=$'\t' read -r dashboard kind value; do
   if [[ "${kind}" == unrecognised ]]; then
     echo "FAIL: ${dashboard} compares ttft_ms other than as span.ttft_ms > <ms>, the" \
       "requests over the Collector's TTFT gate: ${value}" >&2
+    fail=1
+  elif [[ "${kind}" == inactive ]]; then
+    echo "FAIL: ${dashboard} has the TTFT table's query ${value} hidden or not run as" \
+      "TraceQL; it must be visible with queryType traceql to fill the table" >&2
+    fail=1
+  elif [[ "${kind}" == extra ]]; then
+    echo "FAIL: ${dashboard} runs query ${value} beside the TTFT table's cut; its rows" \
+      "would mix into the requests over the TTFT gate, so remove or hide it" >&2
     fail=1
   elif [[ "${kind}" == unshaped ]]; then
     echo "FAIL: ${dashboard} queries span.ttft_ms other than as { resource.service.name =" \
