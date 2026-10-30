@@ -174,8 +174,8 @@ run "stat_panels_show_their_figure_in_full_and_uncoloured" {
 }
 
 # The top row reads Replicas beside the vLLM pods' CPU, both half width, directly above the
-# GPU panels, so CPU is read against GPU busy time (ADR-0026, "Panels: CPU").
-run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu" {
+# GPU panels, so CPU is read against GPU busy time (ADR-0026, the #436 amendment).
+run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu_above_the_gpu_panels" {
   command = plan
 
   override_resource {
