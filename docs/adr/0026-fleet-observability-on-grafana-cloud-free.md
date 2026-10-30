@@ -363,7 +363,7 @@ routing (L3) the breakdown shows the imbalance.
 
 ## Amendment (2026-10-30, #436): a CPU panel on the vLLM GPU pods
 
-- **Why:** GPU busy time low can mean light traffic or an engine starved by its own CPU
+- **Why:** Low GPU busy time can mean light traffic or an engine starved by its own CPU
   work: vLLM's engine-core loop schedules, prepares inputs and detokenizes mostly on one
   thread. GPU metrics cannot tell the two apart; the pod's CPU can.
 - **Panel:** "vLLM pod CPU (cores)", in the top row beside Replicas, half width each, directly
@@ -372,15 +372,16 @@ routing (L3) the breakdown shows the imbalance.
   as "Panels" requires; cores are an amount, so the fleet line is a `sum`, not the GPU
   panels' `avg`.
 - **Reference lines:**
-  - 1 core: the one-thread engine-core loop is CPU-bound there, long before the container
-    total reaches allocatable.
+  - 1 core: the most the one-thread engine-core loop can use, so a pod's total at or above
+    it is where a CPU-bound engine shows, long before allocatable. The total also counts
+    the API server's and tokenizer's threads, so the line is a sign, not proof.
   - The pod's CPU request, a constant equal to the request in `k8s/vllm-gpu.yaml`, which a
     test keeps in step.
-  - The GPU node's allocatable CPU, from the already-sent `karpenter_nodes_allocatable`
+  - The GPU node's allocatable CPU, from the allowlisted `karpenter_nodes_allocatable`
     for the node with an allocatable `nvidia.com/gpu`.
 - **No throttling panel:** the pod has no CPU limit, so CFS never throttles it.
 - **Sent cluster-wide:** `container_cpu_usage_seconds_total` comes from cAdvisor through
-  the kubelet, one series per container and one per pod; the chart's default cAdvisor
+  the kubelet, one series per container plus one pod-level series per pod; the chart's default cAdvisor
   relabelling drops cgroups with no pod, such as the node's own. The allowlist is one keep
   rule over the metric name and `instance_type`; filtering this metric by namespace or
   container would add a second rule for one metric. A system node and a GPU node hold
