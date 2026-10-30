@@ -53,14 +53,18 @@ if [[ -n "${unresolved}" ]]; then
   exit 1
 fi
 
-# Runs the cases against the queries in the dashboard file $1, printing promtool's output.
-run_cases() {
-  DASHBOARD="$1" yq "${resolve_queries} | ${drop_query_names}" "${cases}" \
-    >"${tmp}/tests.yaml" &&
-    promtool test rules "${tmp}/tests.yaml" 2>&1
+# Writes the cases, with the queries from the dashboard file $1, as promtool tests.
+write_tests() {
+  DASHBOARD="$1" yq "${resolve_queries} | ${drop_query_names}" "${cases}" >"${tmp}/tests.yaml"
 }
 
-if ! output="$(run_cases "${dashboard}")"; then
+# Runs promtool over the tests write_tests wrote, printing its output.
+run_tests() {
+  promtool test rules "${tmp}/tests.yaml" 2>&1
+}
+
+write_tests "${dashboard}"
+if ! output="$(run_tests)"; then
   echo "FAIL: promtool test rules failed on ${cases#"${repo_root}/"}:" >&2
   echo "${output}" >&2
   exit 1
@@ -70,7 +74,9 @@ fail=0
 mutations=0
 
 # Replaces the regex $3 with $4 in panel $1's refId $2 query, in a copy of the dashboard,
-# and checks the cases fail against it, so a case catches the defect $5 names.
+# and checks the cases fail against it, so a case catches the defect $5 names. Fails when
+# $3 no longer matches the query, or when the mutated query does not parse, as the cases
+# then fail without catching anything.
 check_mutation_fails() {
   local panel="$1" ref="$2" pattern="$3" replacement="$4" defect="$5"
   local query='.panels[] | select(.id == $id) | .targets[] | select(.refId == $ref) | .expr'
@@ -84,10 +90,16 @@ check_mutation_fails() {
   fi
   jq "${args[@]}" --arg to "${replacement}" "(${query}) |= sub(\$re; \$to)" \
     "${dashboard}" >"${tmp}/mutant.json"
+  write_tests "${tmp}/mutant.json"
   local mutant_output
-  if mutant_output="$(run_cases "${tmp}/mutant.json")"; then
+  if mutant_output="$(run_tests)"; then
     echo "FAIL: the cases still pass with ${defect} in panel ${panel} ${ref}; add a case" \
       "to ${cases#"${repo_root}/"} that catches it. promtool's output:" >&2
+    echo "${mutant_output}" >&2
+    fail=1
+  elif grep -q 'parse error:' <<<"${mutant_output}"; then
+    echo "FAIL: the mutation for ${defect} leaves panel ${panel} ${ref}'s query unparseable," \
+      "so the cases fail without catching it; fix its replacement. promtool's output:" >&2
     echo "${mutant_output}" >&2
     fail=1
   fi
