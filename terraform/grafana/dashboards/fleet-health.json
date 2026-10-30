@@ -61,7 +61,7 @@
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
-        "defaults": { "unit": "suffix: cores", "decimals": 2, "min": 0 },
+        "defaults": { "unit": "short", "decimals": 2, "min": 0 },
         "overrides": [
           {
             "matcher": { "id": "byRegexp", "options": "^(1 core|request|node allocatable)$" },
