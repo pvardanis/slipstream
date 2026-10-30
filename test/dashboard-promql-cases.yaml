@@ -1,0 +1,32 @@
+# promtool unit tests for the Fleet health dashboard's queries, run by
+# test/dashboard-promql-test.sh. Each promql_expr_test names its query by panel id and
+# refId, or by annotation name, in place of an expr; the script fills in the expr from
+# terraform/grafana/dashboards/fleet-health.json with $__range set to 60m. Expected values
+# are worked by hand from the input series, not recomputed the way the query does.
+tests:
+  # Scoreboard, one GPU node: a g5.xlarge on-demand node with a GPU for the first 30m at
+  # $1.20/h, and 3000 prompt + 1500 generation tokens per 30 s scrape.
+  #
+  # Spend: the [60m:1m] subquery steps at 1m..60m; the GPU series' last sample is at 30m,
+  # so it is visible at steps 1m..34m (5m lookback, left-open): 34 steps x $1.20 / 60 =
+  # $0.68.
+  # Tokens: increase over 60m of 0+3000x120 is 357000 sampled over 3570 s, extrapolated
+  # to 3600 s = 360000; generation is 180000; 540000 in all.
+  - interval: 30s
+    input_series:
+      - series: 'karpenter_nodes_allocatable{resource_type="nvidia.com/gpu",instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1a",node_name="gpu1"}'
+        values: '1x60'
+      - series: 'karpenter_cloudprovider_instance_type_offering_price_estimate{instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1a"}'
+        values: '1.2x120'
+      - series: 'vllm:prompt_tokens_total{namespace="slipstream",pod="v1"}'
+        values: '0+3000x120'
+      - series: 'vllm:generation_tokens_total{namespace="slipstream",pod="v1"}'
+        values: '0+1500x120'
+    promql_expr_test:
+      # $0.68 / 540000 tokens x 1e6.
+      - panel: 17
+        ref: A
+        eval_time: 60m
+        exp_samples:
+          - labels: '{}'
+            value: 1.259259259259259
