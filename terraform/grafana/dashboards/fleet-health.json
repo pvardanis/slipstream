@@ -296,6 +296,45 @@
           "spss": 1
         }
       ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "GPU vCPUs running (spend)",
+      "description": "CloudWatch AWS/Usage ResourceCount for the account's running on-demand G-class vCPUs (Class G/OnDemand), the series the spend-leak alarm watches; a g5.xlarge is 4. It is read from AWS, not the cluster, so it stays at 0 while the cluster is down and keeps the history from before a teardown. AWS publishes no datapoint while none run, so FILL shows those minutes as 0.",
+      "gridPos": { "x": 0, "y": 72, "w": 12, "h": 8 },
+      "datasource": { "type": "cloudwatch", "uid": "${DS_CLOUDWATCH}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0 } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "cloudwatch", "uid": "${DS_CLOUDWATCH}" },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 0,
+          "region": "default",
+          "id": "running",
+          "namespace": "AWS/Usage",
+          "metricName": "ResourceCount",
+          "dimensions": { "Service": "EC2", "Type": "Resource", "Resource": "vCPU", "Class": "G/OnDemand" },
+          "matchExact": true,
+          "statistic": "Maximum",
+          "period": "60",
+          "hide": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "cloudwatch", "uid": "${DS_CLOUDWATCH}" },
+          "queryMode": "Metrics",
+          "metricQueryType": 0,
+          "metricEditorMode": 1,
+          "region": "default",
+          "id": "running_or_zero",
+          "expression": "FILL(running, 0)",
+          "period": "60",
+          "label": "G-class vCPUs"
+        }
+      ]
     }
   ]
 }
