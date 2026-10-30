@@ -339,7 +339,8 @@ hosted Prometheus or Tempo data source's UID or the managed CloudWatch data sour
 
   - **Karpenter:** node count, with annotations at the minutes Karpenter created or
     terminated a node; pod-provisioning cold start p50 and p95 over the dashboard's time
-    range, from when Karpenter first sees a schedulable pending pod until it runs; and
+    range, from Karpenter's last scheduling attempt for a pending pod until it runs, so
+    time spent waiting out a GPU capacity shortage before that attempt is left out; and
     voluntary disruption decisions over the range by reason. Karpenter creates these
     counters and the histogram at their first increment, so the queries count a series
     born inside the range in full.
