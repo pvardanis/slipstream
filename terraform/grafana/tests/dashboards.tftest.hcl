@@ -191,7 +191,7 @@ run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu_above_the_gpu_panels" 
       for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
       p.title => p.gridPos if p.gridPos.y == 0
       } == {
-      "Replicas"          = { x = 0, y = 0, w = 12, h = 8 }
+      "Replicas"             = { x = 0, y = 0, w = 12, h = 8 }
       "vLLM pod CPU (cores)" = { x = 12, y = 0, w = 12, h = 8 }
     }
     error_message = "The fleet health dashboard's top row must be Replicas and vLLM pod CPU (cores), half width each."
@@ -255,5 +255,32 @@ run "vllm_pod_cpu_usage_lines_select_the_manifest_namespace_and_container" {
       ] if p.title == "vLLM pod CPU (cores)"
     ] == [[true, true]]
     error_message = "The vLLM pod CPU panel's fleet and per-pod lines must select the vllm-gpu Deployment's namespace and container from k8s/vllm-gpu.yaml."
+  }
+}
+
+# The throughput panels pair up half width: the two token rates in one row, requests/s
+# beside live goodput in the next.
+run "fleet_health_throughput_rows_pair_token_rates_and_requests_with_goodput" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = {
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      p.title => p.gridPos if contains([32, 40], p.gridPos.y)
+      } == {
+      "Output tokens/s" = { x = 0, y = 32, w = 12, h = 8 }
+      "Prompt tokens/s" = { x = 12, y = 32, w = 12, h = 8 }
+      "Requests/s"      = { x = 0, y = 40, w = 12, h = 8 }
+      "Live goodput"    = { x = 12, y = 40, w = 12, h = 8 }
+    }
+    error_message = "Output and prompt tokens/s must share one row, and requests/s and live goodput the next, half width each."
   }
 }

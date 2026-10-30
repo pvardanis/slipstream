@@ -249,7 +249,7 @@
       "type": "timeseries",
       "title": "Output tokens/s",
       "description": "vllm:generation_tokens_total: tokens generated per second, fleet-wide and per pod.",
-      "gridPos": { "x": 0, "y": 32, "w": 8, "h": 8 },
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "short", "min": 0 } },
       "targets": [
@@ -272,7 +272,7 @@
       "type": "timeseries",
       "title": "Prompt tokens/s",
       "description": "vllm:prompt_tokens_total: prompt tokens processed per second, fleet-wide and per pod.",
-      "gridPos": { "x": 8, "y": 32, "w": 8, "h": 8 },
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "short", "min": 0 } },
       "targets": [
@@ -295,7 +295,7 @@
       "type": "timeseries",
       "title": "Requests/s",
       "description": "vllm:request_success_total: requests finished per second, for any finish reason, fleet-wide and per pod.",
-      "gridPos": { "x": 16, "y": 32, "w": 8, "h": 8 },
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "reqps", "min": 0 } },
       "targets": [
@@ -318,7 +318,7 @@
       "type": "timeseries",
       "title": "Live goodput",
       "description": "The share of vLLM's llm_request spans whose request met the SLO (TTFT <= 1 s and TPOT <= 50 ms, the bench configs' goodput gates), from the Collector's span metrics split by slo_met, fleet-wide and per pod. It reads as the bench report's goodput_fraction. Span metrics flush once a minute; with no requests in the window it shows no data, and with none meeting the SLO, 0.",
-      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 8 },
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
       "interval": "1m",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
