@@ -64,8 +64,17 @@ check_mutation_fails() {
   fi
 }
 
-check_mutation_fails 17 A '/ 60\)' '/ 30)' 'the spend subquery divided by 30, not 60'
-check_mutation_fails 18 A '/ 60\)' '/ 30)' 'the spend subquery divided by 30, not 60'
+# The scoreboard panels: $ per 1M tokens and Tokens/s per $/h.
+price_join='on \(instance_type, capacity_type, zone\)'
+for panel in 17 18; do
+  check_mutation_fails "${panel}" A '/ 60\)' '/ 30)' 'the spend subquery divided by 30, not 60'
+  check_mutation_fails "${panel}" A "${price_join}" 'on (capacity_type, zone)' \
+    'the price join ignoring instance_type'
+  check_mutation_fails "${panel}" A "${price_join}" 'on (instance_type, zone)' \
+    'the price join ignoring capacity_type'
+  check_mutation_fails "${panel}" A "${price_join}" 'on (instance_type, capacity_type)' \
+    'the price join ignoring zone'
+done
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
