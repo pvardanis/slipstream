@@ -84,6 +84,7 @@ The CI/CD pipeline and the benchmark data path are detailed in
 | `docker` | local bench-image builds |
 | `prek`, `tflint` | git hooks |
 | `helm`, `kubeconform` | local Helm chart checks (`test/chart-render-test.sh`) |
+| `promtool` | Fleet health dashboard PromQL tests |
 | `gh` | setting repo variables (`just gh-vars`) |
 
 [`mise.toml`](mise.toml) pins the tools above but Docker, for local use and CI, and
