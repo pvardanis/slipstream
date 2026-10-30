@@ -1,7 +1,7 @@
 {
   "uid": "fleet-health",
   "title": "Fleet health",
-  "description": "Replicas, GPU state, serving, throughput and goodput of the vllm-gpu serving fleet (ADR-0026, \"Panels\"). Each GPU, serving, throughput and goodput panel shows the fleet aggregate beside a per-pod breakdown.",
+  "description": "Replicas, GPU state, serving, throughput and goodput of the vllm-gpu serving fleet, Karpenter's scaling, GPU spend and the cost scoreboard (ADR-0026, \"Panels\"). Each GPU, serving, throughput and goodput panel shows the fleet aggregate beside a per-pod breakdown.",
   "editable": false,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
@@ -12,7 +12,7 @@
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "enable": true,
         "iconColor": "green",
-        "expr": "sum((increase(karpenter_nodes_created_total[1m]) and karpenter_nodes_created_total offset 1m) or (karpenter_nodes_created_total unless karpenter_nodes_created_total offset 1m)) > 0",
+        "expr": "sum((increase(karpenter_nodes_created_total[2m]) and karpenter_nodes_created_total offset 2m) or (karpenter_nodes_created_total unless karpenter_nodes_created_total offset 2m)) > 0",
         "step": "1m",
         "titleFormat": "Node created",
         "filter": { "exclude": false, "ids": [14] }
@@ -22,7 +22,7 @@
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "enable": true,
         "iconColor": "red",
-        "expr": "sum((increase(karpenter_nodes_terminated_total[1m]) and karpenter_nodes_terminated_total offset 1m) or (karpenter_nodes_terminated_total unless karpenter_nodes_terminated_total offset 1m)) > 0",
+        "expr": "sum((increase(karpenter_nodes_terminated_total[2m]) and karpenter_nodes_terminated_total offset 2m) or (karpenter_nodes_terminated_total unless karpenter_nodes_terminated_total offset 2m)) > 0",
         "step": "1m",
         "titleFormat": "Node terminated",
         "filter": { "exclude": false, "ids": [14] }
@@ -419,6 +419,44 @@
           "expr": "sum by (reason) ((increase(karpenter_voluntary_disruption_decisions_total[$__range]) and karpenter_voluntary_disruption_decisions_total offset $__range) or (last_over_time(karpenter_voluntary_disruption_decisions_total[$__range]) unless karpenter_voluntary_disruption_decisions_total offset $__range))",
           "instant": true,
           "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "$ per 1M tokens",
+      "description": "GPU dollars over the dashboard's time range, summed over every GPU node, divided by the prompt plus generation tokens served in that range, summed over every replica, times 1e6. Each minute a node holds a GPU it costs karpenter_cloudprovider_instance_type_offering_price_estimate for its instance type, capacity type and zone, divided by 60, so idle GPU time counts and the figure is what serving cost. There is no commercial arm and no input:output split.",
+      "gridPos": { "x": 0, "y": 72, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "noValue": "No GPU node or no tokens served in the range" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "(sum_over_time(sum(count by (instance_type, capacity_type, zone) (karpenter_nodes_allocatable{resource_type=\"nvidia.com/gpu\"} > 0) * on (instance_type, capacity_type, zone) max by (instance_type, capacity_type, zone) (karpenter_cloudprovider_instance_type_offering_price_estimate))[$__range:1m]) / 60) / (sum(increase(vllm:prompt_tokens_total{namespace=\"slipstream\"}[$__range])) + sum(increase(vllm:generation_tokens_total{namespace=\"slipstream\"}[$__range]))) * 1e6",
+          "instant": true,
+          "legendFormat": "$ per 1M tokens"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Tokens/s per $/h",
+      "description": "Prompt plus generation tokens served per second over the dashboard's time range, divided by the GPU dollars per hour over the same range, from the same tokens and GPU dollars as $ per 1M tokens: the throughput each dollar an hour of GPU buys, idle GPU time included.",
+      "gridPos": { "x": 12, "y": 72, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "noValue": "No GPU node or no tokens served in the range" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "(sum(increase(vllm:prompt_tokens_total{namespace=\"slipstream\"}[$__range])) + sum(increase(vllm:generation_tokens_total{namespace=\"slipstream\"}[$__range]))) / (3600 * (sum_over_time(sum(count by (instance_type, capacity_type, zone) (karpenter_nodes_allocatable{resource_type=\"nvidia.com/gpu\"} > 0) * on (instance_type, capacity_type, zone) max by (instance_type, capacity_type, zone) (karpenter_cloudprovider_instance_type_offering_price_estimate))[$__range:1m]) / 60))",
+          "instant": true,
+          "legendFormat": "tokens/s per $/h"
         }
       ]
     }
