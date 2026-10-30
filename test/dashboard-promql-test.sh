@@ -75,6 +75,7 @@ for panel in 17 18; do
   check_mutation_fails "${panel}" A "${price_join}" 'on (instance_type, capacity_type)' \
     'the price join ignoring zone'
 done
+check_mutation_fails 17 A ' > 0\) \* 1e6$' ') * 1e6' 'no > 0 filter on the token count'
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1

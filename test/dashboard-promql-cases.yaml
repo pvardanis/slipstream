@@ -51,3 +51,21 @@ tests:
         exp_samples:
           - labels: '{}'
             value: 220.58823529411765
+
+  # Scoreboard, no tokens: the GPU node is up and priced all range, but the token counters
+  # are flat, so their increase is 0 and $ per 1M tokens has no sample, not +Inf.
+  - interval: 30s
+    input_series:
+      - series: 'karpenter_nodes_allocatable{resource_type="nvidia.com/gpu",instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1a",node_name="gpu1"}'
+        values: '1x120'
+      - series: 'karpenter_cloudprovider_instance_type_offering_price_estimate{instance_type="g5.xlarge",capacity_type="on-demand",zone="eu-central-1a"}'
+        values: '1.2x120'
+      - series: 'vllm:prompt_tokens_total{namespace="slipstream",pod="v1"}'
+        values: '500x120'
+      - series: 'vllm:generation_tokens_total{namespace="slipstream",pod="v1"}'
+        values: '200x120'
+    promql_expr_test:
+      - panel: 17
+        ref: A
+        eval_time: 60m
+        exp_samples: []
