@@ -336,8 +336,8 @@ routing (L3) the breakdown shows the imbalance.
   their first increment, and `just cluster-up` starts a fresh Karpenter, so `increase()`
   misses each series' first increment, often the session's only one. The range panels take
   `increase()` for a series alive at the range's start and its last value for one born
-  inside it. The annotations do the same over 2 minutes, so an increment falls between two
-  30 s scrapes in the window, and one event can mark two adjacent minutes.
+  inside it. The annotations do the same over a 2-minute window, which always holds both
+  30 s scrapes around an increment, so one event can mark two adjacent minutes.
 - **Scoreboard dollars:** each minute of the range, every node with an allocatable
   `nvidia.com/gpu` costs the price gauge for its instance type, capacity type and zone,
   divided by 60. A subquery at a one-minute step sums them, so idle GPU minutes count.
