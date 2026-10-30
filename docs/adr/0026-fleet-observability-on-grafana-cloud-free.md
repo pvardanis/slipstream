@@ -366,7 +366,7 @@ routing (L3) the breakdown shows the imbalance.
 - **Why:** GPU busy time low can mean light traffic or an engine starved by its own CPU
   work: vLLM's engine-core loop schedules, prepares inputs and detokenizes mostly on one
   thread. GPU metrics cannot tell the two apart; the pod's CPU can.
-- **Panel:** "vLLM pod CPU used", in the top row beside Replicas, half width each, directly
+- **Panel:** "vLLM pod CPU (cores)", in the top row beside Replicas, half width each, directly
   above the GPU panels. CPU cores the `vllm` container uses, from
   `rate(container_cpu_usage_seconds_total)`, per `vllm-gpu` pod and summed over the fleet,
   as "Panels" requires; cores are an amount, so the fleet line is a `sum`, not the GPU
