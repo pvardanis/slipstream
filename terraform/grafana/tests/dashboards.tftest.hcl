@@ -359,3 +359,48 @@ run "disruptions_panel_names_each_reason" {
     error_message = "The voluntary disruptions panel must be a stat with textMode value_and_name and legend {{reason}}, so each reason's count is named by its reason."
   }
 }
+
+# The TTFT table's query fixes the span's service and name, so their columns hold one value
+# and are dropped. Tempo's trace service and name columns describe the trace's root span,
+# which is the llm_request span while no client sends a traceparent, so they are dropped
+# too. Tempo's trace ID stays in the data, as the Span ID link opens the trace through it,
+# but is hidden from the table.
+run "ttft_table_shows_only_the_columns_that_vary" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = [
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      [for t in try(p.transformations, []) : t.options.excludeByName if t.id == "organize"]
+      if p.title == "Requests over the TTFT gate"
+      ] == [
+      [{ traceService = true, traceName = true, name = true, "service.name" = true }]
+    ]
+    error_message = "The TTFT table must drop traceService, traceName, name and service.name with one organize transformation, and keep traceIdHidden, which the Span ID link reads."
+  }
+  assert {
+    condition = anytrue(flatten([
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels : [
+        for o in p.fieldConfig.overrides :
+        o.matcher == { id = "byName", options = "traceIdHidden" } && contains(o.properties, { id = "custom.hideFrom.viz", value = true })
+      ] if p.title == "Requests over the TTFT gate"
+    ]))
+    error_message = "The TTFT table must hide traceIdHidden from the table with a custom.hideFrom.viz override."
+  }
+  assert {
+    condition = alltrue([
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      !strcontains(jsonencode(try(p.transformations, [])), "traceIdHidden")
+      if p.title == "Requests over the TTFT gate"
+    ])
+    error_message = "No transformation on the TTFT table may name traceIdHidden: the Span ID link reads it from the data, so it is hidden with an override, not removed."
+  }
+}

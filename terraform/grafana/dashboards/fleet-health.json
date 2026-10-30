@@ -341,7 +341,7 @@
       "id": 12,
       "type": "table",
       "title": "Requests over the TTFT gate",
-      "description": "vLLM's llm_request spans whose TTFT exceeded goodput's 1 s gate, by request_id, sorted slowest first. A Tempo trace search returns the first 100 matching traces in the window, one request each, not the 100 slowest. Select a row's trace to open it. If it is empty while TTFT p95 is over 1 s, ttft_ms is missing from Tempo's spans or the query's literal does not match its type.",
+      "description": "vLLM's llm_request spans whose TTFT exceeded goodput's 1 s gate, by request_id, sorted slowest first. A Tempo trace search returns the first 100 matching traces in the window, one request each, not the 100 slowest. Select a row's Span ID to open its trace. If it is empty while TTFT p95 is over 1 s, ttft_ms is missing from Tempo's spans or the query's literal does not match its type.",
       "gridPos": { "x": 0, "y": 48, "w": 24, "h": 8 },
       "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
       "options": {
@@ -357,9 +357,23 @@
             "properties": [
               { "id": "unit", "value": "ms" }
             ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceIdHidden" },
+            "properties": [
+              { "id": "custom.hideFrom.viz", "value": true }
+            ]
           }
         ]
       },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "traceService": true, "traceName": true, "name": true, "service.name": true }
+          }
+        }
+      ],
       "targets": [
         {
           "refId": "A",
