@@ -56,12 +56,12 @@
     {
       "id": 19,
       "type": "timeseries",
-      "title": "vLLM pod CPU used",
+      "title": "vLLM pod CPU (cores)",
       "description": "container_cpu_usage_seconds_total: CPU cores the vllm container uses, per vllm-gpu pod and summed over the fleet. Read against GPU busy time: low busy time with CPU near the 1 core line means a CPU-bound engine, since vLLM's engine-core loop is mostly one thread; low busy time with CPU low means light traffic. Dashed lines: 1 core, the pod's CPU request, and the GPU node's allocatable CPU. The pod has no CPU limit, so it is not throttled short of allocatable.",
       "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": {
-        "defaults": { "unit": "short", "decimals": 2, "min": 0 },
+        "defaults": { "unit": "suffix: cores", "decimals": 2, "min": 0 },
         "overrides": [
           {
             "matcher": { "id": "byRegexp", "options": "^(1 core|request|node allocatable)$" },
