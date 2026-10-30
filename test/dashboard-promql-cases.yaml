@@ -95,3 +95,23 @@ tests:
         exp_samples:
           - labels: '{}'
             value: 292.5
+
+  # Cold start, nothing in range: the buckets exist all range but stay flat, so every
+  # bucket's increase is 0 and the quantile is NaN; p50 and p95 have no sample, not NaN.
+  - interval: 30s
+    input_series:
+      - series: 'karpenter_pods_provisioning_startup_duration_seconds_bucket{le="150"}'
+        values: '0x120'
+      - series: 'karpenter_pods_provisioning_startup_duration_seconds_bucket{le="300"}'
+        values: '1x120'
+      - series: 'karpenter_pods_provisioning_startup_duration_seconds_bucket{le="+Inf"}'
+        values: '1x120'
+    promql_expr_test:
+      - panel: 14
+        ref: A
+        eval_time: 60m
+        exp_samples: []
+      - panel: 14
+        ref: B
+        eval_time: 60m
+        exp_samples: []
