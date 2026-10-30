@@ -319,21 +319,22 @@ and the next apply overwrites any change made there. Panels name their data sour
   100% whenever a request is in flight, and memory-bandwidth active falls as batching
   shares the weight reads. Read load from the serving and throughput panels:
   - **Serving:** KV-cache usage, requests waiting, TTFT p95 and e2e latency p95, fleet-wide
-    and per pod. An exemplar on the e2e latency line opens the request's trace. From 15 s
-    to 120 s the e2e p95 can be off by up to a factor of 1.5, as it is interpolated inside
-    a latency bucket.
+    and per pod. An exemplar on the fleet e2e latency line opens the request's trace.
+    From 15 s to 120 s the e2e p95 can be off by up to a factor of 1.5, as it is
+    interpolated inside a latency bucket.
   - **Throughput and goodput:** output tokens/s, prompt tokens/s, requests/s, and live
     goodput, the share of requests meeting the bench configs' goodput gates (TTFT ≤ 1 s,
     TPOT ≤ 50 ms). Live goodput reads as the bench report's `goodput_fraction`; compare it
     per bench cell, as the panel's value at one instant covers a sliding window.
   - **Requests over the TTFT gate:** a Tempo table of `llm_request` spans with
     `ttft_ms` over 1 s, by `request_id`. It lists the first 100 matches in the window,
-    sorted slowest first, not the 100 slowest. Empty while TTFT p95 is over 1 s means
-    Tempo's spans lack `ttft_ms` or the query's literal is not a decimal.
+    sorted slowest first, not the 100 slowest. If it is empty while TTFT p95 is over 1 s,
+    check that traces reach Tempo, that their spans carry `ttft_ms`, and that the query's
+    literal is a decimal.
 
-  The span-metric panels (e2e latency, live goodput) flush once a minute, and read
-  series the Collector sends to Grafana Cloud itself, listed under `collector_metrics` in
-  the allowlist.
+  The span-metric panels (e2e latency, live goodput) update once a minute, when the
+  Collector flushes its span metrics, and read series the Collector sends to Grafana Cloud
+  itself, listed under `collector_metrics` in the allowlist.
 
 A panel shows "no data" when it queries a metric Prometheus does not send to Grafana
 Cloud. Check a dashboard's queries against `terraform/eks/remote-write-allowlist.yaml`:
