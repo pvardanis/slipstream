@@ -30,3 +30,10 @@ tests:
         exp_samples:
           - labels: '{}'
             value: 1.259259259259259
+      # 540000 tokens / 3600 s / $0.68 per hour of spend.
+      - panel: 18
+        ref: A
+        eval_time: 60m
+        exp_samples:
+          - labels: '{}'
+            value: 220.58823529411765
