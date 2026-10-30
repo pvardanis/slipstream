@@ -137,9 +137,11 @@ tests:
             value: 3.0252100840336134
 
   # Node-created annotation: the counter is born at 10m and steps 1 -> 2 at 40.5m. At 10m
-  # no series exists 2m before, so the born branch gives 1. At 41m the samples at 39.5m,
-  # 40m, 40.5m and 41m read 1, 1, 2, 2: an increase of 1 over 90 s, extrapolated to the
-  # 2m window = 4/3. At 15m and 50m the counter is flat, so there is no sample.
+  # no series exists 2m before, so the born branch gives 1. At 11m the window holds three
+  # samples, all 1, so increase is 0; with still no series 2m before, the offset guard
+  # drops that 0 and the born branch gives 1. At 41m the samples at 39.5m, 40m, 40.5m and
+  # 41m read 1, 1, 2, 2: an increase of 1 over 90 s, extrapolated to the 2m window = 4/3.
+  # At 15m and 50m the counter is flat, so there is no sample.
   - interval: 30s
     input_series:
       - series: 'karpenter_nodes_created_total{nodepool="gpu"}'
@@ -147,6 +149,11 @@ tests:
     promql_expr_test:
       - annotation: Node created
         eval_time: 10m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - annotation: Node created
+        eval_time: 11m
         exp_samples:
           - labels: '{}'
             value: 1
