@@ -329,24 +329,28 @@ hosted Prometheus or Tempo data source's UID or the managed CloudWatch data sour
     per bench cell, as the panel's value at one instant covers a sliding window.
   - **Requests over the TTFT gate:** a Tempo table of `llm_request` spans with
     `ttft_ms` over 1 s, by `request_id`. It lists the first 100 matches in the window,
-    sorted slowest first, not the 100 slowest. If it is empty while TTFT p95 is over 1 s,
-    check that traces reach Tempo, that their spans carry `ttft_ms`, and that the query's
-    literal is a decimal.
+    sorted slowest first, not the 100 slowest. Select a row's Span ID to open its trace.
+    If it is empty while TTFT p95 is over 1 s, check that traces reach Tempo, that their
+    spans carry `ttft_ms`, and that the query's literal is a decimal.
 
   The span-metric panels (e2e latency, live goodput) update once a minute, when the
   Collector flushes its span metrics, and read series the Collector sends to Grafana Cloud
   itself, listed under `collector_metrics` in the allowlist.
 
-  - **Karpenter:** node count, with annotations at the minutes Karpenter created or
-    terminated a node; pod-provisioning cold start p50 and p95 over the dashboard's time
-    range, from Karpenter's last scheduling attempt for a pending pod until it runs, so
-    time spent waiting out a GPU capacity shortage before that attempt is left out; and
-    voluntary disruption decisions over the range by reason. Karpenter creates these
+  - **Karpenter:** node count, the lowest in each step so a short gap a scrape catches
+    shows, with annotations at the minutes Karpenter created or terminated a node;
+    pod-provisioning cold start p50 and p95 over the dashboard's time range, from
+    Karpenter's last scheduling attempt for a pending pod until it is Ready; and
+    voluntary disruption decisions over the range by reason. The cold start includes
+    vLLM's image pull and model load, and leaves out time spent waiting out a GPU
+    capacity shortage before that last attempt. Karpenter creates these
     counters and the histogram at their first increment, so the queries count a series
     born inside the range in full.
   - **Spend:** the account's running on-demand G-class vCPUs from CloudWatch `AWS/Usage`,
     the series the spend-leak alarm watches; a g5.xlarge is 4. It reads AWS, so after
-    `just cluster-down` it shows 0 with the history from before the teardown.
+    `just cluster-down` it shows 0 with the history from before the teardown. Each
+    5-minute period shows its maximum, so a node replacement shorter than that usually
+    does not reach 0.
   - **Cost scoreboard:** $ per 1M tokens and tokens/s per $/h over the dashboard's time
     range. GPU dollars are each minute a node holds a GPU, priced at Karpenter's
     `karpenter_cloudprovider_instance_type_offering_price_estimate` for its instance type,
