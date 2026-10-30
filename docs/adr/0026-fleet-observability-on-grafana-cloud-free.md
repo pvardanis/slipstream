@@ -360,3 +360,28 @@ routing (L3) the breakdown shows the imbalance.
   and none while none do, so the panel reads 5-minute periods, as the spend-leak alarm
   does, and fills the empty ones with 0 (`FILL`). It reads on-demand vCPUs only, as the GPU NodePool
   launches on-demand capacity only.
+
+## Amendment (2026-10-30, #436): a CPU panel on the vLLM GPU pods
+
+- **Why:** GPU busy time low can mean light traffic or an engine starved by its own CPU
+  work: vLLM's engine-core loop schedules, prepares inputs and detokenizes mostly on one
+  thread. GPU metrics cannot tell the two apart; the pod's CPU can.
+- **Panel:** "vLLM pod CPU used", in the top row beside Replicas, half width each, directly
+  above the GPU panels. CPU cores the `vllm` container uses, from
+  `rate(container_cpu_usage_seconds_total)`, per `vllm-gpu` pod and summed over the fleet,
+  as "Panels" requires; cores are an amount, so the fleet line is a `sum`, not the GPU
+  panels' `avg`.
+- **Reference lines:**
+  - 1 core: the one-thread engine-core loop is CPU-bound there, long before the container
+    total reaches allocatable.
+  - The pod's CPU request, a constant equal to the request in `k8s/vllm-gpu.yaml`, which a
+    test keeps in step.
+  - The GPU node's allocatable CPU, from the already-sent `karpenter_nodes_allocatable`
+    for the node with an allocatable `nvidia.com/gpu`.
+- **No throttling panel:** the pod has no CPU limit, so CFS never throttles it.
+- **Sent cluster-wide:** `container_cpu_usage_seconds_total` comes from cAdvisor through
+  the kubelet, one series per container, pod and node cgroup. The allowlist is one keep
+  rule over the metric name and `instance_type`; filtering this metric by namespace or
+  container would add a second rule for one metric. A system node and a GPU node hold
+  tens of pods, so the metric adds at most a few hundred series against the free tier's
+  10k, and it is sent with no label filter. The measured count is recorded on #436.
