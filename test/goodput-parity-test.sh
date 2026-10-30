@@ -150,7 +150,7 @@ dashboard_ttft_cuts() {
     'def ms: "[0-9]+(?:\\.[0-9]+)?";
     . as $root | paths(objects and has("query")) as $path | getpath($path) as $target
       | $target.query | strings | select(test("ttft_ms")) as $q
-      | (if $path[-2] == "targets" then $root | getpath($path[:-2]) else {} end) as $panel
+      | (if $path[-2] == "targets" then $root | getpath($path[:-2]) else null end) as $panel
       | ($panel.type == "table" and (($panel.datasource | objects | .type) // null) == "tempo"
         and (($target.datasource | objects | .type) // "tempo") == "tempo") as $table
       | ([$q | scan("ttft_ms\\b")] | length) as $mentions
