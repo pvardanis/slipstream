@@ -115,3 +115,23 @@ tests:
         ref: B
         eval_time: 60m
         exp_samples: []
+
+  # Disruptions: reason="empty" is born at 20m and rises to 2; with no series 60m before,
+  # the born-in-range branch counts its last value, 2. reason="drifted" goes 5 -> 8: an
+  # increase of 3 sampled over 30 s..3600 s (3570 s), extrapolated to 3600 s =
+  # 3 x 3600 / 3570 = 1080/357.
+  - interval: 30s
+    input_series:
+      - series: 'karpenter_voluntary_disruption_decisions_total{reason="empty",decision="delete"}'
+        values: '_x40 1x40 2x40'
+      - series: 'karpenter_voluntary_disruption_decisions_total{reason="drifted",decision="replace"}'
+        values: '5x100 8x20'
+    promql_expr_test:
+      - panel: 15
+        ref: A
+        eval_time: 60m
+        exp_samples:
+          - labels: '{reason="empty"}'
+            value: 2
+          - labels: '{reason="drifted"}'
+            value: 3.0252100840336134
