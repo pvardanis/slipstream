@@ -294,7 +294,7 @@ metric_points() {
     END { flush() }
   ' <<<"${logs}"
 }
-# The bucket bounds of metric $1's first histogram data point, one per line, as
+# The bucket bounds of metric $1's first data point, one per line, as
 # the debug exporter's "ExplicitBounds #<i>: <bound>" lines give them.
 metric_bounds() {
   awk -v name="$1" '
@@ -404,13 +404,14 @@ assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)"
   "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(true)" "Count: 3"
 assert_metric_point "traces.span.metrics.duration" "span.name: Str(llm_request)" \
   "k8s.pod.name: Str(${pod_name})" "slo_met: Bool(false)" "Count: 5"
-# The latency panel's p95 interpolates inside a bucket, so from 15 s to 120 s,
-# where loaded requests finish, each bound is at most 1.5 times the one before.
+# The latency panel's p95 interpolates inside a bucket, so the bounds span 15 s
+# to 120 s and every bucket overlapping that range is at most 1.5x wide.
 bounds="$(metric_bounds "traces.span.metrics.duration")"
-if ! awk 'NR > 1 && $1 > 15 && $1 <= 120 && $1 > 1.5 * prev { bad = 1 } { prev = $1 }
-  END { exit bad || NR == 0 }' <<<"${bounds}"; then
-  echo "FAIL: the spanmetrics duration histogram has a bucket wider than 1.5x between" \
-    "15 s and 120 s, or no bounds; got: $(paste -sd ' ' - <<<"${bounds}")" >&2
+if ! awk 'NF { n++ } n > 1 && $1 > 15 && prev < 120 && $1 > 1.5 * prev { bad = 1 }
+  NF && n == 1 { first = $1 } NF { prev = $1 }
+  END { exit bad || n == 0 || first > 15 || prev < 120 }' <<<"${bounds}"; then
+  echo "FAIL: the spanmetrics duration histogram's bounds do not span 15 s to 120 s" \
+    "in buckets at most 1.5x wide; got: $(paste -sd ' ' - <<<"${bounds}")" >&2
   fail=1
 fi
 if ! grep -q "slo_met: Bool(true) .*exemplars=[1-9]" <<<"$(metric_points "traces.span.metrics.duration")"; then
@@ -435,4 +436,4 @@ if [[ "${fail}" -ne 0 ]]; then
   exit 1
 fi
 
-echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met and ttft_ms, spanmetrics split by slo_met and pod with 1.5x latency buckets, exporter counts on :8888"
+echo "PASS: request_id + shape-only fields exported, prompt content dropped, vLLM spans mapped with slo_met and ttft_ms, spanmetrics split by slo_met and pod with latency buckets at most 1.5x wide from 15 s to 120 s, exporter counts on :8888"
