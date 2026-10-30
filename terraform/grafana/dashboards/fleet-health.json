@@ -351,14 +351,14 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.5, sum by (le) ((increase(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) and karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range) or (last_over_time(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) unless karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range)))",
+          "expr": "(histogram_quantile(0.5, sum by (le) ((increase(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) and karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range) or (last_over_time(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) unless karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range)))) >= 0",
           "instant": true,
           "legendFormat": "p50"
         },
         {
           "refId": "B",
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "histogram_quantile(0.95, sum by (le) ((increase(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) and karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range) or (last_over_time(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) unless karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range)))",
+          "expr": "(histogram_quantile(0.95, sum by (le) ((increase(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) and karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range) or (last_over_time(karpenter_pods_provisioning_startup_duration_seconds_bucket[$__range]) unless karpenter_pods_provisioning_startup_duration_seconds_bucket offset $__range)))) >= 0",
           "instant": true,
           "legendFormat": "p95"
         }
@@ -435,7 +435,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-          "expr": "(sum_over_time(sum(count by (instance_type, capacity_type, zone) (karpenter_nodes_allocatable{resource_type=\"nvidia.com/gpu\"} > 0) * on (instance_type, capacity_type, zone) max by (instance_type, capacity_type, zone) (karpenter_cloudprovider_instance_type_offering_price_estimate))[$__range:1m]) / 60) / (sum(increase(vllm:prompt_tokens_total{namespace=\"slipstream\"}[$__range])) + sum(increase(vllm:generation_tokens_total{namespace=\"slipstream\"}[$__range]))) * 1e6",
+          "expr": "(sum_over_time(sum(count by (instance_type, capacity_type, zone) (karpenter_nodes_allocatable{resource_type=\"nvidia.com/gpu\"} > 0) * on (instance_type, capacity_type, zone) max by (instance_type, capacity_type, zone) (karpenter_cloudprovider_instance_type_offering_price_estimate))[$__range:1m]) / 60) / ((sum(increase(vllm:prompt_tokens_total{namespace=\"slipstream\"}[$__range])) + sum(increase(vllm:generation_tokens_total{namespace=\"slipstream\"}[$__range]))) > 0) * 1e6",
           "instant": true,
           "legendFormat": "$ per 1M tokens"
         }
