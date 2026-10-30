@@ -75,10 +75,12 @@ run "panels_query_the_hosted_data_sources_by_uid" {
   }
 
   assert {
-    condition = alltrue([
-      for d in values(grafana_dashboard.this) :
-      !strcontains(d.config_json, "DS_PROMETHEUS") && !strcontains(d.config_json, "DS_TEMPO") && !strcontains(d.config_json, "DS_CLOUDWATCH")
-    ])
+    condition = alltrue(flatten([
+      for d in values(grafana_dashboard.this) : [
+        for placeholder in ["DS_PROMETHEUS", "DS_TEMPO", "DS_CLOUDWATCH"] :
+        !strcontains(d.config_json, placeholder)
+      ]
+    ]))
     error_message = "Every $${DS_PROMETHEUS}, $${DS_TEMPO} and $${DS_CLOUDWATCH} placeholder must be replaced with its data source's UID."
   }
   # Every panel that runs queries, including those nested in a collapsed row, and each of
