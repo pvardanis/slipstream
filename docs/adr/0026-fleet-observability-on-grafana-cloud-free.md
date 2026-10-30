@@ -341,6 +341,11 @@ routing (L3) the breakdown shows the imbalance.
 - **Scoreboard dollars:** each minute of the range, every node with an allocatable
   `nvidia.com/gpu` costs the price gauge for its instance type, capacity type and zone,
   divided by 60. A subquery at a one-minute step sums them, so idle GPU minutes count.
+  Karpenter reports a node from when it registers, taking its GPU from the NodeClaim
+  until the device plugin advertises it, so the minute or so from launch to registration
+  is not counted. A teardown sends no staleness marker for the last scrape, so the
+  last node is priced for up to Prometheus's 5-minute lookback after it. A hand
+  calculation from EC2 node-hours can differ by those minutes.
 - **Tokens/sec/$:** read as tokens served per second over the range divided by GPU dollars
   per hour over the range, "tokens/s per $/h".
 - **Spend:** `AWS/Usage` publishes no datapoint while no G-class vCPU runs, so the panel
