@@ -394,7 +394,7 @@
       "type": "stat",
       "title": "Pod-provisioning cold start",
       "description": "p50 and p95 over the dashboard's time range of karpenter_pods_provisioning_startup_duration_seconds: from when Karpenter's scheduling simulation last started placing a pending pod until the pod is running, so a GPU pod's figure includes launching its node. A simulation that finds no capacity for the pod restarts that clock, so time spent waiting out capacity shortages before the last attempt is left out. Karpenter creates the histogram at its first observation, so a series that starts inside the range counts in full. The quantiles are interpolated inside Karpenter's buckets, which from 150 s to 300 s are 2x wide.",
-      "gridPos": { "x": 12, "y": 56, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 64, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "text" }, "decimals": 0, "noValue": "No pod provisioned in the range" } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name" },
@@ -439,7 +439,7 @@
       "type": "timeseries",
       "title": "GPU vCPUs running (spend)",
       "description": "CloudWatch AWS/Usage ResourceCount for the account's running on-demand G-class vCPUs (Class G/OnDemand), the series the spend-leak alarm watches; a g5.xlarge is 4. It is read from AWS, not the cluster, so it stays at 0 while the cluster is down and keeps the history from before a teardown. AWS publishes a datapoint every 5 minutes while any run and none while none do, so the panel reads 5-minute periods and FILL shows the empty ones as 0.",
-      "gridPos": { "x": 12, "y": 64, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 56, "w": 12, "h": 8 },
       "datasource": { "type": "cloudwatch", "uid": "${DS_CLOUDWATCH}" },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0 } },
       "targets": [

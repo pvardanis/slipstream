@@ -284,3 +284,30 @@ run "fleet_health_throughput_rows_pair_token_rates_and_requests_with_goodput" {
     error_message = "Output and prompt tokens/s must share one row, and requests/s and live goodput the next, half width each."
   }
 }
+
+# The Karpenter rows pair what capacity is up, nodes beside GPU vCPUs running, and node
+# churn, voluntary disruptions beside pod-provisioning cold start.
+run "fleet_health_karpenter_rows_pair_nodes_with_spend_and_disruptions_with_cold_start" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = {
+      for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
+      p.title => p.gridPos if contains([56, 64], p.gridPos.y)
+      } == {
+      "Nodes"                           = { x = 0, y = 56, w = 12, h = 8 }
+      "GPU vCPUs running (spend)"       = { x = 12, y = 56, w = 12, h = 8 }
+      "Voluntary disruptions by reason" = { x = 0, y = 64, w = 12, h = 8 }
+      "Pod-provisioning cold start"     = { x = 12, y = 64, w = 12, h = 8 }
+    }
+    error_message = "Nodes and GPU vCPUs running must share one row, and voluntary disruptions and pod-provisioning cold start the next, half width each."
+  }
+}
