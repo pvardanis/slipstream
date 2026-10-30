@@ -201,8 +201,8 @@ jobs:
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.10.21
-          install_args: kubectl promtool
-      # The image-identity and repo-variable scripts' unit tests (yq preinstalled;
+          install_args: kubectl promtool yq
+      # The image-identity and repo-variable scripts' unit tests (yq from mise;
       # build-image-test stubs docker, gh-vars-test stubs terraform and gh, and
       # orchestration-image-check-test stubs terraform and aws, so no build, GitHub write
       # or AWS call runs). Wiring them here is what makes them more
