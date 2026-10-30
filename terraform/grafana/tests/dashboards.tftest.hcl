@@ -192,9 +192,9 @@ run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu_above_the_gpu_panels" 
       p.title => p.gridPos if p.gridPos.y == 0
       } == {
       "Replicas"          = { x = 0, y = 0, w = 12, h = 8 }
-      "vLLM pod CPU used" = { x = 12, y = 0, w = 12, h = 8 }
+      "vLLM pod CPU (cores)" = { x = 12, y = 0, w = 12, h = 8 }
     }
-    error_message = "The fleet health dashboard's top row must be Replicas and vLLM pod CPU used, half width each."
+    error_message = "The fleet health dashboard's top row must be Replicas and vLLM pod CPU (cores), half width each."
   }
   assert {
     condition = {
@@ -225,7 +225,7 @@ run "vllm_pod_cpu_request_line_is_the_manifest_request" {
     condition = [
       for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels : [
         for q in p.targets : q.expr if q.legendFormat == "request"
-      ] if p.title == "vLLM pod CPU used"
+      ] if p.title == "vLLM pod CPU (cores)"
     ] == [["vector(${regex("requests:\\s+(?:#[^\\n]*\\n\\s*)*cpu:\\s+\"([0-9.]+)\"", file("../../k8s/vllm-gpu.yaml"))[0]})"]]
     error_message = "The vLLM pod CPU panel's request line must be vector(<cpu request>), the vllm-gpu container's CPU request in k8s/vllm-gpu.yaml."
   }
