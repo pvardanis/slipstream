@@ -114,3 +114,28 @@ run "panels_query_the_hosted_data_sources_by_uid" {
     error_message = "The fleet health dashboard must have a panel that reads the managed CloudWatch data source."
   }
 }
+
+# AWS/Usage publishes one datapoint every 5 minutes, so a shorter period leaves empty
+# minutes that FILL draws as 0 between the real counts.
+run "cloudwatch_queries_use_the_aws_usage_period" {
+  command = plan
+
+  override_resource {
+    target          = grafana_data_source.cloudwatch
+    override_during = plan
+    values = {
+      uid = "cloudwatch-uid-test"
+    }
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for d in values(grafana_dashboard.this) : [
+        for p in flatten([for top in jsondecode(d.config_json).panels : concat([top], try(top.panels, []))]) : [
+          for q in try(p.targets, []) : q.period == "300" if q.datasource.type == "cloudwatch"
+        ]
+      ]
+    ]))
+    error_message = "Every CloudWatch query must use a 300 s period, the interval AWS/Usage publishes at."
+  }
+}
