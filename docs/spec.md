@@ -190,7 +190,7 @@ guard outside the cluster. Effort ceiling ≈
 depth.
 
 - **Grafana — "is the fleet healthy?"** GPU utilization, KV-cache occupancy,
-  `num_requests_waiting`, TTFT p95, Karpenter scaling events, tokens/sec/$. Home of the cost
+  `num_requests_waiting`, TTFT p95, Karpenter scaling events, tokens/s per $/h. Home of the cost
   scoreboard and SLO burn-rate alerts.
 - **Spend-leak guard — "is anything billing with no session running?"** Lives in AWS, outside
   the cluster it watches, so it survives the failed `just cluster-down` it exists to catch: a
@@ -294,7 +294,7 @@ persona id, real = Danny, synthetic = generated persona, no PII):
 Two of the brief's four hooks, chosen by one lens: **pick hooks that ride a committed layer, not
 ones that open a new workstream.**
 
-- **Cost scoreboard** — live $/1M tokens and tokens/sec/$ of what slipstream itself serves,
+- **Cost scoreboard** — live $/1M tokens and tokens/s per $/h of what slipstream itself serves,
   priced at the hourly price of the GPU capacity running it, idle time included. Rides the
   fleet-health dashboards; spans every layer; the most legible motivator. It is one blended
   figure because nothing commercial is compared against it live: the commercial comparison,

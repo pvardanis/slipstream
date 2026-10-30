@@ -147,7 +147,7 @@ routing (L3) the breakdown shows the imbalance.
   - $/1M tokens: GPU dollars over the dashboard's time range, summed over every GPU node,
     ÷ prompt plus generation tokens served in that range, summed over every replica, × 1e6.
     Idle GPU time is included, so it shows what serving cost.
-  - tokens/sec/$.
+  - tokens/s per $/h.
   - The price is Karpenter's `karpenter_cloudprovider_instance_type_offering_price_estimate`
     for the running GPU node. There is no commercial arm, and no input:output split, since
     that split existed to compare against commercial APIs.
@@ -354,8 +354,8 @@ routing (L3) the breakdown shows the imbalance.
   traffic running up to an edge reads a few percent high: on 2026-10-30, 10 minutes of
   load in an 11-minute range read 1,108,782 tokens against the 1,075,386 the responses
   reported (+3.1%), and +1.0% in a 15-minute range whose edges fell in idle time.
-- **Tokens/sec/$:** read as tokens served per second over the range divided by GPU dollars
-  per hour over the range, "tokens/s per $/h".
+- **Tokens/s per $/h:** tokens served per second over the range divided by GPU dollars per
+  hour over the range.
 - **Spend:** `AWS/Usage` publishes a datapoint every 5 minutes while a G-class vCPU runs
   and none while none do, so the panel reads 5-minute periods, as the spend-leak alarm
   does, and fills the empty ones with 0 (`FILL`). It reads on-demand vCPUs only, as the GPU NodePool
