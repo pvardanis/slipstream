@@ -260,3 +260,61 @@ routing (L3) the breakdown shows the imbalance.
   honest one" for load, as "Panels" has it.
 - **Load:** read from the Serving and Throughput panels: KV-cache usage, requests waiting
   and output tok/s.
+
+## Amendment (2026-10-30, #371): the TTFT table filters `ttft_ms`, a double
+
+- **Attribute:** the `transform` writes vLLM's TTFT onto the span as `ttft_ms`, in
+  milliseconds as spec §5.2's `first_token` event carries it, and redaction keeps it. The
+  table queries `ttft_ms`, not `gen_ai.latency.time_to_first_token`, which redaction drops.
+  Only the Collector sets `ttft_ms`: a span that is not vLLM's loses any it arrives with.
+- **Query:** `{ resource.service.name = "vllm" && name = "llm_request" && span.ttft_ms >
+  1000.0 } | select(span.request_id, span.ttft_ms)`, the requests over goodput's 1 s TTFT
+  gate.
+- **Decimal literal:** `ttft_ms` is a double, and Grafana Cloud Tempo matches no double
+  against an integer literal. Over the same bench window `span.ttft_ms > 1000` returned no
+  traces and `span.ttft_ms > 1000.0` returned 20.
+- **Rows:** a Tempo trace search returns the first 100 matching traces in the window, one
+  request each. The table sorts them by `ttft_ms`, slowest first, but they are not the 100
+  slowest.
+- **Held by CI:** `test/goodput-parity-test.sh` fails unless a Tempo table panel holds that
+  query, visible and run as TraceQL, with no other visible query beside it, its gate a
+  decimal literal equal to the Collector's TTFT gate. Any other dashboard query on
+  `ttft_ms` must be the same filter.
+
+## Amendment (2026-10-30, #371): e2e latency buckets at most 1.5x wide from 15 s to 120 s
+
+- **Why:** `histogram_quantile` interpolates linearly inside the bucket holding the
+  quantile, so the e2e latency p95 can be off by up to that bucket's upper/lower ratio.
+  With doubling buckets, a bench cell at concurrency 96 read 106–115 s against the bench's
+  true p95 of 71.0 s, both in the 60–120 s bucket.
+- **Buckets:** `spanmetrics` uses 250 ms, 500 ms, 1, 2, 4, 8, 15, 20, 30, 45, 60, 90, 120 and
+  300 s. From 15 s to 120 s each bound is at most 1.5 times the one before, so a p95 there is
+  off by at most a factor of 1.5. Below 15 s and above 120 s the buckets stay wider.
+- **Cost:** each span-metric histogram goes from 12 to 15 `_bucket` series, about 111 more
+  series over a day at the current traffic.
+- **Held by test:** `just obs-test` reads the bounds the real Collector exports and fails
+  unless they span 15 s to 120 s in buckets at most 1.5x wide. It needs Docker and does not
+  run in CI.
+
+## Amendment (2026-10-30, #371): the serving panels' sources
+
+- **KV-cache usage:** `vllm:kv_cache_usage_perc` is a per-replica ratio, so like the GPU
+  panels its fleet line is `avg`, with `avg by (pod)` beside it.
+- **Span metrics:** the Collector's `spanmetrics` connector remote-writes
+  `traces_span_metrics_calls_total` and `traces_span_metrics_duration_seconds_bucket` to
+  Grafana Cloud itself, bypassing Prometheus and its keep rule. They are listed under
+  `collector_metrics` in `terraform/eks/remote-write-allowlist.yaml` so
+  `test/dashboard-allowlist-test.sh` accepts the panels reading them; `monitoring.tf` does
+  not read that list.
+
+## Amendment (2026-10-30, #371): `request_id` is not the client's `X-Request-Id` on `/v1/completions`
+
+- **Measured:** every `llm_request` span from the bench carries a `request_id` of the form
+  `cmpl-<16 hex>-0`.
+- **Why:** `/v1/completions`, which the bench calls, names a request `cmpl-` plus the
+  `X-Request-Id` or a random id, plus `-<prompt index>`. The `transform` strips only
+  `chatcmpl-`, and the bench's `prefix_repetition` dataset sends no `X-Request-Id`. So
+  "Traces and `request_id`" holds for `/v1/chat/completions` only.
+- **Today:** a `request_id` still resolves to one trace, since vLLM's ids are unique, but
+  it does not join to a client's logs, Sentry or PostHog. #430 tracks the fix, which the
+  pivot demo needs.
