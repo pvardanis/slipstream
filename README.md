@@ -335,6 +335,14 @@ re-runs anything.
 Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 `just prefect-ui` running.
 
+A third skill, [`check-observability`](.claude/skills/check-observability/SKILL.md),
+checks the fleet's live metrics and traces in Grafana Cloud through the
+[Grafana MCP server](#grafana-mcp-server) instead of a finished run. It QAs a change item
+by item against an expected result, walks a missing signal back to the first hop where it
+goes dark, or pivots from a `request_id` to its trace, and returns a summary with
+dashboard and trace links. Its one write is `just obs-pivot`'s demo span. Invoke it with
+what to check, e.g. `/check-observability the dashboard`.
+
 ## Grafana MCP server
 
 The project's [`.mcp.json`](.mcp.json) gives Claude Code the
