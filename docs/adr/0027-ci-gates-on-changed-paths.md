@@ -88,8 +88,8 @@ weekly schedule, and keeps the publish job on pushes to `main`.
 `bench-image.yml` and `orchestration-image.yml` carry the docs denylist as `paths-ignore`
 on their `push` trigger. Every other push to `main` still publishes when its content tag
 is absent from ECR. GitHub matches only the first 3,000 changed files of a push, so a push
-whose first 3,000 are all docs skips the publish even with code beyond them; the next code
-push publishes the missed content tag.
+whose first 3,000 are all docs skips the publish even with code beyond them, and the
+floating pointer lags until the next push that is not all docs.
 
 ### A shell test checks the gate
 
@@ -101,11 +101,12 @@ push publishes the missed content tag.
   filter from the content-tag pathspec in `orchestration-image.yml`;
 - the `code` filter includes anything narrower than everything;
 - `scan_config` does not name `.trivyignore` and the scan workflow `ci.yml` calls;
-- an output reads a filter that does not exist;
+- an output reads a filter that does not exist, or fails open on a missing result;
 - `ci-ok` does not need every other job, or does not run `always()`.
 
-It then runs the same checks against mutated copies of `ci.yml` that must fail, so a change
-to the parsing cannot make them pass vacuously. It runs in the lint job, which never skips:
+It then runs the same checks against mutated copies of the workflows and
+`bench/image-tag.sh`, and each copy must fail the check it targets, so a change to the
+parsing that silently empties or skips a check fails the test. It runs in the lint job, which never skips:
 the shell unit tests skip on a docs-only change, which is the change a broken gate would
 misread.
 
