@@ -143,4 +143,16 @@ else
   fail=1
 fi
 
+# A .dockerignore commit must roll the tag: the bench build's context is the repo root,
+# filtered by .dockerignore, so it decides which files the image bakes.
+printf '*\n' >"${scratch}/.dockerignore"
+git -C "${scratch}" -c user.email=t@t -c user.name=t add .dockerignore
+git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qm dockerignore
+if [[ "$("${scratch_script}" sha-tag)" != "${input_tag}" ]]; then
+  echo "ok   .dockerignore edit rolls tag"
+else
+  echo "FAIL .dockerignore edit rolls tag: still '${input_tag}'" >&2
+  fail=1
+fi
+
 exit "${fail}"
