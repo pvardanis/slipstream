@@ -4,10 +4,10 @@
 # content tag: the bench_image filter against bench/image-tag.sh (image_sha), the
 # orchestration_image filter against orchestration-image.yml's tag derivation. The
 # docs-only `code` filter must match everything outside its excludes, every filter
-# output the job reads must exist, and `ci-ok` must need every other job and run
-# always(), so no gated job can drop out of the required check. Then runs the checks
-# against mutated copies of ci.yml that must fail. Reads the workflows with yq and
-# bench/image-tag.sh with awk; runs no git, build or network call.
+# output the job reads must exist and fail closed, and `ci-ok` must need every other job
+# and run always(), so no gated job can drop out of the required check. Then runs the
+# checks against mutated copies of the files that must fail. Reads the workflows with yq
+# and bench/image-tag.sh with awk; runs no git, build or network call.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -91,6 +91,22 @@ check_same "ci.yml paths-filter quantifier" \
   "$(yq '.jobs.changes.steps[] | select(.id == "filter") | .with["predicate-quantifier"]' "${ci_workflow}")" \
   "some-with-excludes" "some-with-excludes"
 
+# Every output must fail closed, so a missing filter result runs the tests: docs_only
+# true only on the filter's explicit 'false', the image outputs false only on it.
+changes_outputs="$(yq '.jobs.changes.outputs | to_entries | .[] | .key + "=" + .value' "${ci_workflow}")"
+fail_open_outputs="$(awk -F= '
+  /\047true\047/ { print $1; next }
+  $1 == "docs_only" && !/== \047false\047/ { print $1; next }
+  $1 != "docs_only" && !/!= \047false\047/ { print $1 }
+' <<<"${changes_outputs}")"
+if [[ -z "${changes_outputs}" ]] || [[ -n "${fail_open_outputs}" ]]; then
+  echo "FAIL: changes job outputs must read the filter's explicit 'false'; failing open:" \
+    "${fail_open_outputs:-(no outputs read)}" >&2
+  fail=1
+else
+  echo "ok   changes job outputs fail closed"
+fi
+
 # A filter output the job reads but the filter does not define is empty on every run.
 check_same "filter outputs the changes job reads" \
   "$(yq '.jobs.changes.outputs[]' "${ci_workflow}" | grep -o 'steps\.filter\.outputs\.[a-z_]*' |
@@ -103,32 +119,63 @@ check_same "ci-ok needs" "$(yq '.jobs["ci-ok"].needs[]' "${ci_workflow}" | sort)
   "every other ci.yml job" "$(yq '.jobs | keys | .[] | select(. != "ci-ok")' "${ci_workflow}" | sort)"
 check_same "ci-ok if" "$(yq '.jobs["ci-ok"].if' "${ci_workflow}")" "always()" "always()"
 
-# Run the checks above against a copy of ci.yml with sed expression $2 applied, and fail
-# unless they fail: each case is a defect named $1 the checks exist to catch. A sed
-# expression that no longer changes ci.yml fails too, so the case cannot pass vacuously.
+# Run the checks above with the file in env var $2 replaced by a copy with sed
+# expression $3 applied, and fail unless the check labelled $4 fails: each case is a
+# defect named $1 that check exists to catch. A sed expression that no longer changes the
+# file fails too, as does a run that fails some other check, so no case passes vacuously.
 check_mutation_fails() {
-  local mutated
-  mutated="$(mktemp)"
-  sed "$2" "${ci_workflow}" >"${mutated}"
-  if cmp -s "${ci_workflow}" "${mutated}"; then
-    echo "FAIL: the mutation for $1 does not change ci.yml; update it to ci.yml's text" >&2
+  local defect="$1" env_var="$2" expression="$3" label="$4" original mutated output
+  case "${env_var}" in
+  CI_WORKFLOW) original="${ci_workflow}" ;;
+  BENCH_IMAGE_TAG) original="${bench_image_tag}" ;;
+  ORCHESTRATION_WORKFLOW) original="${orchestration_workflow}" ;;
+  *)
+    echo "FAIL: no file is read from ${env_var}" >&2
     fail=1
-  elif CI_PATHS_PARITY_MUTATION=1 CI_WORKFLOW="${mutated}" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
-    echo "FAIL: the checks pass on ci.yml with $1" >&2
+    return
+    ;;
+  esac
+  mutated="$(mktemp)"
+  sed "${expression}" "${original}" >"${mutated}"
+  if cmp -s "${original}" "${mutated}"; then
+    echo "FAIL: the mutation for ${defect} does not change ${original}; update it to the file's text" >&2
+    fail=1
+  elif output="$(env CI_PATHS_PARITY_MUTATION=1 "${env_var}=${mutated}" bash "${BASH_SOURCE[0]}" 2>&1)"; then
+    echo "FAIL: the checks pass with ${defect}" >&2
+    fail=1
+  elif ! grep -qF "FAIL: ${label}" <<<"${output}"; then
+    echo "FAIL: with ${defect}, the '${label}' check passes; the run failed on:" >&2
+    grep -F 'FAIL:' <<<"${output}" >&2 || echo "${output}" >&2
     fail=1
   else
-    echo "ok   the checks catch $1"
+    echo "ok   the checks catch ${defect}"
   fi
   rm -f "${mutated}"
 }
 
 if [[ -z "${CI_PATHS_PARITY_MUTATION:-}" ]]; then
-  check_mutation_fails "model.yaml dropped from bench_image" "/bench_image:/,/orchestration_image:/{/'model.yaml'/d;}"
-  check_mutation_fails "the bench/configs exclude dropped" "/'!bench\/configs\/\*\*'/d"
-  check_mutation_fails "packages/** narrowed to packages" "s|'packages/\*\*'|'packages'|"
-  check_mutation_fails "the match-all dropped from code" "/^              - '\*\*'$/d"
-  check_mutation_fails "shell-tests dropped from ci-ok needs" "/^      - shell-tests$/d"
-  check_mutation_fails "a misspelt filter output" "s/steps\.filter\.outputs\.code/steps.filter.outputs.codes/"
+  check_mutation_fails "model.yaml dropped from bench_image" CI_WORKFLOW \
+    "/bench_image:/,/orchestration_image:/{/'model.yaml'/d;}" "ci.yml bench_image filter"
+  check_mutation_fails "the bench/configs exclude dropped" CI_WORKFLOW \
+    "/'!bench\/configs\/\*\*'/d" "ci.yml bench_image filter"
+  check_mutation_fails "packages/** narrowed to packages" CI_WORKFLOW \
+    "s|'packages/\*\*'|'packages'|" "ci.yml bench_image filter"
+  check_mutation_fails "model.yaml dropped from image_sha" BENCH_IMAGE_TAG \
+    "s/ pyproject.toml model.yaml / pyproject.toml /" "ci.yml bench_image filter"
+  check_mutation_fails "a broken continuation in image_sha" BENCH_IMAGE_TAG \
+    's/ .dockerignore \\$/ .dockerignore/' "ci.yml bench_image filter"
+  check_mutation_fails "uv.lock dropped from the orchestration pathspec" ORCHESTRATION_WORKFLOW \
+    "s/ uv.lock / /" "ci.yml orchestration_image filter"
+  check_mutation_fails "the match-all dropped from code" CI_WORKFLOW \
+    "/^              - '\*\*'$/d" "ci.yml code filter includes"
+  check_mutation_fails "docs_only failing open" CI_WORKFLOW \
+    "s/outputs\.code == 'false'/outputs.code != 'true'/" "changes job outputs"
+  check_mutation_fails "bench_image failing open" CI_WORKFLOW \
+    "s/outputs\.bench_image != 'false'/outputs.bench_image == 'true'/" "changes job outputs"
+  check_mutation_fails "shell-tests dropped from ci-ok needs" CI_WORKFLOW \
+    "/^      - shell-tests$/d" "ci-ok needs"
+  check_mutation_fails "a misspelt filter output" CI_WORKFLOW \
+    "s/steps\.filter\.outputs\.code/steps.filter.outputs.codes/" "filter outputs the changes job reads"
 fi
 
 exit "${fail}"

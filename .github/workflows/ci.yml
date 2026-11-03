@@ -74,6 +74,7 @@ jobs:
               - 'packages/**'
               - 'pyproject.toml'
               - 'model.yaml'
+              - '.dockerignore'
               - '!**/*.md'
             orchestration_image:
               - 'orchestration/Dockerfile'
