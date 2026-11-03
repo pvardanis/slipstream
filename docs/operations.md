@@ -50,11 +50,11 @@ default run share cache entries under one `run_id`, so give them different ids.
 The run aborts before its first redeploy if it cannot write and read back the results
 bucket's `prefect/cache-keys` prefix; the error names the bucket.
 
-**Results** land in the results bucket: each cell's JSON under
+**Results** land in the bench-results bucket: each cell's JSON under
 `knob-sweep/<run-id>/<point-slug>/` and the plots under `knob-sweep/<run-id>/charts/`. The
 resume state (Prefect task results and cache records) lives beside them under
-`prefect/results/` and `prefect/cache-keys/`. `stack-down` deletes the whole bucket.
-Pull the results first, then build the artifacts locally:
+`prefect/results/` and `prefect/cache-keys/`. The bucket lives in the bootstrap stack, so
+it survives `stack-down`. Pull the results, then build the artifacts locally:
 
 ```sh
 just bench-results-sync

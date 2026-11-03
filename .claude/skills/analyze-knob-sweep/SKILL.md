@@ -70,7 +70,7 @@ If a `$/hr` was supplied, also compute `$/1M-tokens = ($/hr) / (output_throughpu
 
 ## Step 4 — Write the report
 
-The report is a trimmed slice of the tables plus the sweep's two plots, copied beside it. The results bucket is deleted on `stack-down` and the Prefect run ages out, so the report directory keeps its own copy of the plots and is committed to the repo.
+The report is a trimmed slice of the tables plus the sweep's two plots, copied beside it. The Prefect run ages out and a bucket can be emptied, so the report directory keeps its own copy of the plots and is committed to the repo.
 
 The report directory is `reports/sweep-grid-<stamp>/`, where `<stamp>` is the `run_id` with any leading `sweep-full-` dropped (`sweep-full-20261008T130350Z` → `reports/sweep-grid-20261008T130350Z/`).
 
