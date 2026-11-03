@@ -38,8 +38,10 @@ A `changes` job in `ci.yml` runs first and emits three outputs:
 - `docs_only`: every changed file matches the docs denylist, `docs/**`, `**/*.md`,
   `reports/**` or `.claude/skills/**`.
 - `bench_image`: the change touches a bench image input (the `bench/image-tag.sh` pathspec).
-- `orchestration_image`: the change touches an orchestration image input (the
-  `orchestration-image.yml` content-tag pathspec).
+- `orchestration_scan`: the change touches an orchestration image input (the
+  `orchestration-image.yml` content-tag pathspec) or the scan's configuration
+  (`.trivyignore` and the scan workflow), which can change the scan's verdict without
+  changing the image.
 
 A denylist rather than per-job allowlists: pytest reads configs from `bench/`, `terraform/`
 and `k8s/`, so an allowlist per job would be one more hand-synced list that silently skips
@@ -65,7 +67,7 @@ a new job is covered by adding it to `needs`, with no change to the protection s
 
 `orchestration-image-scan.yml` (`on: workflow_call`) builds the image, scans it with Trivy
 and asserts `kubectl` is on its `PATH`. `ci.yml` calls it on pull requests behind
-`orchestration_image`, so `ci-ok` covers it. `orchestration-image.yml` calls it on its
+`orchestration_scan`, so `ci-ok` covers it. `orchestration-image.yml` calls it on its
 weekly schedule, and keeps the publish job on pushes to `main`.
 
 ### The publish workflows ignore docs-only pushes
@@ -78,8 +80,8 @@ is absent from ECR.
 
 `test/ci-paths-parity-test.sh` reads the lists with `yq` and fails when they differ: the
 docs denylist across `ci.yml` and both publish workflows, the bench image filter against
-`bench/image-tag.sh`, and the orchestration image filter against the content-tag pathspec
-in `orchestration-image.yml`.
+`bench/image-tag.sh`, and the orchestration image input filter against the content-tag
+pathspec in `orchestration-image.yml`.
 
 ## Alternatives considered
 
