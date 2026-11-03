@@ -45,7 +45,7 @@ bench point_slug *args:
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
-    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     # Forward bench_image_tag into the nested call: a command-line override does not
     # cross into a child `just` invocation, so an unforwarded pin would silently fall
     # back to the floating main tag and run the cell on the wrong image.
@@ -109,13 +109,13 @@ bench point_slug *args:
     fi
     exit "${rc}"
 
-# Sync every knob sweep, prefix-cache, and KV cache A/B run's results from the bench endpoint results bucket to bench/results for local reporting, one subdir per bucket prefix (knob-sweep, prefix-cache, kv-offload-ab); use to pull runs made from another machine.
+# Sync every knob sweep, prefix-cache, and KV cache A/B run's results from the bench-results bucket to bench/results for local reporting, one subdir per bucket prefix (knob-sweep, prefix-cache, kv-offload-ab); use to pull runs made from another machine.
 [group('bench')]
 bench-results-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
-    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     for prefix in knob-sweep prefix-cache kv-offload-ab; do
       mkdir -p "bench/results/${prefix}"
       aws s3 sync "s3://${bucket}/${prefix}" "bench/results/${prefix}" --region "${region}"
@@ -136,7 +136,7 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="":
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
-    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     # Forward bench_image_tag into the nested call: a command-line override does not
     # cross into a child `just` invocation, so an unforwarded pin would silently fall
     # back to the floating main tag and run the cell on the wrong image.
@@ -252,7 +252,7 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
     # "failed: <step>") so a following `just bench`/`prefix-cache` cannot race a host
     # whose /usr/local/bin scripts are not written yet (exit 127 on proxy-up).
     region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
-    results_bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
+    results_bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
     key="s3://${results_bucket}/boot-status/${instance}"
     echo "waiting for bench host ${instance} to finish boot..." >&2

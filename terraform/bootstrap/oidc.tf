@@ -108,9 +108,9 @@ locals {
   # server: DescribeCluster backs `aws eks update-kubeconfig` and is scoped to this one
   # cluster's ARN; DescribeInstances resolves the bench host from its tags. Describe
   # actions take no resource scope, so that grant is on "*", narrowed to the stack's
-  # region by condition. ListAllMyBuckets resolves the results bucket the workflow
-  # registers the deployment against: the bench-endpoint stack names it by prefix, so
-  # its full name changes whenever the bucket is recreated and is found by listing. The
+  # region by condition. ListAllMyBuckets resolves the bench-results bucket the workflow
+  # registers the deployment against: this stack names it by prefix, so its full name
+  # changes whenever the bucket is recreated and is found by listing. The
   # action is account-wide and takes no resource scope, and it returns bucket names
   # only, never objects. The port-forward itself is Kubernetes access, granted by the
   # eks stack's access entry + namespaced RBAC, not by this policy.

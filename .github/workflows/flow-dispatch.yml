@@ -207,22 +207,22 @@ jobs:
           tag="$(bench/image-tag.sh main-tag)"
           echo "image_ref=${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${tag}" >>"${GITHUB_OUTPUT}"
 
-          # The bench-endpoint stack names the results bucket by prefix
-          # (${cluster_name}-bench-endpoint-results-<suffix>), so the suffix changes whenever
-          # the bucket is recreated and the bucket is found by listing. One bucket per live
-          # stack: zero means bench-endpoint is not up, and more than one is ambiguous —
-          # both fail loud rather than guess.
-          prefix="${EKS_CLUSTER_NAME}-bench-endpoint-results-"
+          # The bootstrap stack names the bench-results bucket by prefix
+          # (${cluster_name}-bench-results-<suffix>), so the suffix changes whenever the
+          # bucket is recreated and the bucket is found by listing. One bucket per
+          # environment: zero means bootstrap has not created it, and more than one is
+          # ambiguous — both fail loud rather than guess.
+          prefix="${EKS_CLUSTER_NAME}-bench-results-"
           buckets="$(aws s3api list-buckets --prefix "${prefix}" --query 'Buckets[].Name' --output json)"
           count="$(jq 'length' <<<"${buckets}")"
           case "${count}" in
             1) ;;
             0)
-              echo "::error::no results bucket named ${prefix}* — is bench-endpoint up (just stack-up)?"
+              echo "::error::no bench-results bucket named ${prefix}* — has bootstrap been applied (just bootstrap)?"
               exit 1
               ;;
             *)
-              echo "::error::multiple results buckets matched ${prefix}* ($(jq -r 'join(" ")' <<<"${buckets}")); remove the stale one"
+              echo "::error::multiple bench-results buckets matched ${prefix}* ($(jq -r 'join(" ")' <<<"${buckets}")); remove the stale one"
               exit 1
               ;;
           esac
