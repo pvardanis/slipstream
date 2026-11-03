@@ -21,11 +21,12 @@ concurrency:
 jobs:
   # Classifies the change so the jobs below run only when it can affect them
   # (ADR-0027). docs_only is true when every changed file matches the docs denylist;
-  # the image outputs are true when the change touches that image's inputs. Each output
-  # reads a filter result the safe way round: a missing result (a manual dispatch,
-  # which skips the filter, or a misnamed filter) is never docs-only and always
-  # touches the images, so the test jobs run rather than skip. The image builds stay
-  # PR-only.
+  # bench_image is true when the change touches the bench image's inputs, and
+  # orchestration_scan when it touches the orchestration image's inputs or its scan
+  # configuration. Each output reads a filter result the safe way round: a missing
+  # result (a manual dispatch, which skips the filter, or a misnamed filter) is never
+  # docs-only and always touches the images, so the test jobs run rather than skip.
+  # The image builds stay PR-only.
   changes:
     name: classify changed paths
     runs-on: ubuntu-26.04
@@ -33,7 +34,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.filter.outputs.code == 'false' }}
       bench_image: ${{ steps.filter.outputs.bench_image != 'false' }}
-      orchestration_image: ${{ steps.filter.outputs.orchestration_image != 'false' }}
+      orchestration_scan: ${{ steps.filter.outputs.orchestration_image != 'false' || steps.filter.outputs.scan_config != 'false' }}
     steps:
       # A push is diffed with git against the commit before the push, hence the
       # checkout; a PR's changed files come from the API.
@@ -59,6 +60,8 @@ jobs:
           # pathspec in orchestration-image.yml (Derive image tags).
           # Both image filters exclude markdown, as their pathspecs do, so no change
           # the code filter reads as docs-only can touch an image input.
+          # scan_config: the Trivy waivers and the scan workflow, which change the
+          # orchestration scan's verdict without changing the image.
           # test/ci-paths-parity-test.sh fails when the image lists drift from those
           # pathspecs.
           filters: |
@@ -87,6 +90,9 @@ jobs:
               - 'bench/configs/kv-cache-extension-ab.yaml'
               - 'k8s/vllm-gpu.yaml'
               - '!**/*.md'
+            scan_config:
+              - '.trivyignore'
+              - '.github/workflows/orchestration-image-scan.yml'
 
   lint:
     name: lint & format (prek)
@@ -205,32 +211,15 @@ jobs:
       - name: Build the bench image (no push)
         run: bench/build-image.sh
 
-  orchestration-image-build:
-    name: orchestration image build (no push)
+  orchestration-image-scan:
+    name: orchestration image
     # PR-only, same rationale as bench-image-build: prove the Dockerfile still
-    # builds before merge with no credentials; a push to main publishes via
-    # orchestration-image.yml, which rebuilds anyway.
-    # Only the orchestration image's inputs make this build worth running.
-    if: github.event_name == 'pull_request' && needs.changes.outputs.orchestration_image == 'true'
+    # builds, scans clean and carries kubectl before merge with no credentials; a
+    # push to main publishes via orchestration-image.yml, which rebuilds and rescans
+    # anyway. Only the image's inputs or its scan configuration make this worth running.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.orchestration_scan == 'true'
     needs: [changes, lint, python, terraform, shell-tests, chart-render]
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Build succeeding is the check: a broken Dockerfile, an unresolvable
-      # locked dependency, or a baked config missing from the context fails
-      # the PR. No push.
-      - name: Build the orchestration image (no push)
-        run: docker build --platform linux/amd64 -f orchestration/Dockerfile -t orchestration-image:pr-build .
-
-      # The worker drives the GPU redeploy and ceiling scrape by shelling out to kubectl
-      # (slipstream_bench.orchestration.cluster), so the image must carry it. Assert it
-      # resolves on the image PATH here, rather than discovering its absence at run time
-      # on the worker, where it fails the sweep at the first point's apply.
-      - name: Assert kubectl is on the image PATH
-        run: docker run --rm --platform linux/amd64 orchestration-image:pr-build kubectl version --client
+    uses: ./.github/workflows/orchestration-image-scan.yml
 
   shell-tests:
     name: shell unit tests
@@ -319,7 +308,7 @@ jobs:
       - python
       - terraform
       - bench-image-build
-      - orchestration-image-build
+      - orchestration-image-scan
       - shell-tests
       - chart-render
     runs-on: ubuntu-26.04

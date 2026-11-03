@@ -8,22 +8,6 @@
 name: orchestration-image
 
 on:
-  # Build and scan on any PR that touches an image input or a scan waiver
-  # (.trivyignore), so a CVE or broken build is caught before merge rather than on the
-  # post-merge publish run. This trigger runs the no-cloud `scan` job only.
-  pull_request:
-    paths:
-      - packages/**
-      - pyproject.toml
-      - uv.lock
-      - orchestration/Dockerfile
-      - .dockerignore
-      - model.yaml
-      - bench/configs/sweep-grid.yaml
-      - bench/configs/kv-cache-extension-ab.yaml
-      - k8s/vllm-gpu.yaml
-      - .trivyignore
-      - .github/workflows/orchestration-image.yml
   # Rescan main weekly so a new CVE or an expired .trivyignore waiver fails here on
   # schedule, not on whichever PR next touches an image input. Runs the `scan` job only.
   schedule:
@@ -33,8 +17,7 @@ on:
   workflow_dispatch:
 
 # Least privilege at the top: only read. The publish job raises id-token for the OIDC
-# exchange itself, so pull_request and schedule runs — which never publish — are never
-# granted a token.
+# exchange itself, so schedule runs — which never publish — are never granted a token.
 permissions:
   contents: read
 
@@ -47,47 +30,15 @@ env:
   ECR_REPOSITORY: ${{ vars.ORCHESTRATION_ECR_REPOSITORY }}
 
 jobs:
+  # The build-and-scan on PRs runs from ci.yml, through the same reusable workflow.
   scan:
-    name: build & scan (no push)
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
-    runs-on: ubuntu-26.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    # Supersede an in-flight PR scan when the branch is pushed again: unlike the publish
-    # job there is no floating pointer to corrupt, so cancelling the stale run is safe.
-    concurrency:
-      group: orchestration-image-scan-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Build the content image
-        run: |
-          set -euo pipefail
-          # Build for the amd64 worker nodes, tagged locally only — this job never
-          # pushes. The scan below reads this image from the local docker store.
-          docker build --platform linux/amd64 \
-            -f orchestration/Dockerfile \
-            -t orchestration-image:pr-scan \
-            .
-
-      # Same gate as the publish job's scan: fail on fixable high/critical CVEs so a
-      # vulnerable image is caught on the PR or the weekly rescan, not on the publish.
-      - name: Scan the content image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: orchestration-image:pr-scan
-          format: table
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+    name: weekly rescan
+    if: github.event_name == 'schedule'
+    uses: ./.github/workflows/orchestration-image-scan.yml
 
   publish:
     name: build, scan & push (content-hash idempotent)
-    # Publish only on push/dispatch; pull_request and schedule run the scan job alone.
+    # Publish only on push/dispatch; schedule runs the scan job alone.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 30

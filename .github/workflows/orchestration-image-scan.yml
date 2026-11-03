@@ -1,0 +1,50 @@
+# No-push build and scan of the orchestration image (ADR-0027): builds the image from
+# the checked-out tree, fails on fixable high/critical CVEs, and asserts the worker's
+# kubectl is on the image PATH. Called by ci.yml on PRs that touch an image input or
+# a scan waiver (.trivyignore), and by orchestration-image.yml's weekly rescan of main.
+# Holds no credentials and pushes nothing.
+name: orchestration-image-scan
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: build & scan (no push)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the content image
+        run: |
+          set -euo pipefail
+          # Build for the amd64 worker nodes, tagged locally only — this job never
+          # pushes. The scan below reads this image from the local docker store.
+          docker build --platform linux/amd64 \
+            -f orchestration/Dockerfile \
+            -t orchestration-image:pr-scan \
+            .
+
+      # Same gate as the publish job's scan: fail on fixable high/critical CVEs so a
+      # vulnerable image is caught on the PR or the weekly rescan, not on the publish.
+      - name: Scan the content image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: orchestration-image:pr-scan
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      # The worker drives the GPU redeploy and ceiling scrape by shelling out to kubectl
+      # (slipstream_bench.orchestration.cluster), so the image must carry it. Assert it
+      # resolves on the image PATH here, rather than discovering its absence at run time
+      # on the worker, where it fails the sweep at the first point's apply.
+      - name: Assert kubectl is on the image PATH
+        run: docker run --rm --platform linux/amd64 orchestration-image:pr-scan kubectl version --client
