@@ -89,10 +89,11 @@ resource "aws_iam_role" "prefect_worker" {
   tags = local.tags
 }
 
-# Least-privilege permissions. S3 and SSM targets live in the bench-endpoint stack,
-# which consumes this stack's outputs — referencing them back would cycle — and the
-# bucket suffix and instance id are non-deterministic anyway, so both are scoped by
-# ARN prefix / tag condition, not exact ARN.
+# Least-privilege permissions. The S3 target is the bootstrap stack's bench-results
+# bucket, whose name carries a random suffix, so it is scoped by ARN prefix. The SSM
+# target is the bench host in the bench-endpoint stack, which consumes this stack's
+# outputs — referencing it back would cycle — and its instance id is non-deterministic,
+# so it is scoped by tag condition. Neither is an exact ARN.
 resource "aws_iam_role_policy" "prefect_worker" {
   name = "${var.cluster_name}-prefect-worker"
   role = aws_iam_role.prefect_worker.id
@@ -106,13 +107,13 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Sid      = "ResultsBucketObjects"
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/*"
+        Resource = "arn:aws:s3:::${var.cluster_name}-bench-results-*/*"
       },
       {
         Sid      = "ResultsBucketList"
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*"
+        Resource = "arn:aws:s3:::${var.cluster_name}-bench-results-*"
       },
       # The worker persists its own resume state with persist_result=True: the task result
       # under prefect/results and the cache-key records under prefect/cache-keys. PutObject
@@ -123,8 +124,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Effect = "Allow"
         Action = ["s3:PutObject"]
         Resource = [
-          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/prefect/results/*",
-          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/prefect/cache-keys/*",
+          "arn:aws:s3:::${var.cluster_name}-bench-results-*/prefect/results/*",
+          "arn:aws:s3:::${var.cluster_name}-bench-results-*/prefect/cache-keys/*",
         ]
       },
       # The terminal render tasks upload each plot's PNG under knob-sweep/<run>/charts/ or
@@ -136,8 +137,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Effect = "Allow"
         Action = ["s3:PutObject"]
         Resource = [
-          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/knob-sweep/*/charts/*",
-          "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/kv-offload-ab/*/charts/*",
+          "arn:aws:s3:::${var.cluster_name}-bench-results-*/knob-sweep/*/charts/*",
+          "arn:aws:s3:::${var.cluster_name}-bench-results-*/kv-offload-ab/*/charts/*",
         ]
       },
       # The kv-cache-extension-ab flow labels each rung with its arm, run, and prefix-cache
@@ -148,7 +149,7 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Sid      = "KvAbLabelObjects"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-endpoint-results-*/kv-offload-ab/*.kv_ab.json"
+        Resource = "arn:aws:s3:::${var.cluster_name}-bench-results-*/kv-offload-ab/*.kv_ab.json"
       },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;

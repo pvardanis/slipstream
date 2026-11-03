@@ -28,8 +28,10 @@ run "exposure_invariants" {
     target = data.terraform_remote_state.bootstrap
     values = {
       outputs = {
-        bench_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
-        bench_image_repo_arn = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
+        bench_image_repo_url      = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
+        bench_image_repo_arn      = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
+        bench_results_bucket_name = "slipstream-bench-results-abc123"
+        bench_results_bucket_arn  = "arn:aws:s3:::slipstream-bench-results-abc123"
       }
     }
   }

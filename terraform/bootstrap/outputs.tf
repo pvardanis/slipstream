@@ -78,3 +78,13 @@ output "spend_leak_topic_arn" {
   description = "ARN of the SNS topic both spend-leak layers page through; `just bootstrap` reads the operator email back from its email subscription."
   value       = aws_sns_topic.spend_leak.arn
 }
+
+output "bench_results_bucket_name" {
+  description = "Name of the bench-results bucket: the bench host's measurement JSON, the Prefect result and cache-key store, and the chart PNGs. Deployment registration and the bench recipes read it."
+  value       = aws_s3_bucket.bench_results.id
+}
+
+output "bench_results_bucket_arn" {
+  description = "ARN of the bench-results bucket. The bench endpoint's bench host IAM policy scopes its results writes to this bucket's objects."
+  value       = aws_s3_bucket.bench_results.arn
+}
