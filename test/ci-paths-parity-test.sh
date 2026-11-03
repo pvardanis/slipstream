@@ -3,11 +3,12 @@
 # `changes` job must name the same paths as the git pathspecs that derive each image's
 # content tag: the bench_image filter against bench/image-tag.sh (image_sha), the
 # orchestration_image filter against orchestration-image.yml's tag derivation. The
-# docs-only `code` filter must match everything outside its excludes, every filter
-# output the job reads must exist and fail closed, and `ci-ok` must need every other job
-# and run always(), so no gated job can drop out of the required check. Then runs the
-# checks against mutated copies of the files that must fail. Reads the workflows with yq
-# and bench/image-tag.sh with awk; runs no git, build or network call.
+# docs-only `code` filter must match everything outside its excludes, scan_config must
+# name .trivyignore and the scan workflow ci.yml calls, every filter output the job
+# reads must exist and fail closed, and `ci-ok` must need every other job and run
+# always(), so no gated job can drop out of the required check. Then runs the checks
+# against mutated copies of the files that must fail. Reads the workflows with yq and
+# bench/image-tag.sh with awk; runs no git, build or network call.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -90,6 +91,15 @@ check_same "ci.yml code filter includes" "$(filters | yq '.code[] | select(test(
 check_same "ci.yml paths-filter quantifier" \
   "$(yq '.jobs.changes.steps[] | select(.id == "filter") | .with["predicate-quantifier"]' "${ci_workflow}")" \
   "some-with-excludes" "some-with-excludes"
+
+# The orchestration scan runs on a change to its waivers or to the workflow ci.yml
+# actually calls, or a renamed workflow would stop triggering its own scan.
+check_same "ci.yml scan_config filter" "$(ci_filter scan_config)" \
+  ".trivyignore and the scan workflow ci.yml calls" \
+  "$({
+    echo .trivyignore
+    yq '.jobs.orchestration-image-scan.uses | sub("^\\./", "")' "${ci_workflow}"
+  } | sort)"
 
 # Every output must fail closed, so a missing filter result runs the tests: docs_only
 # true only on the filter's explicit 'false', the image outputs false only on it.
@@ -174,6 +184,8 @@ if [[ -z "${CI_PATHS_PARITY_MUTATION:-}" ]]; then
     "s/outputs\.bench_image != 'false'/outputs.bench_image == 'true'/" "changes job outputs"
   check_mutation_fails "shell-tests dropped from ci-ok needs" CI_WORKFLOW \
     "/^      - shell-tests$/d" "ci-ok needs"
+  check_mutation_fails ".trivyignore dropped from scan_config" CI_WORKFLOW \
+    "/^              - '\.trivyignore'$/d" "ci.yml scan_config filter"
   check_mutation_fails "a misspelt filter output" CI_WORKFLOW \
     "s/steps\.filter\.outputs\.code/steps.filter.outputs.codes/" "filter outputs the changes job reads"
 fi
