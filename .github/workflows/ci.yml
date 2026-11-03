@@ -134,9 +134,14 @@ jobs:
               - 'packages/**'
               - 'pyproject.toml'
               - 'model.yaml'
+      # Versions and checksums from mise.toml and mise.lock.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: 2026.10.21
+          install_args: yq
       # Build the image model.yaml describes (hfId + revision via image-tag.sh, yq
-      # preinstalled on the runner), so a broken Dockerfile or an unfetchable
-      # revision fails the PR. No tag, no push: the build succeeding is the check.
+      # from mise), so a broken Dockerfile or an unfetchable revision fails the PR.
+      # No tag, no push: the build succeeding is the check.
       - name: Build the bench image (no push)
         if: steps.filter.outputs.bench == 'true'
         run: bench/build-image.sh
