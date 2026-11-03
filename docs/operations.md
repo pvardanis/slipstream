@@ -321,7 +321,8 @@ hosted Prometheus or Tempo data source's UID or the managed CloudWatch data sour
   100% whenever a request is in flight, and memory-bandwidth active falls as batching
   shares the weight reads. Read load from the serving and throughput panels:
   - **Serving:** KV-cache usage, requests waiting, TTFT p95 and e2e latency p95, fleet-wide
-    and per pod. An exemplar on the fleet e2e latency line opens the request's trace.
+    and per pod. An exemplar on the fleet e2e latency line shows the request's trace_id,
+    to look up in Tempo.
     From 15 s to 120 s the e2e p95 can be off by up to a factor of 1.5, as it is
     interpolated inside a latency bucket.
   - **Throughput and goodput:** output tokens/s, prompt tokens/s, requests/s, and live

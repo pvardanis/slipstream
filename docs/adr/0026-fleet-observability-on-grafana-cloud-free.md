@@ -99,7 +99,10 @@ attribute, `request_id` included.
   The spine's names and spec §5.1's schema stay canonical.
 - **Export and exemplars:** spans go to Grafana Cloud Traces. The `spanmetrics` connector,
   with exemplars on, derives a latency histogram from span duration, which for `llm_request`
-  is e2e latency. Its exemplars open the trace, which carries `request_id`.
+  is e2e latency. Its exemplars carry the trace ID, `trace_id`, and the trace carries
+  `request_id`. The hosted Prometheus data source links an exemplar to Tempo only through
+  a `traceID` label, so the exemplar does not link to the trace: its `trace_id` is looked
+  up in Tempo.
 - **TTFT:** TTFT cannot carry exemplars. A table of the slowest-TTFT requests, a TraceQL
   query on `gen_ai.latency.time_to_first_token` listing `request_id`, answers "which request
   was slow?" for it.
