@@ -89,7 +89,10 @@ flowchart TB
     subgraph endpoint[bench-endpoint stack]
         alb@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/alb.svg", label: "ALB, mutual TLS", pos: "b", w: 48, h: 48, constraint: "on" }
         host@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/ec2-instance.svg", label: "Bench host, no inbound", pos: "b", w: 48, h: 48, constraint: "on" }
-        s3@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/s3-bucket.svg", label: "results bucket", pos: "b", w: 48, h: 48, constraint: "on" }
+    end
+
+    subgraph bootstrap[bootstrap stack]
+        s3@{ img: "https://raw.githubusercontent.com/pvardanis/slipstream/main/docs/icons/aws/s3-bucket.svg", label: "bench-results bucket", pos: "b", w: 48, h: 48, constraint: "on" }
     end
 
     ps -- SQLite --> ebs

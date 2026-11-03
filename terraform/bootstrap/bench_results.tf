@@ -1,7 +1,7 @@
 # The bench-results bucket: measurement JSON from the bench host, the Prefect result
 # and cache-key store the resume cache reads (ADR-0022), and the chart PNGs the render
-# task links from the Prefect UI. It lives in the bootstrap stack, not bench-endpoint,
-# so results, the cache and chart links survive bench-endpoint-down and stack-down, and
+# task links from the Prefect UI. It lives in the bootstrap stack so results, the cache
+# and chart links survive bench-endpoint-down and stack-down, and
 # registering a deployment needs no live bench endpoint (ADR-0024 Amendment). It has
 # neither force_destroy nor prevent_destroy: a bootstrap destroy fails loudly on a
 # non-empty bucket instead of deleting run data, and succeeds once it is emptied.
