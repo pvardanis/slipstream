@@ -126,12 +126,12 @@ jobs:
 
       # Run the Prefect CLI from the repo's lockfile so its version matches the prefect
       # the worker image was built against — a client/server skew is the one failure a
-      # bare `pip install prefect` would invite.
+      # bare `pip install prefect` would invite. yq is for image-tag.sh below.
       # Versions and checksums from mise.toml and mise.lock.
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.10.21
-          install_args: uv
+          install_args: uv yq
 
       - name: Authenticate to AWS via OIDC
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0

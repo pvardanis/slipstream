@@ -48,10 +48,15 @@ jobs:
           # full history rather than a shallow clone.
           fetch-depth: 0
 
+      # Versions and checksums from mise.toml and mise.lock.
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          version: 2026.10.21
+          install_args: yq
+
       # The image identity comes from model.yaml + git through image-tag.sh, so
-      # the tags published here name the same tokenizer the build bakes. yq is
-      # preinstalled on the ubuntu runner image (mikefarah v4), which the script
-      # requires.
+      # the tags published here name the same tokenizer the build bakes. The
+      # script requires yq, installed by mise above.
       - name: Derive image tags
         id: tags
         run: |
