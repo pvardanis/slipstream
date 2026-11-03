@@ -1,7 +1,7 @@
 # Tests for the ephemeral bench host. Like exposure.tftest.hcl they run offline:
 # the aws/tls providers are mocked and both remote-state reads (eks and bootstrap)
 # are overridden, so the assertions check the host's shape and its security
-# invariants — zero ingress, resource-scoped IAM, a locked-down results bucket —
+# invariants — zero ingress, resource-scoped IAM, results written to the bootstrap bucket —
 # without launching an instance. The real end-to-end proof is a `just bench-endpoint-up`
 # run driven from the host, which costs money and is run by hand.
 
@@ -54,8 +54,10 @@ override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
     outputs = {
-      bench_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
-      bench_image_repo_arn = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
+      bench_image_repo_url      = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
+      bench_image_repo_arn      = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
+      bench_results_bucket_name = "slipstream-bench-results-abc123"
+      bench_results_bucket_arn  = "arn:aws:s3:::slipstream-bench-results-abc123"
     }
   }
 }
@@ -115,11 +117,12 @@ run "bench_host_invariants" {
     error_message = "ecr_registry must be the repository URL's registry host (up to the first slash)."
   }
 
-  # The boot script is rendered with the results bucket and image reference it
-  # needs; a wrong value boots a healthy-looking host that cannot run the sweep.
+  # The boot script is rendered with the bootstrap stack's bench-results bucket and the
+  # image reference it needs; a wrong value boots a healthy-looking host that cannot run
+  # the sweep.
   assert {
-    condition     = strcontains(local.bench_user_data, aws_s3_bucket.results.id)
-    error_message = "Rendered boot script must carry the results bucket name."
+    condition     = strcontains(local.bench_user_data, "slipstream-bench-results-abc123")
+    error_message = "Rendered boot script must carry the bootstrap stack's bench-results bucket name."
   }
   assert {
     condition     = strcontains(local.bench_user_data, local.bench_image_ref)
@@ -227,11 +230,11 @@ run "bench_host_invariants" {
     error_message = "Secrets policy must be a single Allow statement; a second statement could grant more."
   }
 
-  # Results write is scoped to the results bucket's objects and to PutObject only:
-  # the host writes measurement JSON, it does not read or delete run data.
+  # Results write is scoped to the bootstrap stack's bench-results bucket objects and to
+  # PutObject only: the host writes measurement JSON, it does not read or delete run data.
   assert {
-    condition     = jsondecode(aws_iam_role_policy.bench_host_results.policy).Statement[0].Resource == "${aws_s3_bucket.results.arn}/*"
-    error_message = "Results write must be scoped to the results bucket objects."
+    condition     = jsondecode(aws_iam_role_policy.bench_host_results.policy).Statement[0].Resource == "arn:aws:s3:::slipstream-bench-results-abc123/*"
+    error_message = "Results write must be scoped to the bootstrap stack's bench-results bucket objects."
   }
   assert {
     condition     = jsondecode(aws_iam_role_policy.bench_host_results.policy).Statement[0].Action == "s3:PutObject"
@@ -278,39 +281,6 @@ run "bench_host_invariants" {
   assert {
     condition     = aws_iam_role_policy_attachment.bench_host_ssm.policy_arn == "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
     error_message = "Bench host must attach the SSM managed instance core policy for keyless access."
-  }
-
-  # The results bucket keeps ACLs blocked but allows a bucket policy to open one prefix:
-  # the render task serves its chart PNGs as public image artifacts (ADR-0018 Amendment),
-  # so the two *policy* flags are off while the two ACL flags stay on. Access comes from the
-  # scoped bucket policy below, never object ACLs.
-  assert {
-    condition     = aws_s3_bucket_public_access_block.results.block_public_acls && aws_s3_bucket_public_access_block.results.ignore_public_acls && !aws_s3_bucket_public_access_block.results.block_public_policy && !aws_s3_bucket_public_access_block.results.restrict_public_buckets
-    error_message = "Results bucket must block public ACLs but allow a scoped public bucket policy for the chart prefix."
-  }
-
-  # The only public grant is anonymous s3:GetObject on the two charts patterns — the chart
-  # PNGs the image artifacts link to, under knob-sweep/<run>/charts/ and
-  # kv-offload-ab/<run>/charts/. It must never widen to the bare bucket or the sibling
-  # cell-result JSONs under knob-sweep/<run>/<point>/ and kv-offload-ab/<run>/<arm>-r<n>/.
-  assert {
-    condition     = length(jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement) == 1 && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Effect == "Allow" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Principal == "*" && jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Action == "s3:GetObject" && toset(try(tolist(jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Resource), [jsondecode(aws_s3_bucket_policy.results_public_charts.policy).Statement[0].Resource])) == toset(["${aws_s3_bucket.results.arn}/knob-sweep/*/charts/*", "${aws_s3_bucket.results.arn}/kv-offload-ab/*/charts/*"])
-    error_message = "Results bucket policy must grant anonymous s3:GetObject on exactly the knob-sweep/*/charts/* and kv-offload-ab/*/charts/* prefixes, nothing wider."
-  }
-
-  # The results bucket is force-destroyed so bench-endpoint-down removes it (and the
-  # run's JSON) cleanly rather than failing on a non-empty bucket.
-  assert {
-    condition     = aws_s3_bucket.results.force_destroy == true
-    error_message = "Results bucket must be force-destroyed so bench-endpoint-down can remove it."
-  }
-
-  # The flow-dispatch workflow finds the results bucket by listing this prefix
-  # (<cluster_name>-bench-endpoint-results-), since the suffix changes whenever the
-  # bucket is recreated. Renaming it breaks the dispatch's bucket lookup.
-  assert {
-    condition     = aws_s3_bucket.results.bucket_prefix == "slipstream-bench-endpoint-results-"
-    error_message = "Results bucket prefix must be <cluster_name>-bench-endpoint-results-, the prefix flow-dispatch lists by."
   }
 }
 

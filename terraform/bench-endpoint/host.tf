@@ -6,7 +6,8 @@
 # layer), which is also how the operator reaches the host — there is no inbound
 # SSH and the security group admits nothing. At sweep time it will read its
 # client certificate, key, CA and api-key from the bench-client secret rather
-# than a command line, and write results to the results bucket so they outlive it.
+# than a command line, and write results to the bootstrap stack's bench-results
+# bucket so they outlive it.
 
 variable "bench_image_tag" {
   description = "Tag of the bench-client image the host pulls from ECR. Defaults to the floating `<slug>-main` pointer that `just bench-image` publishes on every main build; override with a `<slug>-<sha>` tag to pin a reproducible run."
@@ -94,7 +95,7 @@ locals {
     region              = var.region
     ecr_registry        = local.ecr_registry
     image_ref           = local.bench_image_ref
-    results_bucket      = aws_s3_bucket.results.id
+    results_bucket      = data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_name
     proxy_conf          = local.bench_proxy_conf
     proxy_up_script     = local.bench_proxy_up_script
     proxy_env           = local.bench_proxy_env
@@ -166,7 +167,7 @@ resource "aws_iam_role_policy" "bench_host_secrets" {
   })
 }
 
-# Write measurement JSON to the results bucket's objects, nothing else.
+# Write measurement JSON to the bench-results bucket's objects, nothing else.
 resource "aws_iam_role_policy" "bench_host_results" {
   name_prefix = "results-"
   role        = aws_iam_role.bench_host.id
@@ -176,7 +177,7 @@ resource "aws_iam_role_policy" "bench_host_results" {
     Statement = [{
       Effect   = "Allow"
       Action   = "s3:PutObject"
-      Resource = "${aws_s3_bucket.results.arn}/*"
+      Resource = "${data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_arn}/*"
     }]
   })
 }

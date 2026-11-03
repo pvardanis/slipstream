@@ -18,8 +18,3 @@ output "bench_host_instance_id" {
   description = "Instance id of the ephemeral bench host. Used to open an SSM session to drive the sweep from the external vantage."
   value       = aws_instance.bench_host.id
 }
-
-output "results_bucket_name" {
-  description = "Name of the S3 bucket the bench host writes measurement JSON to. Results outlive the host here until bench-endpoint-down removes the bucket."
-  value       = aws_s3_bucket.results.id
-}

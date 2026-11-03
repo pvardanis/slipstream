@@ -1,17 +1,17 @@
-# The results bucket the bench host writes measurement JSON to. It lives outside
-# the ephemeral host so a run's numbers survive the host's teardown: the host is
-# destroyed on bench-endpoint-down, but its results stay downloadable from the S3
-# console until bench-endpoint-down removes this bucket too. force_destroy lets that
-# teardown delete the bucket even with objects still in it, rather than failing.
+# The bench-results bucket: measurement JSON from the bench host, the Prefect result
+# and cache-key store the resume cache reads (ADR-0022), and the chart PNGs the render
+# task links from the Prefect UI. It lives in the bootstrap stack, not bench-endpoint,
+# so results, the cache and chart links survive bench-endpoint-down and stack-down, and
+# registering a deployment needs no live bench endpoint (ADR-0024 Amendment). It has
+# neither force_destroy nor prevent_destroy: a bootstrap destroy fails loudly on a
+# non-empty bucket instead of deleting run data, and succeeds once it is emptied.
 
-resource "aws_s3_bucket" "results" {
-  bucket_prefix = "${local.name}-results-"
-  force_destroy = true
-  tags          = local.tags
+resource "aws_s3_bucket" "bench_results" {
+  bucket_prefix = "${var.cluster_name}-bench-results-"
 }
 
-resource "aws_s3_bucket_public_access_block" "results" {
-  bucket = aws_s3_bucket.results.id
+resource "aws_s3_bucket_public_access_block" "bench_results" {
+  bucket = aws_s3_bucket.bench_results.id
 
   # ACLs stay blocked — public access comes only from the scoped bucket policy below, never
   # object ACLs. The two policy flags are off so that policy can open one prefix: the render
@@ -33,8 +33,8 @@ resource "aws_s3_bucket_public_access_block" "results" {
 # hold the measurements and stay private only while no run id has a charts segment.
 # depends_on the public access block so block_public_policy is already off when
 # PutBucketPolicy runs.
-resource "aws_s3_bucket_policy" "results_public_charts" {
-  bucket = aws_s3_bucket.results.id
+resource "aws_s3_bucket_policy" "bench_results_public_charts" {
+  bucket = aws_s3_bucket.bench_results.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -45,12 +45,12 @@ resource "aws_s3_bucket_policy" "results_public_charts" {
         Principal = "*"
         Action    = "s3:GetObject"
         Resource = [
-          "${aws_s3_bucket.results.arn}/knob-sweep/*/charts/*",
-          "${aws_s3_bucket.results.arn}/kv-offload-ab/*/charts/*",
+          "${aws_s3_bucket.bench_results.arn}/knob-sweep/*/charts/*",
+          "${aws_s3_bucket.bench_results.arn}/kv-offload-ab/*/charts/*",
         ]
       },
     ]
   })
 
-  depends_on = [aws_s3_bucket_public_access_block.results]
+  depends_on = [aws_s3_bucket_public_access_block.bench_results]
 }
