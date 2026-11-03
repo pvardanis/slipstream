@@ -3,18 +3,20 @@
 # `changes` job must name the same paths as the git pathspecs that derive each image's
 # content tag: the bench_image filter against bench/image-tag.sh (image_sha), the
 # orchestration_image filter against orchestration-image.yml's tag derivation. The
-# docs-only `code` filter must match everything outside its excludes, scan_config must
-# name .trivyignore and the scan workflow ci.yml calls, every filter output the job
-# reads must exist and fail closed, and `ci-ok` must need every other job and run
-# always(), so no gated job can drop out of the required check. Then runs the checks
-# against mutated copies of the files that must fail. Reads the workflows with yq and
-# bench/image-tag.sh with awk; runs no git, build or network call.
+# docs-only `code` filter must match everything outside its excludes, and its excludes
+# must equal the push paths-ignore of both publish workflows. scan_config must name
+# .trivyignore and the scan workflow ci.yml calls, every filter output the job reads
+# must exist and fail closed, and `ci-ok` must need every other job and run always(), so
+# no gated job can drop out of the required check. Then runs the checks against mutated
+# copies of the files that must fail. Reads the workflows with yq and bench/image-tag.sh
+# with awk; runs no git, build or network call.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ci_workflow="${CI_WORKFLOW:-${repo_root}/.github/workflows/ci.yml}"
 orchestration_workflow="${ORCHESTRATION_WORKFLOW:-${repo_root}/.github/workflows/orchestration-image.yml}"
 bench_image_tag="${BENCH_IMAGE_TAG:-${repo_root}/bench/image-tag.sh}"
+bench_workflow="${BENCH_WORKFLOW:-${repo_root}/.github/workflows/bench-image.yml}"
 
 fail=0
 
@@ -26,6 +28,16 @@ filters() {
 # The patterns of filter $1, one per line, sorted.
 ci_filter() {
   filters | yq ".$1[]" | sort
+}
+
+# The docs denylist in the changes job's code filter: its !-negated patterns, unnegated.
+ci_docs_denylist() {
+  filters | yq '.code[] | select(test("^!")) | sub("^!", "")' | sort
+}
+
+# The push trigger's paths-ignore in workflow $1, one pattern per line.
+push_paths_ignore() {
+  yq '.on.push.paths-ignore[]' "$1" | sort
 }
 
 # The pathspec of the `sha="$(git ... -- <paths>)"` (or sha_tag=) assignment in text on
@@ -92,6 +104,13 @@ check_same "ci.yml paths-filter quantifier" \
   "$(yq '.jobs.changes.steps[] | select(.id == "filter") | .with["predicate-quantifier"]' "${ci_workflow}")" \
   "some-with-excludes" "some-with-excludes"
 
+# A docs location the gate skips must be one the publish workflows skip, and no other.
+check_same "ci.yml docs denylist" "$(ci_docs_denylist)" \
+  "bench-image.yml push paths-ignore" "$(push_paths_ignore "${bench_workflow}")"
+
+check_same "ci.yml docs denylist" "$(ci_docs_denylist)" \
+  "orchestration-image.yml push paths-ignore" "$(push_paths_ignore "${orchestration_workflow}")"
+
 # The orchestration scan runs on a change to its waivers or to the workflow ci.yml
 # actually calls, or a renamed workflow would stop triggering its own scan.
 check_same "ci.yml scan_config filter" "$(ci_filter scan_config)" \
@@ -139,6 +158,7 @@ check_mutation_fails() {
   CI_WORKFLOW) original="${ci_workflow}" ;;
   BENCH_IMAGE_TAG) original="${bench_image_tag}" ;;
   ORCHESTRATION_WORKFLOW) original="${orchestration_workflow}" ;;
+  BENCH_WORKFLOW) original="${bench_workflow}" ;;
   *)
     echo "FAIL: no file is read from ${env_var}" >&2
     fail=1
@@ -188,6 +208,10 @@ if [[ -z "${CI_PATHS_PARITY_MUTATION:-}" ]]; then
     "/^              - '\.trivyignore'$/d" "ci.yml scan_config filter"
   check_mutation_fails "a misspelt filter output" CI_WORKFLOW \
     "s/steps\.filter\.outputs\.code/steps.filter.outputs.codes/" "filter outputs the changes job reads"
+  check_mutation_fails "reports/** dropped from the docs denylist" CI_WORKFLOW \
+    "/^              - '!reports\/\*\*'$/d" "ci.yml docs denylist"
+  check_mutation_fails "reports/** dropped from bench-image.yml paths-ignore" BENCH_WORKFLOW \
+    "/^      - 'reports\/\*\*'$/d" "ci.yml docs denylist"
 fi
 
 exit "${fail}"

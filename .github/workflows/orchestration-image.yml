@@ -14,6 +14,14 @@ on:
     - cron: '0 6 * * 1'
   push:
     branches: [main]
+    # Docs-only pushes change no image input, so they skip the publish (ADR-0027).
+    # The list is ci.yml's docs denylist; test/ci-paths-parity-test.sh fails when
+    # the two differ.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'reports/**'
+      - '.claude/skills/**'
   workflow_dispatch:
 
 # Least privilege at the top: only read. The publish job raises id-token for the OIDC
