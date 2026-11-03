@@ -105,7 +105,7 @@ expect_fail "empty slug rejected" "${tmp}/empty-slug.yaml" main-tag
 # sees scratch's log.
 scratch="$(mktemp -d)"
 trap 'rm -rf "${tmp}" "${scratch}"' EXIT
-mkdir -p "${scratch}/bench/configs" "${scratch}/src"
+mkdir -p "${scratch}/bench/configs"
 cp "${script}" "${scratch}/bench/image-tag.sh"
 scratch_script="${scratch}/bench/image-tag.sh"
 cat >"${scratch}/model.yaml" <<'YAML'
