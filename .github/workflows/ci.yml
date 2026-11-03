@@ -1,6 +1,7 @@
 # No-cloud CI gate (ADR 0002 tier 1): lint/format/validate, Python tests, offline
 # terraform tests, and a schema check of the rendered local Helm charts. Runs on PRs
-# and pushes to main with no AWS credentials.
+# and pushes to main with no AWS credentials. Jobs gate on the paths a change touches,
+# and `ci-ok` is the one required status check (ADR-0027).
 name: ci
 
 on:
@@ -18,6 +19,67 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Classifies the change so the jobs below run only when it can affect them
+  # (ADR-0027). docs_only is true when every changed file matches the docs denylist;
+  # the image outputs are true when the change touches that image's inputs. A manual
+  # dispatch runs everything, since it has no change to classify.
+  changes:
+    name: classify changed paths
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ github.event_name != 'workflow_dispatch' && steps.filter.outputs.code != 'true' }}
+      bench_image: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.bench_image == 'true' }}
+      orchestration_image: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.orchestration_image == 'true' }}
+    steps:
+      # A push is diffed with git against the commit before it; a PR's changed files
+      # come from the API.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Detect changed paths
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # Excludes must be final, matching the git pathspec's :(exclude): under the
+          # default 'some' quantifier a lone '!' pattern ORs in as match-all-but-that-file,
+          # so a file under bench/configs/ (or any unrelated file) would still trip the
+          # filter. A filter with no '!' pattern matches as under 'some'.
+          predicate-quantifier: some-with-excludes
+          # code: any changed file outside the docs denylist.
+          # bench_image: the bench image inputs, the pathspec in bench/image-tag.sh
+          # (image_sha). The detection differs (this gates on the change's diff;
+          # image_sha tags from committed history), but the set of paths watched is
+          # the same.
+          # orchestration_image: the orchestration image inputs, the content-tag
+          # pathspec in orchestration-image.yml (Derive image tags).
+          # test/ci-paths-parity-test.sh fails when the image lists drift from those
+          # pathspecs.
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!reports/**'
+              - '!.claude/skills/**'
+            bench_image:
+              - 'bench/**'
+              - '!bench/configs/**'
+              - 'packages/**'
+              - 'pyproject.toml'
+              - 'model.yaml'
+            orchestration_image:
+              - 'orchestration/Dockerfile'
+              - 'packages/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.dockerignore'
+              - 'model.yaml'
+              - 'bench/configs/sweep-grid.yaml'
+              - 'bench/configs/kv-cache-extension-ab.yaml'
+              - 'k8s/vllm-gpu.yaml'
+
   lint:
     name: lint & format (prek)
     runs-on: ubuntu-26.04
@@ -43,6 +105,8 @@ jobs:
 
   python:
     name: python tests (pytest)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
@@ -65,6 +129,8 @@ jobs:
 
   terraform:
     name: terraform tests (offline)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
@@ -100,40 +166,21 @@ jobs:
     # PR-only: it proves the Dockerfile still builds before merge, with no
     # credentials. A push to main publishes via bench-image.yml, which rebuilds
     # anyway, so repeating the build here on push would be wasted work.
-    if: github.event_name == 'pull_request'
+    # Only the bench image's inputs make this build worth running. A PR that
+    # leaves them untouched cannot change what the image bakes, so skip the
+    # build and let the job pass.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.bench_image == 'true'
     # This build is the slowest job in the workflow (timeout-minutes: 30
     # ceiling), so gate it on every other check: a PR that fails any of them
     # cannot merge, and building an image for a doomed PR only burns runner time.
     # Failing one skips the build instead.
-    needs: [lint, python, terraform, shell-tests, chart-render]
+    needs: [changes, lint, python, terraform, shell-tests, chart-render]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Only the bench image's inputs make this build worth running. A PR that
-      # leaves them untouched cannot change what the image bakes, so skip the
-      # build and let the job pass. The path list mirrors the git pathspec in
-      # bench/image-tag.sh (image_sha) — keep the two lists in sync. The
-      # detection differs (this gates on the PR's base..head diff; image_sha
-      # tags from committed history), but the set of paths watched is the same.
-      - name: Detect bench image input changes
-        id: filter
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        with:
-          # Excludes must be final, matching the git pathspec's :(exclude): under the
-          # default 'some' quantifier a lone '!' pattern ORs in as match-all-but-that-file,
-          # so a file under bench/configs/ (or any unrelated file) would still trip the
-          # build.
-          predicate-quantifier: some-with-excludes
-          filters: |
-            bench:
-              - 'bench/**'
-              - '!bench/configs/**'
-              - 'packages/**'
-              - 'pyproject.toml'
-              - 'model.yaml'
       # Versions and checksums from mise.toml and mise.lock.
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
@@ -143,7 +190,6 @@ jobs:
       # from mise), so a broken Dockerfile or an unfetchable revision fails the PR.
       # No tag, no push: the build succeeding is the check.
       - name: Build the bench image (no push)
-        if: steps.filter.outputs.bench == 'true'
         run: bench/build-image.sh
 
   orchestration-image-build:
@@ -151,37 +197,19 @@ jobs:
     # PR-only, same rationale as bench-image-build: prove the Dockerfile still
     # builds before merge with no credentials; a push to main publishes via
     # orchestration-image.yml, which rebuilds anyway.
-    if: github.event_name == 'pull_request'
-    needs: [lint, python, terraform, shell-tests, chart-render]
+    # Only the orchestration image's inputs make this build worth running.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.orchestration_image == 'true'
+    needs: [changes, lint, python, terraform, shell-tests, chart-render]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Only the orchestration image's inputs make this build worth running. The
-      # path list mirrors the content-tag pathspec in orchestration-image.yml
-      # (Derive image tags) — keep the two in sync.
-      - name: Detect orchestration image input changes
-        id: filter
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        with:
-          filters: |
-            orchestration:
-              - 'orchestration/Dockerfile'
-              - 'packages/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - '.dockerignore'
-              - 'model.yaml'
-              - 'bench/configs/sweep-grid.yaml'
-              - 'bench/configs/kv-cache-extension-ab.yaml'
-              - 'k8s/vllm-gpu.yaml'
       # Build succeeding is the check: a broken Dockerfile, an unresolvable
       # locked dependency, or a baked config missing from the context fails
       # the PR. No push.
       - name: Build the orchestration image (no push)
-        if: steps.filter.outputs.orchestration == 'true'
         run: docker build --platform linux/amd64 -f orchestration/Dockerfile -t orchestration-image:pr-build .
 
       # The worker drives the GPU redeploy and ceiling scrape by shelling out to kubectl
@@ -189,11 +217,12 @@ jobs:
       # resolves on the image PATH here, rather than discovering its absence at run time
       # on the worker, where it fails the sweep at the first point's apply.
       - name: Assert kubectl is on the image PATH
-        if: steps.filter.outputs.orchestration == 'true'
         run: docker run --rm --platform linux/amd64 orchestration-image:pr-build kubectl version --client
 
   shell-tests:
     name: shell unit tests
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -225,6 +254,9 @@ jobs:
       # allowlist's metrics nor its collector_metrics (ADR-0026).
       # dashboard-promql-test stubs nothing: it runs promtool's unit tests against the Fleet
       # health dashboard's real queries, and against mutated copies of them that must fail.
+      # ci-paths-parity-test stubs nothing: it reads the real workflows and bench/image-tag.sh
+      # with yq and fails when an image filter in the changes job drifts from the git
+      # pathspec that derives that image's content tag (ADR-0027).
       - name: Run shell unit tests
         run: |
           set -euo pipefail
@@ -239,9 +271,12 @@ jobs:
           bash test/otel-collector-check-test.sh
           bash test/dashboard-allowlist-test.sh
           bash test/dashboard-promql-test.sh
+          bash test/ci-paths-parity-test.sh
 
   chart-render:
     name: helm chart render (kubeconform)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
@@ -259,3 +294,33 @@ jobs:
       # resource the API server would reject.
       - name: Render and validate the local Helm charts
         run: bash test/chart-render-test.sh
+
+  # The one required status check (ADR-0027). It fails when any job failed or was
+  # cancelled and passes when each succeeded or was skipped, so a docs-only change
+  # can merge and a new job is covered by adding it to needs, with no change to
+  # branch protection. always() makes it run even when a needed job failed: that
+  # would otherwise skip it, and a skipped required check counts as passing.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs:
+      - changes
+      - lint
+      - python
+      - terraform
+      - bench-image-build
+      - orchestration-image-build
+      - shell-tests
+      - chart-render
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Fail when a needed job failed or was cancelled
+        env:
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          set -euo pipefail
+          if [[ "${FAILED}" == "true" ]]; then
+            echo "::error::a required job failed or was cancelled; see the jobs above"
+            exit 1
+          fi

@@ -62,15 +62,16 @@ fi
 # the container at run time and the orchestration flows' configs, none baked into this
 # image, so the directory is excluded: editing them leaves the tokenizer-and-harness
 # image unchanged and must not roll the tag or force a rebuild of identical bits. The PR
-# build gate in .github/workflows/ci.yml (bench-image-build) mirrors this pathspec as a
-# dorny/paths-filter list: keep the two in sync. This names committed state only:
-# uncommitted edits to the inputs are not reflected, since the image is built from the
-# committed tree (in CI, from the pushed commit). Empty means nothing is committed yet —
-# a content tag would be a lie, so fail loudly rather than tag `-`.
+# build gate in .github/workflows/ci.yml (the changes job's bench_image filter) mirrors
+# this pathspec as a dorny/paths-filter list; test/ci-paths-parity-test.sh fails when
+# the two differ. This names committed state only: uncommitted edits to the inputs are
+# not reflected, since the image is built from the committed tree (in CI, from the pushed
+# commit). Empty means nothing is committed yet — a content tag would be a lie, so fail
+# loudly rather than tag `-`.
 image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
-    bench src packages pyproject.toml model.yaml \
+    bench packages pyproject.toml model.yaml \
     ':(exclude)bench/configs')"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
