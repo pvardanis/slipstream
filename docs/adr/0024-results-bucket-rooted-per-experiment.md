@@ -1,4 +1,4 @@
-<!-- ADR recording the results bucket's layout: one root prefix per experiment (knob-sweep/, kv-offload-ab/) beside prefect/ and boot-status/, the root carried in the bench host's RUN_ID rather than a fixed sweeps/ prefix, each cell result stored once, and the KV cache A/B's rung labels written as a <cell>.kv_ab.json object beside the host's raw result so the worker never writes the host's objects. Amends the paths of ADR-0018 and ADR-0022 and the record of ADR-0017's 2026-10-20 amendment. -->
+<!-- ADR recording the results bucket's layout: one root prefix per experiment (knob-sweep/, kv-offload-ab/) beside prefect/ and boot-status/, the root carried in the bench host's RUN_ID rather than a fixed sweeps/ prefix, each cell result stored once, and the KV cache A/B's rung labels written as a <cell>.kv_ab.json object beside the host's raw result so the worker never writes the host's objects. Amends the paths of ADR-0018 and ADR-0022 and the record of ADR-0017's 2026-10-20 amendment. The 2026-11-03 amendment moves the bucket to the bootstrap stack as the bench-results bucket, so it outlives bench-endpoint-down and stack-down. -->
 
 # ADR-0024: The results bucket is rooted per experiment and stores each result once
 
@@ -96,3 +96,24 @@ condition ADR-0018 states still holds per root: no run id may have a `charts` se
   `bench/results/kv-offload-ab/`.
 - The S3 prefix is `kv-offload-ab`, while the flow is `kv-cache-extension-ab` and the
   glossary's short name is `kv-ab`.
+
+## Amendment (2026-11-03): the bucket lives in the bootstrap stack
+
+The bucket moves from the bench-endpoint stack to bootstrap, as
+`${cluster_name}-bench-results-<suffix>` (#468). It held the bench host's results, the
+worker's resume state and the chart PNGs the Prefect UI links to, yet `bench-endpoint-down`
+deleted it with `force_destroy`. A run's results and cache died with the endpoint, and
+registering a deployment needed a live endpoint just to read the bucket's name.
+
+- The layout above is unchanged; only the bucket's owner and name change.
+- The bucket keeps its public access block and the anonymous read on the two charts
+  prefixes. It has neither `force_destroy` nor `prevent_destroy`, so a bootstrap destroy
+  fails on a non-empty bucket and succeeds once it is emptied.
+- Bootstrap outputs the bucket's name and ARN. The bench host's write policy reads the ARN
+  through bootstrap remote state. The worker's S3 statements match the
+  `${cluster_name}-bench-results-*` pattern with their prefix scoping unchanged.
+  Registration and the bench recipes read the name from bootstrap. The flow-dispatch
+  workflow lists buckets by the `${cluster_name}-bench-results-` prefix.
+- Nothing is migrated. Runs written to the old bench-endpoint bucket are gone once that
+  bucket is destroyed; sync any you need before the bench-endpoint stack moves to this
+  layout.

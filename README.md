@@ -163,13 +163,13 @@ hence the order:
 just stack-up             # cluster + Prefect + GPU pool + vLLM + bench endpoint
 # trigger a knob sweep: Actions → sweep-dispatch → Run workflow (on main)
 # or a KV cache A/B:    Actions → kv-ab-dispatch → Run workflow (on main)
-just bench-results-sync   # pull results into bench/results/ — before stack-down
+just bench-results-sync   # pull results into bench/results/
 just stack-down           # tear down, then zero-leak sweep (spend → 0)
 ```
 
 The bench endpoint is public and every node bills while up: **run `just stack-down`
-when done.** Only the state bucket and ECR repositories survive it; the results bucket
-is deleted with its contents, so sync first. `stack-down` exits non-zero if a tagged
+when done.** The state bucket, ECR repositories and bench-results bucket survive it, so
+results and the resume cache outlive the cluster. `stack-down` exits non-zero if a tagged
 instance or volume survived, and skips `cluster-down` (leaving the cluster billing) if
 the endpoint teardown failed: fix that and rerun. Running a sweep locally, single
 points, pinned images and the cloud-verify check are in
