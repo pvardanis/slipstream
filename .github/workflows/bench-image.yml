@@ -14,8 +14,8 @@ on:
     # Docs-only pushes change no image input, so they skip the publish (ADR-0027).
     # The list is ci.yml's docs denylist; test/ci-paths-parity-test.sh fails when
     # the two differ. GitHub matches only the first 3,000 changed files, so a push whose
-    # first 3,000 are all docs skips even with code beyond them; the next code push
-    # publishes the missed content tag.
+    # first 3,000 are all docs skips even with code beyond them, and the floating pointer
+    # lags until the next push that is not all docs.
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
