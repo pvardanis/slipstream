@@ -1,6 +1,7 @@
 # One-time, durable infrastructure that must exist before the eks stack and
-# outlive `just cluster-down`: the S3 bucket holding remote state, and the ECR repository
-# for the bench-client image (see ecr.tf). This stack keeps its own state in that
+# outlive `just cluster-down`: the S3 bucket holding remote state, the ECR repository
+# for the bench-client image (see ecr.tf), and the bench-results bucket (see
+# bench_results.tf). This stack keeps its own state in that
 # bucket too (see backend.tf); the native S3 lockfile means no DynamoDB table is
 # needed. Credentials come from the caller's AWS_PROFILE.
 provider "aws" {

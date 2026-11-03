@@ -114,6 +114,9 @@ registering a deployment needed a live endpoint just to read the bucket's name.
   `${cluster_name}-bench-results-*` pattern with their prefix scoping unchanged.
   Registration and the bench recipes read the name from bootstrap. The flow-dispatch
   workflow lists buckets by the `${cluster_name}-bench-results-` prefix.
+- ADR-0022's consequences that cache records "live and die with the results bucket" and
+  that the bucket "is destroyed with the stack" no longer hold: cache records now outlive
+  both teardowns.
 - Nothing is migrated. Runs written to the old bench-endpoint bucket are gone once that
   bucket is destroyed; sync any you need before the bench-endpoint stack moves to this
   layout.

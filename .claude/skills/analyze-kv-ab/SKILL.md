@@ -107,7 +107,7 @@ Done when every shared rung has a separation or inconclusive call per metric, th
 
 ## Step 4 — Write the report
 
-The report outlives the results bucket and the Prefect run, so it keeps its own copy of the chart. Fetch it to a `.part` file and keep it only if it is a whole PNG:
+The Prefect run ages out and a bucket can be emptied, so the report keeps its own copy of the chart. Fetch it to a `.part` file and keep it only if it is a whole PNG:
 
 ```bash
 dir="reports/kv-cache-ab-<run_id>"; out="$dir/kv-ab-by-max-concurrency.png"
