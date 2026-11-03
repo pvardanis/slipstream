@@ -154,7 +154,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "KV-cache usage",
-      "description": "vllm:kv_cache_usage_perc: the share of each replica's KV-cache blocks in use, averaged over the replicas fleet-wide, and per pod. Near 1, new requests wait for blocks and running ones can be preempted.",
+      "description": "vllm:kv_cache_usage_perc: the share of each replica's KV-cache blocks in use, averaged over the replicas fleet-wide, and per pod. Near 100%, new requests wait for blocks and running ones can be preempted.",
       "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
