@@ -61,7 +61,9 @@ fi
 # bench/configs/ lives under bench/ — but its files are the load configs mounted into
 # the container at run time and the orchestration flows' configs, none baked into this
 # image, so the directory is excluded: editing them leaves the tokenizer-and-harness
-# image unchanged and must not roll the tag or force a rebuild of identical bits. The PR
+# image unchanged and must not roll the tag or force a rebuild of identical bits.
+# Markdown is excluded too: CI reads a markdown-only change as docs-only and the
+# publish workflows skip it, so it must not name an image nothing builds. The PR
 # build gate in .github/workflows/ci.yml (the changes job's bench_image filter) mirrors
 # this pathspec as a dorny/paths-filter list; test/ci-paths-parity-test.sh fails when
 # the two differ. This names committed state only: uncommitted edits to the inputs are
@@ -72,7 +74,7 @@ image_sha() {
   local sha
   sha="$(git -C "${repo_root}" log -1 --format=%h -- \
     bench packages pyproject.toml model.yaml \
-    ':(exclude)bench/configs')"
+    ':(exclude)bench/configs' ':(exclude,glob)**/*.md')"
   if [[ -z "${sha}" ]]; then
     echo "image-tag.sh: no committed change touches the image inputs;" \
       "cannot derive a content sha" >&2

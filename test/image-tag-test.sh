@@ -125,6 +125,13 @@ printf 'seed: 2\n' >"${scratch}/bench/configs/sweep-grid.yaml"
 git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qam config-only
 check "config edit keeps tag" "${base_tag}" "$("${scratch_script}" sha-tag)"
 
+# A markdown-only commit under an image input must leave the tag unchanged: CI reads it
+# as docs-only and the publish workflows skip it, so it must not name a new image.
+printf '# bench\n' >"${scratch}/bench/README.md"
+git -C "${scratch}" -c user.email=t@t -c user.name=t add bench/README.md
+git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qm markdown-only
+check "markdown edit keeps tag" "${base_tag}" "$("${scratch_script}" sha-tag)"
+
 # An image-input commit must roll the tag.
 printf 'name = "slipstream-bench"\nversion = "0.2"\n' >"${scratch}/pyproject.toml"
 git -C "${scratch}" -c user.email=t@t -c user.name=t commit -qam input-change
