@@ -1,7 +1,8 @@
 # No-push build and scan of the orchestration image (ADR-0027): builds the image from
 # the checked-out tree, fails on fixable high/critical CVEs, and asserts the worker's
 # kubectl is on the image PATH. Called by ci.yml on PRs that touch an image input or
-# a scan waiver (.trivyignore), and by orchestration-image.yml's weekly rescan of main.
+# the scan configuration (.trivyignore, this workflow), and by orchestration-image.yml's
+# weekly rescan of main.
 # Holds no credentials and pushes nothing.
 name: orchestration-image-scan
 
