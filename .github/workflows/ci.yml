@@ -51,7 +51,8 @@ jobs:
           # so a file under bench/configs/ (or any unrelated file) would still trip the
           # filter. A filter with no '!' pattern matches as under 'some'.
           predicate-quantifier: some-with-excludes
-          # code: any changed file outside the docs denylist.
+          # code: any changed file outside the docs denylist, which the publish
+          # workflows' push paths-ignore repeats.
           # bench_image: the bench image inputs, the pathspec in bench/image-tag.sh
           # (image_sha). The detection differs (this gates on the change's diff;
           # image_sha tags from committed history), but the set of paths watched is
@@ -63,7 +64,7 @@ jobs:
           # scan_config: the Trivy waivers and the scan workflow, which change the
           # orchestration scan's verdict without changing the image.
           # test/ci-paths-parity-test.sh fails when the image lists drift from those
-          # pathspecs.
+          # pathspecs, or the denylist from the paths-ignore.
           filters: |
             code:
               - '**'
