@@ -323,8 +323,8 @@ signals through the Grafana MCP server below.
 
 ## Skills
 
-Two Claude Code skills analyse a finished run. Each reads the run's artifacts from the
-Prefect API and writes a report, with the run's charts, under `reports/`. Neither one
+Two of the Claude Code skills analyse a finished run. Each reads the run's artifacts from
+the Prefect API and writes a report, with the run's charts, under `reports/`. Neither one
 re-runs anything.
 
 | Skill | Run | Writes |
@@ -338,16 +338,20 @@ Invoke one with the run's id, e.g. `/analyze-kv-ab 20261022T131457Z`, with
 Two more skills work on the live stack instead of a finished run:
 
 - [`check-observability`](.claude/skills/check-observability/SKILL.md) checks the fleet's
-  metrics and traces in Grafana Cloud through the [Grafana MCP server](#grafana-mcp-server).
-  It QAs a change item by item against an expected result, walks a missing signal back to
-  the first hop where it goes dark, or pivots from a `request_id` to its trace, and returns
-  a summary with dashboard and trace links. Its one write is `just obs-pivot`'s demo span.
-  Invoke it with what to check, e.g. `/check-observability the dashboard`.
+  metrics and traces in Grafana Cloud through the [Grafana MCP server](#grafana-mcp-server),
+  and the in-cluster hops through `kubectl`. It QAs a change item by item against an
+  expected result, walks a missing signal back to the first hop where it goes dark, or
+  pivots from a `request_id` to its trace, and returns a summary with dashboard and trace
+  links. It writes no report; the only thing it sends is `just obs-pivot`'s one known test
+  span (`req-demo-001`). Invoke it with what to check, e.g.
+  `/check-observability the dashboard`.
 - [`e2e-test-orchestration-branch`](.claude/skills/e2e-test-orchestration-branch/SKILL.md)
   runs an unmerged orchestration branch or PR stack end to end on the in-cluster Prefect
   worker. It pushes a `qa-` tagged image, swaps it onto the worker, registers the flows
   from the branch, and runs one scenario at a time for you to confirm in the Prefect UI,
-  then posts the results on the top PR and restores the worker. It needs the stack up.
+  then posts the results on the top PR and restores the worker. It needs the stack up,
+  Docker running, and the branch's work committed. Invoke it from the top of the branch or
+  stack, e.g. `/e2e-test-orchestration-branch`.
 
 ## Grafana MCP server
 
