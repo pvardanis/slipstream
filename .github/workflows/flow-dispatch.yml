@@ -310,9 +310,6 @@ jobs:
             echo "::error::cannot read ${config_repo_path} at worker image commit ${worker_commit}"
             exit 1
           }
-          if ! git diff --quiet "${worker_commit}" HEAD -- "${config_repo_path}"; then
-            echo "::warning::the worker runs ${config_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) to run main's config"
-          fi
           {
             echo "## ${CONFIG_HEADING}"
             echo
@@ -322,6 +319,13 @@ jobs:
             echo "${config_yaml}"
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
+          # Refuse to create the run when the worker's config is not main's: the run would
+          # sweep a config main no longer holds. Checked after the summary, so the job page
+          # still shows the config the worker would have run.
+          if ! git diff --quiet "${worker_commit}" HEAD -- "${config_repo_path}"; then
+            echo "::error::the worker runs ${config_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) and dispatch again"
+            exit 1
+          fi
 
           # Create the run and return; the worker picks it up and runs it to completion
           # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
