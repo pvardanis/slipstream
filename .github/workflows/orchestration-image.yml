@@ -123,16 +123,18 @@ jobs:
           # (model.yaml, the sweep grid, the kv-ab workload, the vLLM redeploy manifest). A
           # change to any of these is what a new content tag must capture; a change elsewhere
           # (docs, terraform) leaves the image identical, so the probe below finds the tag
-          # present and skips the rebuild. Assign before writing: a failing substitution
-          # inside an echo argument does not trip `set -e`, so a bare assignment is what
-          # makes an error here fail the job rather than write an empty tag to GITHUB_OUTPUT.
+          # present and skips the rebuild. Markdown is excluded: CI reads a markdown-only
+          # change as docs-only (ADR-0027), so it must not name an image nothing builds.
+          # Assign before writing: a failing substitution inside an echo argument does not
+          # trip `set -e`, so a bare assignment is what makes an error here fail the job
+          # rather than write an empty tag to GITHUB_OUTPUT.
           # The width is pinned with --abbrev so the immutable tag for a commit stays
           # constant: git's default short hash grows with history, which would otherwise
           # re-tag the same content and defeat the presence probe below.
           sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
             packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
             model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
-            k8s/vllm-gpu.yaml)"
+            k8s/vllm-gpu.yaml ':(exclude,glob)**/*.md')"
           if [[ -z "${sha_tag}" ]]; then
             echo "::error::could not derive a content tag — no commit touches the image inputs"
             exit 1
