@@ -111,6 +111,28 @@ jobs:
         with:
           version: 2026.10.21
           install_args: terraform tflint prek uv yq
+      # The Python hook venvs point at the runner image's python3. prek rebuilds a venv
+      # whose interpreter changed, but an exact cache hit is never re-saved, so the key
+      # names the image version along with the prek version and the hook config.
+      # ImageVersion is an environment variable the runner image sets, not part of the
+      # `env` expression context, so this step reads it into an output for the key, with
+      # the prek version made key-safe (`prek 0.3.11 (...)` -> `prek-0.3.11-...`).
+      - name: Read the prek cache key inputs
+        id: prek
+        run: |
+          set -euo pipefail
+          : "${ImageVersion:?the runner image sets no ImageVersion}"
+          version="$(prek --version | tr -c 'A-Za-z0-9.\n' '-')"
+          : "${version:?prek --version printed nothing}"
+          {
+            echo "image=${ImageVersion}"
+            echo "version=${version}"
+          } >>"${GITHUB_OUTPUT}"
+      - name: Cache prek hook environments
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/prek
+          key: prek-${{ runner.os }}-${{ runner.arch }}-${{ steps.prek.outputs.image }}-${{ steps.prek.outputs.version }}-${{ hashFiles('.pre-commit-config.yaml') }}
       - name: Install tflint plugins
         env:
           GITHUB_TOKEN: ${{ github.token }}
