@@ -126,7 +126,8 @@ jobs:
 
       # Run the Prefect CLI from the repo's lockfile so its version matches the prefect
       # the worker image was built against — a client/server skew is the one failure a
-      # bare `pip install prefect` would invite. yq is for image-tag.sh below.
+      # bare `pip install prefect` would invite.
+      # yq is for image-tag.sh in the registration step below.
       # Versions and checksums from mise.toml and mise.lock.
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
