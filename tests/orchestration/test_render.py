@@ -581,7 +581,7 @@ def test_publish_image_plot_points_an_image_artifact_at_the_public_s3_url() -> N
         s3_key="knob-sweep/run1/charts/ceiling-by-max-num-seqs.png",
         heading="## concurrency ceiling — plot",
         blurb="The ceiling per engine config.",
-        bucket="slipstream-bench-endpoint-results-abc123",
+        bucket="slipstream-bench-results-abc123",
         region="eu-west-1",
         publish=publish,
     )
@@ -592,7 +592,7 @@ def test_publish_image_plot_points_an_image_artifact_at_the_public_s3_url() -> N
     assert calls == [
         {
             "image_url": (
-                "https://slipstream-bench-endpoint-results-abc123.s3.eu-west-1."
+                "https://slipstream-bench-results-abc123.s3.eu-west-1."
                 "amazonaws.com/knob-sweep/run1/charts/ceiling-by-max-num-seqs.png"
             ),
             "key": "knob-sweep-ceiling-plot",

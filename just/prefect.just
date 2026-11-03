@@ -140,8 +140,8 @@ _prefect-register deployment:
     # non-empty-check idiom as `cluster-up` in cluster.just).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     [[ -n "${region}" ]] || { echo "eks output region is empty" >&2; exit 1; }
-    bucket="$(terraform -chdir={{ bench_endpoint_dir }} output -raw results_bucket_name)"
-    [[ -n "${bucket}" ]] || { echo "bench-endpoint output results_bucket_name is empty" >&2; exit 1; }
+    bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
+    [[ -n "${bucket}" ]] || { echo "bootstrap output bench_results_bucket_name is empty" >&2; exit 1; }
     # Forward bench_image_tag into the nested call: a command-line override does not cross
     # into a child `just`, so an unforwarded pin would fall back to the floating main tag.
     image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
