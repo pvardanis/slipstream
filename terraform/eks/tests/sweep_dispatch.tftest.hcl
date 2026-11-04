@@ -47,6 +47,7 @@ override_data {
   values = {
     outputs = {
       orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
       sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
       grafana_cloud_write_secret_name = "grafana-cloud/write"
       cluster_name                    = "slipstream"
@@ -158,6 +159,7 @@ run "sweep_dispatch_rejects_a_different_bootstrap_cluster" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
         grafana_cloud_write_secret_name = "grafana-cloud/write"
         cluster_name                    = "other-cluster"
@@ -177,6 +179,7 @@ run "sweep_dispatch_rejects_a_different_bootstrap_namespace" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
         grafana_cloud_write_secret_name = "grafana-cloud/write"
         cluster_name                    = "slipstream"
@@ -199,6 +202,7 @@ run "sweep_dispatch_rejects_a_bootstrap_without_target_outputs" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
         grafana_cloud_write_secret_name = "grafana-cloud/write"
       }

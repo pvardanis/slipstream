@@ -26,7 +26,9 @@ locals {
   # re-apply re-resolves to a new immutable ref (a real rollout) and a cached image on a
   # node is always the right one under IfNotPresent. repository_name is the path after the
   # registry host, which is what the ECR data source looks the image up by.
-  orchestration_repo_url  = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
+  orchestration_repo_url = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
+  # The bootstrap stack's bench-results bucket, the worker's S3 target.
+  bench_results_arn       = data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_arn
   orchestration_repo_name = trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/")
   # The ECR data source's postcondition guarantees exactly one non-main tag, so the list
   # comprehension's [0] resolves it — and an empty list (a loosened postcondition or
@@ -90,10 +92,9 @@ resource "aws_iam_role" "prefect_worker" {
 }
 
 # Least-privilege permissions. The S3 target is the bootstrap stack's bench-results
-# bucket, whose name carries a random suffix, so it is scoped by ARN prefix. The SSM
-# target is the bench host in the bench-endpoint stack, which consumes this stack's
-# outputs — referencing it back would cycle — and its instance id is non-deterministic,
-# so it is scoped by tag condition. Neither is an exact ARN.
+# bucket, by its exact ARN. The SSM target is the bench host in the bench-endpoint stack,
+# which consumes this stack's outputs — referencing it back would cycle — and its
+# instance id is non-deterministic, so it is scoped by tag condition.
 resource "aws_iam_role_policy" "prefect_worker" {
   name = "${var.cluster_name}-prefect-worker"
   role = aws_iam_role.prefect_worker.id
@@ -107,13 +108,13 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Sid      = "ResultsBucketObjects"
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-results-*/*"
+        Resource = "${local.bench_results_arn}/*"
       },
       {
         Sid      = "ResultsBucketList"
         Effect   = "Allow"
         Action   = ["s3:ListBucket"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-results-*"
+        Resource = local.bench_results_arn
       },
       # The worker persists its own resume state with persist_result=True: the task result
       # under prefect/results and the cache-key records under prefect/cache-keys. PutObject
@@ -124,8 +125,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Effect = "Allow"
         Action = ["s3:PutObject"]
         Resource = [
-          "arn:aws:s3:::${var.cluster_name}-bench-results-*/prefect/results/*",
-          "arn:aws:s3:::${var.cluster_name}-bench-results-*/prefect/cache-keys/*",
+          "${local.bench_results_arn}/prefect/results/*",
+          "${local.bench_results_arn}/prefect/cache-keys/*",
         ]
       },
       # The terminal render tasks upload each plot's PNG under knob-sweep/<run>/charts/ or
@@ -137,8 +138,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Effect = "Allow"
         Action = ["s3:PutObject"]
         Resource = [
-          "arn:aws:s3:::${var.cluster_name}-bench-results-*/knob-sweep/*/charts/*",
-          "arn:aws:s3:::${var.cluster_name}-bench-results-*/kv-offload-ab/*/charts/*",
+          "${local.bench_results_arn}/knob-sweep/*/charts/*",
+          "${local.bench_results_arn}/kv-offload-ab/*/charts/*",
         ]
       },
       # The kv-cache-extension-ab flow labels each rung with its arm, run, and prefix-cache
@@ -149,7 +150,7 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Sid      = "KvAbLabelObjects"
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
-        Resource = "arn:aws:s3:::${var.cluster_name}-bench-results-*/kv-offload-ab/*.kv_ab.json"
+        Resource = "${local.bench_results_arn}/kv-offload-ab/*.kv_ab.json"
       },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;
