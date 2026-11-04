@@ -95,7 +95,7 @@ locals {
     region              = var.region
     ecr_registry        = local.ecr_registry
     image_ref           = local.bench_image_ref
-    results_bucket      = data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_name
+    results_bucket      = local.bench_results_bucket_name
     proxy_conf          = local.bench_proxy_conf
     proxy_up_script     = local.bench_proxy_up_script
     proxy_env           = local.bench_proxy_env
@@ -177,9 +177,16 @@ resource "aws_iam_role_policy" "bench_host_results" {
     Statement = [{
       Effect   = "Allow"
       Action   = "s3:PutObject"
-      Resource = "${data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_arn}/*"
+      Resource = "${local.bench_results_bucket_arn}/*"
     }]
   })
+
+  lifecycle {
+    precondition {
+      condition     = local.bench_results_bucket_name != "" && local.bench_results_bucket_arn != ""
+      error_message = "The bootstrap stack has no bench_results_bucket_name/bench_results_bucket_arn output, so the bench host has no bench-results bucket to write to. Run `just bootstrap` to create the bucket, then re-run bench-endpoint-up."
+    }
+  }
 }
 
 # Pull the bench-client image from its repository (and only that repository).

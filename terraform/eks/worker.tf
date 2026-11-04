@@ -26,10 +26,12 @@ locals {
   # re-apply re-resolves to a new immutable ref (a real rollout) and a cached image on a
   # node is always the right one under IfNotPresent. repository_name is the path after the
   # registry host, which is what the ECR data source looks the image up by.
-  orchestration_repo_url = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
-  # The bootstrap stack's bench-results bucket, the worker's S3 target.
-  bench_results_arn       = data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_arn
+  orchestration_repo_url  = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
   orchestration_repo_name = trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/")
+  # The bootstrap stack's bench-results bucket, the worker's S3 target. try() turns a
+  # bootstrap applied before the bucket existed into the worker policy's precondition
+  # failure rather than an unsupported-attribute error.
+  bench_results_arn = try(data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_arn, "")
   # The ECR data source's postcondition guarantees exactly one non-main tag, so the list
   # comprehension's [0] resolves it — and an empty list (a loosened postcondition or
   # drifted filter) fails the plan loudly instead of pinning "".
@@ -179,6 +181,13 @@ resource "aws_iam_role_policy" "prefect_worker" {
       },
     ]
   })
+
+  lifecycle {
+    precondition {
+      condition     = local.bench_results_arn != ""
+      error_message = "The bootstrap stack has no bench_results_bucket_arn output, so the Prefect worker has no bench-results bucket to read and write. Run `just bootstrap` to create the bucket, then re-run this plan."
+    }
+  }
 }
 
 # Binds the worker's ServiceAccount (created by the chart, in the prefect namespace) to
