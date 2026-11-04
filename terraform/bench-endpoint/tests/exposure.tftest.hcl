@@ -1,21 +1,21 @@
 # Plan-level tests for the bench endpoint exposure stack. They run offline: the aws
-# provider is mocked and the eks remote-state data source is overridden, so the
+# provider is mocked and the bootstrap remote-state data source is overridden, so the
 # assertions check the stack's shape and its security invariants without
 # standing anything up. The real end-to-end proof is `just bench-endpoint-up` plus a
-# client-cert curl, which costs money and is run by hand.
+# `just bench` run from the bench host, which costs money and is run by hand.
 
 mock_provider "aws" {}
 mock_provider "tls" {}
 
 variables {
-  state_bucket            = "slipstream-tf-state-test"
-  operator_cidr           = "203.0.113.7/32"
-  vllm_api_key            = "test-key"
-  vllm_nodeport           = 30800
-  vpc_id                  = "vpc-test"
-  public_subnets          = ["subnet-a", "subnet-b", "subnet-c"]
-  node_security_group_id  = "sg-nodes"
-  node_autoscaling_groups = ["slipstream-cpu"]
+  state_bucket                = "slipstream-tf-state-test"
+  bench_host_instance_profile = "slipstream-bench-host"
+  vllm_api_key                = "test-key"
+  vllm_nodeport               = 30800
+  vpc_id                      = "vpc-test"
+  public_subnets              = ["subnet-a", "subnet-b", "subnet-c"]
+  node_security_group_id      = "sg-nodes"
+  node_autoscaling_groups     = ["slipstream-cpu"]
 }
 
 run "exposure_invariants" {
@@ -29,9 +29,7 @@ run "exposure_invariants" {
     values = {
       outputs = {
         bench_image_repo_url      = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
-        bench_image_repo_arn      = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
         bench_results_bucket_name = "slipstream-bench-results-abc123"
-        bench_results_bucket_arn  = "arn:aws:s3:::slipstream-bench-results-abc123"
       }
     }
   }
@@ -103,23 +101,10 @@ run "exposure_invariants" {
     error_message = "The node autoscaling group must be attached to the target group."
   }
 
-  # The ALB security group's rules are standalone rule resources (alb_operator
-  # here, alb_from_host in host.tf), never inline blocks: mixing inline blocks
-  # with standalone rules on one group makes the provider revoke the standalone
-  # rules on every apply. The inline set is computed and unknown at plan, so the
-  # "no inline rules" property is a structural guarantee (see security.tf); what
-  # is asserted here is the standalone operator rule's shape.
-
-  # The operator ingress rule admits exactly the operator CIDR on TCP 443. Exact
-  # match on cidr_ipv4, so widening it (e.g. to 0.0.0.0/0) fails the test.
-  assert {
-    condition     = aws_vpc_security_group_ingress_rule.alb_operator.cidr_ipv4 == var.operator_cidr
-    error_message = "ALB operator ingress rule must admit only the operator CIDR."
-  }
-  assert {
-    condition     = aws_vpc_security_group_ingress_rule.alb_operator.from_port == 443 && aws_vpc_security_group_ingress_rule.alb_operator.to_port == 443 && aws_vpc_security_group_ingress_rule.alb_operator.ip_protocol == "tcp"
-    error_message = "ALB operator ingress rule must be TCP 443 only."
-  }
+  # The ALB security group's only ingress rule is alb_from_host (host.tf), asserted
+  # in host.tftest.hcl; mTLS and the api-key are the gate, not a laptop allowlist.
+  # terraform test cannot list a stack's resources, so "no other ingress rule on the
+  # ALB group" is checked over the stack's files (tests/test_bench_endpoint_stack_scope.py).
 
   # The node security group admits the NodePort on TCP only, on the eks-owned SG.
   # This is the other half of the network lock ("only the load balancer reaches

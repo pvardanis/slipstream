@@ -45,14 +45,10 @@ variable "state_bucket" {
   }
 }
 
-variable "operator_cidr" {
-  description = "CIDR allowed to reach the public load balancer, in addition to mTLS. A single operator /32 keeps the surface minimal; mTLS is the real gate."
+variable "bench_host_instance_profile" {
+  description = "Instance profile the bench host launches under; the eks stack owns it and its role, so this stack creates no IAM. Supplied from the eks stack's outputs at apply time; unused on destroy."
   type        = string
-
-  validation {
-    condition     = can(cidrhost(var.operator_cidr, 0))
-    error_message = "operator_cidr must be a valid CIDR (e.g. 203.0.113.7/32); a malformed IP lookup would otherwise reach the security group."
-  }
+  default     = ""
 }
 
 variable "vllm_nodeport" {

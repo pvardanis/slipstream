@@ -1,7 +1,7 @@
-# Network locks around the exposure. The load balancer admits only the operator
-# CIDR on 443 (mTLS is the real gate; the CIDR is a cheap extra layer). The node
-# group's security group — owned by the eks module — gets a standalone rule
-# admitting the load balancer on the vLLM NodePort, so only the ALB, not the
+# Network locks around the exposure. The load balancer admits only the bench host's
+# public IP on 443 (alb_from_host in host.tf); mTLS and the vLLM api-key are the
+# gate. The node group's security group — owned by the eks module — gets a standalone
+# rule admitting the load balancer on the vLLM NodePort, so only the ALB, not the
 # open VPC, can reach the port.
 
 # The ALB security group carries no inline rules: its rules are standalone rule
@@ -12,17 +12,6 @@ resource "aws_security_group" "alb" {
   name_prefix = "${local.name}-alb-"
   description = "Ingress to the bench endpoint load balancer"
   vpc_id      = var.vpc_id
-
-  tags = local.tags
-}
-
-resource "aws_vpc_security_group_ingress_rule" "alb_operator" {
-  security_group_id = aws_security_group.alb.id
-  cidr_ipv4         = var.operator_cidr
-  ip_protocol       = "tcp"
-  from_port         = 443
-  to_port           = 443
-  description       = "Operator access to the mutual-TLS listener"
 
   tags = local.tags
 }

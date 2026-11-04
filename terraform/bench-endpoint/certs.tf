@@ -3,8 +3,8 @@
 # load balancer's server certificate and the bench client's certificate; the
 # CA bundle populates the ALB trust store so the listener accepts only clients
 # holding a certificate this CA signed. No public ACM domain or ACM Private CA
-# is involved — the endpoint lives for minutes and only the bench client and
-# operator ever connect. All private keys land in state in plaintext (Terraform
+# is involved — the endpoint lives for minutes and only the bench client ever
+# connects. All private keys land in state in plaintext (Terraform
 # always stores arguments plaintext), which is why the bench endpoint state file is
 # isolated and the bucket is encrypted and IAM-locked.
 

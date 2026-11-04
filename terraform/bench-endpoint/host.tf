@@ -126,109 +126,6 @@ resource "aws_security_group" "bench_host" {
   tags = local.tags
 }
 
-# Instance role, assumable only by EC2. The secrets, results, and ECR-pull grants
-# below are each a separate inline policy scoped to a single resource, so least
-# privilege is legible one grant at a time. SSM access is an AWS-managed
-# attachment, and ECR GetAuthorizationToken must be registry-wide (see below).
-resource "aws_iam_role" "bench_host" {
-  name_prefix = "${local.name}-host-"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Action    = "sts:AssumeRole"
-      Principal = { Service = "ec2.amazonaws.com" }
-    }]
-  })
-
-  tags = local.tags
-}
-
-# Keyless operator and orchestration access: an SSM session is an outbound
-# connection from the host, so it needs no inbound rule and no SSH key pair.
-resource "aws_iam_role_policy_attachment" "bench_host_ssm" {
-  role       = aws_iam_role.bench_host.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-# Read the bench-client credentials (cert, key, CA, api-key) from the one secret.
-resource "aws_iam_role_policy" "bench_host_secrets" {
-  name_prefix = "secrets-"
-  role        = aws_iam_role.bench_host.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "secretsmanager:GetSecretValue"
-      Resource = aws_secretsmanager_secret.bench_client.arn
-    }]
-  })
-}
-
-# Write measurement JSON to the bench-results bucket's objects, nothing else.
-resource "aws_iam_role_policy" "bench_host_results" {
-  name_prefix = "results-"
-  role        = aws_iam_role.bench_host.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "s3:PutObject"
-      Resource = "${local.bench_results_bucket_arn}/*"
-    }]
-  })
-
-  lifecycle {
-    precondition {
-      condition     = local.bench_results_bucket_name != "" && local.bench_results_bucket_arn != ""
-      error_message = "The bootstrap stack has no bench_results_bucket_name/bench_results_bucket_arn output, so the bench host has no bench-results bucket to write to. Run `just bootstrap` to create the bucket, then re-run bench-endpoint-up."
-    }
-  }
-}
-
-# Pull the bench-client image from its repository (and only that repository).
-resource "aws_iam_role_policy" "bench_host_ecr_pull" {
-  name_prefix = "ecr-pull-"
-  role        = aws_iam_role.bench_host.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:BatchGetImage",
-        "ecr:BatchCheckLayerAvailability",
-      ]
-      Resource = data.terraform_remote_state.bootstrap.outputs.bench_image_repo_arn
-    }]
-  })
-}
-
-# GetAuthorizationToken is a registry-wide action that AWS does not let you scope
-# to a repository, so it stands alone rather than widening the pull policy above.
-resource "aws_iam_role_policy" "bench_host_ecr_auth" {
-  name_prefix = "ecr-auth-"
-  role        = aws_iam_role.bench_host.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "ecr:GetAuthorizationToken"
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_instance_profile" "bench_host" {
-  name_prefix = "${local.name}-host-"
-  role        = aws_iam_role.bench_host.name
-}
-
 resource "aws_instance" "bench_host" {
   ami           = data.aws_ssm_parameter.al2023.value
   instance_type = var.bench_host_instance_type
@@ -241,7 +138,9 @@ resource "aws_instance" "bench_host" {
   subnet_id                   = try(var.public_subnets[0], null)
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.bench_host.id]
-  iam_instance_profile        = aws_iam_instance_profile.bench_host.name
+  # The eks stack owns the profile and its role (terraform/eks/bench_host.tf), so this
+  # stack creates no IAM.
+  iam_instance_profile = var.bench_host_instance_profile
 
   # Require IMDSv2: the host is public and carries role credentials that read the
   # bench-client secret, so a token-less IMDSv1 endpoint would be an SSRF path to
@@ -269,13 +168,20 @@ resource "aws_instance" "bench_host" {
   user_data_replace_on_change = true
 
   tags = merge(local.tags, { Name = "${local.name}-host" })
+
+  lifecycle {
+    precondition {
+      condition     = local.bench_results_bucket_name != ""
+      error_message = "The bootstrap stack has no bench_results_bucket_name output, so the bench host has no bench-results bucket to write to. Run `just bootstrap` to create the bucket, then re-run bench-endpoint-up."
+    }
+  }
 }
 
 # The host reaches the internet-facing ALB by its public IP over the IGW hairpin,
 # so it arrives at the ALB as a public source address, not a VPC-internal one — a
 # security-group reference would never match it. Admit exactly the host's public
-# /32 on 443 alongside the operator rule (security.tf). mTLS stays the real gate;
-# this is the CIDR pinhole the operator rule already models, extended to the host.
+# /32 on 443, the only source the ALB admits. mTLS and the vLLM api-key stay the
+# gate; this CIDR pinhole keeps the listener closed to everyone else.
 # The ALB security group manages all its rules as standalone rule resources (no
 # inline blocks), so this rule coexists with them instead of being revoked on
 # every apply. The host is created fresh each bench-endpoint-up and destroyed on
