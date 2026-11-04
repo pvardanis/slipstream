@@ -50,11 +50,11 @@ default run share cache entries under one `run_id`, so give them different ids.
 The run aborts before its first redeploy if it cannot write and read back the results
 bucket's `prefect/cache-keys` prefix; the error names the bucket.
 
-**Results** land in the bench-results bucket: each cell's JSON under
+**Results** land in the results bucket: each cell's JSON under
 `knob-sweep/<run-id>/<point-slug>/` and the plots under `knob-sweep/<run-id>/charts/`. The
 resume state (Prefect task results and cache records) lives beside them under
-`prefect/results/` and `prefect/cache-keys/`. The bucket lives in the bootstrap stack, so
-it survives `stack-down`. Pull the results, then build the artifacts locally:
+`prefect/results/` and `prefect/cache-keys/`. `stack-down` deletes the whole bucket.
+Pull the results first, then build the artifacts locally:
 
 ```sh
 just bench-results-sync
@@ -122,7 +122,7 @@ Either refusal fails the run with no record written for that rung.
 clears both cache tiers, so an arm run whose every rung is cached is skipped, and any
 other is redeployed and re-measured whole. A new `run_id` re-measures everything.
 
-**Results** land in the bench-results bucket under `kv-offload-ab/<run-id>/`. Each rung's raw
+**Results** land in the results bucket under `kv-offload-ab/<run-id>/`. Each rung's raw
 result is under `<arm>-r<n>/<cell>.json`, and its labels (arm, run, and prefix-cache hit
 rates) beside it as `<arm>-r<n>/<cell>.kv_ab.json`; the chart is under `charts/`. Each arm
 run's warmup cell lands beside its rungs under `<arm>-r<n>/warmup/`, unlabelled; leave it
@@ -178,9 +178,9 @@ fails. A green exit means the rig served and spend is back at zero.
 Grafana Cloud's free tier holds the dashboards, metrics and traces
 ([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). The bootstrap stack
 creates four empty Secrets Manager secrets, `grafana-cloud/write`, `grafana-cloud/api`,
-`grafana-cloud/stack-read` and `grafana-cloud/metrics-read`, and the IAM role the stack's CloudWatch data source assumes
-(Grafana Assume Role). The tokens are minted by hand in Grafana Cloud, so a wizard walks
-through it once per environment:
+`grafana-cloud/stack-read` and `grafana-cloud/metrics-read`, and the IAM role the stack's
+CloudWatch data source assumes (Grafana Assume Role). The tokens are minted by hand in
+Grafana Cloud, so a wizard walks through it once per environment:
 
 ```sh
 just grafana-cloud-setup
@@ -310,9 +310,10 @@ the stack persists across sessions, so read the plan first. It has no down recip
 The Grafana provider signs in with the `grafana-cloud/api` token and reads the Cloud API
 with the `grafana-cloud/stack-read` token, and the managed Prometheus data source queries
 with the `grafana-cloud/metrics-read` token, all read from Secrets Manager. The three
-tokens are therefore held in the stack's state, in the encrypted state bucket. The stack URL comes
-from `grafana_url` in the gitignored `terraform/grafana/terraform.tfvars`, or from
-`TF_VAR_grafana_url`; with neither set it defaults to `https://slipstreamobs.grafana.net`.
+tokens are therefore held in the stack's state, in the encrypted state bucket. The stack
+URL comes from `grafana_url` in the gitignored `terraform/grafana/terraform.tfvars`, or
+from `TF_VAR_grafana_url`; with neither set it defaults to
+`https://slipstreamobs.grafana.net`.
 
 After the apply, open the CloudWatch data source and click Save & test. The role reads
 CloudWatch metrics only, so the test reports the metrics query as working and the logs
