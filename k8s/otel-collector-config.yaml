@@ -125,8 +125,9 @@ connectors:
   # (rate(slo_met=true) / rate(all)). For vLLM's llm_request span the duration
   # is e2e latency. k8s.pod.name is the resource attribute naming the vLLM
   # replica (ADR-0026), so every panel can break down by replica. Each histogram
-  # data point carries exemplars, the spans' trace IDs, so a latency panel shows
-  # the trace ID to look up in Tempo, whose trace carries the request_id.
+  # data point carries exemplars, the spans' trace IDs as trace_id, which the
+  # dashboards' Prometheus data source links to Tempo, so a latency panel opens
+  # the trace and its request_id.
   span_metrics:
     histogram:
       unit: s

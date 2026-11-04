@@ -241,7 +241,7 @@ days of history outlive every `just stack-down`
   renames vLLM's attributes to `request_id`, `prompt_tokens` and `completion_tokens`,
   adds `model_id` and the request's `ttft_ms`, and marks each request `slo_met` against
   the bench's goodput gates (TTFT ≤ 1 s and TPOT ≤ 50 ms). Its span metrics give live
-  goodput and an e2e latency histogram whose exemplars carry the request's trace ID.
+  goodput and an e2e latency histogram whose exemplars open the request's trace.
 - **Dashboard as code:** the Fleet health dashboard is
   [`terraform/grafana/dashboards/fleet-health.json`](terraform/grafana/dashboards/fleet-health.json),
   pushed by `just grafana-up`. Every serving and GPU graph draws the fleet aggregate
