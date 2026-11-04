@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Walk the operator through Grafana Cloud's one-time setup (ADR-0026): create the free
 # stack, read its Grafana Assume Role external ID and the operator email into the
-# bootstrap stack's terraform.tfvars, apply bootstrap, mint the three Grafana Cloud
+# bootstrap stack's terraform.tfvars, apply bootstrap, mint the four Grafana Cloud
 # tokens, each written to its Secrets Manager secret with `aws secretsmanager
-# put-secret-value` so none enters the bootstrap stack's state, check all three hold a
+# put-secret-value` so none enters the bootstrap stack's state, check all four hold a
 # value, then write the stack URL into the grafana stack's terraform.tfvars. A token is
 # read with hidden entry and handed to aws on stdin, so it never appears on screen or in
 # a process's arguments. A re-run over a stack URL already in the grafana stack's
@@ -485,7 +485,7 @@ set_operator_email() {
 # outputs.
 apply_bootstrap() {
   stage "Bootstrap: apply"
-  say "Applying the bootstrap stack creates the three secrets, empty until the token stages"
+  say "Applying the bootstrap stack creates the four secrets, empty until the token stages"
   say "fill them, and the IAM role; it leaves tokens already stored untouched."
   if ! confirm "Plan and apply ${bootstrap_dir} now? Terraform asks again before it changes anything."; then
     echo "bootstrap not applied; rerun the wizard when ready" >&2
@@ -497,6 +497,7 @@ apply_bootstrap() {
   write_secret="$(read_output grafana_cloud_write_secret_name)"
   api_secret="$(read_output grafana_cloud_api_secret_name)"
   stack_read_secret="$(read_output grafana_cloud_stack_read_secret_name)"
+  metrics_read_secret="$(read_output grafana_cloud_metrics_read_secret_name)"
 }
 
 # store_token SECRET_ID PROMPT SHOW_STEPS keeps the token SECRET_ID holds, or runs SHOW_STEPS
@@ -541,6 +542,16 @@ show_stack_read_token_steps() {
   note "Grafana shows the token once. It goes to ${stack_read_secret}, not to any file."
 }
 
+# show_metrics_read_token_steps walks the operator through minting the metrics-read token.
+# shellcheck disable=SC2317,SC2329 # called by name through store_token
+show_metrics_read_token_steps() {
+  open_url "${STACK_URL}/a/grafana-auth-app"
+  step "Click Create access policy; name it slipstream-metrics-read."
+  step "Tick Read for metrics only (metrics:read); a policy made here covers this stack alone."
+  step "Click Create, then Add token on the new policy, and copy the token (glc_...)."
+  note "Grafana shows the token once. It goes to ${metrics_read_secret}, not to any file."
+}
+
 # check_secrets_and_write_stack_url checks every secret holds a token, then writes the
 # stack URL.
 check_secrets_and_write_stack_url() {
@@ -548,6 +559,7 @@ check_secrets_and_write_stack_url() {
   check_secret_set "${write_secret}"
   check_secret_set "${api_secret}"
   check_secret_set "${stack_read_secret}"
+  check_secret_set "${metrics_read_secret}"
   # Written once every token is stored, so the URL never names a stack the stored tokens
   # do not belong to.
   write_tfvar "${grafana_tfvars}" grafana_url "${STACK_URL}"
@@ -557,7 +569,7 @@ check_secrets_and_write_stack_url() {
 
 run_wizard() {
 
-  TOTAL_STAGES=8
+  TOTAL_STAGES=9
 
   check_stack_files
   check_prerequisites
@@ -579,6 +591,11 @@ run_wizard() {
   say "A Cloud API token lets the terraform/grafana stack read where Prometheus and the"
   say "Collector send: the hosted data sources name Grafana's internal hosts instead."
   store_token "${stack_read_secret}" "Paste the stack-read token:" show_stack_read_token_steps
+
+  stage "Metrics-read token: exemplar links"
+  say "A metrics:read token lets the Prometheus data source the terraform/grafana stack"
+  say "manages query the stack, so an exemplar opens its trace in Tempo."
+  store_token "${metrics_read_secret}" "Paste the metrics-read token:" show_metrics_read_token_steps
 
   check_secrets_and_write_stack_url
 
