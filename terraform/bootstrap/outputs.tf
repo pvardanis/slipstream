@@ -85,6 +85,6 @@ output "bench_results_bucket_name" {
 }
 
 output "bench_results_bucket_arn" {
-  description = "ARN of the bench-results bucket. The bench endpoint's bench host IAM policy scopes its results writes to this bucket's objects."
+  description = "ARN of the bench-results bucket. The bench host's write policy and the eks Prefect worker's S3 statements scope to this ARN."
   value       = aws_s3_bucket.bench_results.arn
 }
