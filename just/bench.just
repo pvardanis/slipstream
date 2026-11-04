@@ -38,7 +38,7 @@ bench-image: _bootstrap-init
 
 # Run one engine point's Tier-2 client-load ladder — the cells bench/configs/sweep-grid.yaml defines for that point — resumably through Prefect, against the currently-deployed engine over the mutual-TLS bench endpoint. Each cell is one resumable task keyed by its run id and config digest, so a re-run under the same BENCH_RUN_ID skips cells that already hold a cache record (ADR-0022). POINT_SLUG names the grid point the live engine serves (e.g. mns64_kvfp8_pcon). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
-bench point_slug *args:
+bench point_slug *args: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
@@ -111,10 +111,12 @@ bench point_slug *args:
 
 # Sync every knob sweep, prefix-cache, and KV cache A/B run's results from the bench-results bucket to bench/results for local reporting, one subdir per bucket prefix (knob-sweep, prefix-cache, kv-offload-ab); use to pull runs made from another machine.
 [group('bench')]
-bench-results-sync:
+bench-results-sync: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
-    region="$(terraform -chdir={{ eks_dir }} output -raw region)"
+    # Region and bucket both come from bootstrap, so a sync works after stack-down, when
+    # the eks stack has no outputs left.
+    region="$(terraform -chdir={{ bootstrap_dir }} output -raw region)"
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     for prefix in knob-sweep prefix-cache kv-offload-ab; do
       mkdir -p "bench/results/${prefix}"
@@ -124,7 +126,7 @@ bench-results-sync:
 
 # Measure the prefix-cache hit rate for a cold and a warm run of one bench cell from the external bench host over SSM, and join each to its client JSON locally (in bench/results/prefix-cache/<run-id>). Requires a live bench endpoint (`just bench-endpoint-up`).
 [group('bench')]
-prefix-cache prefix_share="90" burstiness="1.0" *args="":
+prefix-cache prefix_share="90" burstiness="1.0" *args="": _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # The host runs the cold and warm cells over SSM against the loopback mTLS proxy,

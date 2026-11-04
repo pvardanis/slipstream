@@ -131,7 +131,7 @@ prefect-register-kv-ab: (_prefect-register "kv-ab")
 # cluster-stable inputs become the deployment's default parameters: region and results
 # bucket are read from terraform, the bench-client image from `_bench-image-ref`; run_id
 # and instance_id are supplied per run at trigger.
-_prefect-register deployment:
+_prefect-register deployment: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed output lookup aborts; the non-empty checks then catch
