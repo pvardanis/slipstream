@@ -75,8 +75,8 @@ run "one_dashboard_per_dashboard_file" {
 # Panels name their data source as ${DS_PROMETHEUS}, ${DS_TEMPO} or ${DS_CLOUDWATCH}, which
 # the stack replaces with the managed Prometheus data source's UID, the hosted Tempo data
 # source's or the managed CloudWatch data source's; overriding those UIDs shows the panels
-# take them from there, not from a literal. The hosted Prometheus data source's UID is
-# not a panel's: it links exemplars only through a traceID label.
+# take them from there, not from a literal. No panel reads the hosted Prometheus data
+# source, which links exemplars only through a traceID label.
 run "panels_query_their_data_sources_by_uid" {
   command = plan
 
@@ -87,7 +87,7 @@ run "panels_query_their_data_sources_by_uid" {
     }
   }
   override_data {
-    target = data.grafana_data_source.prometheus
+    target = data.grafana_data_source.hosted_prometheus
     values = {
       uid               = "hosted-prom-uid-test"
       json_data_encoded = "{}"
@@ -115,6 +115,10 @@ run "panels_query_their_data_sources_by_uid" {
       ]
     ]))
     error_message = "Every dashboard panel and query must read the managed Prometheus data source, the hosted Tempo data source or the managed CloudWatch data source, whichever its type names, by its UID."
+  }
+  assert {
+    condition     = alltrue([for d in values(grafana_dashboard.this) : !strcontains(d.config_json, "hosted-prom-uid-test")])
+    error_message = "No dashboard may read the hosted Prometheus data source, whose exemplars do not link to Tempo."
   }
   # The requests-over-the-TTFT-gate table searches traces, so fleet health reads Tempo as well.
   assert {

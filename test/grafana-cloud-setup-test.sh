@@ -125,8 +125,8 @@ chmod +x "${tmp}/bin/"*
 # The operator's answers, in prompt order: start, stack created, stack URL, an invalid
 # external ID then a valid one, the operator email answers when the wizard has to ask
 # (EMAIL_ANSWERS, one per line), apply, an empty write token then the token,
-# the API token, the stack-read token, and the metrics-read token. ANSWERS replaces them all, one per line.
-# ANSWER_LINES cuts them short, as a closed stdin does.
+# the API token, the stack-read token, and the metrics-read token. ANSWERS replaces them
+# all, one per line. ANSWER_LINES cuts them short, as a closed stdin does.
 answers() {
   {
     if [[ -n "${ANSWERS:-}" ]]; then
