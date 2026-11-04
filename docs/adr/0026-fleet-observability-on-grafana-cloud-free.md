@@ -405,3 +405,32 @@ routing (L3) the breakdown shows the imbalance.
   container would add a second rule for one metric. A system node and a GPU node hold
   tens of pods, so the metric adds at most a few hundred series against the free tier's
   10k, and it is sent with no label filter. The measured count is recorded on #436.
+
+## Amendment (2026-11-04, #456): exemplars link to Tempo through a managed Prometheus data source
+
+- **Why:** the hosted Prometheus data source is provisioned read-only and links an exemplar
+  to Tempo only through a label named `traceID`. The Collector's span metrics exemplars
+  carry `trace_id`, a name fixed both by `prometheus_remote_write` and by Prometheus's OTLP
+  translator (`storage/remote/otlptranslator`), so sending OTLP instead would not rename it.
+  A panel data link on `trace_id` does not reach exemplars: Grafana applies field config to
+  exemplar frames with no overrides.
+- **The data source:** `terraform/grafana` manages a Prometheus data source, `Prometheus`,
+  that queries the stack's public Prometheus at the Cloud API's `prometheus_url` plus
+  `/api/prom`, authenticating as `prometheus_user_id`. Its JSON data is the hosted data
+  source's, so queries behave the same (the 60 s scrape interval among them), plus
+  `exemplarTraceIdDestinations: [{ name: "trace_id", datasourceUid: <hosted Tempo UID> }]`.
+  Every dashboard's `${DS_PROMETHEUS}` names it. The hosted Prometheus data source is
+  still read, for that JSON data, and the hosted Tempo data source for its UID.
+- **Guard:** a precondition requires `prometheus_url` to be a public
+  `https://<host>.grafana.net` URL, like the send endpoints'.
+- **A fourth secret:** querying needs an access-policy token scoped `metrics:read`, realm
+  this stack. `bootstrap` creates `grafana-cloud/metrics-read` empty, and the setup wizard
+  has the operator mint the token on the stack's access policy page and store it. `terraform/grafana`
+  reads it through a data source and writes it into the data source's secure JSON data, so
+  it sits in that stack's state; the Grafana provider has no write-only form of that field.
+- **Minted by hand, not by Terraform:** a `grafana_cloud_access_policy` resource would need
+  a Cloud token scoped `accesspolicies:write`, which could mint any token for the stack.
+  The `stacks:read` token the grafana stack holds cannot.
+- This replaces "the exemplar does not link to the trace" in "Export and exemplars" above:
+  an exemplar on the e2e latency panel opens its trace in Tempo. It also replaces reading
+  rather than managing the hosted Prometheus data source, for the dashboards' queries.
