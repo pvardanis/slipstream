@@ -29,6 +29,13 @@ resource "aws_secretsmanager_secret" "grafana_cloud_stack_read" {
   description = "Grafana Cloud access-policy token scoped stacks:read, for the Grafana Terraform provider to read the stack's send endpoints."
 }
 
+# An access-policy token scoped metrics:read, for the Prometheus data source the
+# terraform/grafana stack manages so exemplars link to Tempo (ADR-0026, #456).
+resource "aws_secretsmanager_secret" "grafana_cloud_metrics_read" {
+  name        = "grafana-cloud/metrics-read"
+  description = "Grafana Cloud access-policy token scoped metrics:read, for the Prometheus data source the Grafana Terraform provider manages."
+}
+
 # Grafana Assume Role: Grafana Cloud's CloudWatch data source assumes this role from
 # Grafana's shared AWS account, so no long-lived AWS key exists. That account serves every
 # Grafana Cloud customer, so the trust also requires this stack's external ID, which
