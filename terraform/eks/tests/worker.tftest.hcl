@@ -57,6 +57,7 @@ override_data {
   values = {
     outputs = {
       orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
       bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
       sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
       grafana_cloud_write_secret_name = "grafana-cloud/write"
@@ -412,8 +413,9 @@ run "worker_requires_a_state_bucket" {
 }
 
 # A bootstrap applied before it created the bench-results bucket has no
-# bench_results_bucket_arn output; the worker policy's precondition fails with its
-# actionable message rather than an unsupported-attribute error.
+# bench_results_bucket_arn output; the worker policy's precondition (and the bench host
+# results policy's, which reads the same output) fails with its actionable message
+# rather than an unsupported-attribute error.
 run "worker_rejects_a_bootstrap_without_the_bench_results_bucket" {
   command = plan
 
@@ -422,6 +424,7 @@ run "worker_rejects_a_bootstrap_without_the_bench_results_bucket" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
         grafana_cloud_write_secret_name = "grafana-cloud/write"
         cluster_name                    = "slipstream"
@@ -430,5 +433,5 @@ run "worker_rejects_a_bootstrap_without_the_bench_results_bucket" {
     }
   }
 
-  expect_failures = [aws_iam_role_policy.prefect_worker]
+  expect_failures = [aws_iam_role_policy.prefect_worker, aws_iam_role_policy.bench_host_results]
 }
