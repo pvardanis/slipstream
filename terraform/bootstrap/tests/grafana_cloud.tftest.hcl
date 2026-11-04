@@ -1,4 +1,4 @@
-# Plan-level tests for Grafana Cloud's footing in the bootstrap stack (ADR-0026): the three
+# Plan-level tests for Grafana Cloud's footing in the bootstrap stack (ADR-0026): the four
 # Secrets Manager secrets the Grafana Cloud tokens live in, and the Grafana Assume Role
 # IAM role Grafana Cloud reads CloudWatch through. They run offline (mocked aws provider):
 # the assertions check that Terraform creates the secrets but never a value for them, and
@@ -35,6 +35,14 @@ run "grafana_cloud_secrets_hold_no_terraform_value" {
   assert {
     condition     = output.grafana_cloud_stack_read_secret_name == "grafana-cloud/stack-read"
     error_message = "The grafana stack finds the stack-read token's secret through the grafana_cloud_stack_read_secret_name output."
+  }
+  assert {
+    condition     = aws_secretsmanager_secret.grafana_cloud_metrics_read.name == "grafana-cloud/metrics-read"
+    error_message = "The metrics-read token's secret must be named grafana-cloud/metrics-read."
+  }
+  assert {
+    condition     = output.grafana_cloud_metrics_read_secret_name == "grafana-cloud/metrics-read"
+    error_message = "The grafana stack finds the metrics-read token's secret through the grafana_cloud_metrics_read_secret_name output."
   }
 
   # The wizard writes each token with `aws secretsmanager put-secret-value`, so no token
