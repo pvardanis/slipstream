@@ -5,10 +5,10 @@
 # no live eks stack; an interrupted cluster-up that leaves the eks stack without
 # outputs can no longer strand this endpoint billing.
 
-# Read-only reference to the bootstrap stack's outputs, for the bench-client
-# image the host pulls and the bench-results bucket it writes to. They live in bootstrap because they must outlive
-# `just cluster-down` and `bench-endpoint-down`; reading them here keeps that ownership
-# while letting the host target them.
+# Read-only reference to the bootstrap stack's outputs, for the bench-client image
+# the host pulls and the bench-results bucket it writes to. They live in bootstrap
+# because they must outlive `just cluster-down` and `bench-endpoint-down`; reading
+# them here keeps that ownership while letting the host target them.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"
   config = {

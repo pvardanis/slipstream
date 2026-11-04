@@ -102,7 +102,7 @@ run "exposure_invariants" {
   }
 
   # The ALB security group's only ingress rule is alb_from_host (host.tf), asserted
-  # in host.tftest.hcl; mTLS and the api-key are the gate, not a laptop allowlist.
+  # in host.tftest.hcl; mTLS and the api-key are the gate.
   # terraform test cannot list a stack's resources, so "no other ingress rule on the
   # ALB group" is checked over the stack's files (tests/test_bench_endpoint_stack_scope.py).
 

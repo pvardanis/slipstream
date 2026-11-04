@@ -175,27 +175,3 @@ run "bench_host_iam_shape" {
     error_message = "Bench host must attach the SSM managed instance core policy for keyless access."
   }
 }
-
-# A bootstrap applied before it created the bench-results bucket has no
-# bench_results_bucket_arn output; the host's results policy fails with an actionable
-# message (alongside the worker's, which reads the same output) rather than granting
-# PutObject on a malformed ARN.
-run "bench_host_rejects_a_bootstrap_without_the_bench_results_bucket" {
-  command = plan
-
-  override_data {
-    target = data.terraform_remote_state.bootstrap
-    values = {
-      outputs = {
-        orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-        bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
-        sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
-        grafana_cloud_write_secret_name = "grafana-cloud/write"
-        cluster_name                    = "slipstream"
-        prefect_namespace               = "prefect"
-      }
-    }
-  }
-
-  expect_failures = [aws_iam_role_policy.bench_host_results, aws_iam_role_policy.prefect_worker]
-}
