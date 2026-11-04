@@ -2,8 +2,8 @@
 # identifier a dashboard panel references its data source by, the stack URL, and the
 # hosted Prometheus remote_write and Tempo OTLP targets.
 output "prometheus_data_source_uid" {
-  description = "UID of the stack's hosted Prometheus data source, grafanacloud-<stack>-prom."
-  value       = data.grafana_data_source.prometheus.uid
+  description = "UID of the managed Prometheus data source the dashboards query, which links exemplars to Tempo."
+  value       = grafana_data_source.prometheus.uid
 }
 
 output "tempo_data_source_uid" {
