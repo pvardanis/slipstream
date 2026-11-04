@@ -1,8 +1,8 @@
 # Tests for the ephemeral bench host. Like exposure.tftest.hcl they run offline:
 # the aws/tls providers are mocked and both remote-state reads (eks and bootstrap)
 # are overridden, so the assertions check the host's shape and its security
-# invariants — zero ingress, the eks-owned instance profile, results written to the bootstrap stack's
-# bench-results bucket — without launching an instance. The real end-to-end proof is a `just bench-endpoint-up`
+# invariants — zero ingress, the eks-owned instance profile, results written to the
+# bootstrap stack's bench-results bucket — without launching an instance. The real end-to-end proof is a `just bench-endpoint-up`
 # run driven from the host, which costs money and is run by hand.
 
 # This suite applies (not just plans) so IAM policy documents and bucket ARNs are
@@ -356,6 +356,19 @@ run "rejects_bootstrap_without_bench_results_bucket" {
         bench_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
       }
     }
+  }
+
+  expect_failures = [aws_instance.bench_host]
+}
+
+# An apply without the eks stack's instance profile would boot a host with no role,
+# failing only at sweep time when its secret and ECR reads are denied; the host's
+# precondition fails the plan instead.
+run "rejects_missing_instance_profile" {
+  command = plan
+
+  variables {
+    bench_host_instance_profile = ""
   }
 
   expect_failures = [aws_instance.bench_host]

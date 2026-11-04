@@ -55,7 +55,10 @@ def test_load_balancer_admits_only_the_bench_host() -> None:
         )
     ]
 
-    assert alb_ingress == ["alb_from_host"]
+    assert alb_ingress == ["alb_from_host"], (
+        f"The load balancer's security group has ingress rules {alb_ingress}; it must "
+        "admit only the bench host (alb_from_host), with mTLS and the api-key as the gate."
+    )
 
 
 def _get_string_attribute(path: Path, attribute: str) -> str:
