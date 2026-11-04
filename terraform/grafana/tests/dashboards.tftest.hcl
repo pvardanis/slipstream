@@ -9,9 +9,16 @@ mock_provider "grafana" {
   mock_data "grafana_cloud_stack" {
     defaults = {
       prometheus_remote_write_endpoint = "https://prometheus-mock.grafana.net/api/prom/push"
+      prometheus_url                   = "https://prometheus-mock.grafana.net"
       prometheus_user_id               = 1111111
       traces_url                       = "https://tempo-mock.grafana.net"
       traces_user_id                   = 2222222
+    }
+  }
+  # The hosted Prometheus data source's JSON data, which the managed one copies, decodes.
+  mock_data "grafana_data_source" {
+    defaults = {
+      json_data_encoded = "{}"
     }
   }
 }
@@ -20,16 +27,34 @@ override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
     outputs = {
-      region                               = "eu-central-1"
-      grafana_cloud_api_secret_name        = "test/grafana-api"
-      grafana_cloud_stack_read_secret_name = "test/grafana-stack-read"
-      grafana_cloudwatch_role_arn          = "arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch"
+      region                                 = "eu-central-1"
+      grafana_cloud_api_secret_name          = "test/grafana-api"
+      grafana_cloud_stack_read_secret_name   = "test/grafana-stack-read"
+      grafana_cloud_metrics_read_secret_name = "test/grafana-metrics-read"
+      grafana_cloudwatch_role_arn            = "arn:aws:iam::111122223333:role/slipstream-grafana-cloudwatch"
     }
   }
 }
 
 variables {
   state_bucket = "slipstream-tf-state-test"
+}
+
+# The managed data sources' UIDs are known only after apply, which would leave every
+# dashboard's config_json unknown at plan; fixed UIDs let the runs decode it.
+override_resource {
+  target          = grafana_data_source.prometheus
+  override_during = plan
+  values = {
+    uid = "prom-uid-test"
+  }
+}
+override_resource {
+  target          = grafana_data_source.cloudwatch
+  override_during = plan
+  values = {
+    uid = "cloudwatch-uid-test"
+  }
 }
 
 # A dashboard is created, updated or deleted when its file is: one dashboard resource per
@@ -48,29 +73,24 @@ run "one_dashboard_per_dashboard_file" {
 }
 
 # Panels name their data source as ${DS_PROMETHEUS}, ${DS_TEMPO} or ${DS_CLOUDWATCH}, which
-# the stack replaces with the hosted Prometheus or Tempo data source's UID or the managed
-# CloudWatch data source's; overriding those UIDs shows the panels take them from there,
-# not from a literal.
-run "panels_query_the_hosted_data_sources_by_uid" {
+# the stack replaces with the managed Prometheus data source's UID, the hosted Tempo data
+# source's or the managed CloudWatch data source's; overriding those UIDs shows the panels
+# take them from there, not from a literal. The hosted Prometheus data source's UID is
+# not a panel's: it links exemplars only through a traceID label.
+run "panels_query_their_data_sources_by_uid" {
   command = plan
 
-  override_data {
-    target = data.grafana_data_source.prometheus
-    values = {
-      uid = "prom-uid-test"
-    }
-  }
   override_data {
     target = data.grafana_data_source.tempo
     values = {
       uid = "tempo-uid-test"
     }
   }
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
+  override_data {
+    target = data.grafana_data_source.prometheus
     values = {
-      uid = "cloudwatch-uid-test"
+      uid               = "hosted-prom-uid-test"
+      json_data_encoded = "{}"
     }
   }
 
@@ -94,7 +114,7 @@ run "panels_query_the_hosted_data_sources_by_uid" {
         ] if length(try(p.targets, [])) > 0
       ]
     ]))
-    error_message = "Every dashboard panel and query must read the hosted Prometheus or Tempo data source, or the managed CloudWatch data source, whichever its type names, by its UID."
+    error_message = "Every dashboard panel and query must read the managed Prometheus data source, the hosted Tempo data source or the managed CloudWatch data source, whichever its type names, by its UID."
   }
   # The requests-over-the-TTFT-gate table searches traces, so fleet health reads Tempo as well.
   assert {
@@ -120,14 +140,6 @@ run "panels_query_the_hosted_data_sources_by_uid" {
 run "cloudwatch_queries_use_the_aws_usage_period" {
   command = plan
 
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
-
   assert {
     condition = alltrue(flatten([
       for d in values(grafana_dashboard.this) : [
@@ -144,14 +156,6 @@ run "cloudwatch_queries_use_the_aws_usage_period" {
 # above 80 whatever its unit, and the short unit would round 1,075 to 1K.
 run "stat_panels_show_their_figure_in_full_and_uncoloured" {
   command = plan
-
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
 
   assert {
     condition = alltrue(flatten([
@@ -177,14 +181,6 @@ run "stat_panels_show_their_figure_in_full_and_uncoloured" {
 # GPU panels, so CPU is read against GPU busy time (ADR-0026, the #436 amendment).
 run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu_above_the_gpu_panels" {
   command = plan
-
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
 
   assert {
     condition = {
@@ -213,14 +209,6 @@ run "fleet_health_top_row_is_replicas_beside_vllm_pod_cpu_above_the_gpu_panels" 
 run "vllm_pod_cpu_request_line_is_the_manifest_request" {
   command = plan
 
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
-
   assert {
     condition = [
       for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels : [
@@ -235,14 +223,6 @@ run "vllm_pod_cpu_request_line_is_the_manifest_request" {
 # rename in the manifest fails here rather than leaving only the reference lines drawn.
 run "vllm_pod_cpu_usage_lines_select_the_manifest_namespace_and_container" {
   command = plan
-
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
 
   assert {
     condition = [
@@ -263,14 +243,6 @@ run "vllm_pod_cpu_usage_lines_select_the_manifest_namespace_and_container" {
 run "fleet_health_throughput_rows_pair_token_rates_and_requests_with_goodput" {
   command = plan
 
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
-
   assert {
     condition = {
       for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
@@ -289,14 +261,6 @@ run "fleet_health_throughput_rows_pair_token_rates_and_requests_with_goodput" {
 # churn, voluntary disruptions beside pod-provisioning cold start.
 run "fleet_health_karpenter_rows_pair_nodes_with_spend_and_disruptions_with_cold_start" {
   command = plan
-
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
 
   assert {
     condition = {
@@ -317,14 +281,6 @@ run "fleet_health_karpenter_rows_pair_nodes_with_spend_and_disruptions_with_cold
 run "nodes_panel_shows_the_lowest_count_in_each_step" {
   command = plan
 
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
-
   assert {
     condition = [
       for p in jsondecode(grafana_dashboard.this["fleet-health.json"].config_json).panels :
@@ -341,14 +297,6 @@ run "nodes_panel_shows_the_lowest_count_in_each_step" {
 # names the figure, so without it the stat shows the series' labels, not the reason.
 run "disruptions_panel_names_each_reason" {
   command = plan
-
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
 
   assert {
     condition = [
@@ -367,14 +315,6 @@ run "disruptions_panel_names_each_reason" {
 # but is hidden from the table.
 run "ttft_table_shows_only_the_columns_that_vary" {
   command = plan
-
-  override_resource {
-    target          = grafana_data_source.cloudwatch
-    override_during = plan
-    values = {
-      uid = "cloudwatch-uid-test"
-    }
-  }
 
   assert {
     condition = [

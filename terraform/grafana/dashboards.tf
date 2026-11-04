@@ -3,8 +3,8 @@
 
 # Keyed by file name, so adding or removing a file touches only that dashboard. Panels
 # name their data source as ${DS_PROMETHEUS}, ${DS_TEMPO} or ${DS_CLOUDWATCH}, which are
-# replaced with the hosted Prometheus or Tempo data source's UID or the managed CloudWatch
-# data source's, so the files carry no stack-specific UID.
+# replaced with the managed Prometheus data source's UID, the hosted Tempo data source's or
+# the managed CloudWatch data source's, so the files carry no stack-specific UID.
 resource "grafana_dashboard" "this" {
   for_each = fileset("${path.module}/dashboards", "*.json")
 
@@ -13,7 +13,7 @@ resource "grafana_dashboard" "this" {
       replace(
         file("${path.module}/dashboards/${each.key}"),
         "$${DS_PROMETHEUS}",
-        data.grafana_data_source.prometheus.uid,
+        grafana_data_source.prometheus.uid,
       ),
       "$${DS_TEMPO}",
       data.grafana_data_source.tempo.uid,

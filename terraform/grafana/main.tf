@@ -3,8 +3,8 @@
 # `just cluster-down`, like the history it shows.
 
 # Read-only reference to the bootstrap stack's outputs: the IAM role the CloudWatch data
-# source assumes, the region it reads, and the names of the API and stack-read tokens'
-# secrets. They live in bootstrap because the setup wizard creates them before this stack
+# source assumes, the region it reads, and the names of the API, stack-read and
+# metrics-read tokens' secrets. They live in bootstrap because the setup wizard creates them before this stack
 # is applied.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"
@@ -27,6 +27,14 @@ data "aws_secretsmanager_secret_version" "grafana_api" {
 # bootstrap stack's grafana-cloud/stack-read secret; it lands in this stack's state too.
 data "aws_secretsmanager_secret_version" "grafana_stack_read" {
   secret_id = data.terraform_remote_state.bootstrap.outputs.grafana_cloud_stack_read_secret_name
+}
+
+# The access-policy token, scoped metrics:read, the managed Prometheus data source queries
+# with (data_sources.tf). The setup wizard writes it into the bootstrap stack's
+# grafana-cloud/metrics-read secret; it lands in this stack's state, and in Grafana as the
+# data source's basic-auth password.
+data "aws_secretsmanager_secret_version" "grafana_metrics_read" {
+  secret_id = data.terraform_remote_state.bootstrap.outputs.grafana_cloud_metrics_read_secret_name
 }
 
 provider "aws" {
