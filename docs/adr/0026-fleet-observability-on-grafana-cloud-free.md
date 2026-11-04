@@ -422,7 +422,8 @@ routing (L3) the breakdown shows the imbalance.
   Every dashboard's `${DS_PROMETHEUS}` names it. The hosted Prometheus data source is
   still read, for that JSON data, and the hosted Tempo data source for its UID.
 - **Guard:** a precondition requires `prometheus_url` to be a public
-  `https://<host>.grafana.net` URL, like the send endpoints'.
+  `https://<host>.grafana.net` URL, like the send endpoints'. Another rejects a blank
+  metrics-read token, which Grafana would store without testing.
 - **A fourth secret:** querying needs an access-policy token scoped `metrics:read`, realm
   this stack. `bootstrap` creates `grafana-cloud/metrics-read` empty, and the setup wizard
   has the operator mint the token on the stack's access policy page and store it. `terraform/grafana`
