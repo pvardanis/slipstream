@@ -177,8 +177,8 @@ fails. A green exit means the rig served and spend is back at zero.
 
 Grafana Cloud's free tier holds the dashboards, metrics and traces
 ([ADR-0026](adr/0026-fleet-observability-on-grafana-cloud-free.md)). The bootstrap stack
-creates three empty Secrets Manager secrets, `grafana-cloud/write`, `grafana-cloud/api` and
-`grafana-cloud/stack-read`, and the IAM role the stack's CloudWatch data source assumes
+creates four empty Secrets Manager secrets, `grafana-cloud/write`, `grafana-cloud/api`,
+`grafana-cloud/stack-read` and `grafana-cloud/metrics-read`, and the IAM role the stack's CloudWatch data source assumes
 (Grafana Assume Role). The tokens are minted by hand in Grafana Cloud, so a wizard walks
 through it once per environment:
 
@@ -187,7 +187,7 @@ just grafana-cloud-setup
 ```
 
 It checks `terraform` and `aws` are installed, `aws` is logged in, and AWS CLI history is
-off (history would record each token), then runs eight stages:
+off (history would record each token), then runs nine stages:
 
 1. Create a free Grafana Cloud stack and paste its URL.
 2. Copy the External ID from the CloudWatch data source's Connection Details; it is
@@ -207,7 +207,10 @@ off (history would record each token), then runs eight stages:
    endpoints with, stored in `grafana-cloud/stack-read`. The policy is made in the Cloud
    Portal (Security → Access Policies), not in the stack: name it `slipstream-stack-read`,
    realm this stack, scope `stacks:read` only.
-8. Check all three secrets hold a value, then write the stack URL as `grafana_url` into
+8. Mint the access-policy token the managed Prometheus data source queries with, stored in
+   `grafana-cloud/metrics-read`. The policy is made on the stack's access policy page:
+   name it `slipstream-metrics-read`, scope `metrics:read` only.
+9. Check all four secrets hold a value, then write the stack URL as `grafana_url` into
    `terraform/grafana/terraform.tfvars`.
 
 The wizard pipes tokens to `aws secretsmanager put-secret-value` on stdin, so they never
@@ -222,6 +225,10 @@ in stage 7, then store it without rerunning the wizard:
 read -rs t && printf '%s' "$t" | aws secretsmanager put-secret-value --region eu-west-1 \
   --secret-id grafana-cloud/stack-read --secret-string file:///dev/stdin; unset t
 ```
+
+The same holds for `grafana-cloud/metrics-read` on a setup made before it existed: mint
+the token as in stage 8 and store it with the command above, `--secret-id
+grafana-cloud/metrics-read`.
 
 `grafana_external_id` and `operator_email` have no default. A later `just bootstrap` takes
 each from the gitignored tfvars file or its `TF_VAR_`; when neither sets it, as in a fresh
@@ -288,6 +295,11 @@ the stack persists across sessions, so read the plan first. It has no down recip
 - **Prometheus and Tempo** come with every Grafana Cloud stack as
   `grafanacloud-<stack>-prom` and `grafanacloud-<stack>-traces`. The stack reads them by
   name rather than managing them.
+- **Prometheus** (managed) is created by the stack and is the one the dashboards query.
+  It reads the same store as `grafanacloud-<stack>-prom`, through the stack's public
+  Prometheus URL with the `grafana-cloud/metrics-read` token, and links an exemplar's
+  `trace_id` to Tempo; the hosted data source links only a `traceID` label. The plan
+  fails if the Cloud API reports no public `https://<host>.grafana.net` Prometheus URL.
 - **Send endpoints:** where Prometheus `remote_write` and the Collector send is read from
   the Grafana Cloud API, not from those data sources, whose URLs name Grafana-internal
   hosts no sender can reach. The plan fails if the API reports no public
@@ -296,8 +308,9 @@ the stack persists across sessions, so read the plan first. It has no down recip
   `grafana-cloud-endpoints` in `slipstream`, so run `just grafana-up` before it.
 
 The Grafana provider signs in with the `grafana-cloud/api` token and reads the Cloud API
-with the `grafana-cloud/stack-read` token, both read from Secrets Manager. Both tokens are
-therefore held in the stack's state, in the encrypted state bucket. The stack URL comes
+with the `grafana-cloud/stack-read` token, and the managed Prometheus data source queries
+with the `grafana-cloud/metrics-read` token, all read from Secrets Manager. The three
+tokens are therefore held in the stack's state, in the encrypted state bucket. The stack URL comes
 from `grafana_url` in the gitignored `terraform/grafana/terraform.tfvars`, or from
 `TF_VAR_grafana_url`; with neither set it defaults to `https://slipstreamobs.grafana.net`.
 
@@ -312,7 +325,8 @@ JSON file, keyed by file name: adding, editing or deleting a file creates, updat
 deletes that dashboard on the next apply. The dashboards are read-only in the Grafana UI,
 and the next apply overwrites any change made there. Panels name their data source as
 `${DS_PROMETHEUS}`, `${DS_TEMPO}` or `${DS_CLOUDWATCH}`, which the stack replaces with the
-hosted Prometheus or Tempo data source's UID or the managed CloudWatch data source's.
+managed Prometheus data source's UID, the hosted Tempo data source's or the managed
+CloudWatch data source's.
 
 - **Fleet health** (`fleet-health.json`,
   [`/d/fleet-health`](https://slipstreamobs.grafana.net/d/fleet-health)): `vllm-gpu`
@@ -321,8 +335,8 @@ hosted Prometheus or Tempo data source's UID or the managed CloudWatch data sour
   100% whenever a request is in flight, and memory-bandwidth active falls as batching
   shares the weight reads. Read load from the serving and throughput panels:
   - **Serving:** KV-cache usage, requests waiting, TTFT p95 and e2e latency p95, fleet-wide
-    and per pod. An exemplar on the fleet e2e latency line shows the request's trace_id,
-    to look up in Tempo.
+    and per pod. An exemplar on the fleet e2e latency line opens the request's
+    trace in Tempo.
     From 15 s to 120 s the e2e p95 can be off by up to a factor of 1.5, as it is
     interpolated inside a latency bucket.
   - **Throughput and goodput:** output tokens/s, prompt tokens/s, requests/s, and live
