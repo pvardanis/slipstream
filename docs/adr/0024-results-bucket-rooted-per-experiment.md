@@ -117,7 +117,10 @@ registering a deployment needed a live endpoint just to read the bucket's name.
   workflow lists buckets by the `${cluster_name}-bench-results-` prefix.
 - ADR-0022's consequences that cache records "live and die with the results bucket" and
   that the bucket "is destroyed with the stack" no longer hold: cache records now outlive
-  both teardowns.
+  both teardowns. ADR-0021's 2026-10-19 amendment, which records the bucket in the
+  bench-endpoint stack with `force_destroy`, is superseded on that point; the analyze
+  skills keep their local chart copies because the Prefect run ages out and a bucket can
+  be emptied.
 - Nothing is migrated. Runs written to the old bench-endpoint bucket are gone once that
   bucket is destroyed; sync any you need before the bench-endpoint stack moves to this
   layout.

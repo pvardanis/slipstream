@@ -122,7 +122,7 @@ Either refusal fails the run with no record written for that rung.
 clears both cache tiers, so an arm run whose every rung is cached is skipped, and any
 other is redeployed and re-measured whole. A new `run_id` re-measures everything.
 
-**Results** land in the results bucket under `kv-offload-ab/<run-id>/`. Each rung's raw
+**Results** land in the bench-results bucket under `kv-offload-ab/<run-id>/`. Each rung's raw
 result is under `<arm>-r<n>/<cell>.json`, and its labels (arm, run, and prefix-cache hit
 rates) beside it as `<arm>-r<n>/<cell>.kv_ab.json`; the chart is under `charts/`. Each arm
 run's warmup cell lands beside its rungs under `<arm>-r<n>/warmup/`, unlabelled; leave it
