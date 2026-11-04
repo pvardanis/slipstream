@@ -110,8 +110,9 @@ registering a deployment needed a live endpoint just to read the bucket's name.
   prefixes. It has neither `force_destroy` nor `prevent_destroy`, so a bootstrap destroy
   fails on a non-empty bucket and succeeds once it is emptied.
 - Bootstrap outputs the bucket's name and ARN. The bench host's write policy reads the ARN
-  through bootstrap remote state. The worker's S3 statements match the
-  `${cluster_name}-bench-results-*` pattern with their prefix scoping unchanged.
+  through bootstrap remote state, and so do the worker's S3 statements, with their prefix
+  scoping unchanged. The eks stack therefore plans only once bootstrap has created the
+  bucket.
   Registration and the bench recipes read the name from bootstrap. The flow-dispatch
   workflow lists buckets by the `${cluster_name}-bench-results-` prefix.
 - ADR-0022's consequences that cache records "live and die with the results bucket" and
