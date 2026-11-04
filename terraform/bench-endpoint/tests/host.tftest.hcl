@@ -1,7 +1,7 @@
 # Tests for the ephemeral bench host. Like exposure.tftest.hcl they run offline:
 # the aws/tls providers are mocked and both remote-state reads (eks and bootstrap)
 # are overridden, so the assertions check the host's shape and its security
-# invariants — zero ingress, resource-scoped IAM, results written to the bootstrap bucket —
+# invariants — zero ingress, resource-scoped IAM, results written to the bootstrap stack's bench-results bucket —
 # without launching an instance. The real end-to-end proof is a `just bench-endpoint-up`
 # run driven from the host, which costs money and is run by hand.
 
@@ -423,4 +423,23 @@ run "rejects_empty_image_tag" {
   }
 
   expect_failures = [var.bench_image_tag]
+}
+
+# A bootstrap applied before it created the bench-results bucket has neither bucket
+# output; the results policy's precondition fails with its actionable message rather
+# than an unsupported-attribute error.
+run "rejects_bootstrap_without_bench_results_bucket" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        bench_image_repo_url = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
+        bench_image_repo_arn = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
+      }
+    }
+  }
+
+  expect_failures = [aws_iam_role_policy.bench_host_results]
 }

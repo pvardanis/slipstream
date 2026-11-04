@@ -131,11 +131,11 @@ run "worker_layer_shape" {
   # objects under kv-offload-ab/.
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ResultsBucketObjects" && contains(s.Action, "s3:GetObject") && s.Resource == "arn:aws:s3:::slipstream-bench-results-abc123/*"]) == 1
-    error_message = "The policy must allow s3:GetObject on the results bucket objects, scoped by ARN prefix."
+    error_message = "The policy must allow s3:GetObject on the bench-results bucket objects, by its exact ARN."
   }
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ResultsBucketList" && contains(s.Action, "s3:ListBucket") && s.Resource == "arn:aws:s3:::slipstream-bench-results-abc123"]) == 1
-    error_message = "The policy must allow s3:ListBucket on the results bucket, scoped by ARN prefix."
+    error_message = "The policy must allow s3:ListBucket on the bench-results bucket, by its exact ARN."
   }
   # The worker persists its resume state with persist_result=True: the task result under
   # prefect/results and the cache-key records under prefect/cache-keys. PutObject is scoped
@@ -409,4 +409,26 @@ run "worker_requires_a_state_bucket" {
   }
 
   expect_failures = [var.state_bucket]
+}
+
+# A bootstrap applied before it created the bench-results bucket has no
+# bench_results_bucket_arn output; the worker policy's precondition fails with its
+# actionable message rather than an unsupported-attribute error.
+run "worker_rejects_a_bootstrap_without_the_bench_results_bucket" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.bootstrap
+    values = {
+      outputs = {
+        orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
+        grafana_cloud_write_secret_name = "grafana-cloud/write"
+        cluster_name                    = "slipstream"
+        prefect_namespace               = "prefect"
+      }
+    }
+  }
+
+  expect_failures = [aws_iam_role_policy.prefect_worker]
 }
