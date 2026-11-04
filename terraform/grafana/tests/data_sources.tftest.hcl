@@ -17,7 +17,8 @@ mock_provider "grafana" {
       traces_user_id                   = 2222222
     }
   }
-  # The hosted Prometheus data source's JSON data, which the managed one copies, decodes.
+  # The hosted Prometheus data source's JSON data is valid JSON, so the managed one can
+  # decode and copy it.
   mock_data "grafana_data_source" {
     defaults = {
       json_data_encoded = "{}"
@@ -168,6 +169,21 @@ run "prometheus_rejects_an_internal_query_host" {
       prometheus_user_id               = 1234567
       traces_url                       = "https://tempo-prod-10-prod-eu-west-2.grafana.net"
       traces_user_id                   = 7654321
+    }
+  }
+
+  expect_failures = [grafana_data_source.prometheus]
+}
+
+# Grafana stores the data source's password without testing it, so a blank metrics-read
+# secret would apply cleanly and only show up as failing panels. It is rejected at plan.
+run "prometheus_rejects_a_blank_metrics_read_token" {
+  command = plan
+
+  override_data {
+    target = data.aws_secretsmanager_secret_version.grafana_metrics_read
+    values = {
+      secret_string = " \n"
     }
   }
 

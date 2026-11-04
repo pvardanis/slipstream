@@ -71,5 +71,11 @@ resource "grafana_data_source" "prometheus" {
       condition     = can(regex("^https://[a-z0-9-]+\\.grafana\\.net$", data.grafana_cloud_stack.this.prometheus_url))
       error_message = "The Cloud API reports no public https://<host>.grafana.net Prometheus URL for the stack."
     }
+    # Grafana stores the password without testing it, so a blank token would apply and
+    # only show up as failing panels.
+    precondition {
+      condition     = trimspace(data.aws_secretsmanager_secret_version.grafana_metrics_read.secret_string) != ""
+      error_message = "The grafana-cloud/metrics-read secret is blank; run `just grafana-cloud-setup` and paste the metrics-read token."
+    }
   }
 }
