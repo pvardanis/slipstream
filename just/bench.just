@@ -228,20 +228,17 @@ bench-endpoint-up: _bootstrap-init _ensure-api-key
     node_sg="$(terraform -chdir={{ eks_dir }} output -raw node_security_group_id)"
     subnets="$(terraform -chdir={{ eks_dir }} output -json public_subnets)"
     asgs="$(terraform -chdir={{ eks_dir }} output -json node_autoscaling_groups)"
+    # The eks stack owns the bench host's role and instance profile, so this stack
+    # creates no IAM; the host launches under the profile named here.
+    profile="$(terraform -chdir={{ eks_dir }} output -raw bench_host_instance_profile)"
     # Pass the api-key through the environment, not `-var`, so the secret never
     # lands in the terraform process argv (visible via `ps`) or shell history.
     TF_VAR_vllm_api_key="$(just _read-api-key)"
     export TF_VAR_vllm_api_key
-    # Restrict the load balancer to this host as a cheap extra layer; mutual TLS
-    # is the real gate.
-    cidr="$(curl -sf https://checkip.amazonaws.com)" \
-      || { echo "could not determine operator IP from checkip.amazonaws.com" >&2; exit 1; }
-    cidr="${cidr}/32"
-    [[ "${cidr}" =~ ^[0-9.]+/32$ ]] || { echo "unexpected operator IP from checkip: ${cidr}" >&2; exit 1; }
     terraform -chdir={{ bench_endpoint_dir }} init -input=false -backend-config="bucket=${bucket}"
     terraform -chdir={{ bench_endpoint_dir }} apply -auto-approve \
       -var="state_bucket=${bucket}" \
-      -var="operator_cidr=${cidr}" \
+      -var="bench_host_instance_profile=${profile}" \
       -var="vpc_id=${vpc_id}" \
       -var="node_security_group_id=${node_sg}" \
       -var="public_subnets=${subnets}" \
@@ -289,11 +286,10 @@ bench-endpoint-down: _bootstrap-init
     set -euo pipefail
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     terraform -chdir={{ bench_endpoint_dir }} init -input=false -backend-config="bucket=${bucket}"
-    # Destroy needs no live cluster or IP lookup: the api-key and operator CIDR only
-    # shape resources being torn down. Placeholders keep teardown of a public
-    # endpoint from being blocked by an already-deleted Secret or an offline network,
-    # which would otherwise orphan an internet-facing load balancer.
+    # Destroy needs no live cluster: the api-key only shapes resources being torn
+    # down. A placeholder keeps teardown of a public endpoint from being blocked by an
+    # already-deleted Secret, which would otherwise orphan an internet-facing load
+    # balancer.
     TF_VAR_vllm_api_key="unused" \
       terraform -chdir={{ bench_endpoint_dir }} destroy -auto-approve \
-      -var="state_bucket=${bucket}" \
-      -var="operator_cidr=0.0.0.0/32"
+      -var="state_bucket=${bucket}"
