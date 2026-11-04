@@ -4,8 +4,8 @@
 
 # Read-only reference to the bootstrap stack's outputs: the IAM role the CloudWatch data
 # source assumes, the region it reads, and the names of the API, stack-read and
-# metrics-read tokens' secrets. They live in bootstrap because the setup wizard creates them before this stack
-# is applied.
+# metrics-read tokens' secrets. They live in bootstrap because the setup wizard creates
+# them before this stack is applied.
 data "terraform_remote_state" "bootstrap" {
   backend = "s3"
   config = {

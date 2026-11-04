@@ -71,13 +71,13 @@ run "cloudwatch_reads_through_the_bootstrap_role" {
 }
 
 # Grafana Cloud provisions the hosted Prometheus and Tempo data sources with every stack,
-# named after its slug, so this Terraform stack reads them by name instead of managing copies that
-# would need a read token of their own.
+# named after its slug, so this Terraform stack reads them by name: the managed Prometheus
+# data source copies the hosted one's JSON data, and links exemplars to the hosted Tempo.
 run "hosted_prometheus_and_tempo_are_read_by_stack_name" {
   command = plan
 
   assert {
-    condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstreamobs-prom"
+    condition     = data.grafana_data_source.hosted_prometheus.name == "grafanacloud-slipstreamobs-prom"
     error_message = "The hosted Prometheus data source must be read as grafanacloud-<stack>-prom."
   }
   assert {
@@ -105,7 +105,7 @@ run "prometheus_links_exemplar_trace_ids_to_tempo" {
     }
   }
   override_data {
-    target = data.grafana_data_source.prometheus
+    target = data.grafana_data_source.hosted_prometheus
     values = {
       json_data_encoded = "{\"timeInterval\":\"60s\",\"prometheusType\":\"Mimir\",\"exemplarTraceIdDestinations\":[{\"name\":\"traceID\",\"datasourceUid\":\"grafanacloud-traces\"}]}"
     }
@@ -212,7 +212,7 @@ run "grafana_url_may_end_in_a_slash" {
   }
 
   assert {
-    condition     = data.grafana_data_source.prometheus.name == "grafanacloud-slipstreamobs-prom"
+    condition     = data.grafana_data_source.hosted_prometheus.name == "grafanacloud-slipstreamobs-prom"
     error_message = "A stack URL with a trailing slash must name the same hosted data sources."
   }
 }

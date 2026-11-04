@@ -24,7 +24,7 @@ locals {
   stack_slug = split(".", trimprefix(var.grafana_url, "https://"))[0]
 }
 
-data "grafana_data_source" "prometheus" {
+data "grafana_data_source" "hosted_prometheus" {
   name = "grafanacloud-${local.stack_slug}-prom"
 }
 
@@ -40,7 +40,7 @@ data "grafana_cloud_stack" "this" {
   slug = local.stack_slug
 }
 
-# The Prometheus data source the dashboards query (ADR-0026, #456 amendment). The hosted
+# The Prometheus data source the dashboards query (ADR-0026, #456). The hosted
 # one is provisioned read-only and links an exemplar to Tempo only through a traceID
 # label, while the Collector's span metrics exemplars carry trace_id. This one queries the
 # stack's public Prometheus as its instance ID with the metrics:read token, keeps the
@@ -53,7 +53,7 @@ resource "grafana_data_source" "prometheus" {
   basic_auth_username = tostring(data.grafana_cloud_stack.this.prometheus_user_id)
 
   json_data_encoded = jsonencode(merge(
-    jsondecode(data.grafana_data_source.prometheus.json_data_encoded),
+    jsondecode(data.grafana_data_source.hosted_prometheus.json_data_encoded),
     {
       exemplarTraceIdDestinations = [{
         name          = "trace_id"
