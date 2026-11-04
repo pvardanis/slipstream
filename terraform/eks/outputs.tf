@@ -45,3 +45,8 @@ output "node_autoscaling_groups" {
   description = "Autoscaling group names backing the managed node groups; a load balancer target group attaches to these to register node instances."
   value       = flatten([for ng in module.eks.eks_managed_node_groups : ng.node_group_autoscaling_group_names])
 }
+
+output "bench_host_instance_profile" {
+  description = "Instance profile the bench-endpoint stack launches the bench host under; it carries the host's role, so that stack creates no IAM."
+  value       = aws_iam_instance_profile.bench_host.name
+}
