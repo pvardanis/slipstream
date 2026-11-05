@@ -9,7 +9,9 @@
 #
 # Auth is keyless: a Pod Identity association grants the worker's ServiceAccount S3
 # (results bucket) + SSM SendCommand (bench host), and an in-namespace Role scopes it
-# to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys).
+# to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys). The
+# scoped rights to apply and destroy the bench-endpoint stack live beside it in
+# worker_bench_endpoint.tf.
 
 locals {
   worker_service_account = "prefect-worker"
@@ -60,6 +62,9 @@ locals {
         apiUrl = "http://prefect-server.${local.prefect_namespace}.svc.cluster.local:4200/api"
       }
       replicaCount = 1
+      # The bench-endpoint topology (worker_bench_endpoint.tf), loaded into the worker's
+      # environment for the flows that apply the stack.
+      extraEnvVarsCMs = [kubernetes_config_map_v1.bench_endpoint_topology.metadata[0].name]
     }
     serviceAccount = {
       create = true
@@ -296,5 +301,5 @@ resource "helm_release" "prefect_worker" {
   # The worker connects to the server on startup and creates the work pool if it is
   # absent, so it must come up after the server is Ready; the prefect namespace the
   # release deploys into is the one the server release created.
-  depends_on = [helm_release.prefect_server]
+  depends_on = [helm_release.prefect_server, kubernetes_config_map_v1.bench_endpoint_topology]
 }
