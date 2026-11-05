@@ -1,8 +1,9 @@
 # No-push build and scan of the orchestration image (ADR-0027): builds the image from
-# the checked-out tree, fails on fixable high/critical CVEs, and asserts the worker's
-# kubectl is on the image PATH. Called by ci.yml on PRs that touch an image input or
-# the scan configuration (.trivyignore, this workflow), and by orchestration-image.yml's
-# weekly rescan of main.
+# the checked-out tree, fails on fixable high/critical CVEs, asserts the worker's
+# kubectl is on the image PATH, and asserts the image's terraform initialises the baked
+# bench-endpoint stack offline. Called by ci.yml on PRs that touch an image input or the
+# scan configuration (.trivyignore, this workflow, the image checks it runs), and by
+# orchestration-image.yml's weekly rescan of main.
 # Holds no credentials and pushes nothing.
 name: orchestration-image-scan
 
@@ -49,3 +50,11 @@ jobs:
       # on the worker, where it fails the sweep at the first point's apply.
       - name: Assert kubectl is on the image PATH
         run: docker run --rm --platform linux/amd64 orchestration-image:pr-scan kubectl version --client
+
+      # The worker applies and destroys the bench-endpoint stack from inside the image, with
+      # no registry access for providers. Assert the image's terraform is the version
+      # mise.toml pins and initialises and validates the baked stack with no network, as the
+      # chart's arbitrary uid on a read-only root, rather than discovering a missing provider
+      # on the worker at the first sweep's apply.
+      - name: Assert terraform initialises the bench-endpoint stack offline
+        run: orchestration/orchestration-image-terraform-check.sh orchestration-image:pr-scan

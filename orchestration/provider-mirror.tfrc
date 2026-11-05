@@ -1,0 +1,14 @@
+# Terraform CLI configuration baked into the orchestration image (orchestration/Dockerfile,
+# TF_CLI_CONFIG_FILE). The worker applies the bench-endpoint stack from inside the image, and
+# its providers are pre-installed under /opt/terraform/plugins at build time. Registry
+# providers install only from that directory, never from the network, so `terraform init`
+# needs no registry access and cannot pick up a provider build the image was not built with.
+provider_installation {
+  filesystem_mirror {
+    path    = "/opt/terraform/plugins"
+    include = ["registry.terraform.io/*/*"]
+  }
+  direct {
+    exclude = ["registry.terraform.io/*/*"]
+  }
+}

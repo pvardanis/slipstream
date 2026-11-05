@@ -81,7 +81,9 @@ jobs:
           # slipstream-bench-contract workspace member it installs; only installed members
           # belong there, so the tree needs no per-member list), its locked dependency set,
           # the build definition, and the deep-config files the image bakes for the worker
-          # (model.yaml, the sweep grid, the kv-ab workload, the vLLM redeploy manifest). A
+          # (model.yaml, the sweep grid, the kv-ab workload, the vLLM redeploy manifest), and
+          # the bench-endpoint stack the worker applies with the Terraform CLI configuration
+          # that installs its providers from the image; the stack's tests are not baked. A
           # change to any of these is what a new content tag must capture; a change elsewhere
           # (docs, terraform) leaves the image identical, so the probe below finds the tag
           # present and skips the rebuild. Markdown is excluded: CI reads a markdown-only
@@ -95,7 +97,8 @@ jobs:
           sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
             packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
             model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
-            k8s/vllm-gpu.yaml ':(exclude,glob)**/*.md')"
+            k8s/vllm-gpu.yaml orchestration/provider-mirror.tfrc terraform/bench-endpoint \
+            ':(exclude)terraform/bench-endpoint/tests' ':(exclude,glob)**/*.md')"
           if [[ -z "${sha_tag}" ]]; then
             echo "::error::could not derive a content tag — no commit touches the image inputs"
             exit 1

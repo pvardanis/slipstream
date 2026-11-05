@@ -4,6 +4,8 @@
 # — Prefect + boto3 + the sweep flow code — and NOTHING of the model: the worker
 # issues SSM SendCommand to the bench host and reconfigures deploy/vllm-gpu, but never
 # serves or tokenizes, so it shares no base with the bench-client image (bench/Dockerfile).
+# It also carries the Terraform CLI, the bench-endpoint stack and that stack's providers, so
+# the worker can apply and destroy the bench endpoint around a sweep with no registry access.
 # The eks worker layer (terraform/eks/worker.tf) runs it under the prefect-worker Helm
 # chart, which supplies the container command; the CMD here only makes a bare `docker run`
 # do something sane.
@@ -52,6 +54,28 @@ COPY packages ./packages
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --package slipstream-bench-orchestration
 
+# The worker applies and destroys the bench-endpoint stack (terraform/bench-endpoint) itself, so
+# the runtime carries the Terraform CLI and the stack's providers. This stage fetches both: the
+# CLI at the version mise.toml pins, verified by ADD --checksum against the release sha256
+# mise.lock records for linux-x64, and the providers at the versions and hashes the stack's
+# dependency lock file pins. `terraform init` with TF_PLUGIN_CACHE_DIR leaves them unpacked under
+# /opt/terraform/plugins, the layout a filesystem mirror reads, so the runtime's init installs
+# them from there with no network (orchestration/provider-mirror.tfrc). Only versions.tf and
+# the lock file are copied in, so a change to the stack's resources reuses this layer. The uv
+# image is reused for its Python, whose zipfile module unpacks the release zip.
+FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS terraform
+
+ADD --checksum=sha256:4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061 \
+    https://releases.hashicorp.com/terraform/1.17.1/terraform_1.17.1_linux_amd64.zip \
+    /tmp/terraform.zip
+RUN python -m zipfile -e /tmp/terraform.zip /opt/terraform/bin \
+    && chmod 0755 /opt/terraform/bin/terraform
+
+COPY terraform/bench-endpoint/versions.tf terraform/bench-endpoint/.terraform.lock.hcl /tmp/providers/
+RUN mkdir /opt/terraform/plugins \
+    && TF_PLUGIN_CACHE_DIR=/opt/terraform/plugins \
+       /opt/terraform/bin/terraform -chdir=/tmp/providers init -backend=false -input=false -lockfile=readonly
+
 # prefecthq/prefect 3.8.7-python3.11 — the base carries the worker runtime contract the
 # prefect-worker Helm chart's command and securityContext assume (tini as PID-1,
 # /opt/prefect/entrypoint.sh, an arbitrary-uid writable HOME). A bare python:slim base
@@ -88,6 +112,16 @@ ADD --chmod=0755 \
     https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl \
     /usr/local/bin/kubectl
 
+# The Terraform CLI and the bench-endpoint stack's pre-installed providers from the terraform
+# stage. TF_CLI_CONFIG_FILE points every terraform run at orchestration/provider-mirror.tfrc,
+# which installs registry providers from /opt/terraform/plugins only, so the worker's
+# `terraform init` makes no registry call. The copies keep the stage's world-readable modes, so the chart's
+# arbitrary uid can execute them.
+COPY --from=terraform /opt/terraform/bin/terraform /usr/local/bin/terraform
+COPY --from=terraform /opt/terraform/plugins /opt/terraform/plugins
+COPY orchestration/provider-mirror.tfrc /opt/terraform/provider-mirror.tfrc
+ENV TF_CLI_CONFIG_FILE=/opt/terraform/provider-mirror.tfrc
+
 # The venv built in the builder stage carries the orchestration member's deps and flow code.
 # Prepend its bin so the locked `prefect` and the package's console scripts resolve ahead of the
 # base's leftover console scripts in /usr/local/bin. The chart runs the container as an arbitrary uid; the venv is copied
@@ -116,6 +150,15 @@ COPY model.yaml /app/model.yaml
 COPY bench/configs/sweep-grid.yaml /app/bench/configs/sweep-grid.yaml
 COPY bench/configs/kv-cache-extension-ab.yaml /app/bench/configs/kv-cache-extension-ab.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
+
+# The bench-endpoint stack the worker applies and destroys around a knob sweep: its .tf files,
+# its dependency lock file, and the templates and scripts its user data reads. .dockerignore
+# leaves out its tests and any local .terraform directory. The image's root filesystem is
+# read-only on the worker, so a run copies this directory somewhere writable before
+# `terraform init`; BENCH_ENDPOINT_STACK_DIR names it so the code finds it without a path of
+# its own. Like the configs above it is an image input, hashed into the content tag.
+COPY terraform/bench-endpoint /app/terraform/bench-endpoint
+ENV BENCH_ENDPOINT_STACK_DIR=/app/terraform/bench-endpoint
 
 # This image's own ECR ref (registry/repo:content-tag), passed by orchestration-image.yml at
 # build time and exported so the knob-sweep flow running in this image can read which
