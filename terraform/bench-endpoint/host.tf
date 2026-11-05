@@ -169,12 +169,13 @@ resource "aws_instance" "bench_host" {
 
   tags = merge(local.tags, { Name = "${local.name}-host" })
 
+  # Destroy does not evaluate these preconditions, so the empty variable defaults the
+  # destroy recipe leaves still tear down.
   lifecycle {
     precondition {
       condition     = local.bench_results_bucket_name != ""
       error_message = "The bootstrap stack has no bench_results_bucket_name output, so the bench host has no bench-results bucket to write to. Run `just bootstrap` to create the bucket, then re-run bench-endpoint-up."
     }
-    # Destroy does not evaluate preconditions, so the empty default still tears down.
     precondition {
       condition     = var.bench_host_instance_profile != ""
       error_message = "bench_host_instance_profile is empty, so the bench host would boot with no role and fail its secret and ECR reads. Pass the eks stack's bench_host_instance_profile output (bench-endpoint-up does), running `just cluster-up` first if it is missing."

@@ -1,12 +1,13 @@
 # Tests for the ephemeral bench host. Like exposure.tftest.hcl they run offline:
-# the aws/tls providers are mocked and both remote-state reads (eks and bootstrap)
-# are overridden, so the assertions check the host's shape and its security
-# invariants — zero ingress, the eks-owned instance profile, results written to the
-# bootstrap stack's bench-results bucket — without launching an instance. The real end-to-end proof is a `just bench-endpoint-up`
-# run driven from the host, which costs money and is run by hand.
+# the aws/tls providers are mocked and the bootstrap remote-state read is overridden,
+# so the assertions check the host's shape and its security invariants — zero
+# ingress, the eks-owned instance profile, results written to the bootstrap stack's
+# bench-results bucket — without launching an instance. The real end-to-end proof is
+# a `just bench-endpoint-up` run driven from the host, which costs money and is run
+# by hand.
 
-# This suite applies (not just plans) so IAM policy documents and bucket ARNs are
-# known when the invariants read them. Under apply the AWS provider validates ARN
+# This suite applies (not just plans) so provider-computed values (the ALB DNS name,
+# the host's public IP, the secret ARN) are known when the invariants read them. Under apply the AWS provider validates ARN
 # shape, and the mock provider's random strings are not valid ARNs, so every
 # resource whose ARN feeds a validated field or an assertion gets a valid-ARN
 # default here. Nothing real is created.
@@ -61,8 +62,8 @@ override_data {
 }
 
 run "bench_host_invariants" {
-  # apply, not plan: several invariants check IAM policy documents and bucket
-  # ARNs that are provider-computed and unknown until apply. The mock provider
+  # apply, not plan: several invariants check provider-computed values (the ALB
+  # DNS name, the host's public IP) that are unknown until apply. The mock provider
   # fills them with generated values, so nothing real is created.
   command = apply
 

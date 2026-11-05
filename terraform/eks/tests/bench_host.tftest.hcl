@@ -77,7 +77,8 @@ run "bench_host_iam_shape" {
   command = plan
 
   # A fixed name, not a prefix: the role's ARN is then known before the bench-endpoint
-  # stack exists, so a grant to pass it to EC2 can name exactly this one role.
+  # stack exists, so the iam:PassRole grant whoever launches the host needs can name
+  # exactly this one role.
   assert {
     condition     = aws_iam_role.bench_host.name == "slipstream-bench-host"
     error_message = "The bench host role must carry the fixed name <cluster>-bench-host."
