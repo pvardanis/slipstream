@@ -1,9 +1,9 @@
 # Provider and Terraform version pins for the persistent grafana Terraform stack.
 # The aws provider reads the Grafana provider's token from Secrets Manager; the grafana
 # provider manages the Grafana Cloud data sources and dashboards (ADR-0026).
-# required_version >= 1.16, the Terraform version pinned in mise.toml and tested in CI.
+# required_version >= 1.17, the Terraform version pinned in mise.toml and tested in CI.
 terraform {
-  required_version = ">= 1.16"
+  required_version = ">= 1.17"
 
   required_providers {
     aws = {
