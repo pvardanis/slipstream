@@ -1,25 +1,30 @@
 # The Prefect worker's rights to apply and destroy the bench-endpoint stack, so a flow run
-# can stand its own bench endpoint up and tear it down (#470). Three grants, each as narrow
-# as the stack allows: an AWS policy scoped by the stack's name prefixes and Component tag,
-# a get on the one vLLM api-key Secret the stack publishes, and the cluster topology the
-# stack is applied with, in the worker's environment.
+# can stand its own bench endpoint up and tear it down (#470). Two grants, each as narrow
+# as the stack allows — an AWS policy scoped by the stack's name prefixes and Component tag,
+# and a get on the one vLLM api-key Secret the stack publishes — plus the cluster topology
+# the stack is applied with, in the worker's environment.
 #
 # The bench-endpoint stack creates no IAM (bench_host.tf owns the host's role and profile),
 # so the worker needs iam:PassRole on that one role and no IAM create, attach, or put: its
 # infra rights cannot be turned into admin.
 
 locals {
-  # The bench-endpoint stack tags every taggable resource Component=bench-endpoint
-  # (terraform/bench-endpoint/data.tf) and names the rest with fixed prefixes: local.name
-  # "<cluster>-bench-endpoint" for the client secret and trust-store bucket, and "bench-"
-  # for the load balancer, target group, and trust store, whose 6-character name_prefix
-  # limit leaves no room for the longer name.
-  bench_endpoint_name           = "${var.cluster_name}-bench-endpoint"
+  # The bench-endpoint stack tags its resources with local.tags, Component=bench-endpoint
+  # (terraform/bench-endpoint/data.tf), and the EC2 and ACM grants below are conditioned on
+  # that tag. The load balancer, target group, listener, trust store, client secret, and
+  # trust-store bucket are granted by name prefix instead: local.bench_endpoint_name
+  # (bench_host.tf) for the secret and bucket, and "bench-" for the load balancer, target
+  # group, and trust store, whose 6-character name_prefix limit leaves no room for the
+  # longer name. The listener is untagged and its ARN carries its load balancer's name.
   bench_endpoint_component_tag  = "bench-endpoint"
   bench_endpoint_trust_store    = "arn:aws:s3:::${local.bench_endpoint_name}-truststore-*"
   bench_endpoint_ec2_arn_prefix = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}"
   bench_endpoint_elb_arn_prefix = "arn:aws:elasticloadbalancing:${var.region}:${data.aws_caller_identity.current.account_id}"
   bench_endpoint_state_key      = "bench-endpoint/terraform.tfstate"
+
+  # The node autoscaling groups, shared by the node_autoscaling_groups output (the manual
+  # bench-endpoint-up path) and the worker's environment, so both apply the same value.
+  node_autoscaling_group_names = flatten([for ng in module.eks.eks_managed_node_groups : ng.node_group_autoscaling_group_names])
 
   # The worker's environment: what the stack is applied with. The state bucket backs the
   # stack's init; the topology and instance profile are its input variables, read here
@@ -30,7 +35,7 @@ locals {
     BENCH_ENDPOINT_VPC_ID                  = module.vpc.vpc_id
     BENCH_ENDPOINT_PUBLIC_SUBNETS          = jsonencode(module.vpc.public_subnets)
     BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID  = module.eks.node_security_group_id
-    BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS = jsonencode(flatten([for ng in module.eks.eks_managed_node_groups : ng.node_group_autoscaling_group_names]))
+    BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS = jsonencode(local.node_autoscaling_group_names)
     BENCH_ENDPOINT_INSTANCE_PROFILE        = aws_iam_instance_profile.bench_host.name
   }
 }
@@ -53,8 +58,8 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Resource  = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${aws_iam_role.bench_host.name}"
         Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } }
       },
-      # Terraform refreshes every resource before it plans. These read actions take no
-      # resource scope.
+      # Terraform reads every resource back on refresh and after create. These read
+      # actions take no resource scope.
       {
         Sid    = "BenchEndpointRead"
         Effect = "Allow"
@@ -72,7 +77,7 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Action   = ["ssm:GetParameter", "ssm:GetParameters"]
         Resource = "arn:aws:ssm:${var.region}::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
       },
-      # The stack's own state and its native lockfile, nothing else in the state bucket.
+      # These two statements cover the stack's own state and its native lockfile only.
       # Taking the lock writes the lockfile and releasing it deletes it.
       {
         Sid      = "BenchEndpointState"
@@ -110,10 +115,11 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Resource  = "${local.bench_endpoint_ec2_arn_prefix}:instance/*"
         Condition = { StringEquals = { "aws:RequestTag/Component" = local.bench_endpoint_component_tag } }
       },
-      # RunInstances is also authorized on what the instance launches with. None of these
-      # carry the bench-endpoint tag (the AMI is Amazon's, the subnet is the cluster's),
-      # and launching with them creates nothing but the instance's own volume and
-      # interface, which go with it on terminate.
+      # RunInstances is also authorized on what the instance launches with. The AMI is
+      # Amazon's and the subnet the cluster's, so neither carries the bench-endpoint tag;
+      # the volume and interface are created by the launch itself, untagged, and go with
+      # the instance on terminate. The host's security group is listed here so one
+      # statement covers every launch input.
       {
         Sid    = "BenchEndpointLaunchInputs"
         Effect = "Allow"
@@ -127,7 +133,8 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         ]
       },
       # The host and load balancer security groups are created only carrying the tag, and
-      # only in the cluster's VPC (the VPC module tags it Project=slipstream).
+      # only in a VPC tagged Project=slipstream, which the VPC module puts on the
+      # cluster's VPC.
       {
         Sid       = "BenchEndpointCreateSecurityGroup"
         Effect    = "Allow"
@@ -142,8 +149,8 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Resource  = "${local.bench_endpoint_ec2_arn_prefix}:vpc/*"
         Condition = { StringEquals = { "aws:ResourceTag/Project" = local.tags.Project } }
       },
-      # Tags are written only as part of creating a resource, never added to an existing
-      # one, so the worker cannot tag a foreign resource into its own scope.
+      # EC2 tags are written only as part of creating a resource, never added to an
+      # existing one, so the worker cannot tag a foreign EC2 resource into its own scope.
       {
         Sid    = "BenchEndpointTagOnCreate"
         Effect = "Allow"
@@ -166,8 +173,10 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
           }
         }
       },
-      # Terminate the host, delete its security groups, and manage their rules only where
-      # the resource carries the bench-endpoint tag.
+      # Terminate or modify the host, delete its security groups, and manage their rules
+      # only where the resource carries the bench-endpoint tag. A rule is modified in place
+      # when a replaced host's public IP moves the load balancer's ingress rule, which
+      # authorizes against the rule as well as its group.
       {
         Sid    = "BenchEndpointManageEc2"
         Effect = "Allow"
@@ -184,6 +193,7 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Resource = [
           "${local.bench_endpoint_ec2_arn_prefix}:instance/*",
           "${local.bench_endpoint_ec2_arn_prefix}:security-group/*",
+          "${local.bench_endpoint_ec2_arn_prefix}:security-group-rule/*",
         ]
         Condition = { StringEquals = { "aws:ResourceTag/Component" = local.bench_endpoint_component_tag } }
       },
@@ -200,7 +210,8 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Condition = { StringEquals = { "aws:RequestTag/Component" = local.bench_endpoint_component_tag } }
       },
       # The load balancer's NodePort rule lands on the eks node security group, the one
-      # group carrying this cluster's Karpenter discovery tag. Ingress only.
+      # group carrying this cluster's Karpenter discovery tag. Ingress only, but IAM has no
+      # condition on port or source, so any ingress rule may be opened or revoked there.
       {
         Sid    = "BenchEndpointNodeIngress"
         Effect = "Allow"
@@ -243,8 +254,8 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         ]
       },
       # Attach the target group to this cluster's node autoscaling groups, which EKS tags
-      # with the cluster name. Both the classic and the traffic-source API, whichever the
-      # provider calls.
+      # with the cluster name. Both the classic target-group API and the traffic-source
+      # API that supersedes it.
       {
         Sid    = "BenchEndpointTargetGroupAttachment"
         Effect = "Allow"
@@ -258,7 +269,10 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Condition = { StringEquals = { "aws:ResourceTag/eks:cluster-name" = var.cluster_name } }
       },
       # The listener's server certificate: imported only carrying the tag, then read and
-      # deleted only where it carries it.
+      # deleted only where it carries it. Importing with tags needs AddTagsToCertificate,
+      # and ACM offers no condition tying it to the import, so the worker can also tag an
+      # existing certificate into this scope: the tag is a bound on intent, not a hard
+      # boundary, for ACM.
       {
         Sid       = "BenchEndpointCertificateImport"
         Effect    = "Allow"
@@ -371,9 +385,10 @@ resource "kubernetes_role_binding_v1" "vllm_api_key_read" {
 }
 
 # The topology as a ConfigMap the worker loads into its environment (worker.extraEnvVarsCMs
-# in worker.tf). A ConfigMap rather than inline Helm env so the module ids, unknown until
-# the cluster exists, stay out of the release's values. Pod env is read at start, so the
-# release depends on it and the worker never starts without it.
+# in worker.tf). A ConfigMap rather than inline Helm env, so the module ids, unknown until
+# the cluster exists, stay out of the release's values and those values stay known at plan.
+# Pod env is read at start: the release references the ConfigMap so the worker never
+# starts without it, and a change to it reaches the worker only when its pod restarts.
 resource "kubernetes_config_map_v1" "bench_endpoint_topology" {
   metadata {
     name      = "bench-endpoint-topology"

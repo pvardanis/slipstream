@@ -63,7 +63,8 @@ locals {
       }
       replicaCount = 1
       # The bench-endpoint topology (worker_bench_endpoint.tf), loaded into the worker's
-      # environment for the flows that apply the stack.
+      # environment for the flows that apply the stack. Referencing the ConfigMap orders
+      # the release after it, so the worker never starts without it.
       extraEnvVarsCMs = [kubernetes_config_map_v1.bench_endpoint_topology.metadata[0].name]
     }
     serviceAccount = {
@@ -301,5 +302,5 @@ resource "helm_release" "prefect_worker" {
   # The worker connects to the server on startup and creates the work pool if it is
   # absent, so it must come up after the server is Ready; the prefect namespace the
   # release deploys into is the one the server release created.
-  depends_on = [helm_release.prefect_server, kubernetes_config_map_v1.bench_endpoint_topology]
+  depends_on = [helm_release.prefect_server]
 }
