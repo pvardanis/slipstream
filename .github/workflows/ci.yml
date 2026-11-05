@@ -61,8 +61,8 @@ jobs:
           # pathspec in orchestration-image.yml (Derive image tags).
           # Both image filters exclude markdown, as their pathspecs do, so no change
           # the code filter reads as docs-only can touch an image input.
-          # scan_config: the Trivy waivers and the scan workflow, which change the
-          # orchestration scan's verdict without changing the image.
+          # scan_config: the Trivy waivers, the scan workflow and the image checks it runs,
+          # which change the orchestration scan's verdict without changing the image.
           # test/ci-paths-parity-test.sh fails when the image lists drift from those
           # pathspecs, or the denylist from the paths-ignore.
           filters: |
@@ -90,10 +90,14 @@ jobs:
               - 'bench/configs/sweep-grid.yaml'
               - 'bench/configs/kv-cache-extension-ab.yaml'
               - 'k8s/vllm-gpu.yaml'
+              - 'orchestration/provider-mirror.tfrc'
+              - 'terraform/bench-endpoint/**'
+              - '!terraform/bench-endpoint/tests/**'
               - '!**/*.md'
             scan_config:
               - '.trivyignore'
               - '.github/workflows/orchestration-image-scan.yml'
+              - 'orchestration/orchestration-image-terraform-check.sh'
 
   lint:
     name: lint & format (prek)
