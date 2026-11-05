@@ -16,13 +16,24 @@ _BENCH_ENDPOINT = _REPO / "terraform" / "bench-endpoint"
 _RESOURCE_HEADER = re.compile(
     r'^resource\s+"(?P<type>[^"]+)"\s+"(?P<name>[^"]+)"', re.MULTILINE
 )
+_MODULE_HEADER = re.compile(r'^module\s+"(?P<name>[^"]+)"', re.MULTILINE)
+
+
+def _get_bench_endpoint_files() -> list[str]:
+    """The text of every .tf file in the bench-endpoint stack, failing if there are none."""
+    texts = [
+        p.read_text(encoding="utf-8") for p in sorted(_BENCH_ENDPOINT.glob("*.tf"))
+    ]
+    assert texts, (
+        f"no .tf files under {_BENCH_ENDPOINT}; the scans would pass vacuously"
+    )
+    return texts
 
 
 def _get_bench_endpoint_resources() -> list[tuple[str, str, str]]:
     """Every (type, name, body) resource block the bench-endpoint stack declares."""
     resources = []
-    for tf_file in sorted(_BENCH_ENDPOINT.glob("*.tf")):
-        text = tf_file.read_text(encoding="utf-8")
+    for text in _get_bench_endpoint_files():
         headers = list(_RESOURCE_HEADER.finditer(text))
         ends = [h.start() for h in headers[1:]] + [len(text)] if headers else []
         for header, end in zip(headers, ends, strict=True):
@@ -43,10 +54,40 @@ def test_bench_endpoint_stack_declares_no_iam_resources() -> None:
     )
 
 
+def test_bench_endpoint_stack_calls_no_modules() -> None:
+    # A module's resources are invisible to the resource scan above, so a module could
+    # bring IAM in unseen.
+    modules = [
+        m["name"]
+        for text in _get_bench_endpoint_files()
+        for m in _MODULE_HEADER.finditer(text)
+    ]
+
+    assert modules == [], (
+        f"terraform/bench-endpoint calls modules {modules}, whose resources the no-IAM "
+        "scan cannot see; declare the resources directly instead."
+    )
+
+
 def test_load_balancer_admits_only_the_bench_host() -> None:
+    resources = _get_bench_endpoint_resources()
+    # aws_security_group_rule and inline ingress blocks are the other two ways to open
+    # a security group; the stack uses neither, so any instance is a new opening. An
+    # inline block would also make the provider revoke alb_from_host on every apply.
+    legacy_rules = [n for kind, n, _ in resources if kind == "aws_security_group_rule"]
+    (alb_group,) = [
+        body
+        for kind, name, body in resources
+        if kind == "aws_security_group" and name == "alb"
+    ]
+    assert legacy_rules == [], f"aws_security_group_rule resources {legacy_rules}"
+    assert not re.search(r"^\s*ingress\s*\{", alb_group, re.MULTILINE), (
+        "aws_security_group.alb carries an inline ingress block"
+    )
+
     alb_ingress = [
         name
-        for kind, name, body in _get_bench_endpoint_resources()
+        for kind, name, body in resources
         if kind == "aws_vpc_security_group_ingress_rule"
         and re.search(
             r"^\s*security_group_id\s*=\s*aws_security_group\.alb\.id",

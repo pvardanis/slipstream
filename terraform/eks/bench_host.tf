@@ -1,9 +1,10 @@
 # The bench host's IAM: its EC2 role, the grants it runs under, and the instance profile
 # the bench-endpoint stack launches it with. They live here, not in the bench-endpoint
 # stack, so that stack declares no IAM at all and can be applied by a principal with no
-# IAM create rights. Like the worker (worker.tf) they ride the cluster's duty-cycle: up
-# with `cluster-up`, torn down by `cluster-down`, after `stack-down` has destroyed the
-# endpoint that used them.
+# IAM create rights (launching the host under the profile still needs iam:PassRole on
+# this role). Like the worker (worker.tf) they ride the cluster's duty-cycle: up with
+# `cluster-up`, torn down by `cluster-down`, which `stack-down` runs only after
+# `bench-endpoint-down` has destroyed the endpoint that used them.
 
 locals {
   # The bench-endpoint stack names its bench-client secret with this prefix
@@ -16,8 +17,8 @@ locals {
 # are each a separate inline policy scoped to a single resource, so least privilege is
 # legible one grant at a time. SSM access is an AWS-managed attachment, and ECR
 # GetAuthorizationToken must be registry-wide (see below). A fixed name rather than a
-# prefix, so its ARN is known before any endpoint exists and a grant to pass it to EC2
-# can name exactly this role.
+# prefix, so its ARN is known before any endpoint exists and the iam:PassRole grant
+# whoever launches the host needs can name exactly this role.
 resource "aws_iam_role" "bench_host" {
   name = "${var.cluster_name}-bench-host"
 
@@ -41,7 +42,8 @@ resource "aws_iam_role_policy_attachment" "bench_host_ssm" {
 }
 
 # Read the bench-client credentials (cert, key, CA, api-key) from the one secret.
-# Secrets Manager appends a random suffix to the name, so the ARN ends in a wildcard.
+# The secret's name carries a unique name_prefix suffix and Secrets Manager appends a
+# random suffix to its ARN, so the ARN ends in a wildcard.
 resource "aws_iam_role_policy" "bench_host_secrets" {
   name = "secrets"
   role = aws_iam_role.bench_host.id
