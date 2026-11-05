@@ -7,10 +7,14 @@
 # `bench-endpoint-down` has destroyed the endpoint that used them.
 
 locals {
+  # The bench-endpoint stack's local.name (terraform/bench-endpoint/data.tf), the prefix
+  # its client secret and trust-store bucket are named with.
+  bench_endpoint_name = "${var.cluster_name}-bench-endpoint"
+
   # The bench-endpoint stack names its bench-client secret with this prefix
-  # (terraform/bench-endpoint/secrets.tf, local.name = "<cluster>-bench-endpoint"). The
-  # secret is created per endpoint, after this stack, so the read grant matches it by name.
-  bench_client_secret_prefix = "${var.cluster_name}-bench-endpoint-client-"
+  # (terraform/bench-endpoint/secrets.tf). The secret is created per endpoint, after this
+  # stack, so the read grant matches it by name.
+  bench_client_secret_prefix = "${local.bench_endpoint_name}-client-"
 }
 
 # Instance role, assumable only by EC2. The secrets, results, and ECR-pull grants below

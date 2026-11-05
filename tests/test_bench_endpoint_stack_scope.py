@@ -4,8 +4,10 @@ The worker will apply terraform/bench-endpoint without IAM create rights, so the
 declare no IAM resources: the bench host's role, policies and instance profile live in the
 eks stack (terraform/eks/bench_host.tf) and reach this stack as an input variable. The
 load balancer admits only the bench host, so no ingress rule on its security group may name
-any other source. terraform test can plan the resources a stack declares but cannot list
-them, so these properties are read from the stack's files.
+any other source. The eks stack's name-prefix grants (the bench host's secret read, the
+worker's trust-store bucket rights) must match the names this stack creates. terraform
+test can plan the resources a stack declares but cannot list them, so these properties
+are read from the stack's files.
 """
 
 import re
@@ -112,14 +114,28 @@ def _get_string_attribute(path: Path, attribute: str) -> str:
     return value
 
 
-def test_host_secret_grant_matches_the_secret_the_endpoint_creates() -> None:
-    endpoint_name = _get_string_attribute(_BENCH_ENDPOINT / "data.tf", "name")
-    created_prefix = _get_string_attribute(
-        _BENCH_ENDPOINT / "secrets.tf", "name_prefix"
-    ).replace("${local.name}", endpoint_name)
-    granted_prefix = _get_string_attribute(
-        _REPO / "terraform" / "eks" / "bench_host.tf", "bench_client_secret_prefix"
+def _get_eks_endpoint_name_prefix(attribute: str) -> str:
+    """An eks-stack name prefix in bench_host.tf, with the endpoint name resolved."""
+    bench_host = _REPO / "terraform" / "eks" / "bench_host.tf"
+    endpoint_name = _get_string_attribute(bench_host, "bench_endpoint_name")
+    return _get_string_attribute(bench_host, attribute).replace(
+        "${local.bench_endpoint_name}", endpoint_name
     )
+
+
+def _get_endpoint_name_prefix(path: Path, attribute: str) -> str:
+    """A bench-endpoint name prefix, with the stack's local.name resolved."""
+    endpoint_name = _get_string_attribute(_BENCH_ENDPOINT / "data.tf", "name")
+    return _get_string_attribute(path, attribute).replace(
+        "${local.name}", endpoint_name
+    )
+
+
+def test_host_secret_grant_matches_the_secret_the_endpoint_creates() -> None:
+    created_prefix = _get_endpoint_name_prefix(
+        _BENCH_ENDPOINT / "secrets.tf", "name_prefix"
+    )
+    granted_prefix = _get_eks_endpoint_name_prefix("bench_client_secret_prefix")
 
     assert (
         created_prefix == granted_prefix == "${var.cluster_name}-bench-endpoint-client-"
@@ -127,4 +143,23 @@ def test_host_secret_grant_matches_the_secret_the_endpoint_creates() -> None:
         "The bench host's secrets grant (terraform/eks/bench_host.tf) must match the "
         "bench-client secret name prefix terraform/bench-endpoint creates, or the host "
         "cannot read its certificate and api-key at sweep time."
+    )
+
+
+def test_worker_trust_store_grant_matches_the_bucket_the_endpoint_creates() -> None:
+    created_prefix = _get_endpoint_name_prefix(
+        _BENCH_ENDPOINT / "alb.tf", "bucket_prefix"
+    )
+    granted_arn = _get_string_attribute(
+        _REPO / "terraform" / "eks" / "worker_bench_endpoint.tf",
+        "bench_endpoint_trust_store",
+    ).replace(
+        "${local.bench_endpoint_name}",
+        _get_eks_endpoint_name_prefix("bench_endpoint_name"),
+    )
+
+    assert granted_arn == f"arn:aws:s3:::{created_prefix}*", (
+        "The worker's trust-store bucket grant (terraform/eks/worker_bench_endpoint.tf) must "
+        "match the bucket name prefix terraform/bench-endpoint creates, or the worker cannot "
+        "apply the stack."
     )
