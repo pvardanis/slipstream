@@ -2,11 +2,12 @@
 # Check an orchestration image can initialise the baked bench-endpoint stack with no network.
 # The worker applies terraform/bench-endpoint from inside this image, so the image must carry
 # the Terraform CLI at the version mise.toml pins, the stack's files, and its providers. The
-# container runs the way the prefect-worker chart runs it: an arbitrary uid, a read-only root
-# filesystem with a writable /tmp, and here no network at all, so a provider that is not baked
-# fails `terraform init` instead of downloading. The stack is copied to /tmp first because the
-# read-only root leaves no room for .terraform next to the baked copy.
-# Usage: orchestration-image-terraform-check.sh <image>
+# container runs the way the prefect-worker chart's default container securityContext runs
+# it, as an arbitrary uid on a read-only root filesystem with a writable /tmp, and here with no
+# network at all, so a provider that is not baked fails `terraform init` instead of
+# downloading. The stack is copied to /tmp first because the read-only root leaves no room
+# for .terraform next to the baked copy.
+# Usage: orchestration-image-terraform-offline-check.sh <image>
 set -euo pipefail
 
 image="$1"
@@ -17,6 +18,23 @@ pinned="$(sed -n 's/^terraform = "\(.*\)"$/\1/p' "${repo_root}/mise.toml")"
   echo "mise.toml pins no terraform version" >&2
   exit 1
 }
+
+# The Dockerfile downloads the CLI from mise.lock's linux-x64 URL and verifies it against the
+# checksum mise.lock records there, so a pin bump that updates one file but not the other fails
+# here, before the image is run.
+locked="$(awk '/^\[tools\.terraform\."platforms\.linux-x64"\]/ { grab = 1; next }
+  grab && /^\[/ { exit }
+  grab && /^(checksum|url) = / { gsub(/"/, "", $3); print $3 }' "${repo_root}/mise.lock")"
+[[ "$(wc -l <<<"${locked}")" -eq 2 ]] || {
+  echo "mise.lock records no linux-x64 terraform checksum and url" >&2
+  exit 1
+}
+while read -r value; do
+  grep -qF "${value}" "${repo_root}/orchestration/Dockerfile" || {
+    echo "orchestration/Dockerfile does not download terraform with mise.lock's ${value}" >&2
+    exit 1
+  }
+done <<<"${locked}"
 
 # The single-quoted script runs inside the container, so its variables are the container's.
 # shellcheck disable=SC2016

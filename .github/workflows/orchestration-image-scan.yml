@@ -57,4 +57,4 @@ jobs:
       # chart's arbitrary uid on a read-only root, rather than discovering a missing provider
       # on the worker at the first sweep's apply.
       - name: Assert terraform initialises the bench-endpoint stack offline
-        run: orchestration/orchestration-image-terraform-check.sh orchestration-image:pr-scan
+        run: orchestration/orchestration-image-terraform-offline-check.sh orchestration-image:pr-scan
