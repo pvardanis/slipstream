@@ -8,7 +8,7 @@
 [![ruff](https://img.shields.io/badge/ruff-0.16.7-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
 [![ty](https://img.shields.io/badge/ty-0.0.84-261230)](https://github.com/astral-sh/ty)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![terraform](https://img.shields.io/badge/terraform-1.16.1-7B42BC?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
+[![terraform](https://img.shields.io/badge/terraform-1.17.1-7B42BC?logo=terraform&logoColor=white)](https://developer.hashicorp.com/terraform)
 [![vLLM](https://img.shields.io/badge/vLLM-0.29.0-30A2FF)](https://github.com/vllm-project/vllm)
 [![platform](https://img.shields.io/badge/platform-AWS%20EKS-FF9900)](#architecture)
 
