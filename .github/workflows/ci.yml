@@ -97,7 +97,7 @@ jobs:
             scan_config:
               - '.trivyignore'
               - '.github/workflows/orchestration-image-scan.yml'
-              - 'orchestration/orchestration-image-terraform-check.sh'
+              - 'orchestration/orchestration-image-terraform-offline-check.sh'
 
   lint:
     name: lint & format (prek)

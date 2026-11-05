@@ -121,7 +121,7 @@ check_same "ci.yml scan_config filter" "$(ci_filter scan_config)" \
     echo .trivyignore
     echo "${scan_workflow}"
     yq '.jobs[].steps[].run // ""' "${repo_root}/${scan_workflow}" |
-      grep -o 'orchestration/[A-Za-z0-9_.-]*\.sh' || true
+      { grep -o 'orchestration/[A-Za-z0-9_.-]*\.sh' || true; }
   } | sort -u)"
 
 # Every output must fail closed, so a missing filter result runs the tests: docs_only
@@ -211,7 +211,7 @@ if [[ -z "${CI_PATHS_PARITY_MUTATION:-}" ]]; then
   check_mutation_fails ".trivyignore dropped from scan_config" CI_WORKFLOW \
     "/^              - '\.trivyignore'$/d" "ci.yml scan_config filter"
   check_mutation_fails "the terraform check dropped from scan_config" CI_WORKFLOW \
-    "/^              - 'orchestration\/orchestration-image-terraform-check\.sh'$/d" "ci.yml scan_config filter"
+    "/^              - 'orchestration\/orchestration-image-terraform-offline-check\.sh'$/d" "ci.yml scan_config filter"
   check_mutation_fails "a misspelt filter output" CI_WORKFLOW \
     "s/steps\.filter\.outputs\.code/steps.filter.outputs.codes/" "filter outputs the changes job reads"
   check_mutation_fails "reports/** dropped from the docs denylist" CI_WORKFLOW \

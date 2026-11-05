@@ -63,6 +63,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # them from there with no network (orchestration/provider-mirror.tfrc). Only versions.tf and
 # the lock file are copied in, so a change to the stack's resources reuses this layer. The uv
 # image is reused for its Python, whose zipfile module unpacks the release zip.
+# uv 0.9.30-python3.11-bookworm-slim, the builder stage's digest
 FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS terraform
 
 ADD --checksum=sha256:4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061 \
@@ -115,8 +116,8 @@ ADD --chmod=0755 \
 # The Terraform CLI and the bench-endpoint stack's pre-installed providers from the terraform
 # stage. TF_CLI_CONFIG_FILE points every terraform run at orchestration/provider-mirror.tfrc,
 # which installs registry providers from /opt/terraform/plugins only, so the worker's
-# `terraform init` makes no registry call. The copies keep the stage's world-readable modes, so the chart's
-# arbitrary uid can execute them.
+# `terraform init` makes no registry call. The copies keep the stage's world-readable modes,
+# so the chart's arbitrary uid can execute them.
 COPY --from=terraform /opt/terraform/bin/terraform /usr/local/bin/terraform
 COPY --from=terraform /opt/terraform/plugins /opt/terraform/plugins
 COPY orchestration/provider-mirror.tfrc /opt/terraform/provider-mirror.tfrc
@@ -153,8 +154,8 @@ COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
 # The bench-endpoint stack the worker applies and destroys around a knob sweep: its .tf files,
 # its dependency lock file, and the templates and scripts its user data reads. .dockerignore
-# leaves out its tests and any local .terraform directory. The image's root filesystem is
-# read-only on the worker, so a run copies this directory somewhere writable before
+# lets in only those files, never its tests or a local .terraform directory. The prefect-worker
+# chart's default container securityContext makes the root filesystem read-only, so a run copies this directory somewhere writable before
 # `terraform init`; BENCH_ENDPOINT_STACK_DIR names it so the code finds it without a path of
 # its own. Like the configs above it is an image input, hashed into the content tag.
 COPY terraform/bench-endpoint /app/terraform/bench-endpoint
