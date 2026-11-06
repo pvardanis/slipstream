@@ -91,8 +91,8 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
     ),
     BoundaryRule(
         package="slipstream_bench.orchestration.bench_endpoint",
-        # The bench-endpoint session is the knob sweep's Prefect-free core for standing the
-        # bench endpoint up and down: the flow opens it around the sweep, and its tests drive
+        # The bench-endpoint session is the flows' Prefect-free core for standing the bench
+        # endpoint up and down: each flow opens it around its cells, and its tests drive
         # it against a fake terraform and a fake S3 with no Prefect runtime. forbidden blocks
         # Prefect in the subprocess probe; allowed holds the module's own source to the
         # stdlib and botocore, whose ClientError tells an absent boot sentinel from a failed

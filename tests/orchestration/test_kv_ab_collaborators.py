@@ -12,6 +12,7 @@ import io
 import json
 import re
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -23,8 +24,14 @@ from prefect import Task, flow
 from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
+from slipstream_bench.orchestration.bench_endpoint import (
+    BenchEndpointEnvironmentError,
+    BenchEndpointTopology,
+    BenchHost,
+)
 from slipstream_bench.orchestration.digest import ServingConfig
 from slipstream_bench.orchestration.flows import kv_ab as kv_ab_module
+from slipstream_bench.orchestration.flows import run_setup as run_setup_module
 from slipstream_bench.orchestration.flows.kv_ab import (
     KvAbInputs,
     KvAbResult,
@@ -36,7 +43,7 @@ from slipstream_bench.orchestration.kv_ab_config import (
     KvAbConfigError,
     load_kv_ab_config,
 )
-from slipstream_bench.orchestration.kv_ab_rig import KvAbRig
+from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
 from slipstream_bench.orchestration.tasks.kv_ab_cell import build_kv_ab_cell_task
 from slipstream_bench.orchestration.validity import InvalidCellError
 
@@ -52,6 +59,20 @@ _PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
 _CONNECTOR = "LMCacheConnectorV1"
 _RUN_ID = re.compile(r"RUN_ID='([^']+)'")
 _CELL_CONFIG = re.compile(r"CELL_CONFIG_B64='([^']+)'")
+_BENCH_HOST_ID = "i-0bench"
+_API_KEY = "sk-bench-123"
+_STACK_DIR = "/app/terraform/bench-endpoint"
+
+# The worker's environment: the bench-endpoint topology ConfigMap and the image's stack dir.
+_WORKER_ENV = {
+    "BENCH_ENDPOINT_STATE_BUCKET": "slipstream-tfstate-abc123",
+    "BENCH_ENDPOINT_VPC_ID": "vpc-0abc",
+    "BENCH_ENDPOINT_PUBLIC_SUBNETS": '["subnet-pub-a", "subnet-pub-b"]',
+    "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID": "sg-0node",
+    "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS": '["eks-cpu-asg-1"]',
+    "BENCH_ENDPOINT_INSTANCE_PROFILE": "slipstream-bench-host",
+    "BENCH_ENDPOINT_STACK_DIR": _STACK_DIR,
+}
 
 _INPUTS = KvAbInputs(
     config=_CONFIG,
@@ -59,7 +80,6 @@ _INPUTS = KvAbInputs(
     rig=_RIG,
     run="ab1",
     serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v0.29.0"),
-    instance_id="i-1",
     image_ref="bench:sha",
     bucket="bench",
     model=_MODEL,
@@ -93,7 +113,10 @@ def _harness() -> Iterator[None]:
 
 
 class _Kubectl:
-    """Record each applied Deployment; report the configured pool in the startup log."""
+    """Record each applied Deployment; report the configured pool in the startup log.
+
+    Serves the vLLM api-key Secret the flow opens its bench endpoint with.
+    """
 
     def __init__(self) -> None:
         self.applied: list[str] = []
@@ -104,17 +127,21 @@ class _Kubectl:
             self.applied.append(stdin)
         if args[0] == "logs":
             return "INFO GPU KV cache size: 16,384 tokens\n"
+        if "secret" in args:
+            return base64.b64encode(_API_KEY.encode("utf-8")).decode("ascii")
         return ""
 
 
 class _Ssm:
-    """Accept every command, recording the bench host's script runs in order."""
+    """Accept every command, recording the bench host's script runs and their hosts."""
 
     def __init__(self) -> None:
         self.commands: list[str] = []
+        self.instance_ids: list[str] = []
 
     def send_command(self, **kwargs: Any) -> dict[str, object]:
         self.commands.append(kwargs["Parameters"]["commands"][0])
+        self.instance_ids.extend(kwargs["InstanceIds"])
         return {"Command": {"CommandId": "cmd-1"}}
 
     def get_command_invocation(self, **_kwargs: object) -> dict[str, object]:
@@ -252,6 +279,7 @@ class _Ab:
         self.ssm = self.s3.ssm
         self.collaborators = build_kv_ab_collaborators(
             _INPUTS,
+            host=BenchHost(instance_id="i-1"),
             kubectl=self.kubectl,
             ssm_client=self.ssm,
             s3_client=self.s3,
@@ -269,6 +297,27 @@ class _Ab:
         return _ab()
 
 
+class _Session:
+    """Stand in for the bench-endpoint session: record its arguments, open, and close.
+
+    Yields the bench host the endpoint booted; ``events`` records the open and close, so a
+    test can place other steps between them.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.events: list[str] = []
+
+    @contextmanager
+    def __call__(self, **kwargs: Any) -> Iterator[BenchHost]:
+        self.calls.append(kwargs)
+        self.events.append("open")
+        try:
+            yield BenchHost(instance_id=_BENCH_HOST_ID)
+        finally:
+            self.events.append("close")
+
+
 def _isolated_task(tmp_path: Path) -> Task[..., str]:
     results = LocalFileSystem(basepath=str(tmp_path / "results"))
     results.save(f"results-{uuid4().hex}", overwrite=True)
@@ -281,7 +330,6 @@ def _isolated_task(tmp_path: Path) -> Task[..., str]:
     ("field", "value"),
     [
         ("run", " "),
-        ("instance_id", ""),
         ("image_ref", " "),
         ("bucket", ""),
         ("model", " "),
@@ -421,15 +469,26 @@ def test_redeploying_the_same_arm_run_rolls_a_fresh_engine(tmp_path: Path) -> No
 
 
 def _drive_flow(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, s3: _S3
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    s3: _S3,
+    session: _Session | None = None,
+    edits: Sequence[tuple[str, str]] = (),
 ) -> tuple[list[str], list[str]]:
     """Drive the flow over a one-run-per-arm workload, returning its pointers and the
-    metrics URLs it scraped."""
+    metrics URLs it scraped.
+
+    The flow opens its bench endpoint from the worker's environment through ``session``;
+    each ``(old, new)`` of ``edits`` is replaced in the workload's text.
+    """
     workload = tmp_path / "kv-ab.yaml"
     agent = (
         _REPO / "bench" / "configs" / "kv-cache-extension-ab.agent.yaml"
     ).read_text(encoding="utf-8")
-    workload.write_text(agent.replace("runs_per_arm: 3", "runs_per_arm: 1"))
+    for old, new in (("runs_per_arm: 3", "runs_per_arm: 1"), *edits):
+        assert old in agent, old
+        agent = agent.replace(old, new)
+    workload.write_text(agent)
     task = _isolated_task(tmp_path)
     kubectl = _Kubectl()
     metrics = _Metrics(kubectl)
@@ -444,10 +503,12 @@ def _drive_flow(
     monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: s3)
     monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
     monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
+    for name, value in _WORKER_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(run_setup_module, "open_bench_endpoint", session or _Session())
 
     pointers = kv_ab_flow(
         run_id="ab1",
-        instance_id="i-1",
         region="us-east-1",
         bucket="bench",
         image_ref="bench:sha",
@@ -482,6 +543,113 @@ def test_the_flow_drives_its_workload_renders_it_and_returns_the_labels_pointers
     assert set(metrics_urls) == {"http://engine:8000/metrics"}
     # The terminal render folds the records and uploads the chart under the run's charts.
     assert list(s3.charts) == ["kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
+
+
+def test_the_flow_runs_every_script_on_the_bench_host_its_endpoint_booted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3 = _S3()
+    session = _Session()
+
+    _drive_flow(tmp_path, monkeypatch, s3, session)
+
+    assert s3.ssm.instance_ids
+    assert set(s3.ssm.instance_ids) == {_BENCH_HOST_ID}
+    # One session, opened from the worker's environment with the key from the Secret,
+    # reporting boot through the results bucket on the client the cells use.
+    [call] = session.calls
+    assert call["topology"] == BenchEndpointTopology(
+        state_bucket="slipstream-tfstate-abc123",
+        vpc_id="vpc-0abc",
+        public_subnets=("subnet-pub-a", "subnet-pub-b"),
+        node_security_group_id="sg-0node",
+        node_autoscaling_groups=("eks-cpu-asg-1",),
+        instance_profile="slipstream-bench-host",
+    )
+    assert call["stack_dir"] == Path(_STACK_DIR)
+    assert call["api_key"] == _API_KEY
+    assert call["results_bucket"] == "bench"
+    assert call["s3_client"] is s3
+    assert callable(call["terraform"])
+
+
+def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The render only reads S3, so the bench endpoint stops billing before it runs.
+    session = _Session()
+    real_drive = kv_ab_module.drive_kv_ab
+
+    def _recording_drive(*args: Any) -> KvAbResult:
+        result = real_drive(*args)
+        session.events.append(f"{len(result.pointers)} cells")
+        return result
+
+    monkeypatch.setattr(kv_ab_module, "drive_kv_ab", _recording_drive)
+    monkeypatch.setattr(
+        kv_ab_module,
+        "render_kv_ab_results",
+        lambda **_k: session.events.append("render"),
+    )
+
+    _drive_flow(tmp_path, monkeypatch, _S3(), session)
+
+    assert session.events == ["open", "6 cells", "close", "render"]
+
+
+def test_the_flow_closes_its_bench_endpoint_when_a_cell_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _Session()
+
+    with pytest.raises(InvalidCellError):
+        _drive_flow(tmp_path, monkeypatch, _S3(failing=("/warmup/",)), session)
+
+    assert session.events == ["open", "close"]
+
+
+def test_a_workload_the_rig_rules_out_is_refused_before_the_bench_endpoint_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Opening the endpoint applies the stack and waits its host's boot, minutes of billed
+    # time a workload the rig refuses should not spend. Ten times the pool holds the
+    # whole working set, so offload has nothing to add.
+    session = _Session()
+
+    with pytest.raises(KvAbWorkloadError, match="working set"):
+        _drive_flow(
+            tmp_path,
+            monkeypatch,
+            _S3(),
+            session,
+            edits=[
+                (
+                    "kv_cache_memory_bytes: 1207959552",
+                    "kv_cache_memory_bytes: 12079595520",
+                )
+            ],
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
+def test_the_flow_names_a_missing_stack_dir_before_the_bench_endpoint_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    # An empty path would read as the working directory, which terraform would init
+    # instead of the baked stack.
+    session = _Session()
+    if value is None:
+        monkeypatch.delitem(_WORKER_ENV, "BENCH_ENDPOINT_STACK_DIR")
+        monkeypatch.delenv("BENCH_ENDPOINT_STACK_DIR", raising=False)
+    else:
+        monkeypatch.setitem(_WORKER_ENV, "BENCH_ENDPOINT_STACK_DIR", value)
+
+    with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_STACK_DIR"):
+        _drive_flow(tmp_path, monkeypatch, _S3(), session)
+
+    assert session.calls == []
 
 
 def test_a_failed_render_fails_the_flow_with_every_rungs_labels_already_written(
@@ -536,7 +704,6 @@ def test_a_workload_the_loader_refuses_still_shows_its_config_on_the_run_page(
     with pytest.raises(KvAbConfigError):
         kv_ab_flow(
             run_id="ab1",
-            instance_id="i-1",
             region="us-east-1",
             bucket="bench",
             image_ref="bench:sha",

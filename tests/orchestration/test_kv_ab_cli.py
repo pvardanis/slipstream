@@ -63,13 +63,10 @@ def test_register_kv_ab_registers_a_module_path_deployment(
         "metrics_url": "http://vllm-gpu.slipstream.svc:8000/metrics",
         "retries": 0,
     }
-    # The A/B drives the running bench host, so run_id and instance_id are the flow
-    # parameters left for the trigger to supply, as flow-dispatch.yml sends them.
+    # The A/B opens its own bench endpoint, so run_id is the one flow parameter left for
+    # the trigger to supply.
     flow_parameters = inspect.signature(cli_module.kv_ab_flow.fn).parameters
-    assert set(flow_parameters) - set(captured["parameters"]) == {
-        "run_id",
-        "instance_id",
-    }
+    assert set(flow_parameters) - set(captured["parameters"]) == {"run_id"}
 
 
 def test_register_kv_ab_threads_overrides_onto_the_deployment(
