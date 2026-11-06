@@ -5,9 +5,9 @@
 # GitHub UI without a workstation's kubectl. It registers the flow's deployment (the same
 # `register-*` command `just prefect-register-sweep` or `just prefect-register-kv-ab`
 # runs), then triggers a run of it against a live cluster; each flow opens and closes its
-# own bench endpoint. Registration
-# overwrites the deployment, so every dispatch runs with defaults resolved from the live
-# stack and main, including after a cluster-down wiped the server's SQLite. It does not
+# own bench endpoint. Registration overwrites the deployment, so every dispatch runs with
+# defaults resolved from the live stack and main, including after a cluster-down wiped the
+# server's SQLite. It does not
 # stand the cluster up (`just stack-up`), which stays a deliberate operator step that
 # brackets the GPU spend (ADR-0015). The run itself executes in-cluster on the worker to
 # completion; this workflow returns as soon as the run is created (no --watch),
@@ -268,7 +268,7 @@ jobs:
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
           # Refuse to create the run when the worker's config is not main's: the run would
-          # run a config main no longer holds. Checked after the summary, so the job page
+          # execute a config main no longer holds. Checked after the summary, so the job page
           # still shows the config the worker would have run.
           if ! git diff --quiet "${worker_commit}" HEAD -- "${config_repo_path}"; then
             echo "::error::the worker runs ${config_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) and dispatch again"
