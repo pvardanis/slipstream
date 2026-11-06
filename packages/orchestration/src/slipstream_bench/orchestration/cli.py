@@ -302,9 +302,9 @@ def register_kv_ab(
     """Register the kv-cache-extension-ab deployment on the process work pool (#326).
 
     Creates the deployment a run triggers with the run id alone; the run opens its own
-    bench endpoint, and the workload config is the in-image default. Registered as ``register-knob-sweep``
-    registers the knob sweep: a module-path entrypoint, no image build, the
-    cluster-stable inputs as default parameters. Region, bucket, and image ref are
+    bench endpoint, and the workload config is the in-image default. Registered as
+    ``register-knob-sweep`` registers the knob sweep: a module-path entrypoint, no image
+    build, the cluster-stable inputs as default parameters. Region, bucket, and image ref are
     checked non-empty and the work pool present first.
 
     :param region: AWS region of the host and bucket.

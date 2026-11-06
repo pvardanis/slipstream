@@ -571,18 +571,16 @@ def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_rende
     assert session.events == ["open", "6 cells", "close", "render"]
 
 
+@pytest.mark.parametrize(
+    "failing", ["/warmup/", "off-r1/pshare90_burst1.0_mc2"], ids=["warmup", "rung"]
+)
 def test_the_flow_closes_its_bench_endpoint_when_a_cell_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
 ) -> None:
     session = RecordingSession()
 
     with pytest.raises(InvalidCellError):
-        _drive_flow(
-            tmp_path,
-            monkeypatch,
-            _S3(failing=("off-r1/pshare90_burst1.0_mc2",)),
-            session,
-        )
+        _drive_flow(tmp_path, monkeypatch, _S3(failing=(failing,)), session)
 
     assert session.events == ["open", "close"]
 
