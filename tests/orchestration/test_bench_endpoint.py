@@ -3,11 +3,13 @@
 These tests drive the session against a scripted fake Terraform, which records each argv and
 the environment it was handed and answers ``output`` with a bench host instance id, and a fake
 S3 serving the host's boot sentinel. So the lifecycle (destroy after any outcome once the stack
-may hold resources), the sentinel handling, and where the variables travel are covered with
-no AWS and no Terraform binary.
+may hold resources), the sentinel handling, where the variables travel, and the milestones
+it logs are covered with no AWS and no Terraform binary.
 """
 
 import io
+import logging
+import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
@@ -628,3 +630,64 @@ def test_read_stack_dir_names_a_missing_or_empty_variable(
     # init whatever it found there instead of the baked stack.
     with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_STACK_DIR"):
         read_stack_dir(environ)
+
+
+_LOGGER_NAME = "slipstream_bench.orchestration.bench_endpoint"
+
+
+def _milestones(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == _LOGGER_NAME]
+
+
+def test_session_logs_its_milestones_in_order(
+    stack_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The apply and boot take minutes with no other output, so each step is logged as it
+    # starts or ends; the flow surfaces these lines on its run page.
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+
+    with _open(_FakeTerraform(), _FakeS3(["ok"]), stack_dir, now=_ticking_clock(30.0)):
+        pass
+
+    milestones = _milestones(caplog)
+    assert milestones[0] == (
+        "bench endpoint applying "
+        "(state s3://slipstream-tfstate-x1/bench-endpoint/terraform.tfstate)"
+    )
+    assert milestones[1] == (
+        f"bench host {_INSTANCE_ID} launched; waiting for its boot sentinel"
+    )
+    assert re.fullmatch(rf"bench host {_INSTANCE_ID} ready after \d+s", milestones[2])
+    assert milestones[3:] == ["bench endpoint destroying", "bench endpoint destroyed"]
+    assert not any("sk-secret-key" in m for m in milestones)
+
+
+def test_session_logs_the_destroy_but_no_ready_when_the_host_fails_to_boot(
+    stack_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+
+    with (
+        pytest.raises(BenchHostBootError),
+        _open(_FakeTerraform(), _FakeS3(["failed: docker"]), stack_dir),
+    ):
+        pass
+
+    milestones = _milestones(caplog)
+    assert not any("ready" in m for m in milestones)
+    assert milestones[-2:] == ["bench endpoint destroying", "bench endpoint destroyed"]
+
+
+def test_session_does_not_log_destroyed_when_the_destroy_fails(
+    stack_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+
+    with (
+        pytest.raises(RuntimeError, match="terraform destroy failed"),
+        _open(_FakeTerraform(fail_on="destroy"), _FakeS3(["ok"]), stack_dir),
+    ):
+        pass
+
+    milestones = _milestones(caplog)
+    assert milestones[-1] == "bench endpoint destroying"

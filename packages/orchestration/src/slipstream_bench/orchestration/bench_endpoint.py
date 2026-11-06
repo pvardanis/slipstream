@@ -4,7 +4,9 @@ The bench endpoint (``terraform/bench-endpoint``) lives for a flow run: the sess
 the stack, reads the bench host's instance id, waits for the host's boot sentinel, yields
 the bench host, and destroys the stack on the way out. Once the apply starts, the destroy
 runs whatever happens next — a failed apply, a host that never boots, a raising body — so a
-run never leaves the endpoint billing.
+run never leaves the endpoint billing. Each step logs a milestone on the package logger
+(applying, launched, ready, destroying, destroyed), which a flow surfaces on its run page,
+so the minutes the apply and boot take are not silent.
 
 The module imports no Prefect, so a flow can open the session around its work and its tests
 drive it against a fake :data:`Terraform` and a fake S3 client. Terraform runs in a
@@ -13,6 +15,7 @@ root where terraform cannot write ``.terraform``.
 """
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -29,6 +32,8 @@ from botocore.exceptions import ClientError
 # The host writes boot-status/<instance-id> to the results bucket when cloud-init ends:
 # "ok", or "failed: <step>; see <log>". Until then the key is absent, which S3 reports as
 # NoSuchKey.
+_LOGGER = logging.getLogger(__name__)
+
 _BOOT_STATUS_PREFIX = "boot-status"
 _BOOT_OK = "ok"
 _BOOT_FAILED_PREFIX = "failed:"
@@ -153,6 +158,8 @@ def open_bench_endpoint(
         )
         _refuse_held_state(terraform, chdir=chdir, env=env, topology=topology)
         try:
+            _LOGGER.info("bench endpoint applying (state %s)", _get_state_url(topology))
+            applied_at = now()
             terraform(
                 [chdir, "apply", "-auto-approve", "-input=false", "-no-color"], env
             )
@@ -163,6 +170,9 @@ def open_bench_endpoint(
                 raise BenchHostBootError(
                     f"terraform output {_INSTANCE_ID_OUTPUT} is empty after apply"
                 )
+            _LOGGER.info(
+                "bench host %s launched; waiting for its boot sentinel", instance_id
+            )
             _wait_for_boot(
                 s3_client,
                 bucket=results_bucket,
@@ -171,6 +181,9 @@ def open_bench_endpoint(
                 poll_interval_s=poll_interval_s,
                 sleep=sleep,
                 now=now,
+            )
+            _LOGGER.info(
+                "bench host %s ready after %.0fs", instance_id, now() - applied_at
             )
             yield BenchHost(instance_id=instance_id)
         finally:
@@ -346,6 +359,7 @@ def _destroy(
     topology: BenchEndpointTopology,
 ) -> None:
     """Destroy the stack, noting on a failure where the state left behind lives."""
+    _LOGGER.info("bench endpoint destroying")
     try:
         terraform([chdir, "destroy", "-auto-approve", "-input=false", "-no-color"], env)
     except Exception as error:
@@ -354,6 +368,7 @@ def _destroy(
             f"{_get_state_url(topology)} (`just bench-endpoint-down` destroys from it)"
         )
         raise
+    _LOGGER.info("bench endpoint destroyed")
 
 
 def _get_state_url(topology: BenchEndpointTopology) -> str:
