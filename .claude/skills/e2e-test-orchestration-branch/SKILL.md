@@ -14,6 +14,8 @@ The agent runs every command: build, push, the worker swap, registration, grid c
 
 The stack is up (`kubectl -n prefect get deploy prefect-worker` lists it), Docker is running, and the branch's work is committed. If the stack is down, stop and say so; bringing it up is the user's call.
 
+A knob sweep brings its own bench endpoint and refuses to start while one is up, so before a knob-sweep scenario `terraform -chdir=terraform/bench-endpoint state list` must print nothing; otherwise ask the user to run `just bench-endpoint-down`.
+
 ## Step 1 — Build and push a `qa-` image
 
 ```bash
@@ -74,7 +76,6 @@ Derive one scenario per behaviour the branch's issues or PRs claim. Give each it
 ```bash
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-sweep/knob-sweep \
   --param run_id=<run-id> \
-  --param instance_id="$(terraform -chdir=terraform/bench-endpoint output -raw bench_host_instance_id)" \
   --param sweep_grid=/tmp/<grid>.yaml
 ```
 
