@@ -84,6 +84,62 @@ class BenchEndpointTopology:
     instance_profile: str
 
 
+class TopologyError(ValueError):
+    """The worker environment lacks, or malforms, a bench-endpoint topology variable."""
+
+
+def read_topology(environ: Mapping[str, str]) -> BenchEndpointTopology:
+    """Read the bench-endpoint topology from the worker's environment.
+
+    The eks stack's ``bench-endpoint-topology`` ConfigMap sets these on the worker: plain
+    strings, and the two lists as JSON arrays.
+
+    :param environ: the environment to read (the worker's ``os.environ``).
+    :return: the topology the session applies the stack against.
+    :raise TopologyError: naming the variable that is unset, empty, or not a non-empty
+        JSON array of strings.
+    """
+    return BenchEndpointTopology(
+        state_bucket=_read_string(environ, "BENCH_ENDPOINT_STATE_BUCKET"),
+        vpc_id=_read_string(environ, "BENCH_ENDPOINT_VPC_ID"),
+        public_subnets=_read_strings(environ, "BENCH_ENDPOINT_PUBLIC_SUBNETS"),
+        node_security_group_id=_read_string(
+            environ, "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID"
+        ),
+        node_autoscaling_groups=_read_strings(
+            environ, "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS"
+        ),
+        instance_profile=_read_string(environ, "BENCH_ENDPOINT_INSTANCE_PROFILE"),
+    )
+
+
+def _read_string(environ: Mapping[str, str], name: str) -> str:
+    value = environ.get(name, "")
+    if not value:
+        raise TopologyError(
+            f"{name} is unset or empty; the worker reads it from the eks stack's "
+            f"bench-endpoint-topology ConfigMap"
+        )
+    return value
+
+
+def _read_strings(environ: Mapping[str, str], name: str) -> tuple[str, ...]:
+    raw = _read_string(environ, name)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise TopologyError(f"{name} is not JSON: {raw!r}") from error
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) for item in value)
+    ):
+        raise TopologyError(
+            f"{name} must be a non-empty JSON array of strings: {raw!r}"
+        )
+    return tuple(value)
+
+
 @dataclass(frozen=True)
 class BenchHost:
     """The bench host the session stood up, addressed by its EC2 instance id."""
