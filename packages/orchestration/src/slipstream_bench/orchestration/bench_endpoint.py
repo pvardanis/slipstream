@@ -40,10 +40,12 @@ _INSTANCE_ID_OUTPUT = "bench_host_instance_id"
 # operator can find the state a run left behind.
 _STATE_KEY = "bench-endpoint/terraform.tfstate"
 
-# Where each environment variable the worker reads comes from, named when one is missing.
+# Where the worker's environment variables come from, named when one is missing.
 _TOPOLOGY_SOURCE = "the eks stack's bench-endpoint-topology ConfigMap"
-_STACK_DIR_SOURCE = "the orchestration image, which bakes the stack there"
-_STACK_DIR_ENV = "BENCH_ENDPOINT_STACK_DIR"
+_STACK_DIR_SOURCE = (
+    "the orchestration image, which bakes the stack there "
+    "(a workstation run points it at a checkout of terraform/bench-endpoint)"
+)
 
 # The terraform transport: run ``terraform <args>`` with extra environment, return stdout,
 # and raise on a non-zero exit. Stateless and single-op, so a typed Callable, not a Protocol.
@@ -54,10 +56,10 @@ class TerraformError(Exception):
     """A ``terraform`` invocation that exited non-zero."""
 
 
-class TopologyError(ValueError):
-    """The worker environment lacks, or malforms, a variable the session is applied from.
+class BenchEndpointEnvironmentError(ValueError):
+    """The worker environment lacks, or malforms, a ``BENCH_ENDPOINT_*`` variable.
 
-    The topology variables and the baked stack's path, ``BENCH_ENDPOINT_*`` all.
+    Covers every variable the session is applied from: the topology and the baked stack's path.
     """
 
 
@@ -183,7 +185,7 @@ def read_topology(environ: Mapping[str, str]) -> BenchEndpointTopology:
 
     :param environ: the environment to read (the worker's ``os.environ``).
     :return: the topology the session applies the stack against.
-    :raise TopologyError: naming the variable that is unset, empty, or not a non-empty
+    :raise BenchEndpointEnvironmentError: naming the variable that is unset, empty, or not a non-empty
         JSON array of strings.
     """
     return BenchEndpointTopology(
@@ -205,9 +207,11 @@ def read_stack_dir(environ: Mapping[str, str]) -> Path:
 
     :param environ: the environment to read (the worker's ``os.environ``).
     :return: the stack directory the session copies and applies.
-    :raise TopologyError: when ``BENCH_ENDPOINT_STACK_DIR`` is unset or empty.
+    :raise BenchEndpointEnvironmentError: when ``BENCH_ENDPOINT_STACK_DIR`` is unset or empty.
     """
-    return Path(_read_string(environ, _STACK_DIR_ENV, source=_STACK_DIR_SOURCE))
+    return Path(
+        _read_string(environ, "BENCH_ENDPOINT_STACK_DIR", source=_STACK_DIR_SOURCE)
+    )
 
 
 def build_terraform(*, binary: str = "terraform") -> Terraform:
@@ -361,7 +365,7 @@ def _read_string(
 ) -> str:
     value = environ.get(name, "")
     if not value:
-        raise TopologyError(
+        raise BenchEndpointEnvironmentError(
             f"{name} is unset or empty; the worker reads it from {source}"
         )
     return value
@@ -372,13 +376,13 @@ def _read_strings(environ: Mapping[str, str], name: str) -> tuple[str, ...]:
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise TopologyError(f"{name} is not JSON: {raw!r}") from error
+        raise BenchEndpointEnvironmentError(f"{name} is not JSON: {raw!r}") from error
     if (
         not isinstance(value, list)
         or not value
         or not all(isinstance(item, str) for item in value)
     ):
-        raise TopologyError(
+        raise BenchEndpointEnvironmentError(
             f"{name} must be a non-empty JSON array of strings: {raw!r}"
         )
     return tuple(value)

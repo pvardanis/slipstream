@@ -35,9 +35,9 @@ from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration import storage as storage_module
 from slipstream_bench.orchestration.bench_endpoint import (
+    BenchEndpointEnvironmentError,
     BenchEndpointTopology,
     BenchHost,
-    TopologyError,
 )
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
@@ -1199,7 +1199,7 @@ def test_knob_sweep_flow_names_a_missing_stack_dir_before_the_bench_endpoint_ope
     else:
         monkeypatch.setenv("BENCH_ENDPOINT_STACK_DIR", value)
 
-    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_STACK_DIR"):
+    with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_STACK_DIR"):
         _run_flow(model_yaml, grid_yaml, manifest)
 
     assert captures["sessions"] == []

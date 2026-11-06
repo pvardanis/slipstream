@@ -15,12 +15,12 @@ import pytest
 from botocore.exceptions import ClientError
 
 from slipstream_bench.orchestration.bench_endpoint import (
+    BenchEndpointEnvironmentError,
     BenchEndpointInUseError,
     BenchEndpointTopology,
     BenchHost,
     BenchHostBootError,
     TerraformError,
-    TopologyError,
     build_terraform,
     open_bench_endpoint,
     read_stack_dir,
@@ -591,14 +591,14 @@ def test_read_topology_parses_the_worker_environment() -> None:
 def test_read_topology_names_a_missing_variable(name: str) -> None:
     environ = {key: value for key, value in _WORKER_ENV.items() if key != name}
 
-    with pytest.raises(TopologyError, match=name):
+    with pytest.raises(BenchEndpointEnvironmentError, match=name):
         read_topology(environ)
 
 
 def test_read_topology_names_an_empty_variable() -> None:
     environ = {**_WORKER_ENV, "BENCH_ENDPOINT_VPC_ID": ""}
 
-    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_VPC_ID"):
+    with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_VPC_ID"):
         read_topology(environ)
 
 
@@ -608,7 +608,9 @@ def test_read_topology_rejects_a_list_that_is_not_strings(value: str) -> None:
     # minutes in, so read_topology refuses it before any apply.
     environ = {**_WORKER_ENV, "BENCH_ENDPOINT_PUBLIC_SUBNETS": value}
 
-    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_PUBLIC_SUBNETS"):
+    with pytest.raises(
+        BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_PUBLIC_SUBNETS"
+    ):
         read_topology(environ)
 
 
@@ -624,5 +626,5 @@ def test_read_stack_dir_names_a_missing_or_empty_variable(
 ) -> None:
     # An empty value would read as Path(""), the working directory, and terraform would
     # init whatever it found there instead of the baked stack.
-    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_STACK_DIR"):
+    with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_STACK_DIR"):
         read_stack_dir(environ)
