@@ -2,8 +2,8 @@
 
 Driven with the flow's ``deploy`` faked: the deployment is registered as a module-path
 entrypoint on the process pool with no image build, its cluster-stable inputs and in-image
-paths as default parameters, so a trigger supplies only the run id, the bench host, and
-optionally the workload config.
+paths as default parameters, so a trigger supplies only the run id and, optionally, the
+workload config.
 """
 
 import inspect

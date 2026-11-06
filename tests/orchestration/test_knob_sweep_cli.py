@@ -19,7 +19,6 @@ import inspect
 import logging
 import re
 from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -54,6 +53,13 @@ from slipstream_bench.orchestration.flows.knob_sweep import (
 )
 from slipstream_bench.orchestration.storage import StorageError
 from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
+from tests.orchestration.bench_endpoint_fakes import (
+    API_KEY,
+    BENCH_HOST_ID,
+    STACK_DIR,
+    WORKER_ENV,
+    RecordingSession,
+)
 from tests.orchestration.cell_object_fakes import ServingCellS3
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
@@ -144,23 +150,6 @@ spec:
               memory: ${MEMORY_LIMIT}
 """
 
-# The bench host the faked bench-endpoint session yields, distinct from any instance id a
-# test passes elsewhere, so a cell sent to it can only have come from the session.
-_BENCH_HOST_ID = "i-0bench"
-_API_KEY = "sk-bench-123"
-_STACK_DIR = "/app/terraform/bench-endpoint"
-
-# The worker's environment: the bench-endpoint topology ConfigMap and the image's stack dir.
-_WORKER_ENV = {
-    "BENCH_ENDPOINT_STATE_BUCKET": "slipstream-tfstate-abc123",
-    "BENCH_ENDPOINT_VPC_ID": "vpc-0abc",
-    "BENCH_ENDPOINT_PUBLIC_SUBNETS": '["subnet-pub-a", "subnet-pub-b"]',
-    "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID": "sg-0node",
-    "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS": '["eks-cpu-asg-1"]',
-    "BENCH_ENDPOINT_INSTANCE_PROFILE": "slipstream-bench-host",
-    "BENCH_ENDPOINT_STACK_DIR": _STACK_DIR,
-}
-
 _CEILING_LOG = "Maximum concurrency for 4,096 tokens per request: 12.50x"
 _POINT = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _OTHER_POINT = EnginePoint(
@@ -180,7 +169,7 @@ class _FakeKubectl:
         if "logs" in args:
             return self._logs
         if "secret" in args:
-            return base64.b64encode(_API_KEY.encode("utf-8")).decode("ascii")
+            return base64.b64encode(API_KEY.encode("utf-8")).decode("ascii")
         return ""
 
 
@@ -393,7 +382,6 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "task_args": {},
         "artifacts": [],
         "images": [],
-        "sessions": [],
         "events": [],
     }
 
@@ -424,22 +412,11 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captures["s3"] = s3
         return s3
 
-    @contextmanager
-    def _fake_open_bench_endpoint(**kwargs: Any) -> Iterator[BenchHost]:
-        # The session's arguments and its open/close are recorded, so a test asserts what
-        # the flow opens it with and what runs inside it.
-        captures["sessions"].append(kwargs)
-        captures["events"].append("open")
-        try:
-            yield BenchHost(instance_id=_BENCH_HOST_ID)
-        finally:
-            captures["events"].append("close")
-
-    for name, value in _WORKER_ENV.items():
+    for name, value in WORKER_ENV.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr(
-        run_setup_module, "open_bench_endpoint", _fake_open_bench_endpoint
-    )
+    session = RecordingSession(captures["events"])
+    captures["session"] = session
+    monkeypatch.setattr(run_setup_module, "open_bench_endpoint", session)
     # Every cell reads as cached, so a real driver skips each point's redeploy and scrape.
     monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
@@ -770,7 +747,7 @@ def test_knob_sweep_aborts_before_any_redeploy_on_unwritable_cache_key_storage(
 
     assert deployed == []
     # ...and before the bench endpoint is applied, the minutes of billed time it costs.
-    assert captures["sessions"] == []
+    assert captures["session"].calls == []
 
 
 def test_register_knob_sweep_registers_a_module_path_deployment(
@@ -1023,10 +1000,10 @@ def test_knob_sweep_flow_runs_its_cells_on_the_bench_host_it_opens(
 
     _run_flow(model_yaml, grid_yaml, manifest)
 
-    assert seen_instances == [_BENCH_HOST_ID]
+    assert seen_instances == [BENCH_HOST_ID]
     # One session, opened from the worker's environment with the key from the Secret,
     # reporting boot through the results bucket on the client the cells use.
-    [session] = captures["sessions"]
+    [session] = captures["session"].calls
     assert session["topology"] == BenchEndpointTopology(
         state_bucket="slipstream-tfstate-abc123",
         vpc_id="vpc-0abc",
@@ -1035,8 +1012,8 @@ def test_knob_sweep_flow_runs_its_cells_on_the_bench_host_it_opens(
         node_autoscaling_groups=("eks-cpu-asg-1",),
         instance_profile="slipstream-bench-host",
     )
-    assert session["stack_dir"] == Path(_STACK_DIR)
-    assert session["api_key"] == _API_KEY
+    assert session["stack_dir"] == Path(STACK_DIR)
+    assert session["api_key"] == API_KEY
     assert session["results_bucket"] == "bench-bucket"
     assert session["s3_client"] is captures["s3"]
     assert callable(session["terraform"])
@@ -1093,7 +1070,7 @@ def test_knob_sweep_flow_rejects_unreadable_sweep_args_before_the_bench_endpoint
     with pytest.raises(DigestError):
         _run_flow(model_yaml, grid_yaml, manifest, sweep_args_b64="not base64!")
 
-    assert captures["sessions"] == []
+    assert captures["session"].calls == []
 
 
 def test_knob_sweep_rejects_an_instance_id_option(tmp_path: Path) -> None:
@@ -1124,4 +1101,4 @@ def test_knob_sweep_flow_names_a_missing_stack_dir_before_the_bench_endpoint_ope
     with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_STACK_DIR"):
         _run_flow(model_yaml, grid_yaml, manifest)
 
-    assert captures["sessions"] == []
+    assert captures["session"].calls == []

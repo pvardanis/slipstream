@@ -73,6 +73,8 @@ def open_run_bench_endpoint(
     :return: the session, which yields the bench host and destroys the endpoint on exit.
     :raise BenchEndpointEnvironmentError: when the worker's environment lacks a
         ``BENCH_ENDPOINT_*`` variable the apply needs.
+    :raise VllmApiKeyError: when the Secret's api-key field is absent, blank, or not
+        base64-encoded UTF-8.
     """
     return open_bench_endpoint(
         terraform=build_terraform(),
