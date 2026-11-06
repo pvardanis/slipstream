@@ -4,7 +4,7 @@ The knob sweep and the KV cache offload A/B call all three at their composition 
 the Prefect-free core's INFO milestones reach the UI, the run joins the ``run=<run-id>``
 filter, and its cells run on a bench endpoint opened from the worker's environment. Both
 register :func:`destroy_run_bench_endpoint` as their crash and cancellation hook, which
-destroys that endpoint once a killed run is gone.
+destroys that endpoint after the run's session has exited.
 """
 
 import logging
@@ -107,12 +107,15 @@ def destroy_run_bench_endpoint(
     """Destroy a crashed or cancelled run's bench endpoint: the flows' state hook.
 
     Prefect runs a cancelled run's hooks in the worker once it has killed the run's
-    process, and a crashed run's there or in the dying process. Either way the session that
-    opened the endpoint is gone, so the teardown is rebuilt from the run's parameters and
-    the worker's environment. Prefect's hook runner logs the hook's start and end on the
-    run, and its failure (a held state lock, a failed destroy) with the traceback.
+    process. A crashed run's run in the worker when its process exits non-zero, or in the
+    dying process when the run reports the crash itself, within whatever time the process
+    has left. Either way the session that opened the endpoint has exited, so the teardown
+    is rebuilt from the run's parameters and the worker's environment. Prefect logs the
+    hook's start on the run, then its success, or its failure (a held state lock, a failed
+    destroy) with the traceback.
 
-    Prefect's runner passes the three arguments by keyword, so their names are fixed.
+    Prefect's runner passes the arguments by keyword and the in-process engine passes them
+    in order, so both their names and their order are fixed.
 
     :param flow: the flow whose run ended (unused; part of the hook signature Prefect calls).
     :param flow_run: the run, whose ``run_id`` and ``region`` parameters the teardown uses.
