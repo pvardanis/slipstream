@@ -160,22 +160,21 @@ hence the order:
 ## Quickstart
 
 ```sh
-just stack-up             # cluster + Prefect + GPU pool + vLLM + bench endpoint
+just stack-up             # cluster + Prefect + GPU pool + vLLM
 # a KV cache A/B:          Actions → kv-ab-dispatch → Run workflow (on main)
-just bench-endpoint-down  # once the A/B ends: a knob sweep brings its own endpoint
-# then a knob sweep:       Actions → sweep-dispatch → Run workflow (on main)
+# a knob sweep:            Actions → sweep-dispatch → Run workflow (on main)
+#                          each run brings up and destroys its own bench endpoint
 just bench-results-sync   # pull results into bench/results/
 just stack-down           # tear down, then zero-leak sweep (spend → 0)
 ```
 
-The bench endpoint is public and every node bills while up: **run `just stack-down`
-when done.** The state bucket, ECR repositories and bench-results bucket survive it, so
-results and the resume cache outlive the cluster. `stack-down` exits non-zero if a tagged
-instance or volume survived, and skips `cluster-down` (leaving the cluster billing) if
-the endpoint teardown failed: fix that and rerun. Running a sweep locally, single
-points, pinned images and the cloud-verify check are in
-[`docs/operations.md`](docs/operations.md); `uv run slipstream-bench --help` lists the
-bench CLI.
+Every node bills while up: **run `just stack-down` when done.** The state bucket, ECR
+repositories and bench-results bucket survive it, so results and the resume cache
+outlive the cluster. `stack-down` exits non-zero if a tagged instance or volume
+survived, and skips `cluster-down` (leaving the cluster billing) if the endpoint
+teardown failed: fix that and rerun. Running a sweep locally, single points, pinned
+images and the cloud-verify check are in [`docs/operations.md`](docs/operations.md);
+`uv run slipstream-bench --help` lists the bench CLI.
 
 ## What a benchmark run looks like
 

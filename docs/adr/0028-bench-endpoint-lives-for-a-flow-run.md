@@ -1,4 +1,4 @@
-<!-- ADR recording that the bench endpoint lives for a flow run: the knob sweep flow applies the bench-endpoint stack from the Prefect worker when it starts, waits for the bench host to boot, runs its cells against it, and destroys the stack when it ends, so the operator passes no instance id. Covers the worker's bounded infra rights, the baked Terraform, the unattended apply with no saved plan, the refusal to touch an endpoint the run did not create, and what a killed or cancelled run leaves behind. Amends ADR-0004 (lifecycle) and ADR-0015 (worker rights). The KV cache A/B adopts the same session in #471. -->
+<!-- ADR recording that the bench endpoint lives for a flow run: the knob sweep and KV cache A/B flows each apply the bench-endpoint stack from the Prefect worker when they start, wait for the bench host to boot, run their cells against it, and destroy the stack when they end, so the operator passes no instance id and `just stack-up` brings up no endpoint. Covers the worker's bounded infra rights, the baked Terraform, the unattended apply with no saved plan, the refusal to touch an endpoint the run did not create, the state shared with the manual recipes, and what a killed or cancelled run leaves behind. Amends ADR-0004 (lifecycle) and ADR-0015 (worker rights). -->
 
 # ADR-0028: The bench endpoint lives for a flow run
 
@@ -19,12 +19,14 @@ stack's outputs and CI found by EC2 tags.
 
 ## Decision
 
-**The knob sweep flow owns its bench endpoint.** It opens a bench-endpoint session around
-its point loop: the session applies `terraform/bench-endpoint`, reads the bench host's
-instance id from the stack's outputs, waits for the host's boot sentinel in the results
-bucket, yields the bench host to the run, and destroys the stack on the way out. The
-operator triggers a run with no instance id, from a workstation or `sweep-dispatch`, and
-the run stays unattended.
+**Each unattended flow owns its bench endpoint.** The knob sweep opens a bench-endpoint
+session around its point loop, and the KV cache A/B around its arm runs, through one
+opener (`flows.run_setup.open_run_bench_endpoint`). The session applies
+`terraform/bench-endpoint`, reads the bench host's instance id from the stack's outputs,
+waits for the host's boot sentinel in the results bucket, yields the bench host to the
+run, and destroys the stack on the way out. The operator triggers a run with its run id
+alone, from a workstation, `sweep-dispatch` or `kv-ab-dispatch`, and the run stays
+unattended. `just stack-up` brings up no endpoint.
 
 - **The session is Prefect-free** (`slipstream_bench.orchestration.bench_endpoint`).
   Terraform is injected as a typed `Callable` over argv, the same shape as the `Kubectl`
@@ -65,17 +67,19 @@ the run stays unattended.
   bucket it writes only the bench-endpoint key and its lock, and reads the bootstrap state.
   Its Kubernetes RBAC adds `get` on the one api-key Secret.
 
-The point sweep keeps its instance-id parameter, so `just bench` still runs against an
-endpoint brought up by hand with `just bench-endpoint-up`. The KV cache A/B still drives a
-running bench host and takes its instance id, and `just stack-up` still creates the
-endpoint, until the A/B opens the same session (#471).
+`just bench` and `just prefix-cache` read the bench host from the stack's outputs, so they
+run against an endpoint brought up by hand with `just bench-endpoint-up`; the point sweep
+keeps its instance-id parameter for that.
 
 ## Consequences
 
-- The endpoint bills and is publicly reachable only while a knob sweep runs, plus the
-  minutes the apply, the host's boot and the destroy take.
-- `just stack-up` leaves an endpoint up, and a knob sweep refuses to start against it. Run
-  `just bench-endpoint-down` before a knob sweep until #471 lands.
+- The endpoint bills and is publicly reachable only while a flow runs, plus the minutes
+  the apply, the host's boot and the destroy take.
+- The flows and the manual recipes share one state. A flow refuses to start while an
+  endpoint from `just bench-endpoint-up` is up, and `just bench-endpoint-down` or
+  `just stack-down` run during a flow destroys that flow's endpoint under it.
+- A KV cache A/B whose workload the rig rules out (`check_fits_rig`) fails before it
+  applies anything.
 - A resume under the same run id brings up a new bench host. No cache key or digest
   includes the instance id, so cells that already hold a cache record are still reused
   (ADR-0022). A resume whose every cell is cached still applies and destroys an endpoint;

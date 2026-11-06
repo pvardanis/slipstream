@@ -11,17 +11,20 @@ unattended on the in-cluster Prefect worker. Every swept value lives in
 [`bench/configs/sweep-grid.yaml`](../bench/configs/sweep-grid.yaml).
 
 **The run brings its own bench endpoint**
-([ADR-0028](adr/0028-bench-endpoint-lives-for-a-flow-run.md)). It applies the bench-endpoint
-stack before its first point, waits for the bench host to boot, and destroys the stack after
-its last point, whether the run succeeds or fails. The run page logs each step (applying,
-launched, ready, destroying, destroyed). A run refuses to start if an endpoint is already
-up, which `just stack-up` leaves behind, so **run `just bench-endpoint-down` before a knob
-sweep**. A run whose destroy failed leaves the endpoint billing; its error names the state,
-and the body's error, if any, is chained beneath it. **Cancelling a run, or a killed worker
-pod, can skip the destroy** and leave the state lock held. Run `just bench-endpoint-down`;
-if it fails on the lock, run `terraform -chdir=terraform/bench-endpoint force-unlock
-<lock-id>` with the id from the lock error, then `just bench-endpoint-down` again. Only the
-monthly budget catches a leaked bench endpoint; the GPU alarm does not.
+([ADR-0028](adr/0028-bench-endpoint-lives-for-a-flow-run.md)). It applies the
+bench-endpoint stack before its first point, waits for the bench host to boot, and
+destroys the stack after its last point, whether the run succeeds or fails. The run page
+logs each step (applying, launched, ready, destroying, destroyed). A run refuses to start
+if an endpoint is already up: one `just bench-endpoint-up` stood up for `just bench`, or
+one a failed destroy left. Bring it down with `just bench-endpoint-down` first. The run
+and those recipes share one Terraform state, so **do not run `just bench-endpoint-down` or
+`just stack-down` while a run is in flight**: either destroys the run's endpoint under it.
+A run whose destroy failed leaves the endpoint billing; its error names the state, and the
+body's error, if any, is chained beneath it. **Cancelling a run, or a killed worker pod,
+can skip the destroy** and leave the state lock held. Run `just bench-endpoint-down`; if
+it fails on the lock, run `terraform -chdir=terraform/bench-endpoint force-unlock
+<lock-id>` with the id from the lock error, then `just bench-endpoint-down` again. Only
+the monthly budget catches a leaked bench endpoint; the GPU alarm does not.
 
 **From CI** — Actions → `sweep-dispatch` → Run workflow, **on `main`** (the role trusts
 only `main`). Its one input, `run_id`, is optional and defaults to a UTC timestamp. The
@@ -83,6 +86,11 @@ interleaved — off, on, off, on — `runs_per_arm` times. Each arm run redeploy
 `deploy/vllm-gpu` with the arm's offload switch and the workload's capped GPU KV pool,
 runs one unrecorded warmup cell, then the concurrency ladder.
 
+**The run brings its own bench endpoint**, as the knob sweep does: it applies the
+bench-endpoint stack before its first arm run and destroys it after its last, before it
+renders the results. Everything the knob sweep's endpoint paragraph says about refusals,
+a failed destroy and cancelling applies here too.
+
 **The workload** is [`bench/configs/kv-cache-extension-ab.yaml`](../bench/configs/kv-cache-extension-ab.yaml),
 the one config the orchestration image bakes and the deployment runs. Other workloads are
 parked beside it: `kv-cache-extension-ab.agent.yaml` (the live one is a copy of it) and
@@ -109,8 +117,7 @@ just prefect-ui               # hold a port-forward open; UI at http://localhost
 # in another shell:
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run \
   kv-cache-extension-ab/kv-cache-extension-ab \
-  --param run_id=<run-id> \
-  --param instance_id="$(terraform -chdir=terraform/bench-endpoint output -raw bench_host_instance_id)"
+  --param run_id=<run-id>
 ```
 
 As with the knob sweep, **do not run `just gpu-deploy` while an A/B is in flight**. After
