@@ -91,6 +91,15 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
         Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource = "arn:aws:s3:::${var.state_bucket}/${local.bench_endpoint_state_key}.tflock"
       },
+      # A terraform run that cannot push the state it changed leaves errored.tfstate in the
+      # run's temporary copy of the stack; the run copies it here, keyed by run id and
+      # command, for `terraform state push`. Write only: recovery reads it as the operator.
+      {
+        Sid      = "BenchEndpointErroredState"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.state_bucket}/bench-endpoint/errored/*"
+      },
       # The stack reads the bootstrap outputs (the bench-client image and results bucket)
       # through terraform_remote_state; read-only.
       {
