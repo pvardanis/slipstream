@@ -25,8 +25,9 @@ on:
         type: string
       instance_id:
         description: >-
-          Bench host instance id the flow drives over SSM. Blank resolves it from the
-          running bench host's tags.
+          Bench host instance id the flow drives over SSM, for kv-ab only. Blank
+          resolves it from the running bench host's tags. knob-sweep opens its own
+          bench endpoint and rejects a set value.
         required: false
         type: string
         default: ""
@@ -83,13 +84,17 @@ jobs:
 
       # The one place a flow's names live: the orchestration CLI command that registers
       # its deployment, the deployment's `<flow>/<deployment>` name, the deployment
-      # parameter holding the in-image path of the config the worker reads, and the job
-      # summary's heading for that config. Checked before any AWS call, so a caller
-      # naming an unknown flow fails here.
+      # parameter holding the in-image path of the config the worker reads, the job
+      # summary's heading for that config, and whether the run takes a bench host
+      # instance id. The knob sweep opens and closes its own bench endpoint, so it takes
+      # none; the KV cache A/B drives the running bench host. Checked before any AWS
+      # call, so a caller naming an unknown flow, or passing an instance id to a flow
+      # that takes none, fails here.
       - name: Resolve the flow's deployment
         id: flow
         env:
           FLOW: ${{ inputs.flow }}
+          INSTANCE_ID: ${{ inputs.instance_id }}
         run: |
           set -euo pipefail
           case "${FLOW}" in
@@ -98,23 +103,30 @@ jobs:
               deployment="knob-sweep/knob-sweep"
               config_parameter="sweep_grid"
               config_heading="Sweep grid"
+              takes_instance_id="false"
               ;;
             kv-ab)
               register="register-kv-ab"
               deployment="kv-cache-extension-ab/kv-cache-extension-ab"
               config_parameter="kv_ab_config"
               config_heading="KV cache A/B workload"
+              takes_instance_id="true"
               ;;
             *)
               echo "::error::unknown flow '${FLOW}'; expected knob-sweep or kv-ab"
               exit 1
               ;;
           esac
+          if [[ "${takes_instance_id}" == "false" && -n "${INSTANCE_ID}" ]]; then
+            echo "::error::flow '${FLOW}' opens its own bench endpoint and takes no instance_id (got ${INSTANCE_ID}); leave it blank"
+            exit 1
+          fi
           {
             echo "register=${register}"
             echo "deployment=${deployment}"
             echo "config_parameter=${config_parameter}"
             echo "config_heading=${config_heading}"
+            echo "takes_instance_id=${takes_instance_id}"
           } >>"${GITHUB_OUTPUT}"
 
       # Full history, so the config summary can read the flow's config at the commit the
@@ -151,6 +163,7 @@ jobs:
 
       - name: Resolve the bench host instance id
         id: host
+        if: steps.flow.outputs.takes_instance_id == 'true'
         env:
           INSTANCE_ID: ${{ inputs.instance_id }}
         run: |
@@ -233,6 +246,7 @@ jobs:
           BUCKET: ${{ steps.registration.outputs.bucket }}
           IMAGE_REF: ${{ steps.registration.outputs.image_ref }}
           INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
+          TAKES_INSTANCE_ID: ${{ steps.flow.outputs.takes_instance_id }}
           RUN_ID: ${{ inputs.run_id }}
           REGISTER: ${{ steps.flow.outputs.register }}
           DEPLOYMENT_NAME: ${{ steps.flow.outputs.deployment }}
@@ -240,7 +254,9 @@ jobs:
           CONFIG_HEADING: ${{ steps.flow.outputs.config_heading }}
         run: |
           set -euo pipefail
-          : "${INSTANCE_ID:?resolved instance id is empty}"
+          if [[ "${TAKES_INSTANCE_ID}" == "true" ]]; then
+            : "${INSTANCE_ID:?resolved instance id is empty}"
+          fi
           : "${BUCKET:?resolved results bucket is empty}"
           : "${IMAGE_REF:?resolved bench-client image ref is empty}"
           : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
@@ -330,7 +346,13 @@ jobs:
           # Create the run and return; the worker picks it up and runs it to completion
           # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
           # go as one JSON object so each value stays a string (--param parses values as
-          # JSON, which would turn a numeric run id into a number).
-          uv run prefect deployment run "${DEPLOYMENT_NAME}" \
-            --params "$(jq -nc --arg run_id "${flow_run_id}" --arg instance_id "${INSTANCE_ID}" \
+          # JSON, which would turn a numeric run id into a number). A flow that takes
+          # no instance id gets none: Prefect fails a run handed a parameter its flow
+          # does not declare.
+          if [[ "${TAKES_INSTANCE_ID}" == "true" ]]; then
+            params="$(jq -nc --arg run_id "${flow_run_id}" --arg instance_id "${INSTANCE_ID}" \
               '{run_id: $run_id, instance_id: $instance_id}')"
+          else
+            params="$(jq -nc --arg run_id "${flow_run_id}" '{run_id: $run_id}')"
+          fi
+          uv run prefect deployment run "${DEPLOYMENT_NAME}" --params "${params}"
