@@ -116,9 +116,9 @@ prefect-storage-down:
 prefect-register-sweep: (_prefect-register "knob-sweep")
 
 # An A/B is then triggered with `prefect deployment run
-# kv-cache-extension-ab/kv-cache-extension-ab --param run_id=... --param instance_id=...`
-# and picked up by the in-cluster worker. Run it after `prefect-up`; `_prefect-register`
-# holds what registration stores.
+# kv-cache-extension-ab/kv-cache-extension-ab --param run_id=...` and picked up by the
+# in-cluster worker, which opens its own bench endpoint (ADR-0028). Run it after
+# `prefect-up`; `_prefect-register` holds what registration stores.
 # Register the kv-cache-extension-ab deployment on the process work pool.
 [group('prefect')]
 prefect-register-kv-ab: (_prefect-register "kv-ab")
@@ -129,8 +129,8 @@ prefect-register-kv-ab: (_prefect-register "kv-ab")
 # process pool. Registration hits the in-cluster Prefect API over a transient
 # port-forward (reaped on exit), the same way `prefect-up` creates the pool. The
 # cluster-stable inputs become the deployment's default parameters: region and results
-# bucket are read from terraform, the bench-client image from `_bench-image-ref`; run_id,
-# and for the A/B instance_id, are supplied per run at trigger.
+# bucket are read from terraform, the bench-client image from `_bench-image-ref`; run_id
+# is supplied per run at trigger.
 _prefect-register deployment: _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
