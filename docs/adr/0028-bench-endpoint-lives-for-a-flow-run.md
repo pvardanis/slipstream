@@ -9,8 +9,8 @@
 
 The bench endpoint (ADR-0004) is the mutual-TLS public load balancer in front of vLLM,
 together with the bench host: the EC2 instance outside the cluster that runs the
-bench-client image and drives the cells over SSM. `just stack-up` stands it up and
-`just stack-down` tears it down, so it bills and stays publicly reachable for the whole
+bench-client image and drives the cells over SSM. `just stack-up` stood it up and
+`just stack-down` tore it down, so it billed and stayed publicly reachable for the whole
 working session. The two unattended Prefect flows (knob sweep and KV cache A/B) need it
 only while they run; `just bench` and `just prefix-cache` use it ad hoc.
 
@@ -69,15 +69,17 @@ unattended. `just stack-up` brings up no endpoint.
 
 `just bench` and `just prefix-cache` read the bench host from the stack's outputs, so they
 run against an endpoint brought up by hand with `just bench-endpoint-up`; the point sweep
-keeps its instance-id parameter for that.
+keeps its instance-id parameter so it can target such an endpoint.
 
 ## Consequences
 
 - The endpoint bills and is publicly reachable only while a flow runs, plus the minutes
-  the apply, the host's boot and the destroy take.
+  the apply, the host's boot and the destroy take, or while one `just bench-endpoint-up`
+  stood up is up.
 - The flows and the manual recipes share one state. A flow refuses to start while an
-  endpoint from `just bench-endpoint-up` is up, and `just bench-endpoint-down` or
-  `just stack-down` run during a flow destroys that flow's endpoint under it.
+  endpoint from `just bench-endpoint-up` is up, and running `just bench-endpoint-down` or
+  `just stack-down` during a flow destroys its endpoint, or fails on the state lock while
+  the flow is applying or destroying.
 - A KV cache A/B whose workload the rig rules out (`check_fits_rig`) fails before it
   applies anything.
 - A resume under the same run id brings up a new bench host. No cache key or digest
@@ -91,7 +93,8 @@ keeps its instance-id parameter for that.
   endpoint stays up and billing, and a kill mid-apply or mid-destroy also leaves the state
   lock held. The next run refuses the state; `just bench-endpoint-down` clears it, after
   `terraform -chdir=terraform/bench-endpoint force-unlock <lock-id>` if the lock is held
-  (the id is in Terraform's lock error). Resources a killed apply had not yet written to
+  (the id is in Terraform's lock error) and the run is Cancelled or Crashed with its
+  worker pod gone, since a live apply or destroy holds the same lock. Resources a killed apply had not yet written to
   state are invisible to Terraform. The spend-leak guard's fast alarm watches GPU capacity
   only (ADR-0025), so a leaked bench endpoint shows up only against the monthly budget.
 - When the body fails and the destroy then fails too, the run's error is the destroy's; the

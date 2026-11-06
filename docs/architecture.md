@@ -148,7 +148,7 @@ needs no live cluster.
 | `terraform/bootstrap` | permanent | state bucket, bench-results bucket, ECR repositories, GitHub OIDC roles |
 | `terraform/grafana` | permanent | Grafana Cloud CloudWatch data source |
 | `terraform/eks` | `cluster-up` → `cluster-down` | VPC, EKS, Karpenter, EBS storage, Prefect server and worker, sweep-dispatch RBAC |
-| `terraform/bench-endpoint` | `bench-endpoint-up` → `bench-endpoint-down` | mTLS ALB, certs, bench host |
+| `terraform/bench-endpoint` | a knob-sweep or KV cache A/B run, or `bench-endpoint-up` → `bench-endpoint-down` | mTLS ALB, certs, bench host |
 
 The GPU node pool (`k8s/gpu-node-pool.yaml`) and vLLM replica (`k8s/vllm-gpu.yaml`) are
 applied with `kubectl` between the eks and bench-endpoint stacks.
