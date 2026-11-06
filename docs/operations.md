@@ -51,8 +51,9 @@ PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-swe
   --params '{"run_id": "<run-id>"}'
 ```
 
-The run id goes in as a JSON string: `--param run_id=<run-id>` parses its value as JSON,
-so an all-digit run id arrives as a number, which the flow's string `run_id` rejects.
+`--params` passes the run id as a JSON string; `--param run_id=<run-id>` parses its value
+as JSON, so an all-digit run id arrives as a number and the flow's string `run_id` rejects
+it.
 
 The flow redeploys `deploy/vllm-gpu` for each engine point, so **do not run
 `just gpu-deploy` while a sweep is in flight**: it recreates the replica under the running
