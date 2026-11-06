@@ -94,6 +94,7 @@ resource "aws_iam_role_policy" "prefect_worker_bench_endpoint" {
       # A terraform run that cannot push the state it changed leaves errored.tfstate in the
       # run's temporary copy of the stack; the run copies it here, keyed by run id and
       # command, for `terraform state push`. Write only: recovery reads it as the operator.
+      # The prefix is _ERRORED_STATE_PREFIX in the orchestration package's bench_endpoint.py.
       {
         Sid      = "BenchEndpointErroredState"
         Effect   = "Allow"
