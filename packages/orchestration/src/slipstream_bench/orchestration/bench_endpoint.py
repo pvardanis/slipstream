@@ -17,6 +17,7 @@ root where terraform cannot write ``.terraform``.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -40,6 +41,9 @@ _BOOT_FAILED_PREFIX = "failed:"
 _NOT_WRITTEN_YET = "NoSuchKey"
 
 _INSTANCE_ID_OUTPUT = "bench_host_instance_id"
+
+# Terraform prints a held lock's holder under "Lock Info:", its id on the first line.
+_LOCK_ID_PATTERN = re.compile(r"Lock Info:\s*\n\s*ID:\s*(\S+)")
 
 # The stack's state key, fixed in terraform/bench-endpoint/backend.tf; named in errors so an
 # operator can find the state a run left behind.
@@ -70,6 +74,10 @@ class BenchEndpointEnvironmentError(ValueError):
 
 class BenchEndpointInUseError(Exception):
     """The bench-endpoint state already holds an endpoint this session did not create."""
+
+
+class BenchEndpointLockedError(Exception):
+    """Another terraform run holds the bench-endpoint state lock."""
 
 
 class BenchHostBootError(Exception):
@@ -157,12 +165,22 @@ def open_bench_endpoint(
             env,
         )
         _refuse_held_state(terraform, chdir=chdir, env=env, topology=topology)
+        # An apply that cannot take the lock changed nothing, and the lock's holder may be
+        # a live run whose endpoint a destroy would tear down, so it disarms the destroy.
+        destroy_armed = True
         try:
             _LOGGER.info("bench endpoint applying (state %s)", _get_state_url(topology))
             applied_at = now()
-            terraform(
-                [chdir, "apply", "-auto-approve", "-input=false", "-no-color"], env
-            )
+            try:
+                _run_locking(
+                    terraform,
+                    [chdir, "apply", "-auto-approve", "-input=false", "-no-color"],
+                    env=env,
+                    topology=topology,
+                )
+            except BenchEndpointLockedError:
+                destroy_armed = False
+                raise
             instance_id = terraform(
                 [chdir, "output", "-no-color", "-raw", _INSTANCE_ID_OUTPUT], env
             ).strip()
@@ -187,7 +205,8 @@ def open_bench_endpoint(
             )
             yield BenchHost(instance_id=instance_id)
         finally:
-            _destroy(terraform, chdir=chdir, env=env, topology=topology)
+            if destroy_armed:
+                _destroy(terraform, chdir=chdir, env=env, topology=topology)
 
 
 def read_topology(environ: Mapping[str, str]) -> BenchEndpointTopology:
@@ -361,7 +380,12 @@ def _destroy(
     """Destroy the stack, noting on a failure where the state left behind lives."""
     _LOGGER.info("bench endpoint destroying")
     try:
-        terraform([chdir, "destroy", "-auto-approve", "-input=false", "-no-color"], env)
+        _run_locking(
+            terraform,
+            [chdir, "destroy", "-auto-approve", "-input=false", "-no-color"],
+            env=env,
+            topology=topology,
+        )
     except Exception as error:
         error.add_note(
             f"bench-endpoint resources may still be billing; their state is "
@@ -369,6 +393,38 @@ def _destroy(
         )
         raise
     _LOGGER.info("bench endpoint destroyed")
+
+
+def _run_locking(
+    terraform: Terraform,
+    args: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    topology: BenchEndpointTopology,
+) -> str:
+    """Run a terraform command that takes the state lock, naming a lock another run holds.
+
+    The session never unlocks by itself: the holder may be a live run, and breaking its
+    lock would let two runs write one state.
+
+    :raise BenchEndpointLockedError: with the lock id and the ``force-unlock`` command, when
+        another run holds the lock.
+    """
+    try:
+        return terraform(args, env)
+    except TerraformError as error:
+        match = _LOCK_ID_PATTERN.search(str(error))
+        if match is None:
+            raise
+        lock_id = match[1]
+        raise BenchEndpointLockedError(
+            f"{_get_state_url(topology)} is locked by another terraform run (lock "
+            f"{lock_id}). If that run is still going, wait for it to end. If it is gone "
+            f"(its flow run shows Cancelled or Crashed and no terraform is running), "
+            f"release the lock with `terraform -chdir=terraform/bench-endpoint "
+            f"force-unlock {lock_id}`, then destroy what it left with "
+            f"`just bench-endpoint-down`"
+        ) from error
 
 
 def _get_state_url(topology: BenchEndpointTopology) -> str:
