@@ -11,11 +11,13 @@ callables, so the whole path is testable against fakes with no cluster, GPU, or 
 server. A run whose cells are all cached skips its redeploy; any other run is redone
 whole.
 
-:func:`build_kv_ab_collaborators` binds those callables to kubectl, SSM, S3, and the
-engine's /metrics, and :func:`kv_ab_flow` is the ``@flow`` composition root the Prefect
-deployment registers: it builds the live transports inside the flow, so only serializable
-parameters cross the flow boundary, drives the loop, then renders the run's tables and chart
-to its run page (:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`).
+:func:`build_kv_ab_collaborators` binds those callables to kubectl, SSM, S3, the engine's
+/metrics, and the bench host, and :func:`kv_ab_flow` is the ``@flow`` composition root the
+Prefect deployment registers: it builds the live transports inside the flow, so only
+serializable parameters cross the flow boundary, drives the loop inside the run's own bench
+endpoint (:func:`slipstream_bench.orchestration.bench_endpoint.open_bench_endpoint`),
+destroys it, then renders the run's tables and chart to its run page
+(:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`).
 """
 
 import logging
@@ -33,6 +35,7 @@ from prefect.logging import get_run_logger
 
 from slipstream_bench.contract import CellConfig, get_cell_basename
 from slipstream_bench.contract.kv_ab_record import Arm
+from slipstream_bench.orchestration.bench_endpoint import BenchHost
 from slipstream_bench.orchestration.cell_run import (
     CellExecutionContext,
     build_cell_execution,
@@ -55,6 +58,7 @@ from slipstream_bench.orchestration.config_artifact import (
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.run_setup import (
     enable_milestone_logging,
+    open_run_bench_endpoint,
     tag_run_with_group,
 )
 from slipstream_bench.orchestration.kv_ab_cell import (
@@ -195,7 +199,6 @@ class KvAbInputs:
         folds in.
     :param run: the A/B's run id, which every arm run's cells and labels nest under.
     :param serving: the model and vLLM serving image every rung's digest folds in.
-    :param instance_id: the bench host the cells run on.
     :param image_ref: the bench-client image the cells run.
     :param bucket: the results bucket.
     :param model: the served model id the cells measure and the counters are labelled by.
@@ -208,7 +211,6 @@ class KvAbInputs:
     rig: KvAbRig
     run: str
     serving: ServingConfig
-    instance_id: str
     image_ref: str
     bucket: str
     model: str
@@ -220,7 +222,7 @@ class KvAbInputs:
 
         :raise ValueError: when an addressing field is blank or a timeout not positive.
         """
-        for name in ("run", "instance_id", "image_ref", "bucket", "model"):
+        for name in ("run", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KvAbInputs.{name} must be a non-empty string")
         for name in ("proxy_timeout_s", "cell_timeout_s"):
@@ -232,7 +234,6 @@ class KvAbInputs:
 def kv_ab_flow(
     *,
     run_id: str,
-    instance_id: str,
     region: str,
     bucket: str,
     image_ref: str,
@@ -247,13 +248,15 @@ def kv_ab_flow(
     The composition root the deployment registers: it reads the workload, the rig, and
     the run-wide digest inputs, binds the driver's collaborators to the live transports,
     drives the interleaved arm runs, and renders every rung's record into the run page's
-    tables and chart. Re-invoked with the same run id, it reads a run
-    whose rungs are all cached from the cache and redoes any other run whole. The
-    parameters are all serializable; the three paths name in-image files read on the
-    worker. The run is tagged ``run=<run-id>``.
+    tables and chart. The arm runs run on a bench endpoint the flow applies for them and
+    destroys after them, whether they pass or raise; a workload the rig rules out is
+    refused before the apply. Its topology comes from the worker's ``BENCH_ENDPOINT_*``
+    environment and its vLLM api-key from the cluster Secret. Re-invoked with the same run
+    id, it reads a run whose rungs are all cached from the cache and redoes any other run
+    whole. The parameters are all serializable; the three paths name in-image files read
+    on the worker. The run is tagged ``run=<run-id>``.
 
     :param run_id: the A/B's run id, which its cells and labels nest under.
-    :param instance_id: the bench host the cells run on.
     :param region: the AWS region of the host and bucket.
     :param bucket: the results bucket (RESULTS_BUCKET).
     :param image_ref: the bench-client image the cells run.
@@ -294,21 +297,31 @@ def kv_ab_flow(
         rig=read_kv_ab_rig(vllm_manifest),
         run=run_id,
         serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
-        instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
         model=read_model_id(model_yaml),
     )
+    # The bench endpoint lives for the arm runs only: a workload the rig rules out is
+    # refused before its apply, and the render below reads only S3, so the endpoint is
+    # destroyed before it. A destroy that fails fails the run before the render: the cells
+    # are already in S3, and the state it leaves must be destroyed
+    # (`just bench-endpoint-down`) before a re-run can open the endpoint.
+    check_fits_rig(config, inputs.rig)
+    kubectl = build_kubectl()
     s3_client = build_s3_client(region)
-    collaborators = build_kv_ab_collaborators(
-        inputs,
-        kubectl=build_kubectl(),
-        ssm_client=build_ssm_client(region),
-        s3_client=s3_client,
-        task=kv_ab_cell_task(bucket, retries=retries),
-        read_metrics=partial(fetch_metrics, metrics_url),
-    )
-    result = drive_kv_ab(config, inputs.rig, collaborators)
+    with open_run_bench_endpoint(
+        kubectl=kubectl, s3_client=s3_client, bucket=bucket
+    ) as host:
+        collaborators = build_kv_ab_collaborators(
+            inputs,
+            host=host,
+            kubectl=kubectl,
+            ssm_client=build_ssm_client(region),
+            s3_client=s3_client,
+            task=kv_ab_cell_task(bucket, retries=retries),
+            read_metrics=partial(fetch_metrics, metrics_url),
+        )
+        result = drive_kv_ab(config, inputs.rig, collaborators)
     # Every rung's raw result and labels are in S3; fold them into the tables and chart on
     # this run page as a terminal task, so a render failure leaves them intact and a re-run
     # resumes every cached run and re-renders.
@@ -387,6 +400,7 @@ def list_arm_runs(runs_per_arm: int) -> list[ArmRun]:
 def build_kv_ab_collaborators(
     inputs: KvAbInputs,
     *,
+    host: BenchHost,
     kubectl: Kubectl,
     ssm_client: Any,
     s3_client: Any,
@@ -404,6 +418,8 @@ def build_kv_ab_collaborators(
     and the pending gate reads that task's cache for every rung of the run.
 
     :param inputs: the per-A/B inputs every arm run shares.
+    :param host: the bench host the proxy and cells run on, booted by the run's bench
+        endpoint.
     :param kubectl: the transport the redeploy and pool scrape are issued through.
     :param ssm_client: the boto3 SSM client the proxy and cells are sent through.
     :param s3_client: the boto3 S3 client results are downloaded and labels written with.
@@ -411,7 +427,7 @@ def build_kv_ab_collaborators(
     :param read_metrics: reads the serving engine's /metrics around each rung.
     :return: the collaborators :func:`drive_kv_ab` sequences.
     """
-    transports = {"ssm_client": ssm_client, "s3_client": s3_client}
+    transports = {"host": host, "ssm_client": ssm_client, "s3_client": s3_client}
     return KvAbCollaborators(
         deploy=partial(_deploy_arm_run, inputs=inputs, kubectl=kubectl),
         scrape_gpu_pool=partial(_scrape_gpu_pool, kubectl=kubectl),
@@ -469,7 +485,12 @@ def _scrape_gpu_pool(*, kubectl: Kubectl) -> int:
 
 
 def _warm_up(
-    arm_run: ArmRun, *, inputs: KvAbInputs, ssm_client: Any, s3_client: Any
+    arm_run: ArmRun,
+    *,
+    inputs: KvAbInputs,
+    host: BenchHost,
+    ssm_client: Any,
+    s3_client: Any,
 ) -> None:
     """Bring the proxy up and run the run's warmup cell, gated but not recorded.
 
@@ -477,12 +498,14 @@ def _warm_up(
         runs against tiers the warmup failed to fill.
     """
     start_bench_proxy(
-        ssm_client, instance_id=inputs.instance_id, timeout_s=inputs.proxy_timeout_s
+        ssm_client, instance_id=host.instance_id, timeout_s=inputs.proxy_timeout_s
     )
     config = inputs.config
     cell = get_kv_ab_cell(config, config.warmup_concurrency, model=inputs.model)
     run_id = f"{get_kv_ab_run_id(inputs.run, arm_run.slug())}/warmup"
-    context = _get_execution_context(inputs, run_id, ssm_client, s3_client)
+    context = _get_execution_context(
+        inputs, run_id, host=host, ssm_client=ssm_client, s3_client=s3_client
+    )
     with TemporaryDirectory() as scratch:
         dest = Path(scratch) / get_cell_basename(cell)
         build_cell_execution(cell, context=context, dest=dest)()
@@ -496,6 +519,7 @@ def _run_rung(
     refresh: bool,
     *,
     inputs: KvAbInputs,
+    host: BenchHost,
     ssm_client: Any,
     s3_client: Any,
     task: Task[..., str],
@@ -503,7 +527,9 @@ def _run_rung(
 ) -> str:
     """Run one rung through the kv-ab cell task and return its labels' pointer."""
     rung = _get_rung(inputs, arm_run, concurrency)
-    context = _get_execution_context(inputs, rung.run_id, ssm_client, s3_client)
+    context = _get_execution_context(
+        inputs, rung.run_id, host=host, ssm_client=ssm_client, s3_client=s3_client
+    )
     result_key = get_cell_s3_key(rung.run_id, rung.cell)
     # The download is read only by the validity gate and the cell's artifact; the durable
     # copies stay in S3, and the worker's root filesystem is read-only, so it lands in /tmp.
@@ -571,13 +597,18 @@ def _get_rung(inputs: KvAbInputs, arm_run: ArmRun, concurrency: int) -> _Rung:
 
 
 def _get_execution_context(
-    inputs: KvAbInputs, run_id: str, ssm_client: Any, s3_client: Any
+    inputs: KvAbInputs,
+    run_id: str,
+    *,
+    host: BenchHost,
+    ssm_client: Any,
+    s3_client: Any,
 ) -> CellExecutionContext:
     """Build the context a run's cells execute in, under the given bench-host run id."""
     return CellExecutionContext(
         ssm_client=ssm_client,
         s3_client=s3_client,
-        instance_id=inputs.instance_id,
+        instance_id=host.instance_id,
         image_ref=inputs.image_ref,
         bucket=inputs.bucket,
         model=inputs.model,
