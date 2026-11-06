@@ -167,7 +167,6 @@ class _Sweep:
             manifest_path=manifest_path,
             run=run,
             serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref=vllm_image),
-            instance_id="i-1",
             image_ref="repo:tag",
             bucket="bench-bucket",
             model="Qwen/Qwen2.5-0.5B-Instruct",
@@ -180,6 +179,7 @@ class _Sweep:
     def _collaborators(self, s3: _CellS3) -> tuple[Any, Any, Any, Any]:
         return build_knob_sweep_collaborators(
             self._inputs,
+            instance_id="i-1",
             kubectl=lambda *_a, **_k: "",
             ssm_client=self.ssm,
             s3_client=s3,
