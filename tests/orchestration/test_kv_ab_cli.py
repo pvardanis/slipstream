@@ -6,6 +6,7 @@ paths as default parameters, so a trigger supplies only the run id, the bench ho
 optionally the workload config.
 """
 
+import inspect
 from typing import Any
 
 import pytest
@@ -61,6 +62,13 @@ def test_register_kv_ab_registers_a_module_path_deployment(
         "vllm_manifest": "/app/k8s/vllm-gpu.yaml",
         "metrics_url": "http://vllm-gpu.slipstream.svc:8000/metrics",
         "retries": 0,
+    }
+    # The A/B drives the running bench host, so run_id and instance_id are the flow
+    # parameters left for the trigger to supply, as flow-dispatch.yml sends them.
+    flow_parameters = inspect.signature(cli_module.kv_ab_flow.fn).parameters
+    assert set(flow_parameters) - set(captured["parameters"]) == {
+        "run_id",
+        "instance_id",
     }
 
 
