@@ -75,8 +75,7 @@ Derive one scenario per behaviour the branch's issues or PRs claim. Give each it
 
 ```bash
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-sweep/knob-sweep \
-  --param run_id=<run-id> \
-  --param sweep_grid=/tmp/<grid>.yaml
+  --params '{"run_id": "<run-id>", "sweep_grid": "/tmp/<grid>.yaml"}'
 ```
 
 - Each scenario gets a fresh `run_id`: a rejected cell's JSON stays under its run's S3 prefix and clutters the next look.
