@@ -2,10 +2,11 @@
 # pyproject.toml + packages/, and orchestration/Dockerfile also reads uv.lock for its
 # frozen install and bakes the deep-config files the registered knob-sweep and
 # kv-cache-extension-ab read on the worker (model.yaml, the sweep grid, the kv-ab workload, the
-# vLLM redeploy manifest). It also bakes the bench-endpoint stack the worker applies
+# vLLM redeploy manifest). It also bakes the bench-endpoint stack for the worker to apply
 # (terraform/bench-endpoint: its .tf files, lock file, and the templates and scripts its
-# user data reads, named by type so its tests, state and local .terraform stay out) and the Terraform CLI configuration that installs the stack's providers from the
-# image (orchestration/provider-mirror.tfrc). packages/ carries the slipstream-contract
+# user data reads, named by type so its tests, state and local .terraform stay out) and the
+# Terraform CLI configuration that installs the stack's providers from the image
+# (orchestration/provider-mirror.tfrc). packages/ carries the slipstream-contract
 # workspace member both installs resolve through [tool.uv.sources].
 # Everything else — terraform state, the rest of the cluster manifests, docs, git, caches,
 # results — stays out of the build context so it can't bloat or leak into a layer. The

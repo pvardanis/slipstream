@@ -61,7 +61,7 @@ jobs:
           # pathspec in orchestration-image.yml (Derive image tags).
           # Both image filters exclude markdown, as their pathspecs do, so no change
           # the code filter reads as docs-only can touch an image input.
-          # scan_config: the Trivy waivers, the scan workflow and the image checks it runs,
+          # scan_config: the Trivy waivers, the scan workflow and the check scripts it runs,
           # which change the orchestration scan's verdict without changing the image.
           # test/ci-paths-parity-test.sh fails when the image lists drift from those
           # pathspecs, or the denylist from the paths-ignore.
@@ -283,6 +283,9 @@ jobs:
       # allowlist's metrics nor its collector_metrics (ADR-0026).
       # dashboard-promql-test stubs nothing: it runs promtool's unit tests against the Fleet
       # health dashboard's real queries, and against mutated copies of them that must fail.
+      # terraform-pin-check-test stubs nothing: it checks the orchestration Dockerfile's
+      # Terraform download against the real mise.lock, and against mutated copies that must
+      # fail, so a pin bump that leaves the Dockerfile behind fails here on every PR.
       - name: Run shell unit tests
         run: |
           set -euo pipefail
@@ -297,6 +300,7 @@ jobs:
           bash test/otel-collector-check-test.sh
           bash test/dashboard-allowlist-test.sh
           bash test/dashboard-promql-test.sh
+          bash test/terraform-pin-check-test.sh
 
   chart-render:
     name: helm chart render (kubeconform)

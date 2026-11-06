@@ -111,9 +111,9 @@ check_same "ci.yml docs denylist" "$(ci_docs_denylist)" \
 check_same "ci.yml docs denylist" "$(ci_docs_denylist)" \
   "orchestration-image.yml push paths-ignore" "$(push_paths_ignore "${orchestration_workflow}")"
 
-# The orchestration scan runs on a change to its waivers, to the workflow ci.yml
-# actually calls, or to a repo script that workflow runs against the image, or a renamed
-# workflow would stop triggering its own scan and an edited check would go unrun.
+# The orchestration scan runs on a change to its waivers, to the workflow ci.yml calls,
+# and to the orchestration/*.sh scripts that workflow runs. Otherwise a renamed workflow
+# would stop triggering its own scan, and an edited check script would go unrun.
 scan_workflow="$(yq '.jobs.orchestration-image-scan.uses | sub("^\\./", "")' "${ci_workflow}")"
 check_same "ci.yml scan_config filter" "$(ci_filter scan_config)" \
   ".trivyignore, the scan workflow ci.yml calls and the scripts it runs" \
