@@ -57,6 +57,7 @@ from slipstream_bench.orchestration.config_artifact import (
 )
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.run_setup import (
+    destroy_run_bench_endpoint,
     enable_milestone_logging,
     open_run_bench_endpoint,
     tag_run_with_group,
@@ -230,7 +231,11 @@ class KvAbInputs:
                 raise ValueError(f"KvAbInputs.{name} must be positive")
 
 
-@flow(name="kv-cache-extension-ab")
+@flow(
+    name="kv-cache-extension-ab",
+    on_cancellation=[destroy_run_bench_endpoint],
+    on_crashed=[destroy_run_bench_endpoint],
+)
 def kv_ab_flow(
     *,
     run_id: str,
@@ -312,7 +317,7 @@ def kv_ab_flow(
     s3_client = build_s3_client(region)
     task = kv_ab_cell_task(bucket, retries=retries)
     with open_run_bench_endpoint(
-        kubectl=kubectl, s3_client=s3_client, bucket=bucket
+        kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
     ) as host:
         collaborators = build_kv_ab_collaborators(
             inputs,
