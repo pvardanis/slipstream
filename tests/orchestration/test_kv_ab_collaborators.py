@@ -543,6 +543,7 @@ def test_the_flow_runs_every_script_on_the_bench_host_its_endpoint_booted(
     assert call["stack_dir"] == Path(STACK_DIR)
     assert call["api_key"] == API_KEY
     assert call["results_bucket"] == "bench"
+    assert call["run_id"] == "ab1"
     assert call["s3_client"] is s3
     assert callable(call["terraform"])
 

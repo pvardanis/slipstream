@@ -2,7 +2,9 @@
 
 The knob sweep and the KV cache offload A/B call all three at their composition roots, so
 the Prefect-free core's INFO milestones reach the UI, the run joins the ``run=<run-id>``
-filter, and its cells run on a bench endpoint opened from the worker's environment.
+filter, and its cells run on a bench endpoint opened from the worker's environment. Both
+register :func:`destroy_run_bench_endpoint` as their crash and cancellation hook, which
+destroys that endpoint once a killed run is gone.
 """
 
 import logging
@@ -10,17 +12,26 @@ import os
 from contextlib import AbstractContextManager
 from typing import Any
 
+from prefect import Flow
 from prefect.client.orchestration import get_client
+from prefect.client.schemas.objects import FlowRun
 from prefect.runtime import flow_run
+from prefect.states import State
 
 from slipstream_bench.orchestration.bench_endpoint import (
     BenchHost,
     build_terraform,
+    destroy_bench_endpoint,
     open_bench_endpoint,
     read_stack_dir,
     read_topology,
 )
-from slipstream_bench.orchestration.cluster import Kubectl, read_vllm_api_key
+from slipstream_bench.orchestration.cell_run import build_s3_client
+from slipstream_bench.orchestration.cluster import (
+    Kubectl,
+    build_kubectl,
+    read_vllm_api_key,
+)
 
 # The package whose stdlib loggers carry the Prefect-free core's milestone lines. The
 # image's PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench attaches a handler to this logger
@@ -59,7 +70,7 @@ def tag_run_with_group(run_id: str) -> None:
 
 
 def open_run_bench_endpoint(
-    *, kubectl: Kubectl, s3_client: Any, bucket: str
+    *, kubectl: Kubectl, s3_client: Any, bucket: str, run_id: str
 ) -> AbstractContextManager[BenchHost]:
     """Open the run's bench endpoint from the worker's environment.
 
@@ -70,6 +81,7 @@ def open_run_bench_endpoint(
     :param kubectl: the transport the api-key Secret is read through.
     :param s3_client: the boto3 S3 client the boot sentinel is read with.
     :param bucket: the results bucket the bench host reports its boot to.
+    :param run_id: the run the endpoint serves, which names its errored-state copies.
     :return: the session, which yields the bench host and destroys the endpoint on exit.
     :raise BenchEndpointEnvironmentError: when the worker's environment lacks a
         ``BENCH_ENDPOINT_*`` variable the apply needs.
@@ -83,4 +95,32 @@ def open_run_bench_endpoint(
         topology=read_topology(os.environ),
         api_key=read_vllm_api_key(kubectl),
         results_bucket=bucket,
+        run_id=run_id,
+    )
+
+
+def destroy_run_bench_endpoint(
+    flow: Flow[..., Any], flow_run: FlowRun, state: State
+) -> None:
+    """Destroy a crashed or cancelled run's bench endpoint: the flows' state hook.
+
+    Prefect runs a cancelled run's hooks in the worker once it has killed the run's
+    process, and a crashed run's there or in the dying process. Either way the session that
+    opened the endpoint is gone, so the teardown is rebuilt from the run's parameters and
+    the worker's environment. Prefect's hook runner logs the hook's start and end on the
+    run, and its failure (a held state lock, a failed destroy) with the traceback.
+
+    :param flow: the flow whose run ended (unused; part of the hook signature Prefect calls).
+    :param flow_run: the run, whose ``run_id`` and ``region`` parameters the teardown uses.
+    :param state: the Cancelling or Crashed state the run entered (unused, likewise).
+    :raise BenchEndpointLockedError: when another terraform run holds the state lock.
+    :raise TerraformError: when the destroy fails, noted with the state left behind.
+    """
+    destroy_bench_endpoint(
+        terraform=build_terraform(),
+        s3_client=build_s3_client(flow_run.parameters["region"]),
+        stack_dir=read_stack_dir(os.environ),
+        topology=read_topology(os.environ),
+        api_key=read_vllm_api_key(build_kubectl()),
+        run_id=flow_run.parameters["run_id"],
     )
