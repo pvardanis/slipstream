@@ -109,8 +109,9 @@ locals {
   # cluster's ARN. ListAllMyBuckets resolves the bench-results bucket the workflow
   # registers the deployment against: this stack names it by prefix, so its full name
   # changes whenever the bucket is recreated and is found by listing. The action is
-  # account-wide, takes no resource scope, and returns bucket names only, never objects. The port-forward itself is Kubernetes access, granted by the
-  # eks stack's access entry + namespaced RBAC, not by this policy.
+  # account-wide, takes no resource scope, and returns bucket names only, never objects.
+  # The port-forward itself is Kubernetes access, granted by the eks stack's access entry
+  # + namespaced RBAC, not by this policy.
   sweep_dispatch_permissions_policy = {
     Version = "2012-10-17"
     Statement = [
