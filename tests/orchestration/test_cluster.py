@@ -2,11 +2,11 @@
 
 Exercises deploy_gpu, deploy_gpu_point, scrape_ceiling, scrape_gpu_kv_pool, and
 read_vllm_api_key against a fake kubectl that records the argv and stdin issued, and
-render/extract as pure functions — no cluster. Asserts the redeploy applies only the Deployment document (the
-worker's RBAC grants get/patch on deploy/vllm-gpu, not the manifest's Namespace or
-Service), renders the point's knobs, then waits the rollout; and that each scrape returns
-the last matching line or raises, and that the api-key read decodes the Secret's field or
-raises on an empty one.
+render/extract as pure functions — no cluster. Asserts the redeploy applies only the
+Deployment document (the worker's RBAC grants get/patch on deploy/vllm-gpu, not the
+manifest's Namespace or Service), renders the point's knobs, then waits the rollout; that
+each scrape returns the last matching line or raises; and that the api-key read decodes
+the Secret's field or raises on an empty or undecodable one.
 """
 
 import base64
@@ -116,15 +116,18 @@ _FP16_OFF = EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=
 
 
 class _FakeKubectl:
-    """Record every ``(argv, stdin)`` issued; serve canned logs to a ``logs`` call."""
+    """Record every ``(argv, stdin)`` issued; serve canned logs and a canned Secret value."""
 
-    def __init__(self, logs: str = "") -> None:
+    def __init__(self, logs: str = "", secret: str = "") -> None:
         self.calls: list[tuple[list[str], str | None]] = []
         self._logs = logs
+        self._secret = secret
 
     def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
         self.calls.append((list(args), stdin))
-        return self._logs if "logs" in args else ""
+        if "logs" in args:
+            return self._logs
+        return self._secret if "secret" in args else ""
 
 
 def _grid() -> SweepGrid:
@@ -651,20 +654,8 @@ def test_build_kubectl_error_carries_the_argv_and_stderr() -> None:
     assert "-c" in message
 
 
-class _SecretKubectl:
-    """Record every ``(argv, stdin)`` issued; answer with one canned stdout."""
-
-    def __init__(self, stdout: str) -> None:
-        self.calls: list[tuple[list[str], str | None]] = []
-        self._stdout = stdout
-
-    def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
-        self.calls.append((list(args), stdin))
-        return self._stdout
-
-
 def test_read_vllm_api_key_reads_the_api_key_field_of_the_slipstream_secret() -> None:
-    kubectl = _SecretKubectl(base64.b64encode(b"sk-bench-123").decode("ascii"))
+    kubectl = _FakeKubectl(secret=base64.b64encode(b"sk-bench-123").decode("ascii"))
 
     assert read_vllm_api_key(kubectl) == "sk-bench-123"
     assert kubectl.calls == [
@@ -687,8 +678,8 @@ def test_read_vllm_api_key_reads_the_api_key_field_of_the_slipstream_secret() ->
 def test_read_vllm_api_key_raises_on_an_empty_api_key(stdout: str) -> None:
     # A Secret with no api-key field reads as empty stdout; applying the stack with an
     # empty key would only fail at its variable validation, after the init.
-    with pytest.raises(VllmApiKeyError, match="slipstream/vllm-api-key"):
-        read_vllm_api_key(_SecretKubectl(stdout))
+    with pytest.raises(VllmApiKeyError, match="slipstream/vllm-api-key holds no"):
+        read_vllm_api_key(_FakeKubectl(secret=stdout))
 
 
 @pytest.mark.parametrize(
@@ -702,4 +693,17 @@ def test_read_vllm_api_key_names_the_secret_when_its_value_cannot_be_decoded(
 ) -> None:
     # A lenient decode would drop the stray characters and hand the stack a wrong key.
     with pytest.raises(VllmApiKeyError, match="slipstream/vllm-api-key"):
-        read_vllm_api_key(_SecretKubectl(stdout))
+        read_vllm_api_key(_FakeKubectl(secret=stdout))
+
+
+def test_read_vllm_api_key_keeps_the_key_out_of_a_decode_error() -> None:
+    # A UTF-8 decode error names the offending byte and carries the decoded bytes; neither
+    # may reach the raised error or the cause a traceback prints.
+    stdout = base64.b64encode(b"sk-\xff-secret").decode("ascii")
+
+    with pytest.raises(VllmApiKeyError) as excinfo:
+        read_vllm_api_key(_FakeKubectl(secret=stdout))
+
+    assert "0xff" not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__suppress_context__
