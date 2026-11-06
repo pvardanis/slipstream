@@ -15,7 +15,7 @@ whole.
 /metrics, and the bench host, and :func:`kv_ab_flow` is the ``@flow`` composition root the
 Prefect deployment registers: it builds the live transports inside the flow, so only
 serializable parameters cross the flow boundary, drives the loop inside the run's own bench
-endpoint (:func:`slipstream_bench.orchestration.bench_endpoint.open_bench_endpoint`),
+endpoint (:func:`slipstream_bench.orchestration.flows.run_setup.open_run_bench_endpoint`),
 destroys it, then renders the run's tables and chart to its run page
 (:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`).
 """
@@ -308,7 +308,9 @@ def kv_ab_flow(
     # (`just bench-endpoint-down`) before a re-run can open the endpoint.
     check_fits_rig(config, inputs.rig)
     kubectl = build_kubectl()
+    ssm_client = build_ssm_client(region)
     s3_client = build_s3_client(region)
+    task = kv_ab_cell_task(bucket, retries=retries)
     with open_run_bench_endpoint(
         kubectl=kubectl, s3_client=s3_client, bucket=bucket
     ) as host:
@@ -316,9 +318,9 @@ def kv_ab_flow(
             inputs,
             host=host,
             kubectl=kubectl,
-            ssm_client=build_ssm_client(region),
+            ssm_client=ssm_client,
             s3_client=s3_client,
-            task=kv_ab_cell_task(bucket, retries=retries),
+            task=task,
             read_metrics=partial(fetch_metrics, metrics_url),
         )
         result = drive_kv_ab(config, inputs.rig, collaborators)
@@ -427,13 +429,24 @@ def build_kv_ab_collaborators(
     :param read_metrics: reads the serving engine's /metrics around each rung.
     :return: the collaborators :func:`drive_kv_ab` sequences.
     """
-    transports = {"host": host, "ssm_client": ssm_client, "s3_client": s3_client}
     return KvAbCollaborators(
         deploy=partial(_deploy_arm_run, inputs=inputs, kubectl=kubectl),
         scrape_gpu_pool=partial(_scrape_gpu_pool, kubectl=kubectl),
-        warm_up=partial(_warm_up, inputs=inputs, **transports),
+        warm_up=partial(
+            _warm_up,
+            inputs=inputs,
+            host=host,
+            ssm_client=ssm_client,
+            s3_client=s3_client,
+        ),
         run_cell=partial(
-            _run_rung, inputs=inputs, task=task, read_metrics=read_metrics, **transports
+            _run_rung,
+            inputs=inputs,
+            host=host,
+            ssm_client=ssm_client,
+            s3_client=s3_client,
+            task=task,
+            read_metrics=read_metrics,
         ),
         has_pending_cells=partial(_run_has_pending_cells, inputs=inputs, task=task),
     )

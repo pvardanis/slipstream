@@ -1,10 +1,11 @@
 """The kv-ab driver and flow over their production collaborators, with the transports faked.
 
 :func:`build_kv_ab_collaborators` binds the redeploy, the GPU KV pool scrape, the warmup,
-the ladder rungs, and the pending-run gate to kubectl, SSM, S3, and the engine's /metrics.
-These tests drive :func:`drive_kv_ab` over them, with real Prefect tasks whose storage is a
-tmp local filesystem, and assert what each arm run deploys, runs, and labels. The flow is
-run once with its transport builders swapped for the same fakes.
+the ladder rungs, and the pending-run gate to kubectl, SSM, S3, the engine's /metrics, and
+the bench host. These tests drive :func:`drive_kv_ab` over them, with real Prefect tasks
+whose storage is a tmp local filesystem, and assert what each arm run deploys, runs, and
+labels. The flow is driven with its transport builders swapped for the same fakes and its
+bench-endpoint session for a recording one.
 """
 
 import base64
@@ -12,7 +13,6 @@ import io
 import json
 import re
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,13 @@ from slipstream_bench.orchestration.kv_ab_config import (
 from slipstream_bench.orchestration.kv_ab_rig import KvAbRig, KvAbWorkloadError
 from slipstream_bench.orchestration.tasks.kv_ab_cell import build_kv_ab_cell_task
 from slipstream_bench.orchestration.validity import InvalidCellError
+from tests.orchestration.bench_endpoint_fakes import (
+    API_KEY,
+    BENCH_HOST_ID,
+    STACK_DIR,
+    WORKER_ENV,
+    RecordingSession,
+)
 
 _REPO = Path(__file__).parents[2]
 # One run per arm keeps the script short: off-r1, then on-r1.
@@ -59,20 +66,6 @@ _PROXY_SCRIPT = "/usr/local/bin/bench-proxy-up.sh"
 _CONNECTOR = "LMCacheConnectorV1"
 _RUN_ID = re.compile(r"RUN_ID='([^']+)'")
 _CELL_CONFIG = re.compile(r"CELL_CONFIG_B64='([^']+)'")
-_BENCH_HOST_ID = "i-0bench"
-_API_KEY = "sk-bench-123"
-_STACK_DIR = "/app/terraform/bench-endpoint"
-
-# The worker's environment: the bench-endpoint topology ConfigMap and the image's stack dir.
-_WORKER_ENV = {
-    "BENCH_ENDPOINT_STATE_BUCKET": "slipstream-tfstate-abc123",
-    "BENCH_ENDPOINT_VPC_ID": "vpc-0abc",
-    "BENCH_ENDPOINT_PUBLIC_SUBNETS": '["subnet-pub-a", "subnet-pub-b"]',
-    "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID": "sg-0node",
-    "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS": '["eks-cpu-asg-1"]',
-    "BENCH_ENDPOINT_INSTANCE_PROFILE": "slipstream-bench-host",
-    "BENCH_ENDPOINT_STACK_DIR": _STACK_DIR,
-}
 
 _INPUTS = KvAbInputs(
     config=_CONFIG,
@@ -128,7 +121,7 @@ class _Kubectl:
         if args[0] == "logs":
             return "INFO GPU KV cache size: 16,384 tokens\n"
         if "secret" in args:
-            return base64.b64encode(_API_KEY.encode("utf-8")).decode("ascii")
+            return base64.b64encode(API_KEY.encode("utf-8")).decode("ascii")
         return ""
 
 
@@ -297,27 +290,6 @@ class _Ab:
         return _ab()
 
 
-class _Session:
-    """Stand in for the bench-endpoint session: record its arguments, open, and close.
-
-    Yields the bench host the endpoint booted; ``events`` records the open and close, so a
-    test can place other steps between them.
-    """
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self.events: list[str] = []
-
-    @contextmanager
-    def __call__(self, **kwargs: Any) -> Iterator[BenchHost]:
-        self.calls.append(kwargs)
-        self.events.append("open")
-        try:
-            yield BenchHost(instance_id=_BENCH_HOST_ID)
-        finally:
-            self.events.append("close")
-
-
 def _isolated_task(tmp_path: Path) -> Task[..., str]:
     results = LocalFileSystem(basepath=str(tmp_path / "results"))
     results.save(f"results-{uuid4().hex}", overwrite=True)
@@ -472,7 +444,7 @@ def _drive_flow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     s3: _S3,
-    session: _Session | None = None,
+    session: RecordingSession | None = None,
     edits: Sequence[tuple[str, str]] = (),
 ) -> tuple[list[str], list[str]]:
     """Drive the flow over a one-run-per-arm workload, returning its pointers and the
@@ -503,9 +475,11 @@ def _drive_flow(
     monkeypatch.setattr(kv_ab_module, "build_s3_client", lambda _region: s3)
     monkeypatch.setattr(kv_ab_module, "kv_ab_cell_task", lambda _bucket, **_k: task)
     monkeypatch.setattr(kv_ab_module, "fetch_metrics", _fetch)
-    for name, value in _WORKER_ENV.items():
+    for name, value in WORKER_ENV.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr(run_setup_module, "open_bench_endpoint", session or _Session())
+    monkeypatch.setattr(
+        run_setup_module, "open_bench_endpoint", session or RecordingSession()
+    )
 
     pointers = kv_ab_flow(
         run_id="ab1",
@@ -549,12 +523,12 @@ def test_the_flow_runs_every_script_on_the_bench_host_its_endpoint_booted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     s3 = _S3()
-    session = _Session()
+    session = RecordingSession()
 
     _drive_flow(tmp_path, monkeypatch, s3, session)
 
     assert s3.ssm.instance_ids
-    assert set(s3.ssm.instance_ids) == {_BENCH_HOST_ID}
+    assert set(s3.ssm.instance_ids) == {BENCH_HOST_ID}
     # One session, opened from the worker's environment with the key from the Secret,
     # reporting boot through the results bucket on the client the cells use.
     [call] = session.calls
@@ -566,8 +540,8 @@ def test_the_flow_runs_every_script_on_the_bench_host_its_endpoint_booted(
         node_autoscaling_groups=("eks-cpu-asg-1",),
         instance_profile="slipstream-bench-host",
     )
-    assert call["stack_dir"] == Path(_STACK_DIR)
-    assert call["api_key"] == _API_KEY
+    assert call["stack_dir"] == Path(STACK_DIR)
+    assert call["api_key"] == API_KEY
     assert call["results_bucket"] == "bench"
     assert call["s3_client"] is s3
     assert callable(call["terraform"])
@@ -577,7 +551,7 @@ def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_rende
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The render only reads S3, so the bench endpoint stops billing before it runs.
-    session = _Session()
+    session = RecordingSession()
     real_drive = kv_ab_module.drive_kv_ab
 
     def _recording_drive(*args: Any) -> KvAbResult:
@@ -600,21 +574,43 @@ def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_rende
 def test_the_flow_closes_its_bench_endpoint_when_a_cell_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    session = _Session()
+    session = RecordingSession()
 
     with pytest.raises(InvalidCellError):
-        _drive_flow(tmp_path, monkeypatch, _S3(failing=("/warmup/",)), session)
+        _drive_flow(
+            tmp_path,
+            monkeypatch,
+            _S3(failing=("off-r1/pshare90_burst1.0_mc2",)),
+            session,
+        )
 
     assert session.events == ["open", "close"]
+
+
+def test_a_failed_destroy_fails_the_flow_before_the_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The cells are in S3, but the state the destroy left must be cleared before a re-run
+    # can open the endpoint, so the run fails rather than rendering over a leaked endpoint.
+    session = RecordingSession(destroy_error=RuntimeError("destroy failed"))
+    renders: list[object] = []
+    monkeypatch.setattr(
+        kv_ab_module, "render_kv_ab_results", lambda **k: renders.append(k)
+    )
+
+    with pytest.raises(RuntimeError, match="destroy failed"):
+        _drive_flow(tmp_path, monkeypatch, _S3(), session)
+
+    assert renders == []
 
 
 def test_a_workload_the_rig_rules_out_is_refused_before_the_bench_endpoint_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Opening the endpoint applies the stack and waits its host's boot, minutes of billed
-    # time a workload the rig refuses should not spend. Ten times the pool holds the
-    # whole working set, so offload has nothing to add.
-    session = _Session()
+    # time a workload the rig refuses should not spend. A pool ten times the configured
+    # size holds the whole working set, so offload has nothing to add.
+    session = RecordingSession()
 
     with pytest.raises(KvAbWorkloadError, match="working set"):
         _drive_flow(
@@ -639,12 +635,12 @@ def test_the_flow_names_a_missing_stack_dir_before_the_bench_endpoint_opens(
 ) -> None:
     # An empty path would read as the working directory, which terraform would init
     # instead of the baked stack.
-    session = _Session()
+    session = RecordingSession()
     if value is None:
-        monkeypatch.delitem(_WORKER_ENV, "BENCH_ENDPOINT_STACK_DIR")
+        monkeypatch.delitem(WORKER_ENV, "BENCH_ENDPOINT_STACK_DIR")
         monkeypatch.delenv("BENCH_ENDPOINT_STACK_DIR", raising=False)
     else:
-        monkeypatch.setitem(_WORKER_ENV, "BENCH_ENDPOINT_STACK_DIR", value)
+        monkeypatch.setitem(WORKER_ENV, "BENCH_ENDPOINT_STACK_DIR", value)
 
     with pytest.raises(BenchEndpointEnvironmentError, match="BENCH_ENDPOINT_STACK_DIR"):
         _drive_flow(tmp_path, monkeypatch, _S3(), session)
