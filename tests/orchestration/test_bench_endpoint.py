@@ -18,6 +18,8 @@ from slipstream_bench.orchestration.bench_endpoint import (
     BenchEndpointTopology,
     BenchHost,
     BenchHostBootError,
+    TerraformError,
+    build_terraform,
     open_bench_endpoint,
 )
 
@@ -372,3 +374,47 @@ def test_empty_instance_id_output_raises_and_destroys(stack_dir: Path) -> None:
         pytest.fail("the body must not run without a bench host")
 
     assert calls[-1] == "destroy"
+
+
+def test_build_terraform_returns_stdout_with_the_extra_environment() -> None:
+    # `sh -c` stands in for terraform: proves the extra env reaches the child process.
+    run = build_terraform(binary="sh")
+
+    assert run(["-c", 'printf %s "$TF_VAR_vpc_id"'], {"TF_VAR_vpc_id": "vpc-1"}) == (
+        "vpc-1"
+    )
+
+
+def test_build_terraform_keeps_the_worker_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The worker's AWS credentials and TF_CLI_CONFIG_FILE reach terraform alongside the
+    # stack variables, so the extra env is merged over the worker's, not substituted.
+    monkeypatch.setenv("TF_CLI_CONFIG_FILE", "/opt/terraform/provider-mirror.tfrc")
+    run = build_terraform(binary="sh")
+
+    assert run(["-c", 'printf %s "$TF_CLI_CONFIG_FILE"'], {"TF_VAR_x": "1"}) == (
+        "/opt/terraform/provider-mirror.tfrc"
+    )
+
+
+def test_build_terraform_error_carries_the_argv_exit_and_stderr() -> None:
+    run = build_terraform(binary="sh")
+
+    with pytest.raises(TerraformError) as excinfo:
+        run(["-c", "echo boom >&2; exit 3"], {})
+
+    message = str(excinfo.value)
+    assert "boom" in message
+    assert "exited 3" in message
+    assert "-c" in message
+
+
+def test_build_terraform_error_leaves_out_the_environment() -> None:
+    # The environment carries the api-key, so a failure message must not echo it.
+    run = build_terraform(binary="sh")
+
+    with pytest.raises(TerraformError) as excinfo:
+        run(["-c", "exit 1"], {"TF_VAR_vllm_api_key": "sk-secret-key"})
+
+    assert "sk-secret-key" not in str(excinfo.value)

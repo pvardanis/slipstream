@@ -6,7 +6,9 @@ the bench host, and destroys the stack on the way out.
 """
 
 import json
+import os
 import shutil
+import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -20,6 +22,40 @@ from botocore.exceptions import ClientError
 # The terraform transport: run ``terraform <args>`` with extra environment, return stdout,
 # and raise on a non-zero exit. Stateless and single-op, so a typed Callable, not a Protocol.
 Terraform = Callable[[Sequence[str], Mapping[str, str]], str]
+
+
+class TerraformError(Exception):
+    """A ``terraform`` invocation that exited non-zero."""
+
+
+def build_terraform(*, binary: str = "terraform") -> Terraform:
+    """Build the production :data:`Terraform`: shell out to the ``terraform`` binary.
+
+    The extra environment is merged over the worker's own, so the worker's AWS credentials
+    and the image's ``TF_CLI_CONFIG_FILE`` provider mirror reach terraform beside the stack
+    variables. A non-zero exit raises :class:`TerraformError` carrying the argv, exit code,
+    and stderr — never the environment, which holds the api-key.
+
+    :param binary: the terraform executable name (overridable for tests).
+    :return: the callable the session sends terraform commands through.
+    """
+
+    def run(args: Sequence[str], env: Mapping[str, str]) -> str:
+        completed = subprocess.run(
+            [binary, *args],
+            env={**os.environ, **env},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise TerraformError(
+                f"terraform {' '.join(args)} exited {completed.returncode}: "
+                f"{completed.stderr.strip()}"
+            )
+        return completed.stdout
+
+    return run
 
 
 # The host writes boot-status/<instance-id> to the results bucket when cloud-init ends:
