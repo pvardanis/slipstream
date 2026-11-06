@@ -1,4 +1,4 @@
-"""The in-cluster collaborators: GPU redeploy, ceiling scrape, and GPU KV pool scrape.
+"""The in-cluster collaborators: GPU redeploy, ceiling and GPU KV pool scrapes, api-key read.
 
 ADR-0015: the parent flow redeploys the GPU per engine point (Tier-1) then scrapes the
 concurrency ceiling from vLLM's startup log before running the point's Tier-2 ladder.
@@ -18,10 +18,14 @@ against a garbage ceiling — the one failure an unattended sweep cannot tolerat
 The KV cache extension A/B redeploys the same Deployment per run with its arm's offload
 switch and a restart stamp on the pod template, and scrapes the GPU KV pool size from the same startup log to size its working
 set; that scrape raises :class:`KvPoolScrapeError` when the engine reported none.
+
+The bench endpoint publishes the vLLM api-key to its bench host, so the flow that applies
+it reads the key from its Secret first; an empty key raises :class:`VllmApiKeyError`.
 """
 
 from __future__ import annotations
 
+import base64
 import re
 import subprocess
 from collections.abc import Callable, Sequence
@@ -95,6 +99,11 @@ _MEMORY_LIMIT_DEFAULT = "8Gi"
 _NAMESPACE = "slipstream"
 _DEPLOYMENT = "vllm-gpu"
 
+# The vLLM api-key the bench endpoint publishes to its bench host, read from the one
+# Secret the worker's RBAC (terraform/eks/worker_bench_endpoint.tf) can get.
+_API_KEY_SECRET = "vllm-api-key"
+_API_KEY_FIELD = "api-key"
+
 # The pod-template annotation `kubectl rollout restart` patches to force new pods.
 _RESTARTED_AT_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
 
@@ -107,6 +116,14 @@ _ROLLOUT_TIMEOUT_S = 1200.0
 # raise on a non-zero exit. Injected so the redeploy and scrape are testable against a
 # fake — stateless and single-op, so a typed Callable, not a Protocol.
 Kubectl = Callable[[Sequence[str], "str | None"], str]
+
+
+class VllmApiKeyError(Exception):
+    """The vLLM api-key Secret holds no api-key value.
+
+    The bench endpoint publishes the key to its bench host, so an empty one raises here
+    rather than reaching the stack.
+    """
 
 
 class KubectlError(Exception):
@@ -373,6 +390,38 @@ def scrape_gpu_kv_pool(
             f"sized against it"
         )
     return tokens
+
+
+def read_vllm_api_key(kubectl: Kubectl, *, namespace: str = _NAMESPACE) -> str:
+    """Read the vLLM api-key from its cluster Secret.
+
+    The Secret lives in the vLLM namespace and the worker in another, so it is read through
+    the API at run time rather than mounted into the worker's pod.
+
+    :param kubectl: the transport the Secret read is issued through.
+    :param namespace: the namespace the Secret lives in.
+    :return: the decoded api-key.
+    :raise VllmApiKeyError: when the Secret's api-key field is absent or blank.
+    """
+    encoded = kubectl(
+        [
+            "-n",
+            namespace,
+            "get",
+            "secret",
+            _API_KEY_SECRET,
+            "-o",
+            f"jsonpath={{.data.{_API_KEY_FIELD}}}",
+        ],
+        None,
+    )
+    api_key = base64.b64decode(encoded).decode("utf-8")
+    if not api_key.strip():
+        raise VllmApiKeyError(
+            f"Secret {namespace}/{_API_KEY_SECRET} holds no {_API_KEY_FIELD} value; "
+            f"`just gpu-deploy` creates it"
+        )
+    return api_key
 
 
 def _get_last_log_match(

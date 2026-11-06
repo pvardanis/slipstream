@@ -1,13 +1,15 @@
-"""The in-cluster collaborators: GPU redeploy, ceiling scrape, and GPU KV pool scrape.
+"""The in-cluster collaborators: GPU redeploy, ceiling and GPU KV pool scrapes, api-key read.
 
-Exercises deploy_gpu, deploy_gpu_point, scrape_ceiling, and scrape_gpu_kv_pool against
-a fake kubectl that records the argv and stdin issued, and render/extract as pure
-functions — no cluster. Asserts the redeploy applies only the Deployment document (the
+Exercises deploy_gpu, deploy_gpu_point, scrape_ceiling, scrape_gpu_kv_pool, and
+read_vllm_api_key against a fake kubectl that records the argv and stdin issued, and
+render/extract as pure functions — no cluster. Asserts the redeploy applies only the Deployment document (the
 worker's RBAC grants get/patch on deploy/vllm-gpu, not the manifest's Namespace or
 Service), renders the point's knobs, then waits the rollout; and that each scrape returns
-the last matching line or raises.
+the last matching line or raises, and that the api-key read decodes the Secret's field or
+raises on an empty one.
 """
 
+import base64
 import json
 import re
 from collections.abc import Sequence
@@ -23,10 +25,12 @@ from slipstream_bench.orchestration.cluster import (
     CeilingScrapeError,
     KubectlError,
     KvPoolScrapeError,
+    VllmApiKeyError,
     build_kubectl,
     deploy_gpu,
     deploy_gpu_point,
     extract_deployment_doc,
+    read_vllm_api_key,
     render_gpu_manifest,
     scrape_ceiling,
     scrape_gpu_kv_pool,
@@ -645,3 +649,43 @@ def test_build_kubectl_error_carries_the_argv_and_stderr() -> None:
     assert "boom" in message
     assert "exited 3" in message
     assert "-c" in message
+
+
+class _SecretKubectl:
+    """Record every ``(argv, stdin)`` issued; answer with one canned stdout."""
+
+    def __init__(self, stdout: str) -> None:
+        self.calls: list[tuple[list[str], str | None]] = []
+        self._stdout = stdout
+
+    def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
+        self.calls.append((list(args), stdin))
+        return self._stdout
+
+
+def test_read_vllm_api_key_reads_the_api_key_field_of_the_slipstream_secret() -> None:
+    kubectl = _SecretKubectl(base64.b64encode(b"sk-bench-123").decode("ascii"))
+
+    assert read_vllm_api_key(kubectl) == "sk-bench-123"
+    assert kubectl.calls == [
+        (
+            [
+                "-n",
+                "slipstream",
+                "get",
+                "secret",
+                "vllm-api-key",
+                "-o",
+                "jsonpath={.data.api-key}",
+            ],
+            None,
+        )
+    ]
+
+
+@pytest.mark.parametrize("stdout", ["", "\n", base64.b64encode(b"  ").decode("ascii")])
+def test_read_vllm_api_key_raises_on_an_empty_api_key(stdout: str) -> None:
+    # A Secret with no api-key field reads as empty stdout; applying the stack with an
+    # empty key would only fail at its variable validation, after the init.
+    with pytest.raises(VllmApiKeyError, match="slipstream/vllm-api-key"):
+        read_vllm_api_key(_SecretKubectl(stdout))
