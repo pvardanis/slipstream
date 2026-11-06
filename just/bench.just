@@ -44,7 +44,8 @@ bench point_slug *args: _bootstrap-init
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
-    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
+    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)" ||
+      { echo "no bench endpoint to run against; run 'just bench-endpoint-up' first" >&2; exit 1; }
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     # Forward bench_image_tag into the nested call: a command-line override does not
     # cross into a child `just` invocation, so an unforwarded pin would silently fall
@@ -137,7 +138,8 @@ prefix-cache prefix_share="90" burstiness="1.0" *args="": _bootstrap-init
     # Bare assignments so a failed output lookup aborts rather than driving SSM at an
     # empty instance id or copying from an empty bucket (see `cluster-up`).
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
-    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)"
+    instance="$(terraform -chdir={{ bench_endpoint_dir }} output -raw bench_host_instance_id)" ||
+      { echo "no bench endpoint to run against; run 'just bench-endpoint-up' first" >&2; exit 1; }
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     # Forward bench_image_tag into the nested call: a command-line override does not
     # cross into a child `just` invocation, so an unforwarded pin would silently fall
