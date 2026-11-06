@@ -22,6 +22,7 @@ from prefect.filesystems import LocalFileSystem
 from prefect.testing.utilities import prefect_test_harness
 
 from slipstream_bench.contract import EnginePoint, SweepGrid, list_engine_points
+from slipstream_bench.orchestration.bench_endpoint import BenchHost
 from slipstream_bench.orchestration.cell_run import CellResultError
 from slipstream_bench.orchestration.digest import ServingConfig
 from slipstream_bench.orchestration.flows.knob_sweep import (
@@ -179,7 +180,7 @@ class _Sweep:
     def _collaborators(self, s3: _CellS3) -> tuple[Any, Any, Any, Any]:
         return build_knob_sweep_collaborators(
             self._inputs,
-            instance_id="i-1",
+            host=BenchHost(instance_id="i-1"),
             kubectl=lambda *_a, **_k: "",
             ssm_client=self.ssm,
             s3_client=s3,
