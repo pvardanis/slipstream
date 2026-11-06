@@ -4,8 +4,8 @@
 # the self-hosted, no-public-endpoint Prefect server, so a run is kicked off from the
 # GitHub UI without a workstation's kubectl. It registers the flow's deployment (the same
 # `register-*` command `just prefect-register-sweep` or `just prefect-register-kv-ab`
-# runs), then triggers a run of it against a live cluster: the KV cache A/B drives the
-# running bench host, and the knob sweep opens its own bench endpoint. Registration
+# runs), then triggers a run of it against a live cluster; each flow opens and closes its
+# own bench endpoint, so a run takes no bench host instance id. Registration
 # overwrites the deployment, so every dispatch runs with defaults resolved from the live
 # stack and main, including after a cluster-down wiped the server's SQLite. It does not
 # stand the cluster up (`just stack-up`), which stays a deliberate operator step that
@@ -24,14 +24,6 @@ on:
           Which flow to register and trigger: knob-sweep or kv-ab.
         required: true
         type: string
-      instance_id:
-        description: >-
-          Bench host instance id the flow drives over SSM, for kv-ab only. Blank
-          resolves it from the running bench host's tags. knob-sweep opens its own
-          bench endpoint and rejects a set value.
-        required: false
-        type: string
-        default: ""
       run_id:
         description: >-
           Run id to tag this run's results under in S3. Blank generates a UTC timestamp.
@@ -86,16 +78,12 @@ jobs:
       # The one place a flow's names and dispatch inputs live: the orchestration CLI
       # command that registers its deployment, the deployment's `<flow>/<deployment>`
       # name, the deployment parameter holding the in-image path of the config the
-      # worker reads, the job summary's heading for that config, and whether the run
-      # takes a bench host instance id. The knob sweep opens and closes its own bench
-      # endpoint, so it takes none; the KV cache A/B drives the running bench host.
-      # Checked before any AWS call, so a caller naming an unknown flow, or passing an
-      # instance id to a flow that takes none, fails here.
+      # worker reads, and the job summary's heading for that config. Checked before any
+      # AWS call, so a caller naming an unknown flow fails here.
       - name: Resolve the flow's deployment
         id: flow
         env:
           FLOW: ${{ inputs.flow }}
-          INSTANCE_ID: ${{ inputs.instance_id }}
         run: |
           set -euo pipefail
           case "${FLOW}" in
@@ -104,30 +92,23 @@ jobs:
               deployment="knob-sweep/knob-sweep"
               config_parameter="sweep_grid"
               config_heading="Sweep grid"
-              takes_instance_id="false"
               ;;
             kv-ab)
               register="register-kv-ab"
               deployment="kv-cache-extension-ab/kv-cache-extension-ab"
               config_parameter="kv_ab_config"
               config_heading="KV cache A/B workload"
-              takes_instance_id="true"
               ;;
             *)
               echo "::error::unknown flow '${FLOW}'; expected knob-sweep or kv-ab"
               exit 1
               ;;
           esac
-          if [[ "${takes_instance_id}" == "false" && -n "${INSTANCE_ID}" ]]; then
-            echo "::error::flow '${FLOW}' opens its own bench endpoint and takes no instance_id (got ${INSTANCE_ID}); leave it blank"
-            exit 1
-          fi
           {
             echo "register=${register}"
             echo "deployment=${deployment}"
             echo "config_parameter=${config_parameter}"
             echo "config_heading=${config_heading}"
-            echo "takes_instance_id=${takes_instance_id}"
           } >>"${GITHUB_OUTPUT}"
 
       # Full history, so the config summary can read the flow's config at the commit the
@@ -161,51 +142,6 @@ jobs:
           : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
           : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
           aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
-
-      - name: Resolve the bench host instance id
-        id: host
-        if: steps.flow.outputs.takes_instance_id == 'true'
-        env:
-          INSTANCE_ID: ${{ inputs.instance_id }}
-        run: |
-          set -euo pipefail
-          : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
-          # The bench-endpoint stack names its host ${cluster_name}-bench-endpoint-host
-          # and tags it Project=slipstream (terraform/bench-endpoint). The same filters
-          # resolve the host when the input is blank and validate it when set, so an
-          # override must still name a running bench host. One running host per live
-          # stack, so exactly one id is expected: zero means the stack is not up (or the
-          # override is not a running bench host), and more than one is ambiguous — both
-          # fail loud rather than guess, and the input is the override for the ambiguous
-          # case. JSON output, because text output applies the query per page.
-          # The override, if any, rides in the positional args ("$@" expands to nothing
-          # when unset, under set -u on any bash).
-          set --
-          if [[ -n "${INSTANCE_ID}" ]]; then
-            set -- --instance-ids "${INSTANCE_ID}"
-          fi
-          resolved="$(aws ec2 describe-instances "$@" \
-            --filters "Name=tag:Name,Values=${EKS_CLUSTER_NAME}-bench-endpoint-host" \
-                      "Name=tag:Project,Values=slipstream" \
-                      "Name=instance-state-name,Values=running" \
-            --query 'Reservations[].Instances[].InstanceId' --output json)"
-          count="$(jq 'length' <<<"${resolved}")"
-          case "${count}" in
-            1) ;;
-            0)
-              if [[ -n "${INSTANCE_ID}" ]]; then
-                echo "::error::instance_id ${INSTANCE_ID} is not a running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host"
-              else
-                echo "::error::no running bench host tagged ${EKS_CLUSTER_NAME}-bench-endpoint-host — is the stack up (just stack-up)?"
-              fi
-              exit 1
-              ;;
-            *)
-              echo "::error::multiple running bench hosts matched ($(jq -r 'join(" ")' <<<"${resolved}")); set the instance_id input to disambiguate"
-              exit 1
-              ;;
-          esac
-          echo "instance_id=$(jq -r '.[0]' <<<"${resolved}")" >>"${GITHUB_OUTPUT}"
 
       - name: Resolve the deployment's registration inputs
         id: registration
@@ -246,8 +182,6 @@ jobs:
         env:
           BUCKET: ${{ steps.registration.outputs.bucket }}
           IMAGE_REF: ${{ steps.registration.outputs.image_ref }}
-          INSTANCE_ID: ${{ steps.host.outputs.instance_id }}
-          TAKES_INSTANCE_ID: ${{ steps.flow.outputs.takes_instance_id }}
           RUN_ID: ${{ inputs.run_id }}
           REGISTER: ${{ steps.flow.outputs.register }}
           DEPLOYMENT_NAME: ${{ steps.flow.outputs.deployment }}
@@ -255,9 +189,6 @@ jobs:
           CONFIG_HEADING: ${{ steps.flow.outputs.config_heading }}
         run: |
           set -euo pipefail
-          if [[ "${TAKES_INSTANCE_ID}" == "true" ]]; then
-            : "${INSTANCE_ID:?resolved instance id is empty}"
-          fi
           : "${BUCKET:?resolved results bucket is empty}"
           : "${IMAGE_REF:?resolved bench-client image ref is empty}"
           : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
@@ -347,13 +278,7 @@ jobs:
           # Create the run and return; the worker picks it up and runs it to completion
           # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
           # go as one JSON object so each value stays a string (--param parses values as
-          # JSON, which would turn a numeric run id into a number). A flow that takes
-          # no instance id gets none: Prefect fails a run handed a parameter its flow
-          # does not declare.
-          if [[ "${TAKES_INSTANCE_ID}" == "true" ]]; then
-            params="$(jq -nc --arg run_id "${flow_run_id}" --arg instance_id "${INSTANCE_ID}" \
-              '{run_id: $run_id, instance_id: $instance_id}')"
-          else
-            params="$(jq -nc --arg run_id "${flow_run_id}" '{run_id: $run_id}')"
-          fi
+          # JSON, which would turn a numeric run id into a number). run_id is the one
+          # parameter: Prefect fails a run handed a parameter its flow does not declare.
+          params="$(jq -nc --arg run_id "${flow_run_id}" '{run_id: $run_id}')"
           uv run prefect deployment run "${DEPLOYMENT_NAME}" --params "${params}"
