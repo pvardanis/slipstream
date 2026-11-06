@@ -2,15 +2,17 @@
 
 # Bring the whole benchmark stack up and leave it running: cluster (with the self-hosted
 # Prefect server and worker), the OTel Collector exporting traces and span metrics to Grafana Cloud,
-# the server's work pool, GPU node pool, GPU replica, and the ephemeral mTLS bench endpoint.
+# the server's work pool, GPU node pool and GPU replica. It brings up no bench endpoint:
+# each Prefect run opens and destroys its own (ADR-0028), and `just bench` and
+# `just prefix-cache` run against one `just bench-endpoint-up` stands up by hand.
 # `obs-pivot` checks that Grafana Cloud accepts what the Collector exports before any GPU spend.
-# Everything `just bench` and `just prefix-cache` need — run them against it as often as
-# you like, then `just stack-down` at the end of the day to return spend to zero. Ordered cluster-up -> obs-up -> obs-pivot -> prefect-up -> gpu-pool-up: the server (a helm_release in
+# Run flows against it as often as you like, then `just stack-down` at the end of the day
+# to return spend to zero. Ordered cluster-up -> obs-up -> obs-pivot -> prefect-up -> gpu-pool-up: the server (a helm_release in
 # the eks stack) comes up with the cluster, the Collector after the endpoints ConfigMap
 # and write-token Secret cluster-up provides, then the server's work pool is created, then the GPU
 # pool a worker's runs target (ADR-0015 amendment).
 [group('orchestrate')]
-stack-up: cluster-up obs-up obs-pivot prefect-up gpu-pool-up gpu-deploy bench-endpoint-up
+stack-up: cluster-up obs-up obs-pivot prefect-up gpu-pool-up gpu-deploy
 
 # Tear the whole benchmark stack down, returning GPU and cluster spend to zero,
 # then sweep AWS to confirm nothing tagged Project=slipstream is still billing.
