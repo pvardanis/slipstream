@@ -54,14 +54,17 @@ COPY packages ./packages
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --package slipstream-bench-orchestration
 
-# The worker applies and destroys the bench-endpoint stack (terraform/bench-endpoint) itself, so
-# the runtime carries the Terraform CLI and the stack's providers. This stage fetches both: the
-# CLI at the version mise.toml pins, verified by ADD --checksum against the release sha256
-# mise.lock records for linux-x64, and the providers at the versions and hashes the stack's
+# The runtime carries the Terraform CLI and the bench-endpoint stack's providers so the worker
+# can apply and destroy that stack (terraform/bench-endpoint) itself. This stage fetches both:
+# the CLI at the version mise.toml pins, verified by ADD --checksum against a copy of the
+# release sha256 mise.lock records for linux-x64 (orchestration/terraform-pin-check.sh fails
+# CI when the copy and mise.lock differ), and the providers at the versions and hashes the stack's
 # dependency lock file pins. `terraform init` with TF_PLUGIN_CACHE_DIR leaves them unpacked under
 # /opt/terraform/plugins, the layout a filesystem mirror reads, so the runtime's init installs
 # them from there with no network (orchestration/provider-mirror.tfrc). Only versions.tf and
-# the lock file are copied in, so a change to the stack's resources reuses this layer. The uv
+# the lock file are copied in, so a change to the stack's resources reuses this layer; that
+# relies on versions.tf declaring every provider the stack uses, which the image's offline
+# init check fails without. The uv
 # image is reused for its Python, whose zipfile module unpacks the release zip.
 # uv 0.9.30-python3.11-bookworm-slim, the builder stage's digest
 FROM ghcr.io/astral-sh/uv@sha256:4f5d923c9dcea037f57bda425dd209f3ec643da2f0b74227f68d09dab0b3bb36 AS terraform
@@ -116,8 +119,8 @@ ADD --chmod=0755 \
 # The Terraform CLI and the bench-endpoint stack's pre-installed providers from the terraform
 # stage. TF_CLI_CONFIG_FILE points every terraform run at orchestration/provider-mirror.tfrc,
 # which installs registry providers from /opt/terraform/plugins only, so the worker's
-# `terraform init` makes no registry call. The copies keep the stage's world-readable modes,
-# so the chart's arbitrary uid can execute them.
+# `terraform init` makes no registry call. The copies keep the stage's modes (0755 binaries
+# and directories), so a non-root uid can read and execute them.
 COPY --from=terraform /opt/terraform/bin/terraform /usr/local/bin/terraform
 COPY --from=terraform /opt/terraform/plugins /opt/terraform/plugins
 COPY orchestration/provider-mirror.tfrc /opt/terraform/provider-mirror.tfrc
@@ -152,12 +155,14 @@ COPY bench/configs/sweep-grid.yaml /app/bench/configs/sweep-grid.yaml
 COPY bench/configs/kv-cache-extension-ab.yaml /app/bench/configs/kv-cache-extension-ab.yaml
 COPY k8s/vllm-gpu.yaml /app/k8s/vllm-gpu.yaml
 
-# The bench-endpoint stack the worker applies and destroys around a knob sweep: its .tf files,
-# its dependency lock file, and the templates and scripts its user data reads. .dockerignore
-# lets in only those files, never its tests or a local .terraform directory. The prefect-worker
-# chart's default container securityContext makes the root filesystem read-only, so a run copies this directory somewhere writable before
-# `terraform init`; BENCH_ENDPOINT_STACK_DIR names it so the code finds it without a path of
-# its own. Like the configs above it is an image input, hashed into the content tag.
+# The bench-endpoint stack, for the worker to apply and destroy around a knob sweep: its .tf
+# files, its dependency lock file, and the templates and scripts its user data reads.
+# .dockerignore lets in only those files, never its tests or a local .terraform directory.
+# The prefect-worker chart's default container securityContext makes the root filesystem
+# read-only, so terraform cannot write .terraform here; the stack runs from a copy in a
+# writable path (the chart mounts emptyDirs at /tmp and /home/prefect).
+# BENCH_ENDPOINT_STACK_DIR names the baked copy. Like the configs above it is an image input,
+# in the content-tag pathspec and the CI filter.
 COPY terraform/bench-endpoint /app/terraform/bench-endpoint
 ENV BENCH_ENDPOINT_STACK_DIR=/app/terraform/bench-endpoint
 

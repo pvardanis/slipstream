@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Check an orchestration image can initialise the baked bench-endpoint stack with no network.
-# The worker applies terraform/bench-endpoint from inside this image, so the image must carry
-# the Terraform CLI at the version mise.toml pins, the stack's files, and its providers. The
-# container runs the way the prefect-worker chart's default container securityContext runs
-# it, as an arbitrary uid on a read-only root filesystem with a writable /tmp, and here with no
-# network at all, so a provider that is not baked fails `terraform init` instead of
-# downloading. The stack is copied to /tmp first because the read-only root leaves no room
-# for .terraform next to the baked copy.
+# The image carries the Terraform CLI, the bench-endpoint stack and its providers so the worker
+# can apply the stack from inside it; this asserts the CLI is the version mise.toml pins (the
+# download itself is checked against mise.lock by terraform-pin-check.sh), that the stack's
+# .tf files are baked, and that `terraform init` installs every provider in the stack's lock
+# file. The container runs as the prefect-worker chart runs it: a read-only root (the chart's
+# default container securityContext) with a writable /tmp (its emptyDir mount). It runs as
+# uid 4242, a non-root uid that owns nothing in the image, standing in for the chart's 1001,
+# and here with no network at all, so a provider that is not baked fails `terraform init`
+# instead of downloading. The stack is copied to /tmp first because terraform cannot write
+# .terraform next to the baked copy on the read-only root.
 # Usage: orchestration-image-terraform-offline-check.sh <image>
 set -euo pipefail
 
@@ -19,28 +22,11 @@ pinned="$(sed -n 's/^terraform = "\(.*\)"$/\1/p' "${repo_root}/mise.toml")"
   exit 1
 }
 
-# The Dockerfile downloads the CLI from mise.lock's linux-x64 URL and verifies it against the
-# checksum mise.lock records there, so a pin bump that updates one file but not the other fails
-# here, before the image is run.
-locked="$(awk '/^\[tools\.terraform\."platforms\.linux-x64"\]/ { grab = 1; next }
-  grab && /^\[/ { exit }
-  grab && /^(checksum|url) = / { gsub(/"/, "", $3); print $3 }' "${repo_root}/mise.lock")"
-[[ "$(wc -l <<<"${locked}")" -eq 2 ]] || {
-  echo "mise.lock records no linux-x64 terraform checksum and url" >&2
-  exit 1
-}
-while read -r value; do
-  grep -qF "${value}" "${repo_root}/orchestration/Dockerfile" || {
-    echo "orchestration/Dockerfile does not download terraform with mise.lock's ${value}" >&2
-    exit 1
-  }
-done <<<"${locked}"
-
 # The single-quoted script runs inside the container, so its variables are the container's.
 # shellcheck disable=SC2016
 docker run --rm --platform linux/amd64 \
   --network none --read-only --tmpfs /tmp --user 4242:0 \
-  --env PINNED="${pinned}" \
+  --env PINNED="${pinned}" --env CHECKPOINT_DISABLE=1 \
   "${image}" bash -euo pipefail -c '
     command -v terraform >/dev/null || {
       echo "image has no terraform on its PATH" >&2
@@ -53,6 +39,22 @@ docker run --rm --platform linux/amd64 \
     }
     stack="$(mktemp -d)"
     cp -R "${BENCH_ENDPOINT_STACK_DIR}/." "${stack}"
+    # init and validate both pass on an empty directory, so an unbaked stack must fail here.
+    compgen -G "${stack}/*.tf" >/dev/null || {
+      echo "${BENCH_ENDPOINT_STACK_DIR} holds no .tf files" >&2
+      exit 1
+    }
     terraform -chdir="${stack}" init -backend=false -input=false -lockfile=readonly
+    locked="$(sed -n "s/^provider \"\(.*\)\" {\$/\1/p" "${stack}/.terraform.lock.hcl")"
+    [[ -n "${locked}" ]] || {
+      echo "the baked stack lock file names no providers" >&2
+      exit 1
+    }
+    for provider in ${locked}; do
+      [[ -d "${stack}/.terraform/providers/${provider}" ]] || {
+        echo "terraform init did not install ${provider}" >&2
+        exit 1
+      }
+    done
     terraform -chdir="${stack}" validate
   '

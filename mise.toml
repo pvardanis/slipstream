@@ -1,10 +1,10 @@
 # Pins the repo's CLIs: mise installs them locally, and the CI jobs install the ones they
 # use through mise-action. mise.lock records each tool's download URL and checksum per
 # platform, and mise-action installs with --locked against it. terraform matches the
-# orchestration image's: orchestration/Dockerfile downloads mise.lock's linux-x64 URL and
-# verifies it against the checksum recorded there, and
-# orchestration-image-terraform-offline-check.sh fails when the Dockerfile's URL or checksum
-# differs from mise.lock's or the image's terraform differs from this pin. kubectl matches the
+# orchestration image's: orchestration/Dockerfile carries a copy of mise.lock's linux-x64
+# URL and checksum, orchestration/terraform-pin-check.sh fails CI when the two differ, and
+# orchestration-image-terraform-offline-check.sh fails the image scan when the image's
+# terraform differs from this pin. kubectl matches the
 # orchestration image's (orchestration/Dockerfile) and tracks the EKS control plane
 # (terraform/eks/variables.tf kubernetes_version) within one minor version.
 [tools]
