@@ -8,7 +8,7 @@ no AWS and no Terraform binary.
 """
 
 import io
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError
 from slipstream_bench.orchestration.bench_endpoint import (
     BenchEndpointTopology,
     BenchHost,
+    BenchHostBootError,
     open_bench_endpoint,
 )
 
@@ -98,6 +99,7 @@ def _open(
     stack_dir: Path,
     *,
     boot_timeout_s: float = 420.0,
+    now: Callable[[], float] = lambda: 0.0,
 ):
     return open_bench_endpoint(
         terraform=terraform,
@@ -108,6 +110,7 @@ def _open(
         results_bucket="bench-results-x1",
         boot_timeout_s=boot_timeout_s,
         sleep=lambda _s: None,
+        now=now,
     )
 
 
@@ -276,3 +279,96 @@ def test_terraform_runs_in_a_writable_copy_of_the_stack(stack_dir: Path) -> None
 
     assert len(set(seen)) == 1
     assert not seen[0].exists()
+
+
+def _ticking_clock(step_s: float) -> Callable[[], float]:
+    """A monotonic clock that advances ``step_s`` on every read."""
+    ticks: Iterator[float] = (index * step_s for index in range(10_000))
+    return lambda: next(ticks)
+
+
+def test_session_waits_for_the_boot_sentinel_before_yielding(stack_dir: Path) -> None:
+    # The host writes its sentinel when cloud-init finishes; until then the key is absent.
+    s3 = _FakeS3([None, None, "ok"])
+
+    with _open(_FakeTerraform(), s3, stack_dir) as host:
+        assert len(s3.reads) == 3
+
+    assert host.instance_id == _INSTANCE_ID
+    assert s3.reads[0] == ("bench-results-x1", f"boot-status/{_INSTANCE_ID}")
+
+
+def test_failed_sentinel_raises_with_the_step_and_destroys(stack_dir: Path) -> None:
+    terraform = _FakeTerraform()
+
+    with (
+        pytest.raises(BenchHostBootError, match="failed: pull bench image"),
+        _open(terraform, _FakeS3([None, "failed: pull bench image"]), stack_dir),
+    ):
+        pytest.fail("the body must not run on a host that failed to boot")
+
+    assert terraform.subcommands()[-1] == "destroy"
+
+
+def test_sentinel_timeout_raises_and_destroys(stack_dir: Path) -> None:
+    terraform = _FakeTerraform()
+
+    with (
+        pytest.raises(BenchHostBootError, match="did not report ready within 420s"),
+        _open(terraform, _FakeS3([None]), stack_dir, now=_ticking_clock(step_s=60.0)),
+    ):
+        pytest.fail("the body must not run on a host that never booted")
+
+    assert terraform.subcommands()[-1] == "destroy"
+
+
+def test_unreadable_sentinel_raises_at_once_and_destroys(stack_dir: Path) -> None:
+    # Only an absent sentinel means not booted yet; a denied read would never clear, so it
+    # raises rather than polling to the timeout.
+    class _DeniedS3:
+        def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}}, "GetObject"
+            )
+
+    terraform = _FakeTerraform()
+
+    with (
+        pytest.raises(ClientError, match="AccessDenied"),
+        open_bench_endpoint(
+            terraform=terraform,
+            s3=_DeniedS3(),
+            stack_dir=stack_dir,
+            topology=_TOPOLOGY,
+            api_key="sk-secret-key",
+            results_bucket="bench-results-x1",
+            sleep=lambda _s: pytest.fail("a denied read must not be retried"),
+        ),
+    ):
+        pytest.fail("the body must not run")
+
+    assert terraform.subcommands()[-1] == "destroy"
+
+
+def test_empty_instance_id_output_raises_and_destroys(stack_dir: Path) -> None:
+    calls: list[str] = []
+
+    def terraform(args: Sequence[str], env: Mapping[str, str]) -> str:
+        calls.append(_subcommand(args))
+        return ""
+
+    with (
+        pytest.raises(BenchHostBootError, match="bench_host_instance_id"),
+        open_bench_endpoint(
+            terraform=terraform,
+            s3=_FakeS3(["ok"]),
+            stack_dir=stack_dir,
+            topology=_TOPOLOGY,
+            api_key="sk-secret-key",
+            results_bucket="bench-results-x1",
+            sleep=lambda _s: None,
+        ),
+    ):
+        pytest.fail("the body must not run without a bench host")
+
+    assert calls[-1] == "destroy"
