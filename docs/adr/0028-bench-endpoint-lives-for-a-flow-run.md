@@ -80,12 +80,14 @@ endpoint, until the A/B opens the same session (#471).
   includes the instance id, so cells that already hold a cache record are still reused
   (ADR-0022). A resume whose every cell is cached still applies and destroys an endpoint;
   skipping that is not worth the extra path.
-- The destroy runs in a `finally`, so a run whose process is killed skips or interrupts it:
-  a worker pod killed outright (OOM, node reaped), or a run cancelled from the UI, which
-  the worker ends by terminating the flow's process. The endpoint stays up and billing, and
-  a kill mid-apply or mid-destroy also leaves the state lock held. The next run refuses the
-  state; `terraform force-unlock <lock-id>` (the lock id is in Terraform's lock error) and
-  then `just bench-endpoint-down` clear it. Resources a killed apply had not yet written to
+- The destroy runs in a `finally`, so a killed run skips or interrupts it. A worker pod
+  killed outright (OOM, node reaped) skips it. A run cancelled from the UI gets SIGTERM
+  across its process group, Terraform included, and SIGKILL 30 s later: the destroy starts
+  but a load balancer and an instance do not come down in that window. Either way the
+  endpoint stays up and billing, and a kill mid-apply or mid-destroy also leaves the state
+  lock held. The next run refuses the state; `just bench-endpoint-down` clears it, after
+  `terraform -chdir=terraform/bench-endpoint force-unlock <lock-id>` if the lock is held
+  (the id is in Terraform's lock error). Resources a killed apply had not yet written to
   state are invisible to Terraform. The spend-leak guard's fast alarm watches GPU capacity
   only (ADR-0025), so a leaked bench endpoint shows up only against the monthly budget.
 - When the body fails and the destroy then fails too, the run's error is the destroy's; the

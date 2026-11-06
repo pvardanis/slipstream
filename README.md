@@ -162,7 +162,7 @@ hence the order:
 ```sh
 just stack-up             # cluster + Prefect + GPU pool + vLLM + bench endpoint
 # a KV cache A/B:          Actions → kv-ab-dispatch → Run workflow (on main)
-just bench-endpoint-down  # a knob sweep brings its own bench endpoint
+just bench-endpoint-down  # once the A/B ends: a knob sweep brings its own endpoint
 # then a knob sweep:       Actions → sweep-dispatch → Run workflow (on main)
 just bench-results-sync   # pull results into bench/results/
 just stack-down           # tear down, then zero-leak sweep (spend → 0)
