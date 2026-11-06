@@ -6,7 +6,9 @@ the bench host, and destroys the stack on the way out. Once the apply takes the 
 the destroy runs whatever error follows — a failed apply, a host that never boots, a
 raising body — so a failing run never leaves the endpoint billing. A run being killed
 leaves the destroy to its flow's crash or cancellation hook, which runs
-:func:`destroy_bench_endpoint` once the run is gone. A held state lock is named with the
+:func:`destroy_bench_endpoint` after the session has exited: in the worker once a
+cancelled run's process is killed, or, for a crash the run reports itself, in the dying
+process. A held state lock is named with the
 command that releases it, and a state terraform could not push is copied to the state
 bucket. Each step logs a milestone on the package logger
 (applying, launched, ready, destroying, destroyed), which a flow surfaces on its run page,
@@ -29,6 +31,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,12 +57,14 @@ _LOCK_ID_PATTERN = re.compile(r"Lock Info:\s*\n\s*ID:\s*(\S+)")
 _STATE_KEY = "bench-endpoint/terraform.tfstate"
 
 # Terraform writes a state it changed but could not push to errored.tfstate in its working
-# directory; the session copies it under this prefix in the state bucket, per run and
-# command, so a failed destroy's dump never overwrites the failed apply's before it. The
+# directory; the session copies it under this prefix in the state bucket, keyed by run,
+# command, and the time of the copy, so no later failure — the destroy after a failed
+# apply, or a resume under the same run id — overwrites a dump not yet recovered. The
 # worker's write grant on the prefix is BenchEndpointErroredState in
 # terraform/eks/worker_bench_endpoint.tf.
 _ERRORED_STATE_FILE = "errored.tfstate"
 _ERRORED_STATE_PREFIX = "bench-endpoint/errored"
+_ERRORED_STATE_STAMP = "%Y%m%dT%H%M%S%fZ"
 
 # Where the worker's environment variables come from, named when one is missing.
 _TOPOLOGY_SOURCE = "the eks stack's bench-endpoint-topology ConfigMap"
@@ -129,6 +134,7 @@ def open_bench_endpoint(
     poll_interval_s: float = 5.0,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
+    wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Iterator[BenchHost]:
     """Apply the bench-endpoint stack, yield its bench host, and destroy the stack on exit.
 
@@ -143,7 +149,7 @@ def open_bench_endpoint(
     since it leaves resources billing; any earlier failure stays on it as ``__context__``.
     A run being killed (a ``BaseException`` that is not an ``Exception``, such as Prefect's
     termination signal) skips the destroy and leaves it to the flow's crash or cancellation
-    hook (:func:`destroy_bench_endpoint`), which runs once the run is gone.
+    hook (:func:`destroy_bench_endpoint`), which runs after the session has exited.
     An apply or destroy that leaves ``errored.tfstate`` has it copied to the state bucket,
     the copy named on its error.
 
@@ -159,6 +165,7 @@ def open_bench_endpoint(
     :param poll_interval_s: the wait between sentinel reads.
     :param sleep: the wait function, injected for tests.
     :param now: the monotonic clock, injected for tests.
+    :param wall_clock: the UTC clock that stamps an errored-state copy, injected for tests.
     :return: a context manager yielding the booted :class:`BenchHost`.
     :raise TerraformError: when a terraform command exits non-zero (from the production
         transport).
@@ -175,6 +182,7 @@ def open_bench_endpoint(
         topology=topology,
         api_key=api_key,
         run_id=run_id,
+        wall_clock=wall_clock,
     ) as workspace:
         _refuse_held_state(workspace)
         destroy_armed = True
@@ -188,9 +196,8 @@ def open_bench_endpoint(
             except BenchEndpointLockedError:
                 destroy_armed = False
                 raise
-            instance_id = terraform(
-                [workspace.chdir, "output", "-no-color", "-raw", _INSTANCE_ID_OUTPUT],
-                workspace.env,
+            instance_id = _run_terraform(
+                workspace, "output", "-no-color", "-raw", _INSTANCE_ID_OUTPUT
             ).strip()
             if not instance_id:
                 raise BenchHostBootError(
@@ -215,13 +222,18 @@ def open_bench_endpoint(
         except BaseException as error:
             # A signal or interrupt means the run is being killed, with seconds left: a
             # destroy started now would be cut off holding the state lock and block the
-            # flow's crash or cancellation hook, which destroys once the run is gone.
+            # flow's crash or cancellation hook, which destroys after the session exits.
+            # Logged as an error naming the recovery, since a signal no hook answers leaves
+            # the endpoint billing with this line its only trace.
             if not isinstance(error, Exception):
                 destroy_armed = False
-                _LOGGER.warning(
-                    "bench endpoint left for the run's crash or cancellation hook to "
-                    "destroy (%s)",
+                _LOGGER.error(
+                    "bench endpoint not destroyed on %s; it is left for the run's crash "
+                    "or cancellation hook. If the run page shows no hook destroying it, "
+                    "destroy it from %s with `just bench-endpoint-down` (an apply cut off "
+                    "mid-way can leave resources the state never recorded)",
                     type(error).__name__,
+                    _get_state_url(topology),
                 )
             raise
         finally:
@@ -237,10 +249,11 @@ def destroy_bench_endpoint(
     topology: BenchEndpointTopology,
     api_key: str,
     run_id: str,
+    wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     """Destroy whatever the bench-endpoint state holds, from the stack alone.
 
-    The teardown a flow's crash and cancellation hooks run once the run's process is gone,
+    The teardown a flow's crash and cancellation hooks run after the session has exited,
     so it needs nothing the session held: it inits a fresh copy of the stack and destroys
     from the state, whatever the killed run left in it. A destroy against an empty state
     changes nothing.
@@ -251,6 +264,7 @@ def destroy_bench_endpoint(
     :param topology: the cluster network and state bucket the stack applies against.
     :param api_key: the vLLM api-key the stack's variables require.
     :param run_id: the run the endpoint served, which names its errored-state copy.
+    :param wall_clock: the UTC clock that stamps an errored-state copy, injected for tests.
     :raise TerraformError: when a terraform command exits non-zero (from the production
         transport), noted with the state left behind.
     :raise BenchEndpointLockedError: when another terraform run holds the state lock.
@@ -262,6 +276,7 @@ def destroy_bench_endpoint(
         topology=topology,
         api_key=api_key,
         run_id=run_id,
+        wall_clock=wall_clock,
     ) as workspace:
         _destroy(workspace)
 
@@ -343,10 +358,7 @@ class _Workspace:
     topology: BenchEndpointTopology
     s3_client: Any
     run_id: str
-
-    @property
-    def chdir(self) -> str:
-        return f"-chdir={self.workdir}"
+    wall_clock: Callable[[], datetime]
 
 
 @contextmanager
@@ -358,6 +370,7 @@ def _open_workspace(
     topology: BenchEndpointTopology,
     api_key: str,
     run_id: str,
+    wall_clock: Callable[[], datetime],
 ) -> Iterator[_Workspace]:
     """Copy the stack to a temporary directory, init its backend there, and yield it."""
     # The state is remote, so a temporary copy that fails to clean up loses nothing, and
@@ -371,19 +384,22 @@ def _open_workspace(
             topology=topology,
             s3_client=s3_client,
             run_id=run_id,
+            wall_clock=wall_clock,
         )
-        terraform(
-            [
-                workspace.chdir,
-                "init",
-                "-input=false",
-                "-no-color",
-                "-lockfile=readonly",
-                f"-backend-config=bucket={topology.state_bucket}",
-            ],
-            workspace.env,
+        _run_terraform(
+            workspace,
+            "init",
+            "-input=false",
+            "-no-color",
+            "-lockfile=readonly",
+            f"-backend-config=bucket={topology.state_bucket}",
         )
         yield workspace
+
+
+def _run_terraform(workspace: _Workspace, *args: str) -> str:
+    """Run ``terraform <args>`` in the workspace's copy of the stack, returning stdout."""
+    return workspace.terraform([f"-chdir={workspace.workdir}", *args], workspace.env)
 
 
 def _get_stack_env_vars(
@@ -417,11 +433,7 @@ def _refuse_held_state(workspace: _Workspace) -> None:
 
     :raise BenchEndpointInUseError: naming the state when it holds any resource.
     """
-    state = json.loads(
-        workspace.terraform(
-            [workspace.chdir, "show", "-json", "-no-color"], workspace.env
-        )
-    )
+    state = json.loads(_run_terraform(workspace, "show", "-json", "-no-color"))
     root_module = state.get("values", {}).get("root_module", {})
     if root_module.get("resources") or root_module.get("child_modules"):
         raise BenchEndpointInUseError(
@@ -508,7 +520,7 @@ def _run_state_changing(workspace: _Workspace, subcommand: str, *flags: str) -> 
         another run holds the lock.
     """
     try:
-        workspace.terraform([workspace.chdir, subcommand, *flags], workspace.env)
+        _run_terraform(workspace, subcommand, *flags)
     except Exception as error:
         _keep_errored_state(workspace, subcommand=subcommand, error=error)
         if isinstance(error, TerraformError):
@@ -531,7 +543,8 @@ def _keep_errored_state(
     state = errored.read_bytes()
     errored.unlink()
     bucket = workspace.topology.state_bucket
-    key = f"{_ERRORED_STATE_PREFIX}/{workspace.run_id}/{subcommand}.tfstate"
+    stamp = workspace.wall_clock().strftime(_ERRORED_STATE_STAMP)
+    key = f"{_ERRORED_STATE_PREFIX}/{workspace.run_id}/{subcommand}-{stamp}.tfstate"
     try:
         workspace.s3_client.put_object(Bucket=bucket, Key=key, Body=state)
     except (BotoCoreError, ClientError) as upload_error:
