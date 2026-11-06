@@ -15,7 +15,7 @@ from typing import Any
 from prefect import Flow
 from prefect.client.orchestration import get_client
 from prefect.client.schemas.objects import FlowRun
-from prefect.runtime import flow_run
+from prefect.runtime import flow_run as current_flow_run
 from prefect.states import State
 
 from slipstream_bench.orchestration.bench_endpoint import (
@@ -62,11 +62,13 @@ def tag_run_with_group(run_id: str) -> None:
     merging, so the current set is read and the run tag added to it. A direct call outside a
     flow run (no runtime id) is a no-op.
     """
-    flow_run_id = flow_run.id
+    flow_run_id = current_flow_run.id
     if flow_run_id is None:
         return
     with get_client(sync_client=True) as client:
-        client.update_flow_run(flow_run_id, tags=set(flow_run.tags) | {f"run={run_id}"})
+        client.update_flow_run(
+            flow_run_id, tags=set(current_flow_run.tags) | {f"run={run_id}"}
+        )
 
 
 def open_run_bench_endpoint(
@@ -109,6 +111,8 @@ def destroy_run_bench_endpoint(
     opened the endpoint is gone, so the teardown is rebuilt from the run's parameters and
     the worker's environment. Prefect's hook runner logs the hook's start and end on the
     run, and its failure (a held state lock, a failed destroy) with the traceback.
+
+    Prefect's runner passes the three arguments by keyword, so their names are fixed.
 
     :param flow: the flow whose run ended (unused; part of the hook signature Prefect calls).
     :param flow_run: the run, whose ``run_id`` and ``region`` parameters the teardown uses.
