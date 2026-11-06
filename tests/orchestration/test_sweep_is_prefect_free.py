@@ -3,9 +3,9 @@
 The workspace keeps framework-free and member-isolated packages (ADR-0012 §Amendment,
 ADR-0017): the bench-client image installs a Prefect-free path, and the ``contract`` kernel
 depends on no framework and no other member. This walks every source file of each package in
-``BOUNDARY_RULES`` and fails on any static ``import`` that breaches the rule — a root the rule
-forbids, or (when the rule names an ``allowed`` set) any root outside it — a fast, precise
-check that names the offending file. It sees only static ``import`` statements in a package's
+``BOUNDARY_RULES`` (or a module rule's one file) and fails on any static ``import`` that
+breaches the rule — a root the rule forbids, or (when the rule names an ``allowed`` set) any
+root outside it — a fast, precise check that names the offending file. It sees only static ``import`` statements in a package's
 own files, not dynamic imports or the transitive closure through other packages;
 ``test_import_contract`` covers that whole closure by importing each package with its
 forbidden roots blocked.
@@ -47,19 +47,26 @@ def _offending_roots(source: str, rule: BoundaryRule) -> set[str]:
     return roots & rule.forbidden
 
 
-def _package_dir(package: str) -> Path:
-    """Return the directory holding a package's own source files."""
+def _source_files(package: str) -> tuple[Path, list[Path]]:
+    """Return the root a rule's source files are named from, and the files themselves.
+
+    A package rule covers every file under the package's directory; a module rule covers
+    the module's own file alone, not the package around it.
+    """
     module_file = importlib.import_module(package).__file__
     assert module_file is not None, f"{package} has no __file__ to walk"
-    return Path(module_file).parent
+    path = Path(module_file)
+    if path.name != "__init__.py":
+        return path.parent, [path]
+    return path.parent, sorted(path.parent.rglob("*.py"))
 
 
 @pytest.mark.parametrize("rule", BOUNDARY_RULES, ids=lambda rule: rule.package)
 def test_package_source_imports_within_boundary(rule: BoundaryRule) -> None:
-    package_dir = _package_dir(rule.package)
+    root, files = _source_files(rule.package)
     offenders = {
-        str(path.relative_to(package_dir)): sorted(breaches)
-        for path in sorted(package_dir.rglob("*.py"))
+        str(path.relative_to(root)): sorted(breaches)
+        for path in files
         if (breaches := _offending_roots(path.read_text(encoding="utf-8"), rule))
     }
 
