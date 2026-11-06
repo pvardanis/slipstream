@@ -40,6 +40,11 @@ _INSTANCE_ID_OUTPUT = "bench_host_instance_id"
 # operator can find the state a run left behind.
 _STATE_KEY = "bench-endpoint/terraform.tfstate"
 
+# Where each environment variable the worker reads comes from, named when one is missing.
+_TOPOLOGY_SOURCE = "the eks stack's bench-endpoint-topology ConfigMap"
+_STACK_DIR_SOURCE = "the orchestration image, which bakes the stack there"
+_STACK_DIR_ENV = "BENCH_ENDPOINT_STACK_DIR"
+
 # The terraform transport: run ``terraform <args>`` with extra environment, return stdout,
 # and raise on a non-zero exit. Stateless and single-op, so a typed Callable, not a Protocol.
 Terraform = Callable[[Sequence[str], Mapping[str, str]], str]
@@ -50,7 +55,10 @@ class TerraformError(Exception):
 
 
 class TopologyError(ValueError):
-    """The worker environment lacks, or malforms, a bench-endpoint topology variable."""
+    """The worker environment lacks, or malforms, a variable the session is applied from.
+
+    The topology variables and the baked stack's path, ``BENCH_ENDPOINT_*`` all.
+    """
 
 
 class BenchEndpointInUseError(Exception):
@@ -190,6 +198,16 @@ def read_topology(environ: Mapping[str, str]) -> BenchEndpointTopology:
         ),
         instance_profile=_read_string(environ, "BENCH_ENDPOINT_INSTANCE_PROFILE"),
     )
+
+
+def read_stack_dir(environ: Mapping[str, str]) -> Path:
+    """Read the path of the bench-endpoint stack the orchestration image bakes.
+
+    :param environ: the environment to read (the worker's ``os.environ``).
+    :return: the stack directory the session copies and applies.
+    :raise TopologyError: when ``BENCH_ENDPOINT_STACK_DIR`` is unset or empty.
+    """
+    return Path(_read_string(environ, _STACK_DIR_ENV, source=_STACK_DIR_SOURCE))
 
 
 def build_terraform(*, binary: str = "terraform") -> Terraform:
@@ -338,12 +356,13 @@ def _get_state_url(topology: BenchEndpointTopology) -> str:
     return f"s3://{topology.state_bucket}/{_STATE_KEY}"
 
 
-def _read_string(environ: Mapping[str, str], name: str) -> str:
+def _read_string(
+    environ: Mapping[str, str], name: str, *, source: str = _TOPOLOGY_SOURCE
+) -> str:
     value = environ.get(name, "")
     if not value:
         raise TopologyError(
-            f"{name} is unset or empty; the worker reads it from the eks stack's "
-            f"bench-endpoint-topology ConfigMap"
+            f"{name} is unset or empty; the worker reads it from {source}"
         )
     return value
 
