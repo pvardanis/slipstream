@@ -26,45 +26,6 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
-# The terraform transport: run ``terraform <args>`` with extra environment, return stdout,
-# and raise on a non-zero exit. Stateless and single-op, so a typed Callable, not a Protocol.
-Terraform = Callable[[Sequence[str], Mapping[str, str]], str]
-
-
-class TerraformError(Exception):
-    """A ``terraform`` invocation that exited non-zero."""
-
-
-def build_terraform(*, binary: str = "terraform") -> Terraform:
-    """Build the production :data:`Terraform`: shell out to the ``terraform`` binary.
-
-    The extra environment is merged over the worker's own, so the worker's AWS credentials
-    and the image's ``TF_CLI_CONFIG_FILE`` provider mirror reach terraform beside the stack
-    variables. A non-zero exit raises :class:`TerraformError` carrying the argv, exit code,
-    and stderr — never the environment, which holds the api-key.
-
-    :param binary: the terraform executable name (overridable for tests).
-    :return: the callable the session sends terraform commands through.
-    """
-
-    def run(args: Sequence[str], env: Mapping[str, str]) -> str:
-        completed = subprocess.run(
-            [binary, *args],
-            env={**os.environ, **env},
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise TerraformError(
-                f"terraform {' '.join(args)} exited {completed.returncode}: "
-                f"{completed.stderr.strip()}"
-            )
-        return completed.stdout
-
-    return run
-
-
 # The host writes boot-status/<instance-id> to the results bucket when cloud-init ends:
 # "ok", or "failed: <step>; see <log>". Until then the key is absent, which S3 reports as
 # NoSuchKey.
@@ -79,13 +40,25 @@ _INSTANCE_ID_OUTPUT = "bench_host_instance_id"
 # operator can find the state a run left behind.
 _STATE_KEY = "bench-endpoint/terraform.tfstate"
 
+# The terraform transport: run ``terraform <args>`` with extra environment, return stdout,
+# and raise on a non-zero exit. Stateless and single-op, so a typed Callable, not a Protocol.
+Terraform = Callable[[Sequence[str], Mapping[str, str]], str]
 
-class BenchHostBootError(Exception):
-    """The bench host failed to boot, never reported ready, or was not created."""
+
+class TerraformError(Exception):
+    """A ``terraform`` invocation that exited non-zero."""
+
+
+class TopologyError(ValueError):
+    """The worker environment lacks, or malforms, a bench-endpoint topology variable."""
 
 
 class BenchEndpointInUseError(Exception):
     """The bench-endpoint state already holds an endpoint this session did not create."""
+
+
+class BenchHostBootError(Exception):
+    """The bench host failed to boot, never reported ready, or was not created."""
 
 
 @dataclass(frozen=True)
@@ -98,62 +71,6 @@ class BenchEndpointTopology:
     node_security_group_id: str
     node_autoscaling_groups: tuple[str, ...]
     instance_profile: str
-
-
-class TopologyError(ValueError):
-    """The worker environment lacks, or malforms, a bench-endpoint topology variable."""
-
-
-def read_topology(environ: Mapping[str, str]) -> BenchEndpointTopology:
-    """Read the bench-endpoint topology from the worker's environment.
-
-    The eks stack's ``bench-endpoint-topology`` ConfigMap sets these on the worker: plain
-    strings, and the two lists as JSON arrays.
-
-    :param environ: the environment to read (the worker's ``os.environ``).
-    :return: the topology the session applies the stack against.
-    :raise TopologyError: naming the variable that is unset, empty, or not a non-empty
-        JSON array of strings.
-    """
-    return BenchEndpointTopology(
-        state_bucket=_read_string(environ, "BENCH_ENDPOINT_STATE_BUCKET"),
-        vpc_id=_read_string(environ, "BENCH_ENDPOINT_VPC_ID"),
-        public_subnets=_read_strings(environ, "BENCH_ENDPOINT_PUBLIC_SUBNETS"),
-        node_security_group_id=_read_string(
-            environ, "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID"
-        ),
-        node_autoscaling_groups=_read_strings(
-            environ, "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS"
-        ),
-        instance_profile=_read_string(environ, "BENCH_ENDPOINT_INSTANCE_PROFILE"),
-    )
-
-
-def _read_string(environ: Mapping[str, str], name: str) -> str:
-    value = environ.get(name, "")
-    if not value:
-        raise TopologyError(
-            f"{name} is unset or empty; the worker reads it from the eks stack's "
-            f"bench-endpoint-topology ConfigMap"
-        )
-    return value
-
-
-def _read_strings(environ: Mapping[str, str], name: str) -> tuple[str, ...]:
-    raw = _read_string(environ, name)
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise TopologyError(f"{name} is not JSON: {raw!r}") from error
-    if (
-        not isinstance(value, list)
-        or not value
-        or not all(isinstance(item, str) for item in value)
-    ):
-        raise TopologyError(
-            f"{name} must be a non-empty JSON array of strings: {raw!r}"
-        )
-    return tuple(value)
 
 
 @dataclass(frozen=True)
@@ -212,7 +129,7 @@ def open_bench_endpoint(
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as workdir:
         shutil.copytree(stack_dir, workdir, dirs_exist_ok=True)
         chdir = f"-chdir={workdir}"
-        env = _get_stack_variables(topology, api_key=api_key)
+        env = _get_stack_env_vars(topology, api_key=api_key)
         terraform(
             [
                 chdir,
@@ -250,8 +167,81 @@ def open_bench_endpoint(
             _destroy(terraform, chdir=chdir, env=env, topology=topology)
 
 
-def _get_state_url(topology: BenchEndpointTopology) -> str:
-    return f"s3://{topology.state_bucket}/{_STATE_KEY}"
+def read_topology(environ: Mapping[str, str]) -> BenchEndpointTopology:
+    """Read the bench-endpoint topology from the worker's environment.
+
+    The eks stack's ``bench-endpoint-topology`` ConfigMap sets these on the worker: plain
+    strings, and the two lists as JSON arrays.
+
+    :param environ: the environment to read (the worker's ``os.environ``).
+    :return: the topology the session applies the stack against.
+    :raise TopologyError: naming the variable that is unset, empty, or not a non-empty
+        JSON array of strings.
+    """
+    return BenchEndpointTopology(
+        state_bucket=_read_string(environ, "BENCH_ENDPOINT_STATE_BUCKET"),
+        vpc_id=_read_string(environ, "BENCH_ENDPOINT_VPC_ID"),
+        public_subnets=_read_strings(environ, "BENCH_ENDPOINT_PUBLIC_SUBNETS"),
+        node_security_group_id=_read_string(
+            environ, "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID"
+        ),
+        node_autoscaling_groups=_read_strings(
+            environ, "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS"
+        ),
+        instance_profile=_read_string(environ, "BENCH_ENDPOINT_INSTANCE_PROFILE"),
+    )
+
+
+def build_terraform(*, binary: str = "terraform") -> Terraform:
+    """Build the production :data:`Terraform`: shell out to the ``terraform`` binary.
+
+    The extra environment is merged over the worker's own, so the worker's AWS credentials
+    and the image's ``TF_CLI_CONFIG_FILE`` provider mirror reach terraform beside the stack
+    variables. A non-zero exit raises :class:`TerraformError` carrying the argv, exit code,
+    and stderr — never the environment, which holds the api-key.
+
+    :param binary: the terraform executable name (overridable for tests).
+    :return: the callable the session sends terraform commands through.
+    """
+
+    def run(args: Sequence[str], env: Mapping[str, str]) -> str:
+        completed = subprocess.run(
+            [binary, *args],
+            env={**os.environ, **env},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise TerraformError(
+                f"terraform {' '.join(args)} exited {completed.returncode}: "
+                f"{completed.stderr.strip()}"
+            )
+        return completed.stdout
+
+    return run
+
+
+def _get_stack_env_vars(
+    topology: BenchEndpointTopology, *, api_key: str
+) -> dict[str, str]:
+    """Map the topology and api-key onto the stack's variables as ``TF_VAR_*`` environment.
+
+    Every variable travels in the environment rather than as ``-var`` so the api-key never
+    lands in the terraform argv, which any process that can see the terraform process can
+    read. Terraform parses a list variable's environment value as HCL, which a JSON list is.
+    """
+    return {
+        "TF_VAR_state_bucket": topology.state_bucket,
+        "TF_VAR_vpc_id": topology.vpc_id,
+        "TF_VAR_public_subnets": json.dumps(list(topology.public_subnets)),
+        "TF_VAR_node_security_group_id": topology.node_security_group_id,
+        "TF_VAR_node_autoscaling_groups": json.dumps(
+            list(topology.node_autoscaling_groups)
+        ),
+        "TF_VAR_bench_host_instance_profile": topology.instance_profile,
+        "TF_VAR_vllm_api_key": api_key,
+    }
 
 
 def _refuse_held_state(
@@ -276,47 +266,6 @@ def _refuse_held_state(
             f"{_get_state_url(topology)} already holds a bench endpoint this run did not "
             f"create; destroy it (`just bench-endpoint-down`) or wait for its run to end"
         )
-
-
-def _destroy(
-    terraform: Terraform,
-    *,
-    chdir: str,
-    env: Mapping[str, str],
-    topology: BenchEndpointTopology,
-) -> None:
-    """Destroy the stack, noting on a failure where the state left behind lives."""
-    try:
-        terraform([chdir, "destroy", "-auto-approve", "-input=false", "-no-color"], env)
-    except Exception as error:
-        error.add_note(
-            f"bench-endpoint resources may still be billing; their state is "
-            f"{_get_state_url(topology)} (`just bench-endpoint-down` destroys from it)"
-        )
-        raise
-
-
-def _get_stack_variables(
-    topology: BenchEndpointTopology, *, api_key: str
-) -> dict[str, str]:
-    """Map the topology and api-key onto the stack's variables as ``TF_VAR_*`` environment.
-
-    Every variable travels in the environment rather than as ``-var`` so the api-key never
-    lands in the terraform argv, which any process that can see the terraform process can
-    read. Terraform parses
-    a list variable's environment value as HCL, which a JSON list is.
-    """
-    return {
-        "TF_VAR_state_bucket": topology.state_bucket,
-        "TF_VAR_vpc_id": topology.vpc_id,
-        "TF_VAR_public_subnets": json.dumps(list(topology.public_subnets)),
-        "TF_VAR_node_security_group_id": topology.node_security_group_id,
-        "TF_VAR_node_autoscaling_groups": json.dumps(
-            list(topology.node_autoscaling_groups)
-        ),
-        "TF_VAR_bench_host_instance_profile": topology.instance_profile,
-        "TF_VAR_vllm_api_key": api_key,
-    }
 
 
 def _wait_for_boot(
@@ -365,3 +314,52 @@ def _read_sentinel(s3_client: Any, *, bucket: str, key: str) -> str | None:
             return None
         raise
     return response["Body"].read().decode().strip()
+
+
+def _destroy(
+    terraform: Terraform,
+    *,
+    chdir: str,
+    env: Mapping[str, str],
+    topology: BenchEndpointTopology,
+) -> None:
+    """Destroy the stack, noting on a failure where the state left behind lives."""
+    try:
+        terraform([chdir, "destroy", "-auto-approve", "-input=false", "-no-color"], env)
+    except Exception as error:
+        error.add_note(
+            f"bench-endpoint resources may still be billing; their state is "
+            f"{_get_state_url(topology)} (`just bench-endpoint-down` destroys from it)"
+        )
+        raise
+
+
+def _get_state_url(topology: BenchEndpointTopology) -> str:
+    return f"s3://{topology.state_bucket}/{_STATE_KEY}"
+
+
+def _read_string(environ: Mapping[str, str], name: str) -> str:
+    value = environ.get(name, "")
+    if not value:
+        raise TopologyError(
+            f"{name} is unset or empty; the worker reads it from the eks stack's "
+            f"bench-endpoint-topology ConfigMap"
+        )
+    return value
+
+
+def _read_strings(environ: Mapping[str, str], name: str) -> tuple[str, ...]:
+    raw = _read_string(environ, name)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise TopologyError(f"{name} is not JSON: {raw!r}") from error
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) for item in value)
+    ):
+        raise TopologyError(
+            f"{name} must be a non-empty JSON array of strings: {raw!r}"
+        )
+    return tuple(value)
