@@ -19,8 +19,10 @@ from slipstream_bench.orchestration.bench_endpoint import (
     BenchHost,
     BenchHostBootError,
     TerraformError,
+    TopologyError,
     build_terraform,
     open_bench_endpoint,
+    read_topology,
 )
 
 _INSTANCE_ID = "i-0abc123"
@@ -418,3 +420,46 @@ def test_build_terraform_error_leaves_out_the_environment() -> None:
         run(["-c", "exit 1"], {"TF_VAR_vllm_api_key": "sk-secret-key"})
 
     assert "sk-secret-key" not in str(excinfo.value)
+
+
+# The worker environment the eks stack's bench-endpoint-topology ConfigMap sets.
+_WORKER_ENV = {
+    "BENCH_ENDPOINT_STATE_BUCKET": "slipstream-tfstate-x1",
+    "BENCH_ENDPOINT_VPC_ID": "vpc-1",
+    "BENCH_ENDPOINT_PUBLIC_SUBNETS": '["subnet-a","subnet-b"]',
+    "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID": "sg-node",
+    "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS": '["asg-1"]',
+    "BENCH_ENDPOINT_INSTANCE_PROFILE": "slipstream-bench-host",
+    "PATH": "/usr/bin",
+}
+
+
+def test_read_topology_parses_the_worker_environment() -> None:
+    assert read_topology(_WORKER_ENV) == _TOPOLOGY
+
+
+@pytest.mark.parametrize(
+    "name", sorted(key for key in _WORKER_ENV if key.startswith("BENCH_ENDPOINT_"))
+)
+def test_read_topology_names_a_missing_variable(name: str) -> None:
+    environ = {key: value for key, value in _WORKER_ENV.items() if key != name}
+
+    with pytest.raises(TopologyError, match=name):
+        read_topology(environ)
+
+
+def test_read_topology_names_an_empty_variable() -> None:
+    environ = {**_WORKER_ENV, "BENCH_ENDPOINT_VPC_ID": ""}
+
+    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_VPC_ID"):
+        read_topology(environ)
+
+
+@pytest.mark.parametrize("value", ["subnet-a", '{"a": 1}', "[1, 2]", "[]"])
+def test_read_topology_rejects_a_list_that_is_not_strings(value: str) -> None:
+    # An empty list would launch the load balancer into no subnet; the apply would fail
+    # minutes in, so the session refuses it before applying.
+    environ = {**_WORKER_ENV, "BENCH_ENDPOINT_PUBLIC_SUBNETS": value}
+
+    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_PUBLIC_SUBNETS"):
+        read_topology(environ)
