@@ -1,17 +1,16 @@
-# The shared body of the manual CI triggers for the unattended Prefect flows (ADR-0015
-# 'CI later' arm, ADR-0012 'CI/CD later'): sweep-dispatch.yml calls it for the knob sweep
-# and kv-ab-dispatch.yml for the KV cache A/B. It fires `prefect deployment run` against
-# the self-hosted, no-public-endpoint Prefect server, so a run is kicked off from the
-# GitHub UI without a workstation's kubectl. It registers the flow's deployment (the same
+# The shared body of the manual CI triggers for the unattended Prefect flows (ADR-0015 'CI
+# later' arm, ADR-0012 'CI/CD later'): sweep-dispatch.yml calls it for the knob sweep and
+# kv-ab-dispatch.yml for the KV cache A/B. It fires `prefect deployment run` against the
+# self-hosted, no-public-endpoint Prefect server, so a run is kicked off from the GitHub
+# UI without a workstation's kubectl. It registers the flow's deployment (the same
 # `register-*` command `just prefect-register-sweep` or `just prefect-register-kv-ab`
 # runs), then triggers a run of it against a live cluster; each flow opens and closes its
 # own bench endpoint. Registration overwrites the deployment, so every dispatch runs with
 # defaults resolved from the live stack and main, including after a cluster-down wiped the
-# server's SQLite. It does not
-# stand the cluster up (`just stack-up`), which stays a deliberate operator step that
-# brackets the GPU spend (ADR-0015). The run itself executes in-cluster on the worker to
-# completion; this workflow returns as soon as the run is created (no --watch),
-# consistent with the ADR's fire-and-forget trigger.
+# server's SQLite. It does not stand the cluster up (`just stack-up`), which stays a
+# deliberate operator step that brackets the GPU spend (ADR-0015). The run itself executes
+# in-cluster on the worker to completion; this workflow returns as soon as the run is
+# created (no --watch), consistent with the ADR's fire-and-forget trigger.
 # Dispatch the callers from main: the OIDC role trusts only main-branch runs, and a called
 # workflow runs in its caller's context, so the caller's ref is the one the role sees.
 name: flow-dispatch
