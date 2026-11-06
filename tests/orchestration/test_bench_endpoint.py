@@ -19,6 +19,7 @@ from botocore.exceptions import ClientError
 from slipstream_bench.orchestration.bench_endpoint import (
     BenchEndpointEnvironmentError,
     BenchEndpointInUseError,
+    BenchEndpointLockedError,
     BenchEndpointTopology,
     BenchHost,
     BenchHostBootError,
@@ -49,24 +50,52 @@ _HELD_STATE = (
 )
 
 
+_LOCK_ID = "2dcc6d8e-8b22-9868-6f34-a1538a71338d"
+
+# What terraform writes to stderr when another process holds the state lock, as Terraform
+# 1.16 prints it; the production transport carries stderr in its TerraformError message.
+_LOCK_STDERR = f"""Error: Error acquiring the state lock
+
+Error message: operation error S3: PutObject, StatusCode: 412, PreconditionFailed
+Lock Info:
+  ID:        {_LOCK_ID}
+  Path:      slipstream-tfstate-x1/bench-endpoint/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       root@prefect-worker-0
+  Version:   1.17.1
+  Created:   2026-11-06 15:33:35.353955 +0000 UTC
+  Info:
+
+Terraform acquires a state lock to protect the state from being written
+by multiple users at the same time."""
+
+
 class _FakeTerraform:
     """A scripted Terraform: records every call and answers ``output`` with an instance id.
 
     ``fail_on`` names a subcommand (``init``, ``apply``, ``destroy``) that raises instead of
-    succeeding, standing in for a non-zero exit. ``show`` answers with the state the backend
+    succeeding, standing in for a non-zero exit. ``locked_on`` names one that fails because
+    another process holds the state lock. ``show`` answers with the state the backend
     already holds: none by default, or ``existing_state``.
     """
 
     def __init__(
-        self, *, fail_on: str | None = None, existing_state: str = _EMPTY_STATE
+        self,
+        *,
+        fail_on: str | None = None,
+        locked_on: str | None = None,
+        existing_state: str = _EMPTY_STATE,
     ) -> None:
         self.calls: list[tuple[list[str], dict[str, str]]] = []
         self._fail_on = fail_on
+        self._locked_on = locked_on
         self._existing_state = existing_state
 
     def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> str:
         self.calls.append((list(args), dict(env)))
         subcommand = _subcommand(args)
+        if subcommand == self._locked_on:
+            raise TerraformError(f"terraform {' '.join(args)} exited 1: {_LOCK_STDERR}")
         if subcommand == self._fail_on:
             raise RuntimeError(f"terraform {subcommand} failed")
         if subcommand == "output":
@@ -260,6 +289,53 @@ def test_session_refuses_a_backend_that_already_holds_an_endpoint(
         pytest.fail("the body must not run against another run's endpoint")
 
     assert terraform.subcommands() == ["init", "show"]
+
+
+def test_held_lock_raises_with_the_lock_id_and_the_force_unlock_command(
+    stack_dir: Path,
+) -> None:
+    # A lock left by a killed run blocks every later apply; the error hands the operator
+    # the id and the command so recovery needs no digging through terraform output.
+    terraform = _FakeTerraform(locked_on="apply")
+
+    with (
+        pytest.raises(BenchEndpointLockedError) as excinfo,
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pytest.fail("the body must not run without the state lock")
+
+    message = str(excinfo.value)
+    assert _LOCK_ID in message
+    assert (
+        f"terraform -chdir=terraform/bench-endpoint force-unlock {_LOCK_ID}" in message
+    )
+
+
+def test_held_lock_on_apply_neither_destroys_nor_unlocks(stack_dir: Path) -> None:
+    # An apply that never took the lock changed nothing, and the lock's holder may be a
+    # live run: destroying would tear its endpoint down once it lets go, and unlocking
+    # would let two runs write one state.
+    terraform = _FakeTerraform(locked_on="apply")
+
+    with (
+        pytest.raises(BenchEndpointLockedError),
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pytest.fail("the body must not run without the state lock")
+
+    assert terraform.subcommands() == ["init", "show", "apply"]
+
+
+def test_held_lock_on_destroy_raises_with_the_lock_id(stack_dir: Path) -> None:
+    terraform = _FakeTerraform(locked_on="destroy")
+
+    with (
+        pytest.raises(BenchEndpointLockedError, match=_LOCK_ID),
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pass
+
+    assert "force-unlock" not in terraform.subcommands()
 
 
 def test_terraform_output_carries_no_colour_codes(stack_dir: Path) -> None:
