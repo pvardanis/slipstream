@@ -207,7 +207,7 @@ def _collaborators(
 ) -> tuple[Any, Any, Any, Any]:
     return build_knob_sweep_collaborators(
         _inputs(manifest_dir),
-        instance_id="i-1",
+        host=BenchHost(instance_id="i-1"),
         kubectl=kubectl,
         ssm_client=object(),
         s3_client=object(),
@@ -275,7 +275,7 @@ def test_sweep_one_point_runs_under_the_points_nested_run_id(
         return _sweep_one_point(
             point,
             inputs=inputs,
-            instance_id="i-1",
+            host=BenchHost(instance_id="i-1"),
             ssm_client=object(),
             s3_client=object(),
             task=cast(Task[..., str], object()),

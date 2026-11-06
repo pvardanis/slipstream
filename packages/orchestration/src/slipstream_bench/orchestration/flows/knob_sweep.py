@@ -268,14 +268,16 @@ def knob_sweep_flow(
     task = cell_task(bucket, retries=retries)
     # The bench endpoint lives for the point loop only: everything that can reject the run
     # cheaply (its inputs, the cell storage preflight) runs before its apply, and the render
-    # below reads only S3, so the endpoint is destroyed before it.
+    # below reads only S3, so the endpoint is destroyed before it. A destroy that fails
+    # fails the run before the render: the cells are already in S3, and the state it leaves
+    # must be destroyed (`just bench-endpoint-down`) before a re-run can open the endpoint.
     with _open_bench_endpoint(
         kubectl=kubectl, s3_client=s3_client, bucket=bucket
     ) as host:
         deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
             build_knob_sweep_collaborators(
                 inputs,
-                instance_id=host.instance_id,
+                host=host,
                 kubectl=kubectl,
                 ssm_client=build_ssm_client(region),
                 s3_client=s3_client,
@@ -391,7 +393,7 @@ def build_sweep_summary(run_id: str, outcome: SweepOutcome) -> str:
 def build_knob_sweep_collaborators(
     inputs: KnobSweepInputs,
     *,
-    instance_id: str,
+    host: BenchHost,
     kubectl: Kubectl,
     ssm_client: Any,
     s3_client: Any,
@@ -410,7 +412,7 @@ def build_knob_sweep_collaborators(
     its redeploy.
 
     :param inputs: the per-run inputs every point of the sweep shares.
-    :param instance_id: the bench host the cells run on.
+    :param host: the bench host the cells run on, booted by the run's bench endpoint.
     :param kubectl: the transport the redeploy and ceiling scrape are issued through.
     :param ssm_client: the boto3 SSM client each point sweep sends cells through.
     :param s3_client: the boto3 S3 client each point sweep downloads its cells with.
@@ -428,13 +430,13 @@ def build_knob_sweep_collaborators(
     point_sweep_fn: PointSweepFn = partial(
         _sweep_one_point,
         inputs=inputs,
-        instance_id=instance_id,
+        host=host,
         ssm_client=ssm_client,
         s3_client=s3_client,
         task=task,
     )
     has_pending_cells: PendingCellsFn = partial(
-        _point_has_pending_cells, inputs=inputs, instance_id=instance_id, task=task
+        _point_has_pending_cells, inputs=inputs, host=host, task=task
     )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
 
@@ -488,7 +490,7 @@ def _sweep_one_point(
     point: EnginePoint,
     *,
     inputs: KnobSweepInputs,
-    instance_id: str,
+    host: BenchHost,
     ssm_client: Any,
     s3_client: Any,
     task: Task[..., str],
@@ -496,7 +498,7 @@ def _sweep_one_point(
     """Run one point's Tier-2 ladder under its own nested run id."""
     return run_point_sweep(
         grid_path=inputs.grid_path,
-        context=_build_point_context(inputs, point, instance_id),
+        context=_build_point_context(inputs, point, host=host),
         ssm_client=ssm_client,
         s3_client=s3_client,
         task=task,
@@ -507,7 +509,7 @@ def _point_has_pending_cells(
     point: EnginePoint,
     *,
     inputs: KnobSweepInputs,
-    instance_id: str,
+    host: BenchHost,
     task: Task[..., str],
 ) -> bool:
     """Report whether a point still has cells to run — any cell without a cache record.
@@ -518,7 +520,7 @@ def _point_has_pending_cells(
     its cells will be served from cache. The first uncached cell is logged, naming why the
     point redeploys.
     """
-    context = _build_point_context(inputs, point, instance_id)
+    context = _build_point_context(inputs, point, host=host)
     for cell in list_point_cells(inputs.grid, context):
         cell_name = get_cell_basename(cell)
         if not is_cell_cached(
@@ -536,14 +538,14 @@ def _point_has_pending_cells(
 
 
 def _build_point_context(
-    inputs: KnobSweepInputs, point: EnginePoint, instance_id: str
+    inputs: KnobSweepInputs, point: EnginePoint, *, host: BenchHost
 ) -> SweepContext:
     """Derive one engine point's sweep context, nesting it under the shared run."""
     return SweepContext(
         run_id=_get_point_run_id(inputs, point),
         point_slug=point.slug(),
         serving=inputs.serving,
-        instance_id=instance_id,
+        instance_id=host.instance_id,
         image_ref=inputs.image_ref,
         bucket=inputs.bucket,
         model=inputs.model,
