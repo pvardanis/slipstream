@@ -5,7 +5,7 @@
 # GitHub UI without a workstation's kubectl. It registers the flow's deployment (the same
 # `register-*` command `just prefect-register-sweep` or `just prefect-register-kv-ab`
 # runs), then triggers a run of it against a live cluster; each flow opens and closes its
-# own bench endpoint, so a run takes no bench host instance id. Registration
+# own bench endpoint. Registration
 # overwrites the deployment, so every dispatch runs with defaults resolved from the live
 # stack and main, including after a cluster-down wiped the server's SQLite. It does not
 # stand the cluster up (`just stack-up`), which stays a deliberate operator step that
@@ -75,7 +75,7 @@ jobs:
             exit 1
           fi
 
-      # The one place a flow's names and dispatch inputs live: the orchestration CLI
+      # The one place a flow's per-flow values live: the orchestration CLI
       # command that registers its deployment, the deployment's `<flow>/<deployment>`
       # name, the deployment parameter holding the in-image path of the config the
       # worker reads, and the job summary's heading for that config. Checked before any
@@ -268,7 +268,7 @@ jobs:
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
           # Refuse to create the run when the worker's config is not main's: the run would
-          # sweep a config main no longer holds. Checked after the summary, so the job page
+          # run a config main no longer holds. Checked after the summary, so the job page
           # still shows the config the worker would have run.
           if ! git diff --quiet "${worker_commit}" HEAD -- "${config_repo_path}"; then
             echo "::error::the worker runs ${config_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) and dispatch again"
@@ -276,9 +276,9 @@ jobs:
           fi
 
           # Create the run and return; the worker picks it up and runs it to completion
-          # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The params
-          # go as one JSON object so each value stays a string (--param parses values as
-          # JSON, which would turn a numeric run id into a number). run_id is the one
-          # parameter: Prefect fails a run handed a parameter its flow does not declare.
+          # in-cluster. No --watch: fire-and-forget is the point (ADR-0015). The run passes
+          # only run_id; registration supplies every other flow parameter as a deployment
+          # default. It goes as a JSON object so the run id stays a string (--param parses
+          # values as JSON, which would turn a numeric run id into a number).
           params="$(jq -nc --arg run_id "${flow_run_id}" '{run_id: $run_id}')"
           uv run prefect deployment run "${DEPLOYMENT_NAME}" --params "${params}"
