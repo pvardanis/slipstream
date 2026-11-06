@@ -3,21 +3,25 @@
 # Bring the whole benchmark stack up and leave it running: cluster (with the self-hosted
 # Prefect server and worker), the OTel Collector exporting traces and span metrics to Grafana Cloud,
 # the server's work pool, GPU node pool and GPU replica. It brings up no bench endpoint:
-# each Prefect run opens and destroys its own (ADR-0028), and `just bench` and
-# `just prefix-cache` run against one `just bench-endpoint-up` stands up by hand.
+# the knob-sweep and kv-ab flows each open and destroy their own (ADR-0028), and
+# `just bench` and `just prefix-cache` run against an endpoint stood up by hand with
+# `just bench-endpoint-up`.
 # `obs-pivot` checks that Grafana Cloud accepts what the Collector exports before any GPU spend.
-# Run flows against it as often as you like, then `just stack-down` at the end of the day
-# to return spend to zero. Ordered cluster-up -> obs-up -> obs-pivot -> prefect-up -> gpu-pool-up: the server (a helm_release in
-# the eks stack) comes up with the cluster, the Collector after the endpoints ConfigMap
-# and write-token Secret cluster-up provides, then the server's work pool is created, then the GPU
-# pool a worker's runs target (ADR-0015 amendment).
+# Run against it as often as you like, then `just stack-down` at the end of the day to
+# return spend to zero.
+# Ordered cluster-up -> obs-up -> obs-pivot -> prefect-up -> gpu-pool-up -> gpu-deploy: the
+# server (a helm_release in the eks stack) comes up with the cluster, the Collector after
+# the endpoints ConfigMap and write-token Secret cluster-up provides, then the server's work
+# pool is created, then the GPU pool a worker's runs target (ADR-0015 amendment), then the
+# GPU replica on it.
 [group('orchestrate')]
 stack-up: cluster-up obs-up obs-pivot prefect-up gpu-pool-up gpu-deploy
 
 # Tear the whole benchmark stack down, returning GPU and cluster spend to zero,
 # then sweep AWS to confirm nothing tagged Project=slipstream is still billing.
 # Bootstrap state and the ECR repo survive (see `just cluster-down`). Order matters:
-# drop the bench endpoint and scale the GPU replica to zero, then delete the
+# drop any bench endpoint (one `just bench-endpoint-up` stood up, or one a flow run
+# failed to destroy) and scale the GPU replica to zero, then delete the
 # NodePool so Karpenter reaps the g5 before `just cluster-down` destroys the VPC it
 # lives in. `cluster-down` is gated on `bench-endpoint-down` succeeding: the endpoint's
 # load balancer and host sit in the cluster VPC, so destroying the VPC under a live
