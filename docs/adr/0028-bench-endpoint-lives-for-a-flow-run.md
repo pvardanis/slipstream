@@ -106,10 +106,12 @@ keeps its instance-id parameter so it can target such an endpoint.
 ## Amendment (2026-11-06): a killed run's endpoint is destroyed by a hook
 
 A cancelled run's `finally` never finished its destroy: Prefect's runner sends the run's
-process group SIGTERM, SIGKILLs it 30 s later, and only then runs the flow's
+process group SIGTERM, SIGKILLs whatever survives 30 s, and only then runs the flow's
 `on_cancellation` hooks, in the worker. Both parent flows now register a hook for
 `on_cancellation` and `on_crashed` that destroys the bench endpoint from the stack and the
-state alone, built from the run's parameters and the worker's environment. The session no
+state alone, built from the run's parameters and the worker's environment. A crash's
+hooks run in the worker when the run's process exits non-zero, or in the dying process
+when the run reports the crash itself. The session no
 longer destroys when it exits on a `BaseException` that is not an `Exception` (Prefect's
 termination signal, an interrupt): a destroy started with seconds left would be cut off
 holding the state lock and block the hook's.
@@ -119,10 +121,13 @@ holding the state lock and block the hook's.
   itself. An apply that cannot take the lock arms no destroy, since it changed nothing and
   the lock's holder may be a live run.
 - **A state Terraform could not push is kept.** An apply or destroy that leaves
-  `errored.tfstate` has it copied to `bench-endpoint/errored/<run-id>/<command>.tfstate` in
-  the state bucket, one key per command so a failed destroy's dump never overwrites the
-  failed apply's. The worker's rights gain `s3:PutObject` on that prefix only.
+  `errored.tfstate` has it copied to
+  `bench-endpoint/errored/<run-id>/<command>-<utc-timestamp>.tfstate` in the state bucket,
+  so neither the destroy after a failed apply nor a resume under the same run id
+  overwrites a dump not yet recovered. The worker's rights gain `s3:PutObject` on that
+  prefix only.
 - **What still leaks.** A worker pod killed outright skips the hook. A run cancelled during
   its apply or destroy leaves the lock held, and the hook's destroy fails on it with the
-  lock hint. The hook destroys whatever the state holds, so it also destroys an endpoint
+  lock hint. A crash hook that runs in the dying process has only the time that process
+  has left. The hook destroys whatever the state holds, so it also destroys an endpoint
   from `just bench-endpoint-up` that happens to be up.
