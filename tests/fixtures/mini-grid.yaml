@@ -10,7 +10,7 @@
 # Reuse: copy onto the worker pod's writable /tmp and point the deployment run at it,
 #   kubectl -n prefect cp tests/fixtures/mini-grid.yaml prefect/<worker-pod>:/tmp/mini-grid.yaml
 #   prefect deployment run knob-sweep/knob-sweep \
-#     --param run_id=smoke-$(date +%s) --param instance_id=<bench-host> \
+#     --param run_id=smoke-$(date +%s) \
 #     --param sweep_grid=/tmp/mini-grid.yaml
 tier1:
   max_num_seqs: [16]

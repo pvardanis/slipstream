@@ -10,10 +10,19 @@ The two-tier sweep ([ADR-0009](adr/0009-knob-sweep-rig-and-ceiling-method.md)) r
 unattended on the in-cluster Prefect worker. Every swept value lives in
 [`bench/configs/sweep-grid.yaml`](../bench/configs/sweep-grid.yaml).
 
+**The run brings its own bench endpoint**
+([ADR-0028](adr/0028-bench-endpoint-lives-for-a-flow-run.md)). It applies the bench-endpoint
+stack before its first point, waits for the bench host to boot, and destroys the stack after
+its last point, whether the run succeeds or fails. The run page logs each step (applying,
+launched, ready, destroying, destroyed). A run refuses to start while the bench-endpoint
+state holds an endpoint it did not create, and `just stack-up` leaves one up, so **run
+`just bench-endpoint-down` before a knob sweep**. A run whose destroy failed, or whose worker
+pod was killed, leaves the endpoint billing; `just bench-endpoint-down` destroys it.
+
 **From CI** — Actions → `sweep-dispatch` → Run workflow, **on `main`** (the role trusts
-only `main`). Both inputs are optional: `instance_id` defaults to the running bench host
-and `run_id` to a UTC timestamp. The workflow does not stand the stack up, and fails
-before creating the run if no worker is polling the pool.
+only `main`). Its one input, `run_id`, is optional and defaults to a UTC timestamp. The
+workflow does not stand the cluster up, and fails before creating the run if no worker is
+polling the pool.
 
 Each dispatch re-registers the deployment with defaults resolved from the live stack
 and `main`'s image, so it **overwrites** any override a manual `just prefect-register-sweep`
@@ -26,8 +35,7 @@ just prefect-register-sweep   # register the deployment on the worker's pool
 just prefect-ui               # hold a port-forward open; UI at http://localhost:4200
 # in another shell:
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-sweep/knob-sweep \
-  --param run_id=<run-id> \
-  --param instance_id="$(terraform -chdir=terraform/bench-endpoint output -raw bench_host_instance_id)"
+  --param run_id=<run-id>
 ```
 
 The flow redeploys `deploy/vllm-gpu` for each engine point, so **do not run
@@ -40,7 +48,8 @@ knobs; `just gpu-deploy` with `MAX_NUM_SEQS`, `KV_CACHE_DTYPE`, `PREFIX_CACHING_
 
 A failed redeploy, ceiling scrape, or cell fails the run. **To resume**, run again with
 the same `run_id` (a Retry in the Prefect UI reuses it): cells with a cache record under
-that run are reused, and a point whose every cell is cached skips its redeploy. A cell whose
+that run are reused, and a point whose every cell is cached skips its redeploy. The resume
+runs on a new bench host, which the cache records do not depend on. A cell whose
 config changed since (model, vLLM or bench-client image, the point's knobs, the cell's
 knobs, the load-cell flags) is re-measured. **A new `run_id` re-measures every cell**,
 which is how to take a fresh sample; nothing in the bucket is deleted by hand
