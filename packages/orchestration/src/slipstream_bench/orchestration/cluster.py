@@ -121,9 +121,9 @@ Kubectl = Callable[[Sequence[str], "str | None"], str]
 
 
 class VllmApiKeyError(Exception):
-    """The vLLM api-key Secret holds no api-key value.
+    """The vLLM api-key Secret's api-key value is absent, blank, or undecodable.
 
-    The bench endpoint publishes the key to its bench host, so an empty one raises here
+    The bench endpoint publishes the key to its bench host, so an unusable one raises here
     rather than reaching the stack.
     """
 
@@ -422,11 +422,13 @@ def read_vllm_api_key(kubectl: Kubectl, *, namespace: str = _NAMESPACE) -> str:
     )
     secret = f"{namespace}/{_API_KEY_SECRET}"
     try:
-        api_key = base64.b64decode(encoded, validate=True).decode("utf-8")
-    except (binascii.Error, UnicodeDecodeError) as error:
+        api_key = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        # Raised from None, without the decoder's message: a UTF-8 decode error names a
+        # byte of the key and carries its decoded bytes.
         raise VllmApiKeyError(
-            f"Secret {secret} {_API_KEY_FIELD} value is not base64-encoded UTF-8: {error}"
-        ) from error
+            f"Secret {secret} {_API_KEY_FIELD} value is not base64-encoded UTF-8"
+        ) from None
     if not api_key.strip():
         raise VllmApiKeyError(
             f"Secret {secret} holds no {_API_KEY_FIELD} value; "
