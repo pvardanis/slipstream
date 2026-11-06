@@ -55,7 +55,9 @@ _STATE_KEY = "bench-endpoint/terraform.tfstate"
 
 # Terraform writes a state it changed but could not push to errored.tfstate in its working
 # directory; the session copies it under this prefix in the state bucket, per run and
-# command, so a failed destroy's dump never overwrites the failed apply's before it.
+# command, so a failed destroy's dump never overwrites the failed apply's before it. The
+# worker's write grant on the prefix is BenchEndpointErroredState in
+# terraform/eks/worker_bench_endpoint.tf.
 _ERRORED_STATE_FILE = "errored.tfstate"
 _ERRORED_STATE_PREFIX = "bench-endpoint/errored"
 
@@ -423,8 +425,9 @@ def _refuse_held_state(workspace: _Workspace) -> None:
     root_module = state.get("values", {}).get("root_module", {})
     if root_module.get("resources") or root_module.get("child_modules"):
         raise BenchEndpointInUseError(
-            f"{_get_state_url(workspace.topology)} already holds a bench endpoint this run did not "
-            f"create; destroy it (`just bench-endpoint-down`) or wait for its run to end"
+            f"{_get_state_url(workspace.topology)} already holds a bench endpoint this "
+            f"run did not create; destroy it (`just bench-endpoint-down`) or wait for its "
+            f"run to end"
         )
 
 
@@ -506,12 +509,10 @@ def _run_state_changing(workspace: _Workspace, subcommand: str, *flags: str) -> 
     """
     try:
         workspace.terraform([workspace.chdir, subcommand, *flags], workspace.env)
-    except TerraformError as error:
-        _keep_errored_state(workspace, subcommand=subcommand, error=error)
-        _raise_if_locked(error, topology=workspace.topology)
-        raise
     except Exception as error:
         _keep_errored_state(workspace, subcommand=subcommand, error=error)
+        if isinstance(error, TerraformError):
+            _raise_if_locked(error, topology=workspace.topology)
         raise
 
 
@@ -536,7 +537,10 @@ def _keep_errored_state(
     except (BotoCoreError, ClientError) as upload_error:
         error.add_note(
             f"terraform {subcommand} left errored.tfstate, and the run could not copy "
-            f"errored.tfstate to s3://{bucket}/{key}: {upload_error}"
+            f"errored.tfstate to s3://{bucket}/{key}: {upload_error}. The dump is lost "
+            f"with the run, so resources it recorded are missing from the state: "
+            f"`just bench-endpoint-down` destroys the rest, and `just stack-down`'s "
+            f"zero-leak sweep reports any tagged instance still running"
         )
         return
     error.add_note(
