@@ -302,6 +302,42 @@ def _write_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     return model_yaml, grid_yaml, manifest
 
 
+def _run_flow(model_yaml: Path, grid_yaml: Path, manifest: Path, **kwargs: Any) -> Any:
+    return knob_sweep_flow(
+        run_id="run1",
+        region="us-east-1",
+        bucket="bench-bucket",
+        image_ref="repo:tag",
+        model_yaml=model_yaml,
+        sweep_grid=grid_yaml,
+        vllm_manifest=manifest,
+        **kwargs,
+    )
+
+
+def _knob_sweep_argv(
+    model_yaml: Path, grid_yaml: Path, manifest: Path, *extra: str
+) -> list[str]:
+    return [
+        "knob-sweep",
+        "--run-id",
+        "run1",
+        "--region",
+        "us-east-1",
+        "--bucket",
+        "bench-bucket",
+        "--image-ref",
+        "repo:tag",
+        "--model-yaml",
+        str(model_yaml),
+        "--sweep-grid",
+        str(grid_yaml),
+        "--vllm-manifest",
+        str(manifest),
+        *extra,
+    ]
+
+
 @pytest.mark.parametrize("field", ["run", "image_ref", "bucket", "model"])
 def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
     # An empty keying field would address cells under a broken key; rejecting it on
@@ -448,28 +484,16 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
 
     result = CliRunner().invoke(
         app,
-        [
-            "knob-sweep",
-            "--run-id",
-            "run1",
-            "--region",
-            "us-east-1",
-            "--bucket",
-            "bench-bucket",
-            "--image-ref",
-            "repo:tag",
-            "--model-yaml",
-            str(model_yaml),
-            "--sweep-grid",
-            str(grid_yaml),
-            "--vllm-manifest",
-            str(manifest),
+        _knob_sweep_argv(
+            model_yaml,
+            grid_yaml,
+            manifest,
             "--retries",
             "2",
             "--commercial",
             "--sweep-args-b64",
             "Zm9v",
-        ],
+        ),
     )
 
     assert result.exit_code == 0, result.output
@@ -539,25 +563,9 @@ def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
 
     result = CliRunner().invoke(
         app,
-        [
-            "knob-sweep",
-            "--run-id",
-            "run1",
-            "--region",
-            "us-east-1",
-            "--bucket",
-            "bench-bucket",
-            "--image-ref",
-            "repo:tag",
-            "--model-yaml",
-            str(model_yaml),
-            "--sweep-grid",
-            str(grid_yaml),
-            "--vllm-manifest",
-            str(manifest),
-            "--results-dir",
-            str(tmp_path / "results"),
-        ],
+        _knob_sweep_argv(
+            model_yaml, grid_yaml, manifest, "--results-dir", str(tmp_path / "results")
+        ),
     )
 
     assert result.exit_code != 0
@@ -587,15 +595,7 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
 
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _recording_point_sweep)
 
-    pointers = knob_sweep_flow(
-        run_id="run1",
-        region="us-east-1",
-        bucket="bench-bucket",
-        image_ref="repo:tag",
-        model_yaml=model_yaml,
-        sweep_grid=grid_yaml,
-        vllm_manifest=manifest,
-    )
+    pointers = _run_flow(model_yaml, grid_yaml, manifest)
 
     # Both point sweeps observe the one parent knob-sweep flow run — same name and same
     # run id — so a knob sweep's point sweeps share a parent in the Prefect UI (ADR-0015).
@@ -619,15 +619,7 @@ def test_knob_sweep_flow_logs_run_start_render_published_and_final_summary(
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
 
     with caplog.at_level(logging.INFO):
-        knob_sweep_flow(
-            run_id="run1",
-            region="us-east-1",
-            bucket="bench-bucket",
-            image_ref="repo:tag",
-            model_yaml=model_yaml,
-            sweep_grid=grid_yaml,
-            vllm_manifest=manifest,
-        )
+        _run_flow(model_yaml, grid_yaml, manifest)
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("run1" in m and "starting" in m for m in messages)
@@ -650,15 +642,7 @@ def test_knob_sweep_flow_logs_when_the_orchestration_image_ref_is_unset(
     monkeypatch.delenv("ORCH_IMAGE_REF", raising=False)
 
     with caplog.at_level(logging.INFO):
-        knob_sweep_flow(
-            run_id="run1",
-            region="us-east-1",
-            bucket="bench-bucket",
-            image_ref="repo:tag",
-            model_yaml=model_yaml,
-            sweep_grid=grid_yaml,
-            vllm_manifest=manifest,
-        )
+        _run_flow(model_yaml, grid_yaml, manifest)
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("ORCH_IMAGE_REF" in m and "unknown" in m for m in messages)
@@ -678,15 +662,7 @@ def test_knob_sweep_flow_does_not_log_the_fallback_when_the_image_ref_is_set(
     monkeypatch.setenv("ORCH_IMAGE_REF", "registry/repo:sha256-abc")
 
     with caplog.at_level(logging.INFO):
-        knob_sweep_flow(
-            run_id="run1",
-            region="us-east-1",
-            bucket="bench-bucket",
-            image_ref="repo:tag",
-            model_yaml=model_yaml,
-            sweep_grid=grid_yaml,
-            vllm_manifest=manifest,
-        )
+        _run_flow(model_yaml, grid_yaml, manifest)
 
     messages = [record.getMessage() for record in caplog.records]
     assert not any("ORCH_IMAGE_REF" in m for m in messages)
@@ -709,15 +685,7 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
 
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _recording_point_sweep)
 
-    knob_sweep_flow(
-        run_id="run1",
-        region="us-east-1",
-        bucket="bench-bucket",
-        image_ref="repo:tag",
-        model_yaml=model_yaml,
-        sweep_grid=grid_yaml,
-        vllm_manifest=manifest,
-    )
+    _run_flow(model_yaml, grid_yaml, manifest)
 
     from prefect.client.orchestration import get_client
 
@@ -726,27 +694,24 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
     assert "run=run1" in run.tags
 
 
-def _sweep_on_local_cache_storage(
+def _stub_local_cache_storage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     cache_key_root: Path,
     deployed: list[str],
-    sessions: list[dict[str, Any]] | None = None,
-) -> None:
-    """Run the real flow with its cell storage on local disk, recording each redeploy.
+) -> dict[str, Any]:
+    """Put the real flow's cell storage on local disk, recording each redeploy.
 
     The real ``cell_task`` registers both storage blocks and runs the preflight, with the
     two S3 builders swapped for local filesystems so ``cache_key_root`` decides whether
     the probe can land. The real cache gate reads that storage, which starts empty, so
     every point is pending and a sweep that gets past the preflight redeploys each
-    point; each redeploy appends its slug to ``deployed`` rather than run. Each bench
-    endpoint session the flow opens is recorded into ``sessions``, when one is passed.
+    point; each redeploy appends its slug to ``deployed`` rather than run.
+
+    :return: the transport captures, the bench-endpoint sessions among them.
     """
-    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     captures = _stub_transports(monkeypatch)
-    if sessions is not None:
-        captures["sessions"] = sessions
     monkeypatch.setattr(knob_sweep_module, "cell_task", cell_task)
     monkeypatch.setattr(knob_sweep_module, "is_cell_cached", is_cell_cached)
     monkeypatch.setattr(
@@ -766,29 +731,21 @@ def _sweep_on_local_cache_storage(
     )
     monkeypatch.setattr(knob_sweep_module, "scrape_ceiling", lambda *_a, **_k: 12.5)
     monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
-
-    knob_sweep_flow(
-        run_id="run1",
-        region="us-east-1",
-        bucket="bench-bucket",
-        image_ref="repo:tag",
-        model_yaml=model_yaml,
-        sweep_grid=grid_yaml,
-        vllm_manifest=manifest,
-    )
+    return captures
 
 
 def test_knob_sweep_proceeds_to_redeploy_on_writable_cache_key_storage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
     deployed: list[str] = []
-
-    _sweep_on_local_cache_storage(
+    _stub_local_cache_storage(
         tmp_path,
         monkeypatch,
         cache_key_root=tmp_path / "cache-keys",
         deployed=deployed,
     )
+
+    _run_flow(*_write_inputs(tmp_path))
 
     assert deployed == [_POINT.slug()]
 
@@ -803,20 +760,16 @@ def test_knob_sweep_aborts_before_any_redeploy_on_unwritable_cache_key_storage(
     blocked_root = tmp_path / "not-a-dir"
     blocked_root.write_text("", encoding="utf-8")
     deployed: list[str] = []
-    sessions: list[dict[str, Any]] = []
+    captures = _stub_local_cache_storage(
+        tmp_path, monkeypatch, cache_key_root=blocked_root, deployed=deployed
+    )
 
     with pytest.raises(StorageError, match="s3://bench-bucket/prefect/cache-keys"):
-        _sweep_on_local_cache_storage(
-            tmp_path,
-            monkeypatch,
-            cache_key_root=blocked_root,
-            deployed=deployed,
-            sessions=sessions,
-        )
+        _run_flow(*_write_inputs(tmp_path))
 
     assert deployed == []
     # ...and before the bench endpoint is applied, the minutes of billed time it costs.
-    assert sessions == []
+    assert captures["sessions"] == []
 
 
 def test_register_knob_sweep_registers_a_module_path_deployment(
@@ -1054,19 +1007,6 @@ def test_register_knob_sweep_creates_a_real_deployment(_harness: None) -> None:
     }
 
 
-def _run_flow(model_yaml: Path, grid_yaml: Path, manifest: Path, **kwargs: Any) -> Any:
-    return knob_sweep_flow(
-        run_id="run1",
-        region="us-east-1",
-        bucket="bench-bucket",
-        image_ref="repo:tag",
-        model_yaml=model_yaml,
-        sweep_grid=grid_yaml,
-        vllm_manifest=manifest,
-        **kwargs,
-    )
-
-
 def test_knob_sweep_flow_runs_its_cells_on_the_bench_host_it_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
@@ -1160,26 +1100,7 @@ def test_knob_sweep_rejects_an_instance_id_option(tmp_path: Path) -> None:
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
 
     result = CliRunner().invoke(
-        app,
-        [
-            "knob-sweep",
-            "--run-id",
-            "run1",
-            "--instance-id",
-            "i-1",
-            "--region",
-            "us-east-1",
-            "--bucket",
-            "bench-bucket",
-            "--image-ref",
-            "repo:tag",
-            "--model-yaml",
-            str(model_yaml),
-            "--sweep-grid",
-            str(grid_yaml),
-            "--vllm-manifest",
-            str(manifest),
-        ],
+        app, _knob_sweep_argv(model_yaml, grid_yaml, manifest, "--instance-id", "i-1")
     )
 
     assert result.exit_code != 0
