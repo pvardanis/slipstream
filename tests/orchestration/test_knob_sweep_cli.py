@@ -1015,6 +1015,7 @@ def test_knob_sweep_flow_runs_its_cells_on_the_bench_host_it_opens(
     assert session["stack_dir"] == Path(STACK_DIR)
     assert session["api_key"] == API_KEY
     assert session["results_bucket"] == "bench-bucket"
+    assert session["run_id"] == "run1"
     assert session["s3_client"] is captures["s3"]
     assert callable(session["terraform"])
 

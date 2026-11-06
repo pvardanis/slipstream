@@ -67,6 +67,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
     run_point_sweep,
 )
 from slipstream_bench.orchestration.flows.run_setup import (
+    destroy_run_bench_endpoint,
     enable_milestone_logging,
     open_run_bench_endpoint,
     tag_run_with_group,
@@ -172,7 +173,11 @@ class KnobSweepInputs:
         read_sweep_flags(self.sweep_args_b64)
 
 
-@flow(name="knob-sweep")
+@flow(
+    name="knob-sweep",
+    on_cancellation=[destroy_run_bench_endpoint],
+    on_crashed=[destroy_run_bench_endpoint],
+)
 def knob_sweep_flow(
     *,
     run_id: str,
@@ -264,7 +269,7 @@ def knob_sweep_flow(
     # fails the run before the render: the cells are already in S3, and the state it leaves
     # must be destroyed (`just bench-endpoint-down`) before a re-run can open the endpoint.
     with open_run_bench_endpoint(
-        kubectl=kubectl, s3_client=s3_client, bucket=bucket
+        kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
     ) as host:
         deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
             build_knob_sweep_collaborators(

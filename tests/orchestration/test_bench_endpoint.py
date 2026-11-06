@@ -25,12 +25,14 @@ from slipstream_bench.orchestration.bench_endpoint import (
     BenchHostBootError,
     TerraformError,
     build_terraform,
+    destroy_bench_endpoint,
     open_bench_endpoint,
     read_stack_dir,
     read_topology,
 )
 
 _INSTANCE_ID = "i-0abc123"
+_RUN_ID = "run-42"
 
 _TOPOLOGY = BenchEndpointTopology(
     state_bucket="slipstream-tfstate-x1",
@@ -75,8 +77,10 @@ class _FakeTerraform:
 
     ``fail_on`` names a subcommand (``init``, ``apply``, ``destroy``) that raises instead of
     succeeding, standing in for a non-zero exit. ``locked_on`` names one that fails because
-    another process holds the state lock. ``show`` answers with the state the backend
-    already holds: none by default, or ``existing_state``.
+    another process holds the state lock, and ``errored_on`` one that fails after writing
+    ``errored.tfstate`` to its working directory, as terraform does when it cannot push the
+    state it changed. ``show`` answers with the state the backend already holds: none by
+    default, or ``existing_state``.
     """
 
     def __init__(
@@ -84,11 +88,13 @@ class _FakeTerraform:
         *,
         fail_on: str | None = None,
         locked_on: str | None = None,
+        errored_on: str | None = None,
         existing_state: str = _EMPTY_STATE,
     ) -> None:
         self.calls: list[tuple[list[str], dict[str, str]]] = []
         self._fail_on = fail_on
         self._locked_on = locked_on
+        self._errored_on = errored_on
         self._existing_state = existing_state
 
     def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> str:
@@ -96,6 +102,12 @@ class _FakeTerraform:
         subcommand = _subcommand(args)
         if subcommand == self._locked_on:
             raise TerraformError(f"terraform {' '.join(args)} exited 1: {_LOCK_STDERR}")
+        if subcommand == self._errored_on:
+            workdir = Path(args[0].removeprefix("-chdir="))
+            (workdir / "errored.tfstate").write_text(
+                _errored_state(subcommand), encoding="utf-8"
+            )
+            raise RuntimeError(f"terraform {subcommand} failed to push its state")
         if subcommand == self._fail_on:
             raise RuntimeError(f"terraform {subcommand} failed")
         if subcommand == "output":
@@ -108,6 +120,11 @@ class _FakeTerraform:
         return [_subcommand(args) for args, _env in self.calls]
 
 
+def _errored_state(subcommand: str) -> str:
+    """The state a failed ``subcommand`` dumps to errored.tfstate, distinct per command."""
+    return f'{{"version":4,"serial":7,"lineage":"{subcommand}"}}\n'
+
+
 def _subcommand(args: Sequence[str]) -> str:
     """Return the first argument that is not a global ``-flag``, the Terraform subcommand."""
     return next(arg for arg in args if not arg.startswith("-"))
@@ -118,13 +135,24 @@ class _FakeS3:
 
     ``None`` stands for the sentinel not written yet (S3's NoSuchKey); the last entry repeats
     if polled past the script. Each body ends in the newline the host's ``<<<`` here-string
-    writes (``user-data.sh.tftpl``). The keys read are recorded.
+    writes (``user-data.sh.tftpl``). The keys read are recorded, and every object put is
+    kept by bucket and key; ``put_error`` makes each put raise instead.
     """
 
-    def __init__(self, sentinels: list[str | None]) -> None:
+    def __init__(
+        self, sentinels: list[str | None], *, put_error: Exception | None = None
+    ) -> None:
         self._sentinels = sentinels
         self._index = 0
+        self._put_error = put_error
         self.reads: list[tuple[str, str]] = []
+        self.puts: dict[tuple[str, str], bytes] = {}
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> dict[str, object]:
+        if self._put_error is not None:
+            raise self._put_error
+        self.puts[(Bucket, Key)] = Body
+        return {}
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
         self.reads.append((Bucket, Key))
@@ -161,6 +189,7 @@ def _open(
         topology=_TOPOLOGY,
         api_key="sk-secret-key",
         results_bucket="bench-results-x1",
+        run_id=_RUN_ID,
         boot_timeout_s=boot_timeout_s,
         sleep=sleep,
         now=now,
@@ -189,6 +218,42 @@ def test_session_destroys_after_a_raising_body(stack_dir: Path) -> None:
         raise ValueError("cell failed")
 
     assert terraform.subcommands()[-1] == "destroy"
+
+
+class _TerminationSignal(BaseException):
+    """Stands in for the signal Prefect raises in a run its runner is about to kill."""
+
+
+@pytest.mark.parametrize("signal", [_TerminationSignal, KeyboardInterrupt])
+def test_session_leaves_the_destroy_to_the_crash_hook_when_the_run_is_killed(
+    stack_dir: Path, signal: type[BaseException]
+) -> None:
+    # A run being killed has seconds left: a destroy started now is cut off holding the
+    # state lock, which then blocks the flow's crash or cancellation hook from destroying
+    # the endpoint once the run is gone. So the session leaves the destroy to that hook.
+    terraform = _FakeTerraform()
+
+    with pytest.raises(signal), _open(terraform, _FakeS3(["ok"]), stack_dir):
+        raise signal()
+
+    assert "destroy" not in terraform.subcommands()
+
+
+def test_session_logs_that_it_left_the_endpoint_for_the_hook(
+    stack_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+
+    with (
+        pytest.raises(_TerminationSignal),
+        _open(_FakeTerraform(), _FakeS3(["ok"]), stack_dir),
+    ):
+        raise _TerminationSignal()
+
+    assert any(
+        "left for the run's crash or cancellation hook" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_session_destroys_after_a_failed_apply(stack_dir: Path) -> None:
@@ -338,6 +403,133 @@ def test_held_lock_on_destroy_raises_with_the_lock_id(stack_dir: Path) -> None:
     assert "force-unlock" not in terraform.subcommands()
 
 
+@pytest.mark.parametrize("subcommand", ["apply", "destroy"])
+def test_errored_state_is_copied_to_the_state_bucket(
+    stack_dir: Path, subcommand: str
+) -> None:
+    # Terraform dumps a state it changed but could not push to errored.tfstate in its
+    # working directory, which the run's temporary copy loses on exit; the copy in the state
+    # bucket is what `terraform state push` recovers from.
+    terraform = _FakeTerraform(errored_on=subcommand)
+    s3 = _FakeS3(["ok"])
+
+    with (
+        pytest.raises(RuntimeError, match="failed to push"),
+        _open(terraform, s3, stack_dir),
+    ):
+        pass
+
+    key = f"bench-endpoint/errored/{_RUN_ID}/{subcommand}.tfstate"
+    assert s3.puts == {
+        ("slipstream-tfstate-x1", key): _errored_state(subcommand).encode()
+    }
+
+
+def test_errored_state_copy_is_named_on_the_error(stack_dir: Path) -> None:
+    terraform = _FakeTerraform(errored_on="destroy")
+
+    with (
+        pytest.raises(RuntimeError) as excinfo,
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pass
+
+    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+    assert (
+        f"s3://slipstream-tfstate-x1/bench-endpoint/errored/{_RUN_ID}/destroy.tfstate"
+        in notes
+    )
+    assert "terraform state push" in notes
+
+
+def test_failed_apply_keeps_its_errored_state_beside_the_destroys(
+    stack_dir: Path,
+) -> None:
+    # The apply's dump records resources the remote state never saw, so the destroy that
+    # follows must not overwrite it with its own.
+    class _BothErrored(_FakeTerraform):
+        def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> str:
+            if _subcommand(args) == "destroy":
+                workdir = Path(args[0].removeprefix("-chdir="))
+                (workdir / "errored.tfstate").write_text(
+                    _errored_state("destroy"), encoding="utf-8"
+                )
+                raise RuntimeError("terraform destroy failed to push its state")
+            return super().__call__(args, env)
+
+    s3 = _FakeS3(["ok"])
+
+    with (
+        pytest.raises(RuntimeError),
+        _open(_BothErrored(errored_on="apply"), s3, stack_dir),
+    ):
+        pytest.fail("the body must not run after a failed apply")
+
+    assert s3.puts == {
+        (
+            "slipstream-tfstate-x1",
+            f"bench-endpoint/errored/{_RUN_ID}/apply.tfstate",
+        ): _errored_state("apply").encode(),
+        (
+            "slipstream-tfstate-x1",
+            f"bench-endpoint/errored/{_RUN_ID}/destroy.tfstate",
+        ): _errored_state("destroy").encode(),
+    }
+
+
+def test_failed_errored_state_copy_keeps_the_terraform_error(stack_dir: Path) -> None:
+    # The copy is a recovery aid: its failure is noted on the terraform error, never raised
+    # over it.
+    terraform = _FakeTerraform(errored_on="destroy")
+    denied = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "no"}}, "PutObject"
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="failed to push") as excinfo,
+        _open(terraform, _FakeS3(["ok"], put_error=denied), stack_dir),
+    ):
+        pass
+
+    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+    assert "could not copy errored.tfstate" in notes
+    assert "AccessDenied" in notes
+
+
+def test_uncopied_errored_state_is_never_copied_under_a_later_commands_name(
+    stack_dir: Path,
+) -> None:
+    # The apply's dump fails to upload; the destroy then fails without leaving one, so
+    # nothing may land under the destroy's key.
+    class _FirstPutDenied(_FakeS3):
+        def put_object(
+            self, *, Bucket: str, Key: str, Body: bytes
+        ) -> dict[str, object]:
+            if not self.denied:
+                self.denied = True
+                raise ClientError(
+                    {"Error": {"Code": "SlowDown", "Message": "retry"}}, "PutObject"
+                )
+            return super().put_object(Bucket=Bucket, Key=Key, Body=Body)
+
+    class _ApplyErroredDestroyFails(_FakeTerraform):
+        def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> str:
+            if _subcommand(args) == "destroy":
+                raise RuntimeError("terraform destroy failed")
+            return super().__call__(args, env)
+
+    s3 = _FirstPutDenied(["ok"])
+    s3.denied = False
+
+    with (
+        pytest.raises(RuntimeError, match="destroy failed"),
+        _open(_ApplyErroredDestroyFails(errored_on="apply"), s3, stack_dir),
+    ):
+        pytest.fail("the body must not run after a failed apply")
+
+    assert s3.puts == {}
+
+
 def test_terraform_output_carries_no_colour_codes(stack_dir: Path) -> None:
     # Terraform's output lands in the flow's logs and error messages, so ANSI colour is off.
     terraform = _FakeTerraform()
@@ -453,6 +645,7 @@ def test_terraform_runs_in_a_writable_copy_of_the_stack(stack_dir: Path) -> None
         topology=_TOPOLOGY,
         api_key="sk-secret-key",
         results_bucket="bench-results-x1",
+        run_id=_RUN_ID,
         sleep=lambda _s: None,
     ):
         pass
@@ -559,6 +752,7 @@ def test_unreadable_sentinel_raises_at_once_and_destroys(stack_dir: Path) -> Non
             topology=_TOPOLOGY,
             api_key="sk-secret-key",
             results_bucket="bench-results-x1",
+            run_id=_RUN_ID,
             sleep=lambda _s: pytest.fail("a denied read must not be retried"),
         ),
     ):
@@ -583,6 +777,7 @@ def test_empty_instance_id_output_raises_and_destroys(stack_dir: Path) -> None:
             topology=_TOPOLOGY,
             api_key="sk-secret-key",
             results_bucket="bench-results-x1",
+            run_id=_RUN_ID,
             sleep=lambda _s: None,
         ),
     ):
@@ -767,3 +962,51 @@ def test_session_does_not_log_destroyed_when_the_destroy_fails(
 
     milestones = _milestones(caplog)
     assert milestones[-1] == "bench endpoint destroying"
+
+
+def _destroy_endpoint(terraform: _FakeTerraform, s3: _FakeS3, stack_dir: Path) -> None:
+    destroy_bench_endpoint(
+        terraform=terraform,
+        s3_client=s3,
+        stack_dir=stack_dir,
+        topology=_TOPOLOGY,
+        api_key="sk-secret-key",
+        run_id=_RUN_ID,
+    )
+
+
+def test_destroy_bench_endpoint_inits_and_destroys_whatever_the_state_holds(
+    stack_dir: Path,
+) -> None:
+    # The crash and cancellation hooks run after the run's process is gone, so they start
+    # from the stack and the state alone: whatever the killed run left there is destroyed.
+    terraform = _FakeTerraform(existing_state=_HELD_STATE)
+
+    _destroy_endpoint(terraform, _FakeS3([]), stack_dir)
+
+    assert terraform.subcommands() == ["init", "destroy"]
+    _args, env = terraform.calls[-1]
+    assert env["TF_VAR_vllm_api_key"] == "sk-secret-key"
+    assert env["TF_VAR_vpc_id"] == "vpc-1"
+
+
+def test_destroy_bench_endpoint_names_a_held_lock(stack_dir: Path) -> None:
+    # A run killed mid-apply leaves its lock; the hook's destroy reports it with the
+    # command that releases it rather than unlocking.
+    terraform = _FakeTerraform(locked_on="destroy")
+
+    with pytest.raises(BenchEndpointLockedError, match=f"force-unlock {_LOCK_ID}"):
+        _destroy_endpoint(terraform, _FakeS3([]), stack_dir)
+
+    assert terraform.subcommands() == ["init", "destroy"]
+
+
+def test_destroy_bench_endpoint_copies_an_errored_state(stack_dir: Path) -> None:
+    s3 = _FakeS3([])
+
+    with pytest.raises(RuntimeError, match="failed to push"):
+        _destroy_endpoint(_FakeTerraform(errored_on="destroy"), s3, stack_dir)
+
+    assert list(s3.puts) == [
+        ("slipstream-tfstate-x1", f"bench-endpoint/errored/{_RUN_ID}/destroy.tfstate")
+    ]
