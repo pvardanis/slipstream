@@ -334,4 +334,5 @@ bench-endpoint key only, and RBAC `get` on the one api-key Secret
 (`terraform/eks/worker_bench_endpoint.tf`;
 [ADR-0028](0028-bench-endpoint-lives-for-a-flow-run.md) has the full bounds). The knob-sweep
 and kv-cache-extension-ab deployments, `sweep-dispatch` and `kv-ab-dispatch` take no
-`instance_id` parameter.
+`instance_id` parameter, so the sweep-dispatch role no longer holds `ec2:DescribeInstances`:
+its grant is `eks:DescribeCluster` and `s3:ListAllMyBuckets`.

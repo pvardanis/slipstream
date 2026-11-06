@@ -61,9 +61,9 @@ flowchart LR
   table, registers the deployment, and starts a run. A called workflow runs in its
   caller's context and mints the caller's OIDC token, so both triggers assume the same
   role under the same `main`-only trust.
-- **Flow dispatch is least-privilege.** The role can describe the cluster and bench
-  host and list buckets. An EKS access entry maps it to a Kubernetes group that can only
-  read and port-forward within the Prefect namespace (`terraform/eks`).
+- **Flow dispatch is least-privilege.** The role can describe the cluster and list
+  buckets. An EKS access entry maps it to a Kubernetes group that can only read and
+  port-forward within the Prefect namespace (`terraform/eks`).
 - **Repo variables** (`just gh-vars`, from the bootstrap outputs): `AWS_REGION`,
   `ECR_REPOSITORY`, `AWS_BENCH_IMAGE_PUSH_ROLE_ARN`, `ORCHESTRATION_ECR_REPOSITORY`,
   `AWS_ORCHESTRATION_IMAGE_PUSH_ROLE_ARN`, `AWS_SWEEP_DISPATCH_ROLE_ARN`,
