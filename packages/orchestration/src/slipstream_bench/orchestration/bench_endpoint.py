@@ -2,7 +2,14 @@
 
 The bench endpoint (``terraform/bench-endpoint``) lives for a flow run: the session applies
 the stack, reads the bench host's instance id, waits for the host's boot sentinel, yields
-the bench host, and destroys the stack on the way out.
+the bench host, and destroys the stack on the way out. Once the apply starts, the destroy
+runs whatever happens next — a failed apply, a host that never boots, a raising body — so a
+run never leaves the endpoint billing.
+
+The module imports no Prefect: the knob sweep's flow opens the session around its core, and
+its tests drive it against a fake :data:`Terraform` and a fake S3 client. Terraform runs in a
+writable copy of the stack, because the orchestration image bakes the stack on a read-only
+root where terraform cannot write ``.terraform``.
 """
 
 import json
@@ -161,7 +168,31 @@ def open_bench_endpoint(
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
 ) -> Iterator[BenchHost]:
-    """Apply the bench-endpoint stack, yield its bench host, and destroy the stack on exit."""
+    """Apply the bench-endpoint stack, yield its bench host, and destroy the stack on exit.
+
+    init runs before the destroy is armed: it changes no infrastructure, and a destroy
+    without an initialised backend would fail too. Every later step is followed by the
+    destroy. A failed destroy is the error raised, since it leaves resources billing; a
+    body or apply failure before it stays on it as ``__context__``.
+
+    :param terraform: the terraform transport (see :func:`build_terraform`).
+    :param s3: a boto3 S3 client (or a stand-in exposing ``get_object``), read for the
+        host's boot sentinel.
+    :param stack_dir: the bench-endpoint stack to apply, copied before terraform runs.
+    :param topology: the cluster network and state bucket the stack applies against.
+    :param api_key: the vLLM api-key the stack publishes for the bench host.
+    :param results_bucket: the bench-results bucket the host writes its sentinel to.
+    :param boot_timeout_s: the ceiling on waiting for the host's boot sentinel.
+    :param poll_interval_s: the wait between sentinel reads.
+    :param sleep: the wait function, injected for tests.
+    :param now: the monotonic clock, injected for tests.
+    :return: a context manager yielding the booted :class:`BenchHost`.
+    :raise TerraformError: when a terraform command exits non-zero (from the production
+        transport).
+    :raise BenchHostBootError: when the apply yields no instance id, or the host reports a
+        failed boot or none within ``boot_timeout_s``.
+    :raise ClientError: when the sentinel read fails for a reason other than its absence.
+    """
     with tempfile.TemporaryDirectory() as workdir:
         shutil.copytree(stack_dir, workdir, dirs_exist_ok=True)
         chdir = f"-chdir={workdir}"
