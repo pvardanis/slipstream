@@ -48,8 +48,11 @@ just prefect-register-sweep   # register the deployment on the worker's pool
 just prefect-ui               # hold a port-forward open; UI at http://localhost:4200
 # in another shell:
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-sweep/knob-sweep \
-  --param run_id=<run-id>
+  --params '{"run_id": "<run-id>"}'
 ```
+
+The run id goes in as a JSON string: `--param run_id=<run-id>` parses its value as JSON,
+so an all-digit run id arrives as a number, which the flow's string `run_id` rejects.
 
 The flow redeploys `deploy/vllm-gpu` for each engine point, so **do not run
 `just gpu-deploy` while a sweep is in flight**: it recreates the replica under the running
@@ -125,7 +128,7 @@ just prefect-ui               # hold a port-forward open; UI at http://localhost
 # in another shell:
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run \
   kv-cache-extension-ab/kv-cache-extension-ab \
-  --param run_id=<run-id>
+  --params '{"run_id": "<run-id>"}'
 ```
 
 As with the knob sweep, **do not run `just gpu-deploy` while an A/B is in flight**. After
