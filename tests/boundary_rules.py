@@ -1,6 +1,7 @@
 """The workspace import boundaries both guards enforce, declared as one rule table.
 
-Each rule names an importable package, the top-level import roots it must never pull —
+Each rule names an importable package, or a single module held to a narrower boundary than
+the package around it, the top-level import roots it must never pull —
 a framework its image does not ship, or another workspace member it must not depend on —
 and a probe that loads it. A rule may also name the only roots it is allowed to pull, for
 a package whose contract is a closed set (the kernel: stdlib, pydantic, PyYAML) rather than
@@ -20,7 +21,8 @@ class BoundaryRule:
     """One package's import boundary: the roots it may not pull, optionally the only roots
     it may pull, and a load probe.
 
-    :param package: the importable package the rule governs (e.g. ``slipstream_bench.contract``).
+    :param package: the importable package or module the rule governs (e.g.
+        ``slipstream_bench.contract``); a module rule covers that module's own file alone.
     :param forbidden: the top-level import roots the package must never pull — a framework
         its image does not ship, or another workspace member. Enforced by both guards.
     :param probe: a Python snippet that imports the package and asserts it loaded, run in a
@@ -85,6 +87,21 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
             "import slipstream_bench.orchestration.cli as cli\n"
             "names = [command.name for command in cli.app.registered_commands]\n"
             "assert 'point-sweep' in names, names\n"
+        ),
+    ),
+    BoundaryRule(
+        package="slipstream_bench.orchestration.bench_endpoint",
+        # The bench-endpoint session is the knob sweep's Prefect-free core for standing the
+        # bench endpoint up and down: the flow opens it around the sweep, and its tests drive
+        # it against a fake terraform and a fake S3 with no Prefect runtime. forbidden blocks
+        # Prefect in the subprocess probe; allowed holds the module's own source to the
+        # stdlib and botocore, whose ClientError tells an absent boot sentinel from a failed
+        # read. The rule governs this one module, not the orchestration package around it.
+        forbidden=frozenset({"prefect", "prefect_aws"}),
+        allowed=frozenset(sys.stdlib_module_names) | {"botocore"},
+        probe=(
+            "import slipstream_bench.orchestration.bench_endpoint as bench_endpoint\n"
+            "assert bench_endpoint.open_bench_endpoint is not None\n"
         ),
     ),
     BoundaryRule(
