@@ -26,8 +26,8 @@ A run whose destroy failed leaves the endpoint billing; its error names the stat
 body's error, if any, is chained beneath it. **A cancelled or crashed run destroys its
 endpoint from a hook.** Prefect stops a cancelled run's process, then runs the flow's
 cancellation hook in the worker, which destroys whatever the bench-endpoint state holds;
-a crash runs the same teardown. The run page logs the hook starting and finishing, or its
-error. Because the hook destroys whatever the state holds, cancelling a run while an
+a crash runs the same teardown. The run page logs the hook starting, then its success or
+its error. Because the hook destroys whatever the state holds, cancelling a run while an
 endpoint from `just bench-endpoint-up` is up destroys that endpoint too.
 
 **A worker pod killed outright (OOM, node reaped) skips the hook,** and a run cancelled
@@ -41,7 +41,7 @@ monthly budget catches a leaked bench endpoint; the GPU alarm does not.
 
 **An apply or destroy that cannot push the state it changed** leaves Terraform's
 `errored.tfstate`; the run copies it to
-`s3://<state-bucket>/bench-endpoint/errored/<run-id>/<apply|destroy>.tfstate` and names
+`s3://<state-bucket>/bench-endpoint/errored/<run-id>/<apply|destroy>-<utc-timestamp>.tfstate` and names
 that path in its error. Download it, run `terraform state push` with it from
 `terraform/bench-endpoint`, then `just bench-endpoint-down`.
 
