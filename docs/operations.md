@@ -23,14 +23,27 @@ destroys the run's endpoint under it, or fails on the state lock while the run i
 or destroying.
 
 A run whose destroy failed leaves the endpoint billing; its error names the state, and the
-body's error, if any, is chained beneath it. **Cancelling a run, or a killed worker pod,
-can skip the destroy** and leave the state lock held. Run `just bench-endpoint-down`. If
-it fails on the lock, and the run shows Cancelled or Crashed and its worker pod is gone,
-run `terraform -chdir=terraform/bench-endpoint force-unlock <lock-id>` with the id from
-the lock error, then `just bench-endpoint-down` again. A killed apply can leave resources
-Terraform never recorded; `just stack-down`'s zero-leak sweep reports any tagged instance
-still running. Only the monthly budget catches a leaked bench endpoint; the GPU alarm does
-not.
+body's error, if any, is chained beneath it. **A cancelled or crashed run destroys its
+endpoint from a hook.** Prefect stops a cancelled run's process, then runs the flow's
+cancellation hook in the worker, which destroys whatever the bench-endpoint state holds;
+a crash runs the same teardown. The run page logs the hook starting, then its success or
+its error. Because the hook destroys whatever the state holds, cancelling a run while an
+endpoint from `just bench-endpoint-up` is up destroys that endpoint too.
+
+**A worker pod killed outright (OOM, node reaped) skips the hook,** and a run cancelled
+while its apply or destroy is running leaves the state lock held, so the hook's destroy
+fails on it. Its error, like any run's that meets a held lock, names the lock id and the
+command that releases it. Once the run shows Cancelled or Crashed and no terraform is
+running, run `terraform -chdir=terraform/bench-endpoint force-unlock <lock-id>`, then
+`just bench-endpoint-down`. A killed apply can leave resources Terraform never recorded;
+`just stack-down`'s zero-leak sweep reports any tagged instance still running. Only the
+monthly budget catches a leaked bench endpoint; the GPU alarm does not.
+
+**An apply or destroy that cannot push the state it changed** leaves Terraform's
+`errored.tfstate`; the run copies it to
+`s3://<state-bucket>/bench-endpoint/errored/<run-id>/<apply|destroy>-<utc-timestamp>.tfstate` and names
+that path in its error. Download it, run `terraform state push` with it from
+`terraform/bench-endpoint`, then `just bench-endpoint-down`.
 
 **From CI** — Actions → `sweep-dispatch` → Run workflow, **on `main`** (the role trusts
 only `main`). Its one input, `run_id`, is optional and defaults to a UTC timestamp. The
