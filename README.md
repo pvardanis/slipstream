@@ -171,7 +171,7 @@ just stack-down           # tear down, then zero-leak sweep (spend → 0)
 Every node bills while up: **run `just stack-down` when done.** The state bucket, ECR
 repositories and bench-results bucket survive it, so results and the resume cache
 outlive the cluster. `stack-down` exits non-zero if a tagged instance or volume
-survived, and skips `cluster-down` (leaving the cluster billing) if the endpoint
+survived, and skips `cluster-down` (leaving the cluster billing) if the bench-endpoint
 teardown failed: fix that and rerun. Running a sweep locally, single points, pinned
 images and the cloud-verify check are in [`docs/operations.md`](docs/operations.md);
 `uv run slipstream-bench --help` lists the bench CLI.

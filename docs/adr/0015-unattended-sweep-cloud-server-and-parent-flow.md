@@ -327,9 +327,11 @@ sweep is in flight.
 ## Amendment (2026-11-06): the worker holds bounded rights to the bench-endpoint stack
 
 Beyond S3, SSM and the `deploy/vllm-gpu` patch, the worker applies and destroys the
-bench-endpoint stack, so a knob sweep run owns its bench endpoint. Its rights are bounded by
-that stack: `iam:PassRole` on the bench host role and no IAM writes, create and delete scoped
-by the stack's name prefixes or tag, state writes on the bench-endpoint key only, and RBAC
-`get` on the one api-key Secret (`terraform/eks/worker_bench_endpoint.tf`;
-[ADR-0028](0028-bench-endpoint-lives-for-a-flow-run.md) has the full bounds). The
-knob-sweep deployment and `sweep-dispatch` drop the `instance_id` parameter.
+bench-endpoint stack, so a knob sweep or KV cache A/B run owns its bench endpoint. Its
+rights are bounded by that stack: `iam:PassRole` on the bench host role and no IAM writes,
+create and delete scoped by the stack's name prefixes or tag, state writes on the
+bench-endpoint key only, and RBAC `get` on the one api-key Secret
+(`terraform/eks/worker_bench_endpoint.tf`;
+[ADR-0028](0028-bench-endpoint-lives-for-a-flow-run.md) has the full bounds). The knob-sweep
+and kv-cache-extension-ab deployments, `sweep-dispatch` and `kv-ab-dispatch` take no
+`instance_id` parameter.
