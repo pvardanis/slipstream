@@ -8,13 +8,18 @@ id (the gate itself is covered against real cache storage in
 ``test_redeploy_skip_gate``). The ``knob-sweep`` command runs the real
 ``knob_sweep_flow`` against an ephemeral Prefect server with the transports (the gate's
 cache lookup among them) and the sequencing driver faked, so the command->flow->driver wiring is covered without a
-cluster; ``register-knob-sweep`` is driven with ``deploy`` faked, asserting the deployment
+cluster. Its bench-endpoint session is faked too: the flow opens it from the worker's
+environment after its inputs and storage are checked, runs every cell on the host it
+yields, and closes it before the render, also when a point fails; ``register-knob-sweep`` is driven with ``deploy`` faked, asserting the deployment
 is registered as a module-path entrypoint on the process pool with no image build.
 """
 
+import base64
+import inspect
 import logging
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -29,6 +34,10 @@ from typer.testing import CliRunner
 from slipstream_bench.contract import EnginePoint, SweepGrid
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration import storage as storage_module
+from slipstream_bench.orchestration.bench_endpoint import (
+    BenchEndpointTopology,
+    BenchHost,
+)
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
 from slipstream_bench.orchestration.digest import DigestError, ServingConfig
@@ -133,6 +142,23 @@ spec:
               memory: ${MEMORY_LIMIT}
 """
 
+# The bench host the faked bench-endpoint session yields, distinct from any instance id a
+# test passes elsewhere, so a cell sent to it can only have come from the session.
+_BENCH_HOST_ID = "i-0bench"
+_API_KEY = "sk-bench-123"
+_STACK_DIR = "/app/terraform/bench-endpoint"
+
+# The worker's environment: the bench-endpoint topology ConfigMap and the image's stack dir.
+_WORKER_ENV = {
+    "BENCH_ENDPOINT_STATE_BUCKET": "slipstream-tfstate-abc123",
+    "BENCH_ENDPOINT_VPC_ID": "vpc-0abc",
+    "BENCH_ENDPOINT_PUBLIC_SUBNETS": '["subnet-pub-a", "subnet-pub-b"]',
+    "BENCH_ENDPOINT_NODE_SECURITY_GROUP_ID": "sg-0node",
+    "BENCH_ENDPOINT_NODE_AUTOSCALING_GROUPS": '["eks-cpu-asg-1"]',
+    "BENCH_ENDPOINT_INSTANCE_PROFILE": "slipstream-bench-host",
+    "BENCH_ENDPOINT_STACK_DIR": _STACK_DIR,
+}
+
 _CEILING_LOG = "Maximum concurrency for 4,096 tokens per request: 12.50x"
 _POINT = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _OTHER_POINT = EnginePoint(
@@ -141,7 +167,7 @@ _OTHER_POINT = EnginePoint(
 
 
 class _FakeKubectl:
-    """Record every ``(argv, stdin)`` issued; serve canned logs to a ``logs`` call."""
+    """Record every ``(argv, stdin)`` issued; serve canned logs and the api-key Secret."""
 
     def __init__(self, logs: str = "") -> None:
         self.calls: list[tuple[list[str], str | None]] = []
@@ -149,7 +175,11 @@ class _FakeKubectl:
 
     def __call__(self, args: Any, stdin: str | None = None) -> str:
         self.calls.append((list(args), stdin))
-        return self._logs if "logs" in args else ""
+        if "logs" in args:
+            return self._logs
+        if "secret" in args:
+            return base64.b64encode(_API_KEY.encode("utf-8")).decode("ascii")
+        return ""
 
 
 def _grid() -> SweepGrid:
@@ -165,7 +195,6 @@ def _inputs(manifest_dir: Path) -> KnobSweepInputs:
         manifest_path=manifest_path,
         run="run1",
         serving=ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
-        instance_id="i-1",
         image_ref="repo:tag",
         bucket="bench-bucket",
         model="Qwen/Qwen2.5-0.5B-Instruct",
@@ -177,6 +206,7 @@ def _collaborators(
 ) -> tuple[Any, Any, Any, Any]:
     return build_knob_sweep_collaborators(
         _inputs(manifest_dir),
+        instance_id="i-1",
         kubectl=kubectl,
         ssm_client=object(),
         s3_client=object(),
@@ -244,6 +274,7 @@ def test_sweep_one_point_runs_under_the_points_nested_run_id(
         return _sweep_one_point(
             point,
             inputs=inputs,
+            instance_id="i-1",
             ssm_client=object(),
             s3_client=object(),
             task=cast(Task[..., str], object()),
@@ -281,7 +312,6 @@ def test_empty_keying_input_is_rejected_before_the_redeploy(field: str) -> None:
         "manifest_path": Path("vllm-gpu.yaml"),
         "run": "run1",
         "serving": ServingConfig(model_yaml=b"model: {}\n", vllm_image_ref="vllm:v1"),
-        "instance_id": "i-1",
         "image_ref": "repo:tag",
         "bucket": "bench-bucket",
         "model": "Qwen/Qwen2.5-0.5B-Instruct",
@@ -321,7 +351,13 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     test asserts the flow threads ``bucket``/``retries``/``region`` from its parameters into
     the transports rather than dropping or hardcoding them.
     """
-    captures: dict[str, Any] = {"task_args": {}, "artifacts": [], "images": []}
+    captures: dict[str, Any] = {
+        "task_args": {},
+        "artifacts": [],
+        "images": [],
+        "sessions": [],
+        "events": [],
+    }
 
     def _fake_cell_task(bucket: str, *, retries: int = 0) -> object:
         captures["task_args"] = {"bucket": bucket, "retries": retries}
@@ -350,6 +386,22 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         captures["s3"] = s3
         return s3
 
+    @contextmanager
+    def _fake_open_bench_endpoint(**kwargs: Any) -> Iterator[BenchHost]:
+        # The session's arguments and its open/close are recorded, so a test asserts what
+        # the flow opens it with and what runs inside it.
+        captures["sessions"].append(kwargs)
+        captures["events"].append("open")
+        try:
+            yield BenchHost(instance_id=_BENCH_HOST_ID)
+        finally:
+            captures["events"].append("close")
+
+    for name, value in _WORKER_ENV.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(
+        knob_sweep_module, "open_bench_endpoint", _fake_open_bench_endpoint
+    )
     # Every cell reads as cached, so a real driver skips each point's redeploy and scrape.
     monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
@@ -399,8 +451,6 @@ def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
             "knob-sweep",
             "--run-id",
             "run1",
-            "--instance-id",
-            "i-1",
             "--region",
             "us-east-1",
             "--bucket",
@@ -492,8 +542,6 @@ def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
             "knob-sweep",
             "--run-id",
             "run1",
-            "--instance-id",
-            "i-1",
             "--region",
             "us-east-1",
             "--bucket",
@@ -540,7 +588,6 @@ def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
 
     pointers = knob_sweep_flow(
         run_id="run1",
-        instance_id="i-1",
         region="us-east-1",
         bucket="bench-bucket",
         image_ref="repo:tag",
@@ -573,7 +620,6 @@ def test_knob_sweep_flow_logs_run_start_render_published_and_final_summary(
     with caplog.at_level(logging.INFO):
         knob_sweep_flow(
             run_id="run1",
-            instance_id="i-1",
             region="us-east-1",
             bucket="bench-bucket",
             image_ref="repo:tag",
@@ -605,7 +651,6 @@ def test_knob_sweep_flow_logs_when_the_orchestration_image_ref_is_unset(
     with caplog.at_level(logging.INFO):
         knob_sweep_flow(
             run_id="run1",
-            instance_id="i-1",
             region="us-east-1",
             bucket="bench-bucket",
             image_ref="repo:tag",
@@ -634,7 +679,6 @@ def test_knob_sweep_flow_does_not_log_the_fallback_when_the_image_ref_is_set(
     with caplog.at_level(logging.INFO):
         knob_sweep_flow(
             run_id="run1",
-            instance_id="i-1",
             region="us-east-1",
             bucket="bench-bucket",
             image_ref="repo:tag",
@@ -666,7 +710,6 @@ def test_parent_knob_sweep_run_is_tagged_with_the_shared_run(
 
     knob_sweep_flow(
         run_id="run1",
-        instance_id="i-1",
         region="us-east-1",
         bucket="bench-bucket",
         image_ref="repo:tag",
@@ -688,6 +731,7 @@ def _sweep_on_local_cache_storage(
     *,
     cache_key_root: Path,
     deployed: list[str],
+    sessions: list[dict[str, Any]] | None = None,
 ) -> None:
     """Run the real flow with its cell storage on local disk, recording each redeploy.
 
@@ -695,10 +739,13 @@ def _sweep_on_local_cache_storage(
     two S3 builders swapped for local filesystems so ``cache_key_root`` decides whether
     the probe can land. The real cache gate reads that storage, which starts empty, so
     every point is pending and a sweep that gets past the preflight redeploys each
-    point; each redeploy appends its slug to ``deployed`` rather than run.
+    point; each redeploy appends its slug to ``deployed`` rather than run. Each bench
+    endpoint session the flow opens is recorded into ``sessions``, when one is passed.
     """
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
-    _stub_transports(monkeypatch)
+    captures = _stub_transports(monkeypatch)
+    if sessions is not None:
+        captures["sessions"] = sessions
     monkeypatch.setattr(knob_sweep_module, "cell_task", cell_task)
     monkeypatch.setattr(knob_sweep_module, "is_cell_cached", is_cell_cached)
     monkeypatch.setattr(
@@ -721,7 +768,6 @@ def _sweep_on_local_cache_storage(
 
     knob_sweep_flow(
         run_id="run1",
-        instance_id="i-1",
         region="us-east-1",
         bucket="bench-bucket",
         image_ref="repo:tag",
@@ -756,13 +802,20 @@ def test_knob_sweep_aborts_before_any_redeploy_on_unwritable_cache_key_storage(
     blocked_root = tmp_path / "not-a-dir"
     blocked_root.write_text("", encoding="utf-8")
     deployed: list[str] = []
+    sessions: list[dict[str, Any]] = []
 
     with pytest.raises(StorageError, match="s3://bench-bucket/prefect/cache-keys"):
         _sweep_on_local_cache_storage(
-            tmp_path, monkeypatch, cache_key_root=blocked_root, deployed=deployed
+            tmp_path,
+            monkeypatch,
+            cache_key_root=blocked_root,
+            deployed=deployed,
+            sessions=sessions,
         )
 
     assert deployed == []
+    # ...and before the bench endpoint is applied, the minutes of billed time it costs.
+    assert sessions == []
 
 
 def test_register_knob_sweep_registers_a_module_path_deployment(
@@ -803,7 +856,7 @@ def test_register_knob_sweep_registers_a_module_path_deployment(
     assert captured["push"] is False
     # Every cluster-stable input defaults onto the deployment, keyed exactly as the flow's
     # parameters — a dropped or mis-named default is a run-time failure on the worker, since
-    # `prefect deployment run` supplies only run_id and instance_id per run.
+    # `prefect deployment run` supplies only run_id per run.
     assert captured["parameters"] == {
         "region": "us-east-1",
         "bucket": "bench-bucket",
@@ -819,6 +872,10 @@ def test_register_knob_sweep_registers_a_module_path_deployment(
     # so a raw Path default would fail at real registration.
     for key in ("model_yaml", "sweep_grid", "vllm_manifest"):
         assert isinstance(captured["parameters"][key], str)
+    # The run opens its own bench endpoint, so run_id is the one flow parameter left for
+    # the trigger to supply: no bench host is asked of the operator.
+    flow_parameters = inspect.signature(knob_sweep_flow.fn).parameters
+    assert set(flow_parameters) - set(captured["parameters"]) == {"run_id"}
 
 
 def test_register_knob_sweep_threads_overrides_onto_the_deployment(
@@ -994,3 +1051,135 @@ def test_register_knob_sweep_creates_a_real_deployment(_harness: None) -> None:
         "commercial": False,
         "sweep_args_b64": "",
     }
+
+
+def _run_flow(model_yaml: Path, grid_yaml: Path, manifest: Path, **kwargs: Any) -> Any:
+    return knob_sweep_flow(
+        run_id="run1",
+        region="us-east-1",
+        bucket="bench-bucket",
+        image_ref="repo:tag",
+        model_yaml=model_yaml,
+        sweep_grid=grid_yaml,
+        vllm_manifest=manifest,
+        **kwargs,
+    )
+
+
+def test_knob_sweep_flow_runs_its_cells_on_the_bench_host_it_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    captures = _stub_transports(monkeypatch)
+    seen_instances: list[str] = []
+
+    def _recording_point_sweep(**kwargs: Any) -> list[str]:
+        seen_instances.append(kwargs["context"].instance_id)
+        return ["ptr"]
+
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _recording_point_sweep)
+
+    _run_flow(model_yaml, grid_yaml, manifest)
+
+    assert seen_instances == [_BENCH_HOST_ID]
+    # One session, opened from the worker's environment with the key from the Secret,
+    # reporting boot through the results bucket on the client the cells use.
+    [session] = captures["sessions"]
+    assert session["topology"] == BenchEndpointTopology(
+        state_bucket="slipstream-tfstate-abc123",
+        vpc_id="vpc-0abc",
+        public_subnets=("subnet-pub-a", "subnet-pub-b"),
+        node_security_group_id="sg-0node",
+        node_autoscaling_groups=("eks-cpu-asg-1",),
+        instance_profile="slipstream-bench-host",
+    )
+    assert session["stack_dir"] == Path(_STACK_DIR)
+    assert session["api_key"] == _API_KEY
+    assert session["results_bucket"] == "bench-bucket"
+    assert session["s3_client"] is captures["s3"]
+    assert callable(session["terraform"])
+
+
+def test_knob_sweep_flow_closes_the_bench_endpoint_before_the_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    # The render only reads S3, so the bench endpoint is torn down before it runs.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    captures = _stub_transports(monkeypatch)
+
+    def _recording_point_sweep(**_kwargs: Any) -> list[str]:
+        captures["events"].append("point")
+        return ["ptr"]
+
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _recording_point_sweep)
+    monkeypatch.setattr(
+        knob_sweep_module,
+        "render_results",
+        lambda **_k: captures["events"].append("render"),
+    )
+
+    _run_flow(model_yaml, grid_yaml, manifest)
+
+    assert captures["events"] == ["open", "point", "close", "render"]
+
+
+def test_knob_sweep_flow_closes_the_bench_endpoint_when_a_point_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    captures = _stub_transports(monkeypatch)
+
+    def _failing_point_sweep(**_kwargs: Any) -> list[str]:
+        raise RuntimeError("cell failed")
+
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", _failing_point_sweep)
+
+    with pytest.raises(RuntimeError, match="cell failed"):
+        _run_flow(model_yaml, grid_yaml, manifest)
+
+    assert captures["events"] == ["open", "close"]
+
+
+def test_knob_sweep_flow_rejects_unreadable_sweep_args_before_the_bench_endpoint_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    # Opening the endpoint applies the stack and waits its host's boot, minutes of billed
+    # time a run whose inputs are unusable should not spend.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    captures = _stub_transports(monkeypatch)
+
+    with pytest.raises(DigestError):
+        _run_flow(model_yaml, grid_yaml, manifest, sweep_args_b64="not base64!")
+
+    assert captures["sessions"] == []
+
+
+def test_knob_sweep_rejects_an_instance_id_option(tmp_path: Path) -> None:
+    # The flow opens its own bench endpoint, so the command takes no bench host.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "knob-sweep",
+            "--run-id",
+            "run1",
+            "--instance-id",
+            "i-1",
+            "--region",
+            "us-east-1",
+            "--bucket",
+            "bench-bucket",
+            "--image-ref",
+            "repo:tag",
+            "--model-yaml",
+            str(model_yaml),
+            "--sweep-grid",
+            str(grid_yaml),
+            "--vllm-manifest",
+            str(manifest),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option: --instance-id" in _plain(result.output)

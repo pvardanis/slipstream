@@ -125,7 +125,6 @@ def knob_sweep(
         str,
         typer.Option(help="Shared run the points nest under (<run-id>/<point-slug>)."),
     ],
-    instance_id: Annotated[str, typer.Option(help="Bench host instance id.")],
     region: Annotated[str, typer.Option(help="AWS region of the host and bucket.")],
     bucket: Annotated[str, typer.Option(help="Results bucket (RESULTS_BUCKET).")],
     image_ref: Annotated[str, typer.Option(help="Bench-client image reference.")],
@@ -168,11 +167,11 @@ def knob_sweep(
     Runs :func:`knob_sweep_flow` directly against local files — the same flow the EKS
     worker runs from its registered deployment, driven from the workstation for a
     one-off. A resume re-invoked with the same inputs skips a point whose cells already
-    hold valid measurements.
+    hold valid measurements. The flow opens its own bench endpoint, so it reads the
+    worker's ``BENCH_ENDPOINT_*`` environment and needs the worker's rights.
     """
     for uri in knob_sweep_flow(
         run_id=run_id,
-        instance_id=instance_id,
         region=region,
         bucket=bucket,
         image_ref=image_ref,
@@ -218,18 +217,19 @@ def register_knob_sweep(
     """Register the knob-sweep deployment on the process work pool (ADR-0015).
 
     Creates the deployment the operator triggers with ``prefect deployment run
-    knob-sweep/knob-sweep --param run_id=... --param instance_id=...``. The worker runs
+    knob-sweep/knob-sweep --param run_id=...``. The worker runs
     the baked orchestration image, so the entrypoint is stored as a module path resolved
     by import (``EntrypointType.MODULE_PATH``) — no source tree is fetched and no laptop
     path leaks into the deployment — and no image is built (a process worker runs the flow
     in-process from its baked image). The cluster-stable inputs become the deployment's
-    default parameters; ``run_id`` and ``instance_id`` are supplied per run at trigger time.
+    default parameters; ``run_id`` is supplied per run at trigger time. The run opens its
+    own bench endpoint, so no bench host is a parameter.
 
     Run over a port-forward to the in-cluster Prefect API (see
     ``just prefect-register-sweep``).
 
-    The cluster-stable inputs are rejected here if empty: ``run_id`` and ``instance_id``
-    are the only parameters ``prefect deployment run`` supplies per run, so an empty
+    The cluster-stable inputs are rejected here if empty: ``run_id`` is the only
+    parameter ``prefect deployment run`` supplies per run, so an empty
     ``region``, ``bucket``, or ``image_ref`` default would otherwise surface as an obscure
     boto3 failure on the worker at run time, long after registration reported success. The
     target work pool is checked present for the same reason: ``flow.deploy`` only warns on a

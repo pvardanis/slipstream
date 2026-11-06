@@ -14,14 +14,19 @@ or Prefect server.
 :func:`build_knob_sweep_collaborators` binds those four callables from the live transports,
 and :func:`knob_sweep_flow` is the ``@flow``-decorated composition root the Prefect
 deployment registers: it builds the real collaborators inside the flow and drives the loop,
-so only serializable parameters cross the flow boundary. Each point sweep runs nested under
-that one parent flow run, so the point sweeps of a knob sweep share a parent->child lineage
-in the Prefect UI, and the parent run is tagged ``run=<run-id>`` to join the same ``run=``
-filter its point sweeps group under.
+so only serializable parameters cross the flow boundary. The loop runs inside the flow's own
+bench endpoint (:func:`slipstream_bench.orchestration.bench_endpoint.open_bench_endpoint`),
+applied from the worker's environment once the run's inputs are checked and destroyed
+before the render, so every cell runs on the bench host that session booted. Each point
+sweep runs nested under that one parent flow run, so the point sweeps of a knob sweep share
+a parent->child lineage in the Prefect UI, and the parent run is tagged ``run=<run-id>`` to
+join the same ``run=`` filter its point sweeps group under.
 """
 
 import logging
+import os
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -38,12 +43,19 @@ from slipstream_bench.contract import (
     list_engine_points,
     load_grid,
 )
+from slipstream_bench.orchestration.bench_endpoint import (
+    BenchHost,
+    build_terraform,
+    open_bench_endpoint,
+    read_topology,
+)
 from slipstream_bench.orchestration.cell_objects import get_knob_sweep_prefix
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
     build_kubectl,
     deploy_gpu_point,
+    read_vllm_api_key,
     scrape_ceiling,
 )
 from slipstream_bench.orchestration.config_artifact import (
@@ -72,6 +84,9 @@ from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
+
+# The environment variable the orchestration image names its baked bench-endpoint stack by.
+_STACK_DIR_ENV = "BENCH_ENDPOINT_STACK_DIR"
 
 # The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
@@ -142,7 +157,6 @@ class KnobSweepInputs:
     manifest_path: Path
     run: str
     serving: ServingConfig
-    instance_id: str
     image_ref: str
     bucket: str
     model: str
@@ -162,7 +176,7 @@ class KnobSweepInputs:
 
         :raise DigestError: when the extra load-cell flags cannot be read.
         """
-        for name in ("run", "instance_id", "image_ref", "bucket", "model"):
+        for name in ("run", "image_ref", "bucket", "model"):
             if not getattr(self, name).strip():
                 raise ValueError(f"KnobSweepInputs.{name} must be a non-empty string")
         read_sweep_flags(self.sweep_args_b64)
@@ -172,7 +186,6 @@ class KnobSweepInputs:
 def knob_sweep_flow(
     *,
     run_id: str,
-    instance_id: str,
     region: str,
     bucket: str,
     image_ref: str,
@@ -190,9 +203,12 @@ def knob_sweep_flow(
     transports, and sequences them so one flow run redeploys the GPU, scrapes the ceiling,
     and runs each point's Tier-2 ladder — each point sweep nested under this parent run. A
     resume re-invoked with the same inputs skips a point whose cells already hold valid
-    measurements, so its ~20-minute redeploy and scrape are not re-paid. After the loop, a
-    terminal task folds the whole run off S3 and renders its ceiling and goodput-cliff tables
-    to this parent run page as markdown artifacts (ADR-0018).
+    measurements, so its ~20-minute redeploy and scrape are not re-paid. The loop runs on a
+    bench endpoint the flow applies for it and destroys after it, whether the loop passes or
+    raises; its topology comes from the worker's ``BENCH_ENDPOINT_*`` environment and its
+    vLLM api-key from the cluster Secret. After the loop, a terminal task folds the whole run
+    off S3 and renders its ceiling and goodput-cliff tables to this parent run page as
+    markdown artifacts (ADR-0018).
 
     The parameters are all serializable (Prefect persists them through
     ``serialize_parameters``); the live handles are built inside the flow, never passed in.
@@ -201,7 +217,6 @@ def knob_sweep_flow(
     the UI filters the whole sweep — parent and points — as one run.
 
     :param run_id: shared run the points nest under (``<run-id>/<point-slug>``).
-    :param instance_id: bench host the cells run on.
     :param region: AWS region of the host and bucket.
     :param bucket: results bucket (RESULTS_BUCKET).
     :param image_ref: bench-client image reference the cells run.
@@ -225,7 +240,6 @@ def knob_sweep_flow(
         manifest_path=vllm_manifest,
         run=run_id,
         serving=read_serving_config(model_yaml=model_yaml, vllm_manifest=vllm_manifest),
-        instance_id=instance_id,
         image_ref=image_ref,
         bucket=bucket,
         model=read_model_id(model_yaml),
@@ -251,23 +265,32 @@ def knob_sweep_flow(
         vllm_manifest=vllm_manifest,
         publish=create_markdown_artifact,
     )
+    kubectl = build_kubectl()
     s3_client = build_s3_client(region)
-    deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
-        build_knob_sweep_collaborators(
-            inputs,
-            kubectl=build_kubectl(),
-            ssm_client=build_ssm_client(region),
-            s3_client=s3_client,
-            task=cell_task(bucket, retries=retries),
+    task = cell_task(bucket, retries=retries)
+    # The bench endpoint lives for the point loop only: everything that can reject the run
+    # cheaply (its inputs, the cell storage preflight) runs before its apply, and the render
+    # below reads only S3, so the endpoint is destroyed before it.
+    with _open_bench_endpoint(
+        kubectl=kubectl, s3_client=s3_client, bucket=bucket
+    ) as host:
+        deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
+            build_knob_sweep_collaborators(
+                inputs,
+                instance_id=host.instance_id,
+                kubectl=kubectl,
+                ssm_client=build_ssm_client(region),
+                s3_client=s3_client,
+                task=task,
+            )
         )
-    )
-    outcome = drive_knob_sweep(
-        points=points,
-        deploy_fn=deploy_fn,
-        scrape_fn=scrape_fn,
-        point_sweep_fn=point_sweep_fn,
-        has_pending_cells=has_pending_cells,
-    )
+        outcome = drive_knob_sweep(
+            points=points,
+            deploy_fn=deploy_fn,
+            scrape_fn=scrape_fn,
+            point_sweep_fn=point_sweep_fn,
+            has_pending_cells=has_pending_cells,
+        )
     # The point loop has persisted every cell to S3; render the whole run's ceiling and
     # goodput-cliff tables and plots to this parent run page as a terminal task (ADR-0018). It
     # folds the complete grid off S3 — a resumed sweep's cached points fold in too — so the
@@ -370,6 +393,7 @@ def build_sweep_summary(run_id: str, outcome: SweepOutcome) -> str:
 def build_knob_sweep_collaborators(
     inputs: KnobSweepInputs,
     *,
+    instance_id: str,
     kubectl: Kubectl,
     ssm_client: Any,
     s3_client: Any,
@@ -388,6 +412,7 @@ def build_knob_sweep_collaborators(
     its redeploy.
 
     :param inputs: the per-run inputs every point of the sweep shares.
+    :param instance_id: the bench host the cells run on.
     :param kubectl: the transport the redeploy and ceiling scrape are issued through.
     :param ssm_client: the boto3 SSM client each point sweep sends cells through.
     :param s3_client: the boto3 S3 client each point sweep downloads its cells with.
@@ -405,14 +430,34 @@ def build_knob_sweep_collaborators(
     point_sweep_fn: PointSweepFn = partial(
         _sweep_one_point,
         inputs=inputs,
+        instance_id=instance_id,
         ssm_client=ssm_client,
         s3_client=s3_client,
         task=task,
     )
     has_pending_cells: PendingCellsFn = partial(
-        _point_has_pending_cells, inputs=inputs, task=task
+        _point_has_pending_cells, inputs=inputs, instance_id=instance_id, task=task
     )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
+
+
+def _open_bench_endpoint(
+    *, kubectl: Kubectl, s3_client: Any, bucket: str
+) -> AbstractContextManager[BenchHost]:
+    """Open the run's bench endpoint from the worker's environment.
+
+    The topology and the baked stack's path come from the worker's environment, the vLLM
+    api-key from its cluster Secret, and the bench host reports its boot to the results
+    bucket the cells write to.
+    """
+    return open_bench_endpoint(
+        terraform=build_terraform(),
+        s3_client=s3_client,
+        stack_dir=Path(os.environ[_STACK_DIR_ENV]),
+        topology=read_topology(os.environ),
+        api_key=read_vllm_api_key(kubectl),
+        results_bucket=bucket,
+    )
 
 
 def _deploy_and_log(
@@ -445,6 +490,7 @@ def _sweep_one_point(
     point: EnginePoint,
     *,
     inputs: KnobSweepInputs,
+    instance_id: str,
     ssm_client: Any,
     s3_client: Any,
     task: Task[..., str],
@@ -452,7 +498,7 @@ def _sweep_one_point(
     """Run one point's Tier-2 ladder under its own nested run id."""
     return run_point_sweep(
         grid_path=inputs.grid_path,
-        context=_build_point_context(inputs, point),
+        context=_build_point_context(inputs, point, instance_id),
         ssm_client=ssm_client,
         s3_client=s3_client,
         task=task,
@@ -460,7 +506,11 @@ def _sweep_one_point(
 
 
 def _point_has_pending_cells(
-    point: EnginePoint, *, inputs: KnobSweepInputs, task: Task[..., str]
+    point: EnginePoint,
+    *,
+    inputs: KnobSweepInputs,
+    instance_id: str,
+    task: Task[..., str],
 ) -> bool:
     """Report whether a point still has cells to run — any cell without a cache record.
 
@@ -470,7 +520,7 @@ def _point_has_pending_cells(
     its cells will be served from cache. The first uncached cell is logged, naming why the
     point redeploys.
     """
-    context = _build_point_context(inputs, point)
+    context = _build_point_context(inputs, point, instance_id)
     for cell in list_point_cells(inputs.grid, context):
         cell_name = get_cell_basename(cell)
         if not is_cell_cached(
@@ -487,13 +537,15 @@ def _point_has_pending_cells(
     return False
 
 
-def _build_point_context(inputs: KnobSweepInputs, point: EnginePoint) -> SweepContext:
+def _build_point_context(
+    inputs: KnobSweepInputs, point: EnginePoint, instance_id: str
+) -> SweepContext:
     """Derive one engine point's sweep context, nesting it under the shared run."""
     return SweepContext(
         run_id=_get_point_run_id(inputs, point),
         point_slug=point.slug(),
         serving=inputs.serving,
-        instance_id=inputs.instance_id,
+        instance_id=instance_id,
         image_ref=inputs.image_ref,
         bucket=inputs.bucket,
         model=inputs.model,
