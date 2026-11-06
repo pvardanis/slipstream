@@ -54,8 +54,8 @@ _HELD_STATE = (
 
 _LOCK_ID = "2dcc6d8e-8b22-9868-6f34-a1538a71338d"
 
-# What terraform writes to stderr when another process holds the state lock, as Terraform
-# 1.16 prints it; the production transport carries stderr in its TerraformError message.
+# What terraform writes to stderr when another process holds the state lock, in the shape
+# Terraform prints it; the production transport carries stderr in its TerraformError message.
 _LOCK_STDERR = f"""Error: Error acquiring the state lock
 
 Error message: operation error S3: PutObject, StatusCode: 412, PreconditionFailed
@@ -494,6 +494,7 @@ def test_failed_errored_state_copy_keeps_the_terraform_error(stack_dir: Path) ->
     notes = "\n".join(getattr(excinfo.value, "__notes__", []))
     assert "could not copy errored.tfstate" in notes
     assert "AccessDenied" in notes
+    assert "The dump is lost" in notes
 
 
 def test_uncopied_errored_state_is_never_copied_under_a_later_commands_name(
@@ -502,6 +503,10 @@ def test_uncopied_errored_state_is_never_copied_under_a_later_commands_name(
     # The apply's dump fails to upload; the destroy then fails without leaving one, so
     # nothing may land under the destroy's key.
     class _FirstPutDenied(_FakeS3):
+        def __init__(self, sentinels: list[str | None]) -> None:
+            super().__init__(sentinels)
+            self.denied = False
+
         def put_object(
             self, *, Bucket: str, Key: str, Body: bytes
         ) -> dict[str, object]:
@@ -519,7 +524,6 @@ def test_uncopied_errored_state_is_never_copied_under_a_later_commands_name(
             return super().__call__(args, env)
 
     s3 = _FirstPutDenied(["ok"])
-    s3.denied = False
 
     with (
         pytest.raises(RuntimeError, match="destroy failed"),
