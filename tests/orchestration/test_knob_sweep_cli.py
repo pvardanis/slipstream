@@ -43,6 +43,7 @@ from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
 from slipstream_bench.orchestration.digest import DigestError, ServingConfig
 from slipstream_bench.orchestration.flows import knob_sweep as knob_sweep_module
+from slipstream_bench.orchestration.flows import run_setup as run_setup_module
 from slipstream_bench.orchestration.flows.knob_sweep import (
     KnobSweepInputs,
     SweepOutcome,
@@ -437,7 +438,7 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     for name, value in _WORKER_ENV.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(
-        knob_sweep_module, "open_bench_endpoint", _fake_open_bench_endpoint
+        run_setup_module, "open_bench_endpoint", _fake_open_bench_endpoint
     )
     # Every cell reads as cached, so a real driver skips each point's redeploy and scrape.
     monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)

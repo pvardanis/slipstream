@@ -24,9 +24,7 @@ join the same ``run=`` filter its point sweeps group under.
 """
 
 import logging
-import os
 from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -43,20 +41,13 @@ from slipstream_bench.contract import (
     list_engine_points,
     load_grid,
 )
-from slipstream_bench.orchestration.bench_endpoint import (
-    BenchHost,
-    build_terraform,
-    open_bench_endpoint,
-    read_stack_dir,
-    read_topology,
-)
+from slipstream_bench.orchestration.bench_endpoint import BenchHost
 from slipstream_bench.orchestration.cell_objects import get_knob_sweep_prefix
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.cluster import (
     Kubectl,
     build_kubectl,
     deploy_gpu_point,
-    read_vllm_api_key,
     scrape_ceiling,
 )
 from slipstream_bench.orchestration.config_artifact import (
@@ -77,6 +68,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
 )
 from slipstream_bench.orchestration.flows.run_setup import (
     enable_milestone_logging,
+    open_run_bench_endpoint,
     tag_run_with_group,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
@@ -271,7 +263,7 @@ def knob_sweep_flow(
     # below reads only S3, so the endpoint is destroyed before it. A destroy that fails
     # fails the run before the render: the cells are already in S3, and the state it leaves
     # must be destroyed (`just bench-endpoint-down`) before a re-run can open the endpoint.
-    with _open_bench_endpoint(
+    with open_run_bench_endpoint(
         kubectl=kubectl, s3_client=s3_client, bucket=bucket
     ) as host:
         deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
@@ -439,25 +431,6 @@ def build_knob_sweep_collaborators(
         _point_has_pending_cells, inputs=inputs, host=host, task=task
     )
     return deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells
-
-
-def _open_bench_endpoint(
-    *, kubectl: Kubectl, s3_client: Any, bucket: str
-) -> AbstractContextManager[BenchHost]:
-    """Open the run's bench endpoint from the worker's environment.
-
-    The topology and the baked stack's path come from the worker's environment, the vLLM
-    api-key from its cluster Secret, and the bench host reports its boot to the results
-    bucket the cells write to.
-    """
-    return open_bench_endpoint(
-        terraform=build_terraform(),
-        s3_client=s3_client,
-        stack_dir=read_stack_dir(os.environ),
-        topology=read_topology(os.environ),
-        api_key=read_vllm_api_key(kubectl),
-        results_bucket=bucket,
-    )
 
 
 def _deploy_and_log(
