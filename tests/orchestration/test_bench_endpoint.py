@@ -176,3 +176,103 @@ def test_failed_destroy_after_a_raising_body_keeps_the_body_error_as_context(
         raise ValueError("cell failed")
 
     assert isinstance(excinfo.value.__context__, ValueError)
+
+
+_EXPECTED_VARIABLES = {
+    "TF_VAR_state_bucket": "slipstream-tfstate-x1",
+    "TF_VAR_vpc_id": "vpc-1",
+    "TF_VAR_public_subnets": '["subnet-a", "subnet-b"]',
+    "TF_VAR_node_security_group_id": "sg-node",
+    "TF_VAR_node_autoscaling_groups": '["asg-1"]',
+    "TF_VAR_bench_host_instance_profile": "slipstream-bench-host",
+    "TF_VAR_vllm_api_key": "sk-secret-key",
+}
+
+
+def test_topology_and_api_key_reach_apply_and_destroy_as_variables(
+    stack_dir: Path,
+) -> None:
+    terraform = _FakeTerraform()
+
+    with _open(terraform, _FakeS3(["ok"]), stack_dir):
+        pass
+
+    for args, env in terraform.calls:
+        if _subcommand(args) in {"apply", "destroy"}:
+            assert env == _EXPECTED_VARIABLES, args
+
+
+def test_api_key_never_appears_in_terraform_argv(stack_dir: Path) -> None:
+    # argv is visible to every process on the node through ps; the environment is not.
+    terraform = _FakeTerraform()
+
+    with _open(terraform, _FakeS3(["ok"]), stack_dir):
+        pass
+
+    assert terraform.calls
+    for args, _env in terraform.calls:
+        assert not any("sk-secret-key" in arg for arg in args), args
+
+
+def test_init_points_the_backend_at_the_state_bucket_without_prompting(
+    stack_dir: Path,
+) -> None:
+    terraform = _FakeTerraform()
+
+    with _open(terraform, _FakeS3(["ok"]), stack_dir):
+        pass
+
+    init_args = terraform.calls[0][0]
+    assert _subcommand(init_args) == "init"
+    assert "-backend-config=bucket=slipstream-tfstate-x1" in init_args
+    assert "-input=false" in init_args
+
+
+def test_apply_and_destroy_run_unattended(stack_dir: Path) -> None:
+    terraform = _FakeTerraform()
+
+    with _open(terraform, _FakeS3(["ok"]), stack_dir):
+        pass
+
+    for args, _env in terraform.calls:
+        if _subcommand(args) in {"apply", "destroy"}:
+            assert {"-auto-approve", "-input=false"} <= set(args), args
+
+
+def test_session_reads_the_bench_host_instance_id_output(stack_dir: Path) -> None:
+    terraform = _FakeTerraform()
+
+    with _open(terraform, _FakeS3(["ok"]), stack_dir):
+        pass
+
+    (output_args,) = [
+        args for args, _env in terraform.calls if _subcommand(args) == "output"
+    ]
+    assert output_args[-2:] == ["-raw", "bench_host_instance_id"]
+
+
+def test_terraform_runs_in_a_writable_copy_of_the_stack(stack_dir: Path) -> None:
+    # The image bakes the stack on a read-only root, so terraform cannot write .terraform
+    # beside it; every command runs in a copy holding the stack's files.
+    seen: list[Path] = []
+
+    def terraform(args: Sequence[str], env: Mapping[str, str]) -> str:
+        workdir = Path(args[0].removeprefix("-chdir="))
+        assert workdir != stack_dir
+        assert (workdir / "main.tf").read_text(encoding="utf-8") == "# stack\n"
+        seen.append(workdir)
+        return f"{_INSTANCE_ID}\n" if _subcommand(args) == "output" else ""
+
+    with open_bench_endpoint(
+        terraform=terraform,
+        s3=_FakeS3(["ok"]),
+        stack_dir=stack_dir,
+        topology=_TOPOLOGY,
+        api_key="sk-secret-key",
+        results_bucket="bench-results-x1",
+        sleep=lambda _s: None,
+    ):
+        pass
+
+    assert len(set(seen)) == 1
+    assert not seen[0].exists()
