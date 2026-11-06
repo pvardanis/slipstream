@@ -109,7 +109,7 @@ prefect-storage-down:
 
 # A sweep is then triggered with `prefect deployment run knob-sweep/knob-sweep --param
 # run_id=...` and picked up by the in-cluster worker, which opens its own bench endpoint
-# (ADR-0015). Run it after `prefect-up`; `_prefect-register` holds what registration
+# (ADR-0028). Run it after `prefect-up`; `_prefect-register` holds what registration
 # stores.
 # Register the knob-sweep deployment on the process work pool.
 [group('prefect')]

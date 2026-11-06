@@ -1,4 +1,4 @@
-<!-- ADR recording that the bench endpoint lives for a flow run: the knob sweep flow applies the bench-endpoint stack from the Prefect worker when it starts, waits for the bench host to boot, runs its cells against it, and destroys the stack when it ends, so the operator passes no instance id. Covers the worker's scoped infra rights, the baked Terraform, the unattended apply with no saved plan, the refusal to touch an endpoint the run did not create, and what a killed run leaves behind. Amends ADR-0004 (lifecycle) and ADR-0015 (worker rights). The KV cache A/B adopts the same session in #471. -->
+<!-- ADR recording that the bench endpoint lives for a flow run: the knob sweep flow applies the bench-endpoint stack from the Prefect worker when it starts, waits for the bench host to boot, runs its cells against it, and destroys the stack when it ends, so the operator passes no instance id. Covers the worker's bounded infra rights, the baked Terraform, the unattended apply with no saved plan, the refusal to touch an endpoint the run did not create, and what a killed or cancelled run leaves behind. Amends ADR-0004 (lifecycle) and ADR-0015 (worker rights). The KV cache A/B adopts the same session in #471. -->
 
 # ADR-0028: The bench endpoint lives for a flow run
 
@@ -9,14 +9,13 @@
 
 The bench endpoint (ADR-0004) is the mutual-TLS public load balancer in front of vLLM,
 together with the bench host: the EC2 instance outside the cluster that runs the
-bench-client image and drives the cells over SSM. `just stack-up` stood it up and
-`just stack-down` tore it down, so it billed and stayed publicly reachable for the whole
-working session. Only the two unattended Prefect flows (knob sweep and KV cache A/B) need
-it, and only while they run.
+bench-client image and drives the cells over SSM. `just stack-up` stands it up and
+`just stack-down` tears it down, so it bills and stays publicly reachable for the whole
+working session. The two unattended Prefect flows (knob sweep and KV cache A/B) need it
+only while they run; `just bench` and `just prefix-cache` use it ad hoc.
 
-Every run of those flows also took the bench host's instance id as a parameter. The
-operator looked it up from the bench-endpoint stack's outputs, and the CI dispatch
-workflows found it by EC2 tags.
+Each flow run also took the bench host's instance id, which the operator read from the
+stack's outputs and CI found by EC2 tags.
 
 ## Decision
 
@@ -32,15 +31,16 @@ the run stays unattended.
   transport, so its tests drive it against a fake Terraform and a fake S3 client. It logs a
   milestone for each step (applying, launched, ready after N seconds, destroying,
   destroyed), which the flow routes to the run page.
-- **Once the apply starts, the destroy always runs.** A failed apply, a host that reports
-  `failed: <step>`, a host that does not report ready within 420 s, and a raising body all
-  end in a destroy. A failed destroy fails the run before the results are rendered, and its
-  error names the state and `just bench-endpoint-down`.
+- **Once the apply starts, the destroy always runs** while the flow's process can unwind. A
+  failed apply, a host that reports `failed: <step>`, a host that does not report ready
+  within 420 s, and a raising body all end in a destroy. A failed destroy fails the run
+  before the results are rendered, and its error names the state and
+  `just bench-endpoint-down`.
 - **A run never touches an endpoint it did not create.** Before applying, the session reads
   the state, and if it already holds resources it refuses with the state's location and
   `just bench-endpoint-down`. It never force-unlocks the state. One state key means one
-  endpoint at a time, and the sweep pool's concurrency limit of 1 keeps two runs from
-  racing for it.
+  endpoint at a time, and the sweep pool's concurrency limit of 1 (`just prefect-up`) keeps
+  two runs from racing for it.
 - **The apply runs unattended, with no saved plan.** `init`, `apply -auto-approve
   -input=false` and `destroy -auto-approve` run against the same state key the manual
   recipes use (`bench-endpoint/terraform.tfstate`). This departs from reviewed plans on
@@ -56,12 +56,14 @@ the run stays unattended.
   `BENCH_ENDPOINT_*` variables in the worker's environment. The vLLM api-key is read at run
   time from the `slipstream/vllm-api-key` Secret and reaches Terraform through its
   environment, never argv.
-- **The worker's infra rights are scoped to the stack** (`terraform/eks/worker_bench_endpoint.tf`).
-  It gets `iam:PassRole` on the bench host role and no IAM create, attach or put, so its
-  rights cannot be turned into admin. Its EC2, load balancer, trust store, ACM, Secrets
-  Manager and trust-store bucket rights are scoped by the stack's name prefixes or its
-  `Component=bench-endpoint` tag. Its state access covers the bench-endpoint key only, and
-  its Kubernetes RBAC adds `get` on the one api-key Secret.
+- **The worker's infra rights are bounded by the stack**
+  (`terraform/eks/worker_bench_endpoint.tf`). It gets `iam:PassRole` on the bench host role
+  and no IAM writes, so it cannot escalate to admin. Creating and deleting the stack's
+  resources is scoped by its name prefixes or its `Component=bench-endpoint` tag; describes
+  are account-wide, the node security group rule and the ASG attachment are scoped by the
+  cluster's tags, and the ACM tag bounds intent rather than enforcing it. In the state
+  bucket it writes only the bench-endpoint key and its lock, and reads the bootstrap state.
+  Its Kubernetes RBAC adds `get` on the one api-key Secret.
 
 The point sweep keeps its instance-id parameter, so `just bench` still runs against an
 endpoint brought up by hand with `just bench-endpoint-up`. The KV cache A/B still drives a
@@ -78,10 +80,15 @@ endpoint, until the A/B opens the same session (#471).
   includes the instance id, so cells that already hold a cache record are still reused
   (ADR-0022). A resume whose every cell is cached still applies and destroys an endpoint;
   skipping that is not worth the extra path.
-- The destroy runs in a `finally`, so it runs only while the flow's process gets to unwind.
-  A worker pod killed outright (OOM, node reaped) leaves the endpoint up and its state
-  holding it. The next run refuses that state, `just bench-endpoint-down` or
-  `just stack-down` destroys it, and the spend-leak guard (ADR-0025) alerts meanwhile.
-- The worker can now create and destroy public-facing AWS resources. The rights are
-  bounded by name prefix, tag and the absence of IAM writes, and the tftests pin those
-  bounds.
+- The destroy runs in a `finally`, so a run whose process is killed skips or interrupts it:
+  a worker pod killed outright (OOM, node reaped), or a run cancelled from the UI, which
+  the worker ends by terminating the flow's process. The endpoint stays up and billing, and
+  a kill mid-apply or mid-destroy also leaves the state lock held. The next run refuses the
+  state; `terraform force-unlock <lock-id>` (the lock id is in Terraform's lock error) and
+  then `just bench-endpoint-down` clear it. Resources a killed apply had not yet written to
+  state are invisible to Terraform. The spend-leak guard's fast alarm watches GPU capacity
+  only (ADR-0025), so a leaked bench endpoint shows up only against the monthly budget.
+- When the body fails and the destroy then fails too, the run's error is the destroy's; the
+  body's error is chained beneath it in the traceback.
+- The worker can create and destroy public-facing AWS resources, within the bounds above,
+  which the tftests pin.

@@ -71,8 +71,7 @@ vLLM is not left publicly reachable between runs.
 ## Amendment (2026-11-06): the bench endpoint lives for a flow run
 
 The exposure is ephemeral per run, not per working session. The knob sweep flow applies
-the bench-endpoint stack from the Prefect worker when it starts and destroys it when it
-ends, and the run no longer takes the bench host's instance id
+the bench-endpoint stack when it starts and destroys it when it ends
 ([ADR-0028](0028-bench-endpoint-lives-for-a-flow-run.md)). The measurement vantage does
 not change: cells are still measured from the bench host outside the cluster, through the
 mutual-TLS load balancer. `just bench-endpoint-up` / `bench-endpoint-down` stay for

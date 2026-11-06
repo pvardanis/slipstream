@@ -14,10 +14,14 @@ unattended on the in-cluster Prefect worker. Every swept value lives in
 ([ADR-0028](adr/0028-bench-endpoint-lives-for-a-flow-run.md)). It applies the bench-endpoint
 stack before its first point, waits for the bench host to boot, and destroys the stack after
 its last point, whether the run succeeds or fails. The run page logs each step (applying,
-launched, ready, destroying, destroyed). A run refuses to start while the bench-endpoint
-state holds an endpoint it did not create, and `just stack-up` leaves one up, so **run
-`just bench-endpoint-down` before a knob sweep**. A run whose destroy failed, or whose worker
-pod was killed, leaves the endpoint billing; `just bench-endpoint-down` destroys it.
+launched, ready, destroying, destroyed). A run refuses to start if an endpoint is already
+up, which `just stack-up` leaves behind, so **run `just bench-endpoint-down` before a knob
+sweep**. A run whose destroy failed leaves the endpoint billing; its error names the state,
+and the body's error, if any, is chained beneath it. **Cancelling a run, or a killed worker
+pod, can skip the destroy** and leave the state lock held. Run `just bench-endpoint-down`;
+if it fails on the lock, run `terraform -chdir=terraform/bench-endpoint force-unlock
+<lock-id>` with the id from the lock error, then `just bench-endpoint-down` again. Only the
+monthly budget catches a leaked bench endpoint; the GPU alarm does not.
 
 **From CI** — Actions → `sweep-dispatch` → Run workflow, **on `main`** (the role trusts
 only `main`). Its one input, `run_id`, is optional and defaults to a UTC timestamp. The
