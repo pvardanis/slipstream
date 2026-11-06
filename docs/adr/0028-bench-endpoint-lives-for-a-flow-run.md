@@ -94,9 +94,10 @@ keeps its instance-id parameter so it can target such an endpoint.
   lock held. The next run refuses the state; `just bench-endpoint-down` clears it, after
   `terraform -chdir=terraform/bench-endpoint force-unlock <lock-id>` if the lock is held
   (the id is in Terraform's lock error) and the run is Cancelled or Crashed with its
-  worker pod gone, since a live apply or destroy holds the same lock. Resources a killed apply had not yet written to
-  state are invisible to Terraform. The spend-leak guard's fast alarm watches GPU capacity
-  only (ADR-0025), so a leaked bench endpoint shows up only against the monthly budget.
+  worker pod gone, since a live apply or destroy holds the same lock. Resources a killed
+  apply had not yet written to state are invisible to Terraform. The spend-leak guard's
+  fast alarm watches GPU capacity only (ADR-0025), so a leaked bench endpoint shows up
+  only against the monthly budget.
 - When the body fails and the destroy then fails too, the run's error is the destroy's; the
   body's error is chained beneath it in the traceback.
 - The worker can create and destroy public-facing AWS resources, within the bounds above,
