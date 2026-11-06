@@ -75,7 +75,7 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Ladder** — the client concurrencies a measurement steps through against one running
   replica, one cell per step.
 - **Rung** — one step of a ladder: a single cell at one offered concurrency.
-- **Bench endpoint** — the ephemeral, mutual-TLS public load balancer in front of the Engine,
+- **Bench endpoint** — the ephemeral, authenticated public entry point to the Engine,
   together with its bench host: the one path every measurement takes, from outside the
   cluster.
 - **Bench host** — the machine outside the cluster that runs the bench-client image and

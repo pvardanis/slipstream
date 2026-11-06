@@ -1,4 +1,4 @@
-<!-- ADR recording how the knob sweep runs unattended off the laptop: the whole outer loop (Tier-1 GPU redeploys + Tier-2 cells) is promoted into one parent Prefect flow calling per-point subflows; the Prefect server moves from local SQLite to Prefect Cloud (Hobby); the flow runs on a Prefect worker on EKS as a run-to-completion Job; a resume skips a point's GPU redeploy when all its cells already hold a valid measurement; and ArgoCD is ruled out as the sweep runner (kept, if at all, for L2a production serving deploy). Supersedes ADR-0012's "server runs locally" and "flows run from the workstation" sections, firing that ADR's own reopen trigger #3. NOTE: the Cloud-server half is reversed by the 2026-09-29 amendment below — the server is a self-hosted OSS Prefect on EKS that rides the cluster's own duty-cycle; read that amendment for the server location, work pool type, and state backend actually built. AMENDED 2026-10-19: the deferred vllm-gpu ownership item is settled — `just gpu-deploy` creates the Deployment, the flow patches it per point. AMENDED 2026-11-06: the worker holds scoped rights to apply and destroy the bench-endpoint stack (ADR-0028). -->
+<!-- ADR recording how the knob sweep runs unattended off the laptop: the whole outer loop (Tier-1 GPU redeploys + Tier-2 cells) is promoted into one parent Prefect flow calling per-point subflows; the Prefect server moves from local SQLite to Prefect Cloud (Hobby); the flow runs on a Prefect worker on EKS as a run-to-completion Job; a resume skips a point's GPU redeploy when all its cells already hold a valid measurement; and ArgoCD is ruled out as the sweep runner (kept, if at all, for L2a production serving deploy). Supersedes ADR-0012's "server runs locally" and "flows run from the workstation" sections, firing that ADR's own reopen trigger #3. NOTE: the Cloud-server half is reversed by the 2026-09-29 amendment below — the server is a self-hosted OSS Prefect on EKS that rides the cluster's own duty-cycle; read that amendment for the server location, work pool type, and state backend actually built. AMENDED 2026-10-19: the deferred vllm-gpu ownership item is settled — `just gpu-deploy` creates the Deployment, the flow patches it per point. AMENDED 2026-11-06: the worker holds bounded rights to apply and destroy the bench-endpoint stack (ADR-0028). -->
 
 # ADR-0015: The knob sweep runs unattended — Cloud server, EKS worker, one parent flow
 
@@ -324,14 +324,12 @@ notice. A guard would have the recipe ask the Prefect server whether a run is in
 one operator that check is not built, and the runbook says not to run `gpu-deploy` while a
 sweep is in flight.
 
-## Amendment (2026-11-06): the worker holds scoped rights to the bench-endpoint stack
+## Amendment (2026-11-06): the worker holds bounded rights to the bench-endpoint stack
 
 Beyond S3, SSM and the `deploy/vllm-gpu` patch, the worker applies and destroys the
-bench-endpoint stack: a knob sweep run owns its bench endpoint
-([ADR-0028](0028-bench-endpoint-lives-for-a-flow-run.md)). Its role holds `iam:PassRole` on
-the bench host role (and no IAM create, attach or put), create/delete/describe rights scoped
-by the stack's name prefixes or `Component=bench-endpoint` tag, and read/write on the
-bench-endpoint state key only (`terraform/eks/worker_bench_endpoint.tf`). Its RBAC adds `get`
-on the one `slipstream/vllm-api-key` Secret. The orchestration image bakes a pinned Terraform
-with the stack and its providers, and the eks stack puts the cluster topology in the worker's
-environment. The knob-sweep deployment and `sweep-dispatch` drop the `instance_id` parameter.
+bench-endpoint stack, so a knob sweep run owns its bench endpoint. Its rights are bounded by
+that stack: `iam:PassRole` on the bench host role and no IAM writes, create and delete scoped
+by the stack's name prefixes or tag, state writes on the bench-endpoint key only, and RBAC
+`get` on the one api-key Secret (`terraform/eks/worker_bench_endpoint.tf`;
+[ADR-0028](0028-bench-endpoint-lives-for-a-flow-run.md) has the full bounds). The
+knob-sweep deployment and `sweep-dispatch` drop the `instance_id` parameter.
