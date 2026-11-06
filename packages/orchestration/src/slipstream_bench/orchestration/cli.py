@@ -219,8 +219,9 @@ def register_knob_sweep(
     """Register the knob-sweep deployment on the process work pool (ADR-0015).
 
     Creates the deployment the operator triggers with ``prefect deployment run
-    knob-sweep/knob-sweep --param run_id=...``. The worker runs
-    the baked orchestration image, so the entrypoint is stored as a module path resolved
+    knob-sweep/knob-sweep --params '{"run_id": "..."}'`` (``--param`` parses its value as
+    JSON, so an all-digit run id would arrive as a number). The worker runs the baked
+    orchestration image, so the entrypoint is stored as a module path resolved
     by import (``EntrypointType.MODULE_PATH``) — no source tree is fetched and no laptop
     path leaks into the deployment — and no image is built (a process worker runs the flow
     in-process from its baked image). The cluster-stable inputs become the deployment's

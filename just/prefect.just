@@ -107,17 +107,17 @@ prefect-storage-down:
       fi
     done
 
-# A sweep is then triggered with `prefect deployment run knob-sweep/knob-sweep --param
-# run_id=...` and picked up by the in-cluster worker, which opens its own bench endpoint
-# (ADR-0028). Run it after `prefect-up`; `_prefect-register` holds what registration
-# stores.
+# A sweep is then triggered with `prefect deployment run knob-sweep/knob-sweep --params
+# '{"run_id": "..."}'` and picked up by the in-cluster worker, which opens its own bench
+# endpoint (ADR-0028). Run it after `prefect-up`; `_prefect-register` holds what
+# registration stores.
 # Register the knob-sweep deployment on the process work pool.
 [group('prefect')]
 prefect-register-sweep: (_prefect-register "knob-sweep")
 
 # An A/B is then triggered with `prefect deployment run
-# kv-cache-extension-ab/kv-cache-extension-ab --param run_id=...` and picked up by the
-# in-cluster worker, which opens its own bench endpoint (ADR-0028). Run it after
+# kv-cache-extension-ab/kv-cache-extension-ab --params '{"run_id": "..."}'` and picked up
+# by the in-cluster worker, which opens its own bench endpoint (ADR-0028). Run it after
 # `prefect-up`; `_prefect-register` holds what registration stores.
 # Register the kv-cache-extension-ab deployment on the process work pool.
 [group('prefect')]
