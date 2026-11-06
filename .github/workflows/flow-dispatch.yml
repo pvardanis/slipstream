@@ -4,13 +4,14 @@
 # the self-hosted, no-public-endpoint Prefect server, so a run is kicked off from the
 # GitHub UI without a workstation's kubectl. It registers the flow's deployment (the same
 # `register-*` command `just prefect-register-sweep` or `just prefect-register-kv-ab`
-# runs), then triggers a run of it against an already-live stack. Registration overwrites
-# the deployment, so every dispatch runs with defaults resolved from the live stack and
-# main, including after a cluster-down wiped the server's SQLite. It does not stand the
-# cluster up (`just stack-up`), which stays a deliberate operator step that brackets the
-# GPU spend (ADR-0015). The run itself executes in-cluster on the worker to completion;
-# this workflow returns as soon as the run is created (no --watch), consistent with the
-# ADR's fire-and-forget trigger.
+# runs), then triggers a run of it against a live cluster: the KV cache A/B drives the
+# running bench host, and the knob sweep opens its own bench endpoint. Registration
+# overwrites the deployment, so every dispatch runs with defaults resolved from the live
+# stack and main, including after a cluster-down wiped the server's SQLite. It does not
+# stand the cluster up (`just stack-up`), which stays a deliberate operator step that
+# brackets the GPU spend (ADR-0015). The run itself executes in-cluster on the worker to
+# completion; this workflow returns as soon as the run is created (no --watch),
+# consistent with the ADR's fire-and-forget trigger.
 # Dispatch the callers from main: the OIDC role trusts only main-branch runs, and a called
 # workflow runs in its caller's context, so the caller's ref is the one the role sees.
 name: flow-dispatch
@@ -82,14 +83,14 @@ jobs:
             exit 1
           fi
 
-      # The one place a flow's names live: the orchestration CLI command that registers
-      # its deployment, the deployment's `<flow>/<deployment>` name, the deployment
-      # parameter holding the in-image path of the config the worker reads, the job
-      # summary's heading for that config, and whether the run takes a bench host
-      # instance id. The knob sweep opens and closes its own bench endpoint, so it takes
-      # none; the KV cache A/B drives the running bench host. Checked before any AWS
-      # call, so a caller naming an unknown flow, or passing an instance id to a flow
-      # that takes none, fails here.
+      # The one place a flow's names and dispatch inputs live: the orchestration CLI
+      # command that registers its deployment, the deployment's `<flow>/<deployment>`
+      # name, the deployment parameter holding the in-image path of the config the
+      # worker reads, the job summary's heading for that config, and whether the run
+      # takes a bench host instance id. The knob sweep opens and closes its own bench
+      # endpoint, so it takes none; the KV cache A/B drives the running bench host.
+      # Checked before any AWS call, so a caller naming an unknown flow, or passing an
+      # instance id to a flow that takes none, fails here.
       - name: Resolve the flow's deployment
         id: flow
         env:
