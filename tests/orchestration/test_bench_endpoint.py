@@ -23,6 +23,7 @@ from slipstream_bench.orchestration.bench_endpoint import (
     TopologyError,
     build_terraform,
     open_bench_endpoint,
+    read_stack_dir,
     read_topology,
 )
 
@@ -609,3 +610,19 @@ def test_read_topology_rejects_a_list_that_is_not_strings(value: str) -> None:
 
     with pytest.raises(TopologyError, match="BENCH_ENDPOINT_PUBLIC_SUBNETS"):
         read_topology(environ)
+
+
+def test_read_stack_dir_reads_the_baked_stacks_path() -> None:
+    environ = {"BENCH_ENDPOINT_STACK_DIR": "/app/terraform/bench-endpoint"}
+
+    assert read_stack_dir(environ) == Path("/app/terraform/bench-endpoint")
+
+
+@pytest.mark.parametrize("environ", [{}, {"BENCH_ENDPOINT_STACK_DIR": ""}])
+def test_read_stack_dir_names_a_missing_or_empty_variable(
+    environ: dict[str, str],
+) -> None:
+    # An empty value would read as Path(""), the working directory, and terraform would
+    # init whatever it found there instead of the baked stack.
+    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_STACK_DIR"):
+        read_stack_dir(environ)

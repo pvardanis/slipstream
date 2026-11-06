@@ -689,3 +689,17 @@ def test_read_vllm_api_key_raises_on_an_empty_api_key(stdout: str) -> None:
     # empty key would only fail at its variable validation, after the init.
     with pytest.raises(VllmApiKeyError, match="slipstream/vllm-api-key"):
         read_vllm_api_key(_SecretKubectl(stdout))
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    # "c2st!YmVu" decodes leniently to b"sk-ben" once the "!" is dropped.
+    ["c2st!YmVu", base64.b64encode(b"\xff\xfe").decode("ascii")],
+    ids=["not-base64", "not-utf8"],
+)
+def test_read_vllm_api_key_names_the_secret_when_its_value_cannot_be_decoded(
+    stdout: str,
+) -> None:
+    # A lenient decode would drop the stray characters and hand the stack a wrong key.
+    with pytest.raises(VllmApiKeyError, match="slipstream/vllm-api-key"):
+        read_vllm_api_key(_SecretKubectl(stdout))

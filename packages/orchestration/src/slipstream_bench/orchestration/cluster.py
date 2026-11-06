@@ -3,8 +3,8 @@
 ADR-0015: the parent flow redeploys the GPU per engine point (Tier-1) then scrapes the
 concurrency ceiling from vLLM's startup log before running the point's Tier-2 ladder.
 Off-laptop, both run from the EKS worker over ``kubectl`` against the in-cluster API,
-under a ServiceAccount whose RBAC (``terraform/eks/worker.tf``) grants only get/patch on
-``deploy/vllm-gpu`` and reads of its rollout and pod logs — nothing wider. So the
+under a ServiceAccount whose redeploy grant (``terraform/eks/worker.tf``) is only get/patch
+on ``deploy/vllm-gpu`` and reads of its rollout and pod logs — nothing wider. So the
 redeploy applies **only** the Deployment document (a get + patch the RBAC allows), never
 the manifest's Namespace or Service (which it has no permission to touch and which the
 operator's ``just gpu-deploy`` created once at stack-up).
@@ -20,12 +20,14 @@ switch and a restart stamp on the pod template, and scrapes the GPU KV pool size
 set; that scrape raises :class:`KvPoolScrapeError` when the engine reported none.
 
 The bench endpoint publishes the vLLM api-key to its bench host, so the flow that applies
-it reads the key from its Secret first; an empty key raises :class:`VllmApiKeyError`.
+it reads the key from its Secret first, under a separate get on that one Secret
+(``terraform/eks/worker_bench_endpoint.tf``); an empty key raises :class:`VllmApiKeyError`.
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
 import re
 import subprocess
 from collections.abc import Callable, Sequence
@@ -401,7 +403,10 @@ def read_vllm_api_key(kubectl: Kubectl, *, namespace: str = _NAMESPACE) -> str:
     :param kubectl: the transport the Secret read is issued through.
     :param namespace: the namespace the Secret lives in.
     :return: the decoded api-key.
-    :raise VllmApiKeyError: when the Secret's api-key field is absent or blank.
+    :raise VllmApiKeyError: when the Secret's api-key field is absent, blank, or not
+        base64-encoded UTF-8.
+    :raise KubectlError: from the production transport, when the Secret is missing or the
+        read is denied.
     """
     encoded = kubectl(
         [
@@ -415,10 +420,16 @@ def read_vllm_api_key(kubectl: Kubectl, *, namespace: str = _NAMESPACE) -> str:
         ],
         None,
     )
-    api_key = base64.b64decode(encoded).decode("utf-8")
+    secret = f"{namespace}/{_API_KEY_SECRET}"
+    try:
+        api_key = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as error:
+        raise VllmApiKeyError(
+            f"Secret {secret} {_API_KEY_FIELD} value is not base64-encoded UTF-8: {error}"
+        ) from error
     if not api_key.strip():
         raise VllmApiKeyError(
-            f"Secret {namespace}/{_API_KEY_SECRET} holds no {_API_KEY_FIELD} value; "
+            f"Secret {secret} holds no {_API_KEY_FIELD} value; "
             f"`just gpu-deploy` creates it"
         )
     return api_key

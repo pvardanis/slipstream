@@ -17,7 +17,7 @@ deployment registers: it builds the real collaborators inside the flow and drive
 so only serializable parameters cross the flow boundary. The loop runs inside the flow's own
 bench endpoint (:func:`slipstream_bench.orchestration.bench_endpoint.open_bench_endpoint`),
 applied from the worker's environment once the run's inputs are checked and destroyed
-before the render, so every cell runs on the bench host that session booted. Each point
+before the render, so every cell runs on the bench host that endpoint booted. Each point
 sweep runs nested under that one parent flow run, so the point sweeps of a knob sweep share
 a parent->child lineage in the Prefect UI, and the parent run is tagged ``run=<run-id>`` to
 join the same ``run=`` filter its point sweeps group under.
@@ -47,6 +47,7 @@ from slipstream_bench.orchestration.bench_endpoint import (
     BenchHost,
     build_terraform,
     open_bench_endpoint,
+    read_stack_dir,
     read_topology,
 )
 from slipstream_bench.orchestration.cell_objects import get_knob_sweep_prefix
@@ -84,9 +85,6 @@ from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
-
-# The environment variable the orchestration image names its baked bench-endpoint stack by.
-_STACK_DIR_ENV = "BENCH_ENDPOINT_STACK_DIR"
 
 # The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
@@ -453,7 +451,7 @@ def _open_bench_endpoint(
     return open_bench_endpoint(
         terraform=build_terraform(),
         s3_client=s3_client,
-        stack_dir=Path(os.environ[_STACK_DIR_ENV]),
+        stack_dir=read_stack_dir(os.environ),
         topology=read_topology(os.environ),
         api_key=read_vllm_api_key(kubectl),
         results_bucket=bucket,

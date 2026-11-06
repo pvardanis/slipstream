@@ -37,6 +37,7 @@ from slipstream_bench.orchestration import storage as storage_module
 from slipstream_bench.orchestration.bench_endpoint import (
     BenchEndpointTopology,
     BenchHost,
+    TopologyError,
 )
 from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import CeilingScrapeError
@@ -1183,3 +1184,22 @@ def test_knob_sweep_rejects_an_instance_id_option(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "No such option: --instance-id" in _plain(result.output)
+
+
+@pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
+def test_knob_sweep_flow_names_a_missing_stack_dir_before_the_bench_endpoint_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None, value: str | None
+) -> None:
+    # An empty path would read as the working directory, which terraform would init
+    # instead of the baked stack.
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    captures = _stub_transports(monkeypatch)
+    if value is None:
+        monkeypatch.delenv("BENCH_ENDPOINT_STACK_DIR")
+    else:
+        monkeypatch.setenv("BENCH_ENDPOINT_STACK_DIR", value)
+
+    with pytest.raises(TopologyError, match="BENCH_ENDPOINT_STACK_DIR"):
+        _run_flow(model_yaml, grid_yaml, manifest)
+
+    assert captures["sessions"] == []
