@@ -1,14 +1,26 @@
-"""Set up a parent flow run: surface the core's milestone logs and tag the run's group.
+"""Set up a parent flow run: milestone logs, the run's group tag, and its bench endpoint.
 
-The knob sweep and the KV cache offload A/B call both at their composition roots, so the
-Prefect-free core's INFO milestones reach the UI and the run joins the ``run=<run-id>``
-filter.
+The knob sweep and the KV cache offload A/B call all three at their composition roots, so
+the Prefect-free core's INFO milestones reach the UI, the run joins the ``run=<run-id>``
+filter, and its cells run on a bench endpoint opened from the worker's environment.
 """
 
 import logging
+import os
+from contextlib import AbstractContextManager
+from typing import Any
 
 from prefect.client.orchestration import get_client
 from prefect.runtime import flow_run
+
+from slipstream_bench.orchestration.bench_endpoint import (
+    BenchHost,
+    build_terraform,
+    open_bench_endpoint,
+    read_stack_dir,
+    read_topology,
+)
+from slipstream_bench.orchestration.cluster import Kubectl, read_vllm_api_key
 
 # The package whose stdlib loggers carry the Prefect-free core's milestone lines. The
 # image's PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench attaches a handler to this logger
@@ -44,3 +56,29 @@ def tag_run_with_group(run_id: str) -> None:
         return
     with get_client(sync_client=True) as client:
         client.update_flow_run(flow_run_id, tags=set(flow_run.tags) | {f"run={run_id}"})
+
+
+def open_run_bench_endpoint(
+    *, kubectl: Kubectl, s3_client: Any, bucket: str
+) -> AbstractContextManager[BenchHost]:
+    """Open the run's bench endpoint from the worker's environment.
+
+    The topology and the baked stack's path come from the worker's environment, the vLLM
+    api-key from its cluster Secret, and the bench host reports its boot to the results
+    bucket the cells write to.
+
+    :param kubectl: the transport the api-key Secret is read through.
+    :param s3_client: the boto3 S3 client the boot sentinel is read with.
+    :param bucket: the results bucket the bench host reports its boot to.
+    :return: the session, which yields the bench host and destroys the endpoint on exit.
+    :raise BenchEndpointEnvironmentError: when the worker's environment lacks a
+        ``BENCH_ENDPOINT_*`` variable the apply needs.
+    """
+    return open_bench_endpoint(
+        terraform=build_terraform(),
+        s3_client=s3_client,
+        stack_dir=read_stack_dir(os.environ),
+        topology=read_topology(os.environ),
+        api_key=read_vllm_api_key(kubectl),
+        results_bucket=bucket,
+    )
