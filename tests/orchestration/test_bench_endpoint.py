@@ -15,6 +15,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from slipstream_bench.orchestration.bench_endpoint import (
+    BenchEndpointInUseError,
     BenchEndpointTopology,
     BenchHost,
     BenchHostBootError,
@@ -37,16 +38,28 @@ _TOPOLOGY = BenchEndpointTopology(
 )
 
 
+# `terraform show -json` on a backend holding no state, and on one holding a resource.
+_EMPTY_STATE = '{"format_version":"1.0"}\n'
+_HELD_STATE = (
+    '{"format_version":"1.0","values":{"root_module":{"resources":'
+    '[{"address":"aws_lb.bench","mode":"managed"}]}}}\n'
+)
+
+
 class _FakeTerraform:
     """A scripted Terraform: records every call and answers ``output`` with an instance id.
 
     ``fail_on`` names a subcommand (``init``, ``apply``, ``destroy``) that raises instead of
-    succeeding, standing in for a non-zero exit.
+    succeeding, standing in for a non-zero exit. ``show`` answers with the state the backend
+    already holds: none by default, or ``existing_state``.
     """
 
-    def __init__(self, *, fail_on: str | None = None) -> None:
+    def __init__(
+        self, *, fail_on: str | None = None, existing_state: str = _EMPTY_STATE
+    ) -> None:
         self.calls: list[tuple[list[str], dict[str, str]]] = []
         self._fail_on = fail_on
+        self._existing_state = existing_state
 
     def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> str:
         self.calls.append((list(args), dict(env)))
@@ -55,6 +68,8 @@ class _FakeTerraform:
             raise RuntimeError(f"terraform {subcommand} failed")
         if subcommand == "output":
             return f"{_INSTANCE_ID}\n"
+        if subcommand == "show":
+            return self._existing_state
         return ""
 
     def subcommands(self) -> list[str]:
@@ -70,7 +85,8 @@ class _FakeS3:
     """Serve a scripted sequence of boot sentinels, one per ``get_object``.
 
     ``None`` stands for the sentinel not written yet (S3's NoSuchKey); the last entry repeats
-    if polled past the script. The keys read are recorded.
+    if polled past the script. Each body ends in the newline the host's ``<<<`` here-string
+    writes (``user-data.sh.tftpl``). The keys read are recorded.
     """
 
     def __init__(self, sentinels: list[str | None]) -> None:
@@ -86,7 +102,7 @@ class _FakeS3:
             raise ClientError(
                 {"Error": {"Code": "NoSuchKey", "Message": "absent"}}, "GetObject"
             )
-        return {"Body": io.BytesIO(sentinel.encode())}
+        return {"Body": io.BytesIO(f"{sentinel}\n".encode())}
 
 
 @pytest.fixture
@@ -104,16 +120,17 @@ def _open(
     *,
     boot_timeout_s: float = 420.0,
     now: Callable[[], float] = lambda: 0.0,
+    sleep: Callable[[float], None] = lambda _s: None,
 ):
     return open_bench_endpoint(
         terraform=terraform,
-        s3=s3,
+        s3_client=s3,
         stack_dir=stack_dir,
         topology=_TOPOLOGY,
         api_key="sk-secret-key",
         results_bucket="bench-results-x1",
         boot_timeout_s=boot_timeout_s,
-        sleep=lambda _s: None,
+        sleep=sleep,
         now=now,
     )
 
@@ -127,7 +144,7 @@ def test_session_yields_the_bench_host_and_destroys_after_the_body(
         assert host == BenchHost(instance_id=_INSTANCE_ID)
         assert "destroy" not in terraform.subcommands()
 
-    assert terraform.subcommands() == ["init", "apply", "output", "destroy"]
+    assert terraform.subcommands() == ["init", "show", "apply", "output", "destroy"]
 
 
 def test_session_destroys_after_a_raising_body(stack_dir: Path) -> None:
@@ -152,7 +169,7 @@ def test_session_destroys_after_a_failed_apply(stack_dir: Path) -> None:
     ):
         pytest.fail("the body must not run after a failed apply")
 
-    assert terraform.subcommands() == ["init", "apply", "destroy"]
+    assert terraform.subcommands() == ["init", "show", "apply", "destroy"]
 
 
 def test_session_does_not_destroy_after_a_failed_init(stack_dir: Path) -> None:
@@ -185,6 +202,73 @@ def test_failed_destroy_after_a_raising_body_keeps_the_body_error_as_context(
     assert isinstance(excinfo.value.__context__, ValueError)
 
 
+def test_failed_destroy_after_a_failed_apply_keeps_the_apply_error_as_context(
+    stack_dir: Path,
+) -> None:
+    class _ApplyAndDestroyFail(_FakeTerraform):
+        def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> str:
+            if _subcommand(args) == "apply":
+                self.calls.append((list(args), dict(env)))
+                raise ValueError("terraform apply failed")
+            return super().__call__(args, env)
+
+    terraform = _ApplyAndDestroyFail(fail_on="destroy")
+
+    with (
+        pytest.raises(RuntimeError, match="destroy failed") as excinfo,
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pytest.fail("the body must not run after a failed apply")
+
+    assert isinstance(excinfo.value.__context__, ValueError)
+
+
+def test_failed_destroy_names_the_state_left_behind(stack_dir: Path) -> None:
+    # A failed destroy leaves the endpoint billing; its error names where the state lives
+    # so the operator can destroy from it.
+    terraform = _FakeTerraform(fail_on="destroy")
+
+    with (
+        pytest.raises(RuntimeError) as excinfo,
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pass
+
+    notes = "\n".join(getattr(excinfo.value, "__notes__", []))
+    assert "may still be billing" in notes
+    assert "s3://slipstream-tfstate-x1/bench-endpoint/terraform.tfstate" in notes
+
+
+def test_session_refuses_a_backend_that_already_holds_an_endpoint(
+    stack_dir: Path,
+) -> None:
+    # The state key is shared with `just bench-endpoint-up` and every other run, so an
+    # endpoint already in it belongs to someone else: applying would adopt it and the exit
+    # would destroy it under them. The session raises without applying or destroying.
+    terraform = _FakeTerraform(existing_state=_HELD_STATE)
+
+    with (
+        pytest.raises(
+            BenchEndpointInUseError,
+            match="s3://slipstream-tfstate-x1/bench-endpoint/terraform.tfstate",
+        ),
+        _open(terraform, _FakeS3(["ok"]), stack_dir),
+    ):
+        pytest.fail("the body must not run against another run's endpoint")
+
+    assert terraform.subcommands() == ["init", "show"]
+
+
+def test_terraform_output_carries_no_colour_codes(stack_dir: Path) -> None:
+    # Terraform's output lands in the flow's logs and error messages, so ANSI colour is off.
+    terraform = _FakeTerraform()
+
+    with _open(terraform, _FakeS3(["ok"]), stack_dir):
+        pass
+
+    assert all("-no-color" in args for args, _env in terraform.calls)
+
+
 _EXPECTED_VARIABLES = {
     "TF_VAR_state_bucket": "slipstream-tfstate-x1",
     "TF_VAR_vpc_id": "vpc-1",
@@ -204,13 +288,18 @@ def test_topology_and_api_key_reach_apply_and_destroy_as_variables(
     with _open(terraform, _FakeS3(["ok"]), stack_dir):
         pass
 
-    for args, env in terraform.calls:
-        if _subcommand(args) in {"apply", "destroy"}:
-            assert env == _EXPECTED_VARIABLES, args
+    envs = [
+        env
+        for args, env in terraform.calls
+        if _subcommand(args) in {"apply", "destroy"}
+    ]
+    assert len(envs) == 2
+    assert all(env == _EXPECTED_VARIABLES for env in envs)
 
 
 def test_api_key_never_appears_in_terraform_argv(stack_dir: Path) -> None:
-    # argv is visible to every process on the node through ps; the environment is not.
+    # argv is readable by any process that can see the terraform process (ps,
+    # /proc/<pid>/cmdline); the environment only by the same user or root.
     terraform = _FakeTerraform()
 
     with _open(terraform, _FakeS3(["ok"]), stack_dir):
@@ -233,6 +322,8 @@ def test_init_points_the_backend_at_the_state_bucket_without_prompting(
     assert _subcommand(init_args) == "init"
     assert "-backend-config=bucket=slipstream-tfstate-x1" in init_args
     assert "-input=false" in init_args
+    # The image bakes the providers the lock file pins; init must not rewrite it.
+    assert "-lockfile=readonly" in init_args
 
 
 def test_apply_and_destroy_run_unattended(stack_dir: Path) -> None:
@@ -241,9 +332,13 @@ def test_apply_and_destroy_run_unattended(stack_dir: Path) -> None:
     with _open(terraform, _FakeS3(["ok"]), stack_dir):
         pass
 
-    for args, _env in terraform.calls:
-        if _subcommand(args) in {"apply", "destroy"}:
-            assert {"-auto-approve", "-input=false"} <= set(args), args
+    unattended = [
+        args
+        for args, _env in terraform.calls
+        if _subcommand(args) in {"apply", "destroy"}
+    ]
+    assert len(unattended) == 2
+    assert all({"-auto-approve", "-input=false"} <= set(args) for args in unattended)
 
 
 def test_session_reads_the_bench_host_instance_id_output(stack_dir: Path) -> None:
@@ -268,11 +363,13 @@ def test_terraform_runs_in_a_writable_copy_of_the_stack(stack_dir: Path) -> None
         assert workdir != stack_dir
         assert (workdir / "main.tf").read_text(encoding="utf-8") == "# stack\n"
         seen.append(workdir)
-        return f"{_INSTANCE_ID}\n" if _subcommand(args) == "output" else ""
+        return {"output": f"{_INSTANCE_ID}\n", "show": _EMPTY_STATE}.get(
+            _subcommand(args), ""
+        )
 
     with open_bench_endpoint(
         terraform=terraform,
-        s3=_FakeS3(["ok"]),
+        s3_client=_FakeS3(["ok"]),
         stack_dir=stack_dir,
         topology=_TOPOLOGY,
         api_key="sk-secret-key",
@@ -307,7 +404,13 @@ def test_failed_sentinel_raises_with_the_step_and_destroys(stack_dir: Path) -> N
 
     with (
         pytest.raises(BenchHostBootError, match="failed: pull bench image"),
-        _open(terraform, _FakeS3([None, "failed: pull bench image"]), stack_dir),
+        _open(
+            terraform,
+            _FakeS3(
+                [None, "failed: pull bench image; see /var/log/cloud-init-output.log"]
+            ),
+            stack_dir,
+        ),
     ):
         pytest.fail("the body must not run on a host that failed to boot")
 
@@ -316,12 +419,43 @@ def test_failed_sentinel_raises_with_the_step_and_destroys(stack_dir: Path) -> N
 
 def test_sentinel_timeout_raises_and_destroys(stack_dir: Path) -> None:
     terraform = _FakeTerraform()
+    s3 = _FakeS3([None])
+    sleeps: list[float] = []
 
     with (
         pytest.raises(BenchHostBootError, match="did not report ready within 420s"),
-        _open(terraform, _FakeS3([None]), stack_dir, now=_ticking_clock(step_s=60.0)),
+        _open(
+            terraform,
+            s3,
+            stack_dir,
+            now=_ticking_clock(step_s=60.0),
+            sleep=sleeps.append,
+        ),
     ):
         pytest.fail("the body must not run on a host that never booted")
+
+    # The deadline is set at t=0 and each poll then reads the clock 60s on, so the seventh
+    # poll sees t=420 and raises: seven reads, the poll interval slept between them.
+    assert len(s3.reads) == 7
+    assert sleeps == [5.0] * 6
+    assert terraform.subcommands()[-1] == "destroy"
+
+
+def test_unrecognised_sentinel_raises_at_once_and_destroys(stack_dir: Path) -> None:
+    # The host writes "ok" or "failed: ..." in one put; any other text will not change, so
+    # it raises rather than polling to the timeout.
+    terraform = _FakeTerraform()
+
+    with (
+        pytest.raises(BenchHostBootError, match="unrecognised boot status 'booting'"),
+        _open(
+            terraform,
+            _FakeS3(["booting"]),
+            stack_dir,
+            sleep=lambda _s: pytest.fail("an unrecognised status must not be retried"),
+        ),
+    ):
+        pytest.fail("the body must not run")
 
     assert terraform.subcommands()[-1] == "destroy"
 
@@ -341,7 +475,7 @@ def test_unreadable_sentinel_raises_at_once_and_destroys(stack_dir: Path) -> Non
         pytest.raises(ClientError, match="AccessDenied"),
         open_bench_endpoint(
             terraform=terraform,
-            s3=_DeniedS3(),
+            s3_client=_DeniedS3(),
             stack_dir=stack_dir,
             topology=_TOPOLOGY,
             api_key="sk-secret-key",
@@ -359,13 +493,13 @@ def test_empty_instance_id_output_raises_and_destroys(stack_dir: Path) -> None:
 
     def terraform(args: Sequence[str], env: Mapping[str, str]) -> str:
         calls.append(_subcommand(args))
-        return ""
+        return _EMPTY_STATE if _subcommand(args) == "show" else ""
 
     with (
         pytest.raises(BenchHostBootError, match="bench_host_instance_id"),
         open_bench_endpoint(
             terraform=terraform,
-            s3=_FakeS3(["ok"]),
+            s3_client=_FakeS3(["ok"]),
             stack_dir=stack_dir,
             topology=_TOPOLOGY,
             api_key="sk-secret-key",
@@ -397,6 +531,18 @@ def test_build_terraform_keeps_the_worker_environment(
 
     assert run(["-c", 'printf %s "$TF_CLI_CONFIG_FILE"'], {"TF_VAR_x": "1"}) == (
         "/opt/terraform/provider-mirror.tfrc"
+    )
+
+
+def test_build_terraform_stack_variables_override_the_worker_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A stray TF_VAR_* on the worker must not override the value the session passes.
+    monkeypatch.setenv("TF_VAR_vpc_id", "vpc-worker")
+    run = build_terraform(binary="sh")
+
+    assert run(["-c", 'printf %s "$TF_VAR_vpc_id"'], {"TF_VAR_vpc_id": "vpc-1"}) == (
+        "vpc-1"
     )
 
 
@@ -458,7 +604,7 @@ def test_read_topology_names_an_empty_variable() -> None:
 @pytest.mark.parametrize("value", ["subnet-a", '{"a": 1}', "[1, 2]", "[]"])
 def test_read_topology_rejects_a_list_that_is_not_strings(value: str) -> None:
     # An empty list would launch the load balancer into no subnet; the apply would fail
-    # minutes in, so the session refuses it before applying.
+    # minutes in, so read_topology refuses it before any apply.
     environ = {**_WORKER_ENV, "BENCH_ENDPOINT_PUBLIC_SUBNETS": value}
 
     with pytest.raises(TopologyError, match="BENCH_ENDPOINT_PUBLIC_SUBNETS"):

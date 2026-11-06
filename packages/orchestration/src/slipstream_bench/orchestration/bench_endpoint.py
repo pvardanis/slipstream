@@ -6,8 +6,8 @@ the bench host, and destroys the stack on the way out. Once the apply starts, th
 runs whatever happens next — a failed apply, a host that never boots, a raising body — so a
 run never leaves the endpoint billing.
 
-The module imports no Prefect: the knob sweep's flow opens the session around its core, and
-its tests drive it against a fake :data:`Terraform` and a fake S3 client. Terraform runs in a
+The module imports no Prefect, so a flow can open the session around its work and its tests
+drive it against a fake :data:`Terraform` and a fake S3 client. Terraform runs in a
 writable copy of the stack, because the orchestration image bakes the stack on a read-only
 root where terraform cannot write ``.terraform``.
 """
@@ -66,7 +66,8 @@ def build_terraform(*, binary: str = "terraform") -> Terraform:
 
 
 # The host writes boot-status/<instance-id> to the results bucket when cloud-init ends:
-# "ok", or "failed: <step>". Until then the key is absent, which S3 reports as NoSuchKey.
+# "ok", or "failed: <step>; see <log>". Until then the key is absent, which S3 reports as
+# NoSuchKey.
 _BOOT_STATUS_PREFIX = "boot-status"
 _BOOT_OK = "ok"
 _BOOT_FAILED_PREFIX = "failed:"
@@ -74,9 +75,17 @@ _NOT_WRITTEN_YET = "NoSuchKey"
 
 _INSTANCE_ID_OUTPUT = "bench_host_instance_id"
 
+# The stack's state key, fixed in terraform/bench-endpoint/backend.tf; named in errors so an
+# operator can find the state a run left behind.
+_STATE_KEY = "bench-endpoint/terraform.tfstate"
+
 
 class BenchHostBootError(Exception):
     """The bench host failed to boot, never reported ready, or was not created."""
+
+
+class BenchEndpointInUseError(Exception):
+    """The bench-endpoint state already holds an endpoint this session did not create."""
 
 
 @dataclass(frozen=True)
@@ -158,7 +167,7 @@ class BenchHost:
 def open_bench_endpoint(
     *,
     terraform: Terraform,
-    s3: Any,
+    s3_client: Any,
     stack_dir: Path,
     topology: BenchEndpointTopology,
     api_key: str,
@@ -170,13 +179,17 @@ def open_bench_endpoint(
 ) -> Iterator[BenchHost]:
     """Apply the bench-endpoint stack, yield its bench host, and destroy the stack on exit.
 
-    init runs before the destroy is armed: it changes no infrastructure, and a destroy
-    without an initialised backend would fail too. Every later step is followed by the
-    destroy. A failed destroy is the error raised, since it leaves resources billing; a
-    body or apply failure before it stays on it as ``__context__``.
+    The destroy is armed only once the session knows the state is its own. init changes
+    no infrastructure, and a destroy without an initialised backend would fail too. The
+    state key is shared with ``just bench-endpoint-up`` and every other run, so a state
+    that already holds resources belongs to another endpoint: applying would adopt it and
+    the exit would destroy it under its owner, so the session raises instead. Every later
+    step is followed by the destroy. A failed destroy is the error raised, noted with the
+    state left behind, since it leaves resources billing; any earlier failure stays on it
+    as ``__context__``.
 
     :param terraform: the terraform transport (see :func:`build_terraform`).
-    :param s3: a boto3 S3 client (or a stand-in exposing ``get_object``), read for the
+    :param s3_client: a boto3 S3 client (or a stand-in exposing ``get_object``), read for the
         host's boot sentinel.
     :param stack_dir: the bench-endpoint stack to apply, copied before terraform runs.
     :param topology: the cluster network and state bucket the stack applies against.
@@ -189,11 +202,14 @@ def open_bench_endpoint(
     :return: a context manager yielding the booted :class:`BenchHost`.
     :raise TerraformError: when a terraform command exits non-zero (from the production
         transport).
+    :raise BenchEndpointInUseError: when the state already holds resources.
     :raise BenchHostBootError: when the apply yields no instance id, or the host reports a
-        failed boot or none within ``boot_timeout_s``.
+        failed or unrecognised boot status, or none within ``boot_timeout_s``.
     :raise ClientError: when the sentinel read fails for a reason other than its absence.
     """
-    with tempfile.TemporaryDirectory() as workdir:
+    # The state is remote, so a temporary copy that fails to clean up loses nothing, and
+    # its cleanup error must not replace a destroy failure.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as workdir:
         shutil.copytree(stack_dir, workdir, dirs_exist_ok=True)
         chdir = f"-chdir={workdir}"
         env = _get_stack_variables(topology, api_key=api_key)
@@ -202,22 +218,26 @@ def open_bench_endpoint(
                 chdir,
                 "init",
                 "-input=false",
+                "-no-color",
                 "-lockfile=readonly",
                 f"-backend-config=bucket={topology.state_bucket}",
             ],
             env,
         )
+        _refuse_held_state(terraform, chdir=chdir, env=env, topology=topology)
         try:
-            terraform([chdir, "apply", "-auto-approve", "-input=false"], env)
+            terraform(
+                [chdir, "apply", "-auto-approve", "-input=false", "-no-color"], env
+            )
             instance_id = terraform(
-                [chdir, "output", "-raw", _INSTANCE_ID_OUTPUT], env
+                [chdir, "output", "-no-color", "-raw", _INSTANCE_ID_OUTPUT], env
             ).strip()
             if not instance_id:
                 raise BenchHostBootError(
                     f"terraform output {_INSTANCE_ID_OUTPUT} is empty after apply"
                 )
             _wait_for_boot(
-                s3,
+                s3_client,
                 bucket=results_bucket,
                 instance_id=instance_id,
                 timeout_s=boot_timeout_s,
@@ -227,7 +247,53 @@ def open_bench_endpoint(
             )
             yield BenchHost(instance_id=instance_id)
         finally:
-            terraform([chdir, "destroy", "-auto-approve", "-input=false"], env)
+            _destroy(terraform, chdir=chdir, env=env, topology=topology)
+
+
+def _get_state_url(topology: BenchEndpointTopology) -> str:
+    return f"s3://{topology.state_bucket}/{_STATE_KEY}"
+
+
+def _refuse_held_state(
+    terraform: Terraform,
+    *,
+    chdir: str,
+    env: Mapping[str, str],
+    topology: BenchEndpointTopology,
+) -> None:
+    """Raise when the backend's state already holds resources.
+
+    ``show -json`` on an empty state carries no ``values``; once anything is applied it
+    lists the resources under ``values.root_module``. Its stdout carries state values,
+    sensitive ones included, so it is parsed here and never logged.
+
+    :raise BenchEndpointInUseError: naming the state when it holds any resource.
+    """
+    state = json.loads(terraform([chdir, "show", "-json", "-no-color"], env))
+    root_module = state.get("values", {}).get("root_module", {})
+    if root_module.get("resources") or root_module.get("child_modules"):
+        raise BenchEndpointInUseError(
+            f"{_get_state_url(topology)} already holds a bench endpoint this run did not "
+            f"create; destroy it (`just bench-endpoint-down`) or wait for its run to end"
+        )
+
+
+def _destroy(
+    terraform: Terraform,
+    *,
+    chdir: str,
+    env: Mapping[str, str],
+    topology: BenchEndpointTopology,
+) -> None:
+    """Destroy the stack, noting on a failure where the state left behind lives."""
+    try:
+        terraform([chdir, "destroy", "-auto-approve", "-input=false", "-no-color"], env)
+    except Exception as error:
+        error.add_note(
+            f"bench-endpoint resources may still be billing; their state is "
+            f"{_get_state_url(topology)} (`just bench-endpoint-down` destroys from it)"
+        )
+        raise
 
 
 def _get_stack_variables(
@@ -236,7 +302,8 @@ def _get_stack_variables(
     """Map the topology and api-key onto the stack's variables as ``TF_VAR_*`` environment.
 
     Every variable travels in the environment rather than as ``-var`` so the api-key never
-    lands in the terraform argv, which any process on the node can read. Terraform parses
+    lands in the terraform argv, which any process that can see the terraform process can
+    read. Terraform parses
     a list variable's environment value as HCL, which a JSON list is.
     """
     return {
@@ -253,7 +320,7 @@ def _get_stack_variables(
 
 
 def _wait_for_boot(
-    s3: Any,
+    s3_client: Any,
     *,
     bucket: str,
     instance_id: str,
@@ -264,30 +331,35 @@ def _wait_for_boot(
 ) -> None:
     """Poll the host's boot sentinel until it reports ``ok``.
 
-    :raise BenchHostBootError: on a ``failed: <step>`` sentinel, or when none reports ready
-        within ``timeout_s``.
+    :raise BenchHostBootError: on a ``failed: <step>`` sentinel or any other text but
+        ``ok`` (the host writes it in one put, so it will not change), or when none reports
+        ready within ``timeout_s``.
     :raise ClientError: on any S3 read failure other than the sentinel not written yet.
     """
     key = f"{_BOOT_STATUS_PREFIX}/{instance_id}"
     deadline = now() + timeout_s
     while True:
-        status = _read_sentinel(s3, bucket=bucket, key=key)
+        status = _read_sentinel(s3_client, bucket=bucket, key=key)
         if status == _BOOT_OK:
             return
         if status is not None and status.startswith(_BOOT_FAILED_PREFIX):
             raise BenchHostBootError(f"bench host {instance_id} boot {status}")
+        if status is not None:
+            raise BenchHostBootError(
+                f"bench host {instance_id} wrote an unrecognised boot status {status!r}"
+            )
         if now() >= deadline:
             raise BenchHostBootError(
                 f"bench host {instance_id} did not report ready within "
-                f"{timeout_s:.0f}s (last: {status or '<no sentinel yet>'!r})"
+                f"{timeout_s:.0f}s (no sentinel at s3://{bucket}/{key})"
             )
         sleep(poll_interval_s)
 
 
-def _read_sentinel(s3: Any, *, bucket: str, key: str) -> str | None:
+def _read_sentinel(s3_client: Any, *, bucket: str, key: str) -> str | None:
     """Return the sentinel's text, or None while the host has not written it yet."""
     try:
-        response = s3.get_object(Bucket=bucket, Key=key)
+        response = s3_client.get_object(Bucket=bucket, Key=key)
     except ClientError as error:
         if error.response.get("Error", {}).get("Code") == _NOT_WRITTEN_YET:
             return None

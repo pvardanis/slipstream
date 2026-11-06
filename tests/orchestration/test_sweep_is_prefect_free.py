@@ -5,10 +5,10 @@ ADR-0017): the bench-client image installs a Prefect-free path, and the ``contra
 depends on no framework and no other member. This walks every source file of each package in
 ``BOUNDARY_RULES`` (or a module rule's one file) and fails on any static ``import`` that
 breaches the rule — a root the rule forbids, or (when the rule names an ``allowed`` set) any
-root outside it — a fast, precise check that names the offending file. It sees only static ``import`` statements in a package's
-own files, not dynamic imports or the transitive closure through other packages;
-``test_import_contract`` covers that whole closure by importing each package with its
-forbidden roots blocked.
+root outside it — a fast, precise check that names the offending file. It sees only static
+``import`` statements in a package's own files, not dynamic imports or the transitive closure
+through other packages; ``test_import_contract`` covers that whole closure by importing each
+package with its forbidden roots blocked.
 """
 
 import ast
