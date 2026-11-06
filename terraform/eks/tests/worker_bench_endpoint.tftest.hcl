@@ -83,12 +83,13 @@ run "worker_bench_endpoint_rights" {
   # than slipping past the per-statement checks below, which only pin what is there. Sids
   # are unique, so no check below can be satisfied by one copy while a second widens.
   assert {
-    condition = length(jsondecode(aws_iam_role_policy.prefect_worker_bench_endpoint.policy).Statement) == 22 && toset([for s in jsondecode(aws_iam_role_policy.prefect_worker_bench_endpoint.policy).Statement : s.Sid]) == toset([
+    condition = length(jsondecode(aws_iam_role_policy.prefect_worker_bench_endpoint.policy).Statement) == 23 && toset([for s in jsondecode(aws_iam_role_policy.prefect_worker_bench_endpoint.policy).Statement : s.Sid]) == toset([
       "BenchHostPassRole",
       "BenchEndpointRead",
       "BenchEndpointAmiParameter",
       "BenchEndpointState",
       "BenchEndpointStateLock",
+      "BenchEndpointErroredState",
       "BootstrapStateRead",
       "BenchEndpointStateList",
       "BenchEndpointLaunch",
@@ -213,7 +214,7 @@ run "worker_bench_endpoint_rights" {
             for r in try(tolist(s.Resource), [s.Resource]) : anytrue([
               for p in [
                 "^arn:aws:ssm:eu-west-1::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64$",
-                "^arn:aws:s3:::slipstream-tfstate-abc123(/bench-endpoint/terraform\\.tfstate(\\.tflock)?|/bootstrap/terraform\\.tfstate)?$",
+                "^arn:aws:s3:::slipstream-tfstate-abc123(/bench-endpoint/terraform\\.tfstate(\\.tflock)?|/bench-endpoint/errored/\\*|/bootstrap/terraform\\.tfstate)?$",
                 "^arn:aws:elasticloadbalancing:eu-west-1:111122223333:(loadbalancer/app|targetgroup|listener/app|truststore)/bench-\\*$",
                 "^arn:aws:secretsmanager:eu-west-1:111122223333:secret:slipstream-bench-endpoint-client-\\*$",
                 "^arn:aws:s3:::slipstream-bench-endpoint-truststore-\\*(/\\*)?$",
@@ -301,7 +302,8 @@ run "worker_bench_endpoint_rights" {
 
   # Every S3 resource across both worker policies, outside the results bucket (pinned in
   # worker.tftest.hcl), is one of these: the state bucket for listing, the bench-endpoint
-  # state key and lockfile, the bootstrap state read, and the trust-store bucket by prefix.
+  # state key and lockfile, its errored-state prefix, the bootstrap state read, and the
+  # trust-store bucket by prefix.
   # A glob over the state bucket, another key, or another bucket shows up as a mismatch.
   assert {
     condition = toset(flatten([
@@ -315,25 +317,28 @@ run "worker_bench_endpoint_rights" {
       "arn:aws:s3:::slipstream-tfstate-abc123",
       "arn:aws:s3:::slipstream-tfstate-abc123/bench-endpoint/terraform.tfstate",
       "arn:aws:s3:::slipstream-tfstate-abc123/bench-endpoint/terraform.tfstate.tflock",
+      "arn:aws:s3:::slipstream-tfstate-abc123/bench-endpoint/errored/*",
       "arn:aws:s3:::slipstream-tfstate-abc123/bootstrap/terraform.tfstate",
       "arn:aws:s3:::slipstream-bench-endpoint-truststore-*",
       "arn:aws:s3:::slipstream-bench-endpoint-truststore-*/*",
     ])
-    error_message = "S3 access outside the results bucket must be limited to the bench-endpoint state key, its lockfile, the bootstrap state read, the state bucket listing, and the trust-store bucket."
+    error_message = "S3 access outside the results bucket must be limited to the bench-endpoint state key, its lockfile, its errored-state prefix, the bootstrap state read, the state bucket listing, and the trust-store bucket."
   }
   # Each state grant's actions are exact: read/write the state, read/write/delete the
-  # lockfile, read the bootstrap state, list the bucket.
+  # lockfile, write an errored state (never read or delete one), read the bootstrap state,
+  # list the bucket.
   assert {
     condition = alltrue([
       for s in jsondecode(aws_iam_role_policy.prefect_worker_bench_endpoint.policy).Statement : (
         s.Sid == "BenchEndpointState" ? toset(try(tolist(s.Action), [s.Action])) == toset(["s3:GetObject", "s3:PutObject"]) && toset(try(tolist(s.Resource), [s.Resource])) == toset(["arn:aws:s3:::slipstream-tfstate-abc123/bench-endpoint/terraform.tfstate"]) :
         s.Sid == "BenchEndpointStateLock" ? toset(try(tolist(s.Action), [s.Action])) == toset(["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]) && toset(try(tolist(s.Resource), [s.Resource])) == toset(["arn:aws:s3:::slipstream-tfstate-abc123/bench-endpoint/terraform.tfstate.tflock"]) :
+        s.Sid == "BenchEndpointErroredState" ? toset(try(tolist(s.Action), [s.Action])) == toset(["s3:PutObject"]) && toset(try(tolist(s.Resource), [s.Resource])) == toset(["arn:aws:s3:::slipstream-tfstate-abc123/bench-endpoint/errored/*"]) :
         s.Sid == "BootstrapStateRead" ? toset(try(tolist(s.Action), [s.Action])) == toset(["s3:GetObject"]) && toset(try(tolist(s.Resource), [s.Resource])) == toset(["arn:aws:s3:::slipstream-tfstate-abc123/bootstrap/terraform.tfstate"]) :
         s.Sid == "BenchEndpointStateList" ? toset(try(tolist(s.Action), [s.Action])) == toset(["s3:ListBucket"]) && toset(try(tolist(s.Resource), [s.Resource])) == toset(["arn:aws:s3:::slipstream-tfstate-abc123"]) :
         true
       )
     ])
-    error_message = "The state grants must be exactly: read/write the bench-endpoint state, read/write/delete its lockfile, read the bootstrap state, list the bucket."
+    error_message = "The state grants must be exactly: read/write the bench-endpoint state, read/write/delete its lockfile, write its errored states, read the bootstrap state, list the bucket."
   }
   # The trust-store bucket is created and deleted by its name prefix.
   assert {
