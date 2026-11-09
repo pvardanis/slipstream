@@ -4,18 +4,21 @@ Prefect runs a cancelled run's hooks in the worker after killing the run's proce
 crashed run's either there or in the dying process, so the hook rebuilds everything the
 teardown needs from the run's parameters and the worker's environment. These tests call the
 hook as Prefect does, on a run carrying each flow's real parameter names, with terraform,
-kubectl, and S3 swapped for recording fakes, and check both flows register it.
+kubectl, and S3 swapped for recording fakes, check it logs its destroy or failure on the
+run, and check both flows register it.
 """
 
 import base64
 import inspect
-from collections.abc import Mapping, Sequence
+import logging
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from prefect.client.schemas.objects import FlowRun
+from prefect.settings import PREFECT_LOGGING_TO_API_ENABLED, temporary_settings
 from prefect.states import Cancelling, Crashed
 
 import slipstream_bench.orchestration.flows.run_setup as run_setup_module
@@ -53,6 +56,13 @@ class _RecordingTerraform:
 def _serve_api_key(args: Sequence[str], _stdin: str | None) -> str:
     assert "secret" in args
     return base64.b64encode(API_KEY.encode("utf-8")).decode("ascii")
+
+
+@pytest.fixture(autouse=True)
+def _keep_run_logs_local() -> Iterator[None]:
+    """Keep the hook's run log lines local, so no test sends them to a Prefect API."""
+    with temporary_settings({PREFECT_LOGGING_TO_API_ENABLED: False}):
+        yield
 
 
 @pytest.fixture
@@ -142,3 +152,54 @@ def test_both_flows_destroy_their_endpoint_on_a_crash_or_cancellation(
 ) -> None:
     assert parent_flow.on_cancellation_hooks == [destroy_run_bench_endpoint]
     assert parent_flow.on_crashed_hooks == [destroy_run_bench_endpoint]
+
+
+def _hook_messages(caplog: pytest.LogCaptureFixture) -> list[tuple[int, str]]:
+    return [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "prefect.flow_runs"
+    ]
+
+
+@pytest.mark.parametrize("parent_flow", _FLOWS)
+def test_hook_logs_the_destroy_on_the_run(
+    terraform: _RecordingTerraform,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    parent_flow: Any,
+) -> None:
+    monkeypatch.setattr(run_setup_module, "build_s3_client", lambda _region: None)
+
+    destroy_run_bench_endpoint(
+        flow=parent_flow, flow_run=_flow_run(parent_flow), state=Cancelling()
+    )
+
+    assert _hook_messages(caplog) == [
+        (logging.INFO, "destroying run run-7's bench endpoint"),
+        (logging.INFO, "destroyed run run-7's bench endpoint"),
+    ]
+
+
+@pytest.mark.parametrize("parent_flow", _FLOWS)
+def test_hook_logs_no_destroyed_line_when_the_destroy_fails(
+    terraform: _RecordingTerraform,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    parent_flow: Any,
+) -> None:
+    # Prefect logs the raised error, with the recovery its notes carry, on the run; the
+    # missing "destroyed" line is what tells the operator the endpoint may still be up.
+    terraform.errored_destroy = True
+    monkeypatch.setattr(
+        run_setup_module, "build_s3_client", lambda _region: _RecordingS3()
+    )
+
+    with pytest.raises(RuntimeError, match="failed to push"):
+        destroy_run_bench_endpoint(
+            flow=parent_flow, flow_run=_flow_run(parent_flow), state=Crashed()
+        )
+
+    assert _hook_messages(caplog) == [
+        (logging.INFO, "destroying run run-7's bench endpoint")
+    ]

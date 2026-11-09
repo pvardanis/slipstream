@@ -15,10 +15,12 @@ from typing import Any
 from prefect import Flow
 from prefect.client.orchestration import get_client
 from prefect.client.schemas.objects import FlowRun
+from prefect.logging.loggers import flow_run_logger
 from prefect.runtime import flow_run as current_flow_run
 from prefect.states import State
 
 from slipstream_bench.orchestration.bench_endpoint import (
+    HOOK_DESTROYED_LINE,
     BenchHost,
     build_terraform,
     destroy_bench_endpoint,
@@ -110,24 +112,31 @@ def destroy_run_bench_endpoint(
     process. A crashed run's run in the worker when its process exits non-zero, or in the
     dying process when the run reports the crash itself, within whatever time the process
     has left. Either way the session that opened the endpoint has exited, so the teardown
-    is rebuilt from the run's parameters and the worker's environment. Prefect logs the
-    hook's start on the run, then its success, or its failure (a held state lock, a failed
-    destroy) with the traceback.
+    is rebuilt from the run's parameters and the worker's environment. The worker runs the
+    hook in a subprocess that logs nothing when it succeeds, and the session's stdlib
+    milestones carry no run there, so the hook logs its destroy's start and end on the run
+    itself. A failure leaves no end line; Prefect logs the raised error on the run, with
+    the recovery its notes carry.
 
     Prefect's runner passes the arguments by keyword and the in-process engine passes them
     in order, so both their names and their order are fixed.
 
-    :param flow: the flow whose run ended (unused; part of the hook signature Prefect calls).
+    :param flow: the flow whose run ended, which names the run's log lines.
     :param flow_run: the run, whose ``run_id`` and ``region`` parameters the teardown uses.
-    :param state: the Cancelling or Crashed state the run entered (unused, likewise).
+    :param state: the Cancelling or Crashed state the run entered (unused; part of the hook
+        signature Prefect calls).
     :raise BenchEndpointLockedError: when another terraform run holds the state lock.
     :raise TerraformError: when the destroy fails, noted with the state left behind.
     """
+    logger = flow_run_logger(flow_run, flow)
+    run_id = flow_run.parameters["run_id"]
+    logger.info("destroying run %s's bench endpoint", run_id)
     destroy_bench_endpoint(
         terraform=build_terraform(),
         s3_client=build_s3_client(flow_run.parameters["region"]),
         stack_dir=read_stack_dir(os.environ),
         topology=read_topology(os.environ),
         api_key=read_vllm_api_key(build_kubectl()),
-        run_id=flow_run.parameters["run_id"],
+        run_id=run_id,
     )
+    logger.info(HOOK_DESTROYED_LINE, run_id)

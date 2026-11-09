@@ -270,6 +270,9 @@ def test_session_logs_that_it_left_the_endpoint_for_the_hook(
         in record.getMessage()
     )
     assert "just bench-endpoint-down" in record.getMessage()
+    # Names the line the hook logs on the run once it has destroyed the endpoint, so its
+    # absence is what calls for the recipe.
+    assert f"destroyed run {_RUN_ID}'s bench endpoint" in record.getMessage()
 
 
 def test_session_destroys_after_a_failed_apply(stack_dir: Path) -> None:

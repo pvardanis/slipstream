@@ -55,6 +55,9 @@ _LOCK_ID_PATTERN = re.compile(r"Lock Info:\s*\n\s*ID:\s*(\S+)")
 # The stack's state key, fixed in terraform/bench-endpoint/backend.tf; named in errors so an
 # operator can find the state a run left behind.
 _STATE_KEY = "bench-endpoint/terraform.tfstate"
+# The line a run's crash or cancellation hook logs on the run once it has destroyed the
+# endpoint, formatted with the run id; the session's skipped-destroy error names it.
+HOOK_DESTROYED_LINE = "destroyed run %s's bench endpoint"
 
 # Terraform writes a state it changed but could not push to errored.tfstate in its working
 # directory; the session copies it under this prefix in the state bucket, keyed by run,
@@ -229,10 +232,11 @@ def open_bench_endpoint(
                 destroy_armed = False
                 _LOGGER.error(
                     "bench endpoint not destroyed on %s; it is left for the run's crash "
-                    "or cancellation hook. If the run page shows no hook destroying it, "
-                    "destroy it from %s with `just bench-endpoint-down` (an apply cut off "
-                    "mid-way can leave resources the state never recorded)",
+                    'or cancellation hook. If the run page shows no "%s" line from '
+                    "that hook, destroy it from %s with `just bench-endpoint-down` (an "
+                    "apply cut off mid-way can leave resources the state never recorded)",
                     type(error).__name__,
+                    HOOK_DESTROYED_LINE % run_id,
                     _get_state_url(topology),
                 )
             raise
