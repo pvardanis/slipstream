@@ -26,9 +26,11 @@ A run whose destroy failed leaves the endpoint billing; its error names the stat
 body's error, if any, is chained beneath it. **A cancelled or crashed run destroys its
 endpoint from a hook.** Prefect stops a cancelled run's process, then runs the flow's
 cancellation hook in the worker, which destroys whatever the bench-endpoint state holds;
-a crash runs the same teardown. The run page logs the hook starting, then its success or
-its error. Because the hook destroys whatever the state holds, cancelling a run while an
-endpoint from `just bench-endpoint-up` is up destroys that endpoint too.
+a crash runs the same teardown. The run page shows `destroying run <run-id>'s bench
+endpoint` when the hook starts and `destroyed run <run-id>'s bench endpoint` when it is
+done. With no `destroyed` line, the endpoint may still be up: Prefect logs the hook's error
+beneath, with its recovery. Because the hook destroys whatever the state holds, cancelling
+a run while an endpoint from `just bench-endpoint-up` is up destroys that endpoint too.
 
 **A worker pod killed outright (OOM, node reaped) skips the hook,** and a run cancelled
 while its apply or destroy is running leaves the state lock held, so the hook's destroy
