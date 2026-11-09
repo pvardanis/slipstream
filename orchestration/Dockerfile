@@ -112,8 +112,8 @@ RUN site="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 # image digests follow), failing the build on any mismatch; --chmod makes it executable
 # for the arbitrary uid the prefect-worker chart runs as. amd64 to match the worker nodes.
 ADD --chmod=0755 \
-    --checksum=sha256:33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e \
-    https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl \
+    --checksum=sha256:29818b6729dc9262b692307470d0558d027725e738be5dd47c760261868a2634 \
+    https://dl.k8s.io/release/v1.36.6/bin/linux/amd64/kubectl \
     /usr/local/bin/kubectl
 
 # The Terraform CLI and the bench-endpoint stack's pre-installed providers from the terraform
