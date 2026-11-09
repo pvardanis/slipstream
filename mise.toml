@@ -10,7 +10,7 @@
 [tools]
 terraform = "1.17.1"
 tflint = "0.64.0"
-kubectl = "1.36.5"
+kubectl = "1.36.6"
 helm = "4.3.1"
 kubeconform = "0.8.0"
 promtool = "3.15.1"

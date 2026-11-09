@@ -22,6 +22,11 @@
 # profile. kubectl v1.36.6 does not link golang.org/x/text/secure/precis: the binary holds
 # no symbol from that package, so the flagged code is not in the image.
 #
+# Each line silences its CVE in every binary in the image, not only the ones named above,
+# so a Go binary added to the image (another provider, a tool) is not covered by this
+# reasoning: scan the image with no ignore file and check every finding of these CVEs
+# lands in kubectl or the tls provider before relying on the waivers.
+#
 # Drop each line once upstream kubectl (or the tls provider) ships the patched module. The
 # exp date forces the scan to fail again and this file to be revisited rather than rot
 # silently.
