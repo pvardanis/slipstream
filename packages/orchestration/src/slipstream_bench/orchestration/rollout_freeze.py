@@ -3,8 +3,9 @@
 ADR-0029: a merge to main that Argo CD synced mid-run would roll the vLLM replica or the
 worker under a knob sweep or a KV cache A/B and corrupt what it measures. So a parent
 flow holds a rollout freeze for its run: an Argo CD deny sync window on the ``workloads``
-AppProject, active from the current minute for the run's timeout, that denies manual syncs
-too. Argo CD queues what merged meanwhile and syncs it once the window is gone.
+AppProject, active from the current minute for the run's timeout. The window blocks
+automated syncs and self-heal but lets a manual sync through, so an operator can still roll
+out by hand. Argo CD queues what merged meanwhile and syncs it once the window is gone.
 
 The freeze is a port (:class:`RolloutFreeze`) the flow reaches Argo CD through, the way it
 reaches the cluster through :data:`~slipstream_bench.orchestration.cluster.Kubectl`;
@@ -25,12 +26,15 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from slipstream_bench.orchestration.cluster import Kubectl
+from slipstream_bench.orchestration.cluster import Kubectl, KubectlError
 
 # The Argo CD namespace and the AppProject the workloads' Applications belong to
 # (terraform/eks/argocd.tf); the worker's RBAC grants get and patch on that one project.
 _NAMESPACE = "argocd"
 _PROJECT = "workloads"
+
+# The command an operator removes a window left behind with.
+_EDIT_COMMAND = f"kubectl -n {_NAMESPACE} edit appproject {_PROJECT}"
 
 # The description a run's window carries, which a release matches its own window by.
 _DESCRIPTION = "slipstream rollout freeze: run={holder}"
@@ -60,14 +64,10 @@ class AppProjectFreeze:
 
     :param kubectl: the transport the AppProject is read and patched through.
     :param now: the clock the window's start is pinned to.
-    :param namespace: the namespace the AppProject lives in.
-    :param project: the AppProject whose Applications the freeze holds.
     """
 
     kubectl: Kubectl
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
-    namespace: str = _NAMESPACE
-    project: str = _PROJECT
 
     def acquire(self, holder: str, duration_s: int) -> None:
         """Add ``holder``'s deny window, active from the current UTC minute.
@@ -100,22 +100,32 @@ class AppProjectFreeze:
         before a hook released it again) is left unpatched.
 
         :param holder: the run whose window is removed.
+        :raise KubectlError: when the AppProject cannot be read or patched, noted with the
+            window left behind and the command that removes it.
         """
-        project = self._get_project()
-        windows = _get_other_windows(project, holder)
-        if len(windows) == len(_get_windows(project)):
-            return
-        self._patch_windows(project, windows)
+        try:
+            project = self._get_project()
+            windows = _get_other_windows(project, holder)
+            if len(windows) == len(_get_windows(project)):
+                return
+            self._patch_windows(project, windows)
+        except KubectlError as error:
+            error.add_note(
+                f'the "{_DESCRIPTION.format(holder=holder)}" window freezes the '
+                "workloads until it lapses; remove it with "
+                f"`{_EDIT_COMMAND}`"
+            )
+            raise
 
     def _get_project(self) -> dict[str, Any]:
         return json.loads(
             self.kubectl(
                 [
                     "-n",
-                    self.namespace,
+                    _NAMESPACE,
                     "get",
                     "appproject",
-                    self.project,
+                    _PROJECT,
                     "-o",
                     "json",
                 ],
@@ -133,10 +143,10 @@ class AppProjectFreeze:
         self.kubectl(
             [
                 "-n",
-                self.namespace,
+                _NAMESPACE,
                 "patch",
                 "appproject",
-                self.project,
+                _PROJECT,
                 "--type=merge",
                 "-p",
                 json.dumps(patch),
@@ -192,12 +202,11 @@ def hold_rollout_freeze(
             _LOGGER.error(
                 "rollout freeze not released on %s; it is left for the run's crash or "
                 'cancellation hook. If the run page shows no "%s" line from that hook, '
-                'remove the "%s" window with `kubectl -n %s edit appproject %s`',
+                'remove the "%s" window with `%s`',
                 type(error).__name__,
                 HOOK_RELEASED_LINE % holder,
                 _DESCRIPTION.format(holder=holder),
-                _NAMESPACE,
-                _PROJECT,
+                _EDIT_COMMAND,
             )
         raise
     finally:
