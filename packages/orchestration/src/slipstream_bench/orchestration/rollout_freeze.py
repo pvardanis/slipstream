@@ -73,7 +73,7 @@ class AppProjectFreeze:
         """Add ``holder``'s deny window, active from the current UTC minute.
 
         Argo CD has no one-off window, only a cron schedule and a duration, so the
-        schedule is pinned to the current minute, day and month: the window is active
+        schedule is pinned to the current minute, hour, day and month: the window is active
         at once and lasts ``duration_s``. A window the holder left behind (a run resumed
         after its process was killed before it released) is replaced, not duplicated.
 
@@ -176,12 +176,13 @@ def hold_rollout_freeze(
 ) -> Iterator[None]:
     """Acquire ``holder``'s rollout freeze, yield, and release it on exit.
 
-    The release follows a body that returns or raises an ``Exception``. A run being killed
-    (a ``BaseException`` that is not an ``Exception``, such as Prefect's termination
-    signal) skips it and leaves it to the flow's crash or cancellation hook, which
-    destroys the run's bench endpoint first: a rollout Argo CD started on a release here
-    could restart the worker under that destroy. The window's own duration lifts the
-    freeze if no hook answers.
+    The release follows a body that returns or raises an ``Exception``; when the body has
+    raised, a release that fails too is logged and the body's error is the one raised. A
+    run being killed (a ``BaseException`` that is not an ``Exception``, such as Prefect's
+    termination signal) skips it and leaves it to the flow's crash or cancellation hooks,
+    where it runs after the bench endpoint's destroy hook has returned or failed: a
+    rollout Argo CD started on a release here could restart the worker under that
+    destroy. The window's own duration lifts the freeze if no hook answers.
 
     :param freeze: the freeze to acquire and release.
     :param holder: the run the freeze is held for.
@@ -191,25 +192,32 @@ def hold_rollout_freeze(
     """
     freeze.acquire(holder, duration_s)
     _LOGGER.info("rollout freeze held for run %s (%ds)", holder, duration_s)
-    release_armed = True
     try:
         yield
-    except BaseException as error:
-        if not isinstance(error, Exception):
-            release_armed = False
-            # Logged as an error naming the recovery, since a signal no hook answers
-            # leaves the workloads frozen until the window lapses.
-            _LOGGER.error(
-                "rollout freeze not released on %s; it is left for the run's crash or "
-                'cancellation hook. If the run page shows no "%s" line from that hook, '
-                'remove the "%s" window with `%s`',
-                type(error).__name__,
-                HOOK_RELEASED_LINE % holder,
-                _DESCRIPTION.format(holder=holder),
-                _EDIT_COMMAND,
-            )
+    except Exception:
+        # The run fails for what went wrong in it, so a release that fails as well is
+        # logged beside that failure rather than raised over it.
+        try:
+            _release(freeze, holder)
+        except Exception:
+            _LOGGER.exception("rollout freeze release for run %s failed", holder)
         raise
-    finally:
-        if release_armed:
-            freeze.release(holder)
-            _LOGGER.info("rollout freeze released for run %s", holder)
+    except BaseException as error:
+        # Logged as an error naming the recovery, since a signal no hook answers leaves
+        # the workloads frozen until the window lapses.
+        _LOGGER.error(
+            "rollout freeze not released on %s; it is left for the run's crash or "
+            'cancellation hook. If the run page shows no "%s" line from that hook, '
+            'remove the "%s" window with `%s`',
+            type(error).__name__,
+            HOOK_RELEASED_LINE % holder,
+            _DESCRIPTION.format(holder=holder),
+            _EDIT_COMMAND,
+        )
+        raise
+    _release(freeze, holder)
+
+
+def _release(freeze: RolloutFreeze, holder: str) -> None:
+    freeze.release(holder)
+    _LOGGER.info("rollout freeze released for run %s", holder)

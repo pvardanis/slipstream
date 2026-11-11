@@ -19,7 +19,7 @@ from prefect.settings import PREFECT_LOGGING_TO_API_ENABLED, temporary_settings
 from prefect.states import Cancelling, Crashed
 
 import slipstream_bench.orchestration.flows.run_setup as run_setup_module
-from slipstream_bench.orchestration.cluster import Kubectl
+from slipstream_bench.orchestration.cluster import Kubectl, KubectlError
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
 from slipstream_bench.orchestration.flows.run_setup import (
     destroy_run_bench_endpoint,
@@ -87,6 +87,33 @@ def test_hook_logs_the_release_on_the_run(
         (logging.INFO, "releasing run run-7's rollout freeze"),
         (logging.INFO, "released run run-7's rollout freeze"),
     ]
+
+
+class _FailingReleaseFreeze(RecordingFreeze):
+    def release(self, holder: str) -> None:
+        raise KubectlError("kubectl patch exited 1: forbidden")
+
+
+def test_hook_logs_no_released_line_when_the_release_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Prefect logs the raised error on the run; the missing "released" line is what the
+    # session's error tells the operator to look for before removing the window by hand.
+    monkeypatch.setattr(run_setup_module, "build_kubectl", lambda: _kubectl)
+    monkeypatch.setattr(
+        run_setup_module, "build_rollout_freeze", lambda _k: _FailingReleaseFreeze()
+    )
+
+    with pytest.raises(KubectlError, match="forbidden"):
+        release_run_rollout_freeze(
+            flow=knob_sweep_flow, flow_run=_flow_run(knob_sweep_flow), state=Crashed()
+        )
+
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "prefect.flow_runs"
+    ] == ["releasing run run-7's rollout freeze"]
 
 
 def test_knob_sweep_releases_its_freeze_after_destroying_its_endpoint() -> None:
