@@ -69,6 +69,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
 from slipstream_bench.orchestration.flows.run_setup import (
     destroy_run_bench_endpoint,
     enable_milestone_logging,
+    on_run_timeout,
     open_run_bench_endpoint,
     open_run_rollout_freeze,
     release_run_rollout_freeze,
@@ -185,6 +186,10 @@ class KnobSweepInputs:
     timeout_seconds=_RUN_TIMEOUT_S,
     on_cancellation=[destroy_run_bench_endpoint, release_run_rollout_freeze],
     on_crashed=[destroy_run_bench_endpoint, release_run_rollout_freeze],
+    on_failure=[
+        on_run_timeout(destroy_run_bench_endpoint),
+        on_run_timeout(release_run_rollout_freeze),
+    ],
 )
 def knob_sweep_flow(
     *,
@@ -212,7 +217,8 @@ def knob_sweep_flow(
     vLLM api-key from the cluster Secret. After the loop, a terminal task folds the whole run
     off S3 and renders its ceiling and goodput-cliff tables to this parent run page as
     markdown artifacts (ADR-0018). Argo CD's rollouts of the workloads are frozen from before
-    the endpoint opens until the render is done (ADR-0029), and the run times out after 19 h.
+    the endpoint opens until the render is done (ADR-0029). The run times out after 19 h,
+    and its failure hooks then destroy the endpoint and release the freeze.
 
     The parameters are all serializable (Prefect persists them through
     ``serialize_parameters``); the live handles are built inside the flow, never passed in.

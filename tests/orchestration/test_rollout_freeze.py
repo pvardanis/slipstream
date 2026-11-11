@@ -205,19 +205,14 @@ def test_session_holds_the_freeze_around_its_body() -> None:
     assert freeze.calls[-1] == ("release", "knob-20261111")
 
 
-# A flow's timeout_seconds raises TimeoutError inside the run, an Exception like any
-# failure, so a timed-out run releases in the session too.
-@pytest.mark.parametrize("failure", [ValueError, TimeoutError])
-def test_session_releases_the_freeze_when_its_body_fails(
-    failure: type[Exception],
-) -> None:
+def test_session_releases_the_freeze_when_its_body_fails() -> None:
     freeze = RecordingFreeze()
 
     with (
-        pytest.raises(failure, match="point failed"),
+        pytest.raises(ValueError, match="point failed"),
         hold_rollout_freeze(freeze, holder="knob-20261111", duration_s=68400),
     ):
-        raise failure("point failed")
+        raise ValueError("point failed")
 
     assert freeze.calls[-1] == ("release", "knob-20261111")
 

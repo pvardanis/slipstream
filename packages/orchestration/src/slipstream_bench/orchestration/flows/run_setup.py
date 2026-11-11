@@ -9,9 +9,12 @@ destroys that endpoint after the run's session has exited.
 A flow that holds Argo CD off the workloads for its run (ADR-0029) opens its rollout
 freeze here too, through :func:`build_rollout_freeze`, and registers
 :func:`release_run_rollout_freeze` after the destroy hook, which releases a killed run's
-freeze once that hook has returned or failed.
+freeze once that hook has returned or failed. A flow with a timeout registers both again
+as failure hooks through :func:`on_run_timeout`, since a timed-out run runs no crash or
+cancellation hook.
 """
 
+import functools
 import logging
 import os
 from contextlib import AbstractContextManager
@@ -20,6 +23,7 @@ from typing import Any
 from prefect import Flow
 from prefect.client.orchestration import get_client
 from prefect.client.schemas.objects import FlowRun
+from prefect.flows import FlowStateHook
 from prefect.logging.loggers import flow_run_logger
 from prefect.runtime import flow_run as current_flow_run
 from prefect.states import State
@@ -45,6 +49,9 @@ from slipstream_bench.orchestration.rollout_freeze import (
     RolloutFreeze,
     hold_rollout_freeze,
 )
+
+# The name Prefect gives the Failed state of a run that outlived its timeout_seconds.
+_TIMED_OUT = "TimedOut"
 
 # The package whose stdlib loggers carry the Prefect-free core's milestone lines. The
 # image's PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench attaches a handler to this logger
@@ -139,10 +146,33 @@ def open_run_rollout_freeze(
     )
 
 
+def on_run_timeout(
+    hook: FlowStateHook[..., Any],
+) -> FlowStateHook[..., Any]:
+    """Wrap a crash or cancellation hook to run as a failure hook on a timed-out run alone.
+
+    Prefect stops a run that outlives its ``timeout_seconds`` by raising a cancellation,
+    a ``BaseException``, into its body, so the run's sessions leave their teardown to its
+    hooks as they do for a killed run; the run then ends ``TimedOut``, a Failed state,
+    which runs its failure hooks and not its crash or cancellation ones. A run that failed
+    in its own code tore down in its sessions, so the wrapped hook skips it.
+
+    :param hook: the crash or cancellation hook to run on a timed-out run.
+    :return: the failure hook, which keeps the wrapped hook's name for Prefect's logs.
+    """
+
+    @functools.wraps(hook)
+    def run_on_timeout(flow: Flow[..., Any], flow_run: FlowRun, state: State) -> None:
+        if state.name == _TIMED_OUT:
+            hook(flow, flow_run, state)
+
+    return run_on_timeout
+
+
 def destroy_run_bench_endpoint(
     flow: Flow[..., Any], flow_run: FlowRun, state: State
 ) -> None:
-    """Destroy a crashed or cancelled run's bench endpoint: the flows' state hook.
+    """Destroy a crashed, cancelled or timed-out run's bench endpoint: a state hook.
 
     Prefect runs a cancelled run's hooks in the worker once it has killed the run's
     process. A crashed run's run in the worker when its process exits non-zero, or in the
@@ -159,8 +189,8 @@ def destroy_run_bench_endpoint(
 
     :param flow: the flow whose run ended, which names the run's log lines.
     :param flow_run: the run, whose ``run_id`` and ``region`` parameters the teardown uses.
-    :param state: the Cancelling or Crashed state the run entered (unused; part of the hook
-        signature Prefect calls).
+    :param state: the Cancelling, Crashed or TimedOut state the run entered (unused; part
+        of the hook signature Prefect calls).
     :raise BenchEndpointLockedError: when another terraform run holds the state lock.
     :raise TerraformError: when the destroy fails, noted with the state left behind.
     """
@@ -181,7 +211,7 @@ def destroy_run_bench_endpoint(
 def release_run_rollout_freeze(
     flow: Flow[..., Any], flow_run: FlowRun, state: State
 ) -> None:
-    """Release a crashed or cancelled run's rollout freeze: the flows' state hook.
+    """Release a crashed, cancelled or timed-out run's rollout freeze: a state hook.
 
     A killed run's freeze session leaves the release to this hook, which the flows register
     after :func:`destroy_run_bench_endpoint`: the release lets Argo CD roll the worker, which
@@ -194,8 +224,8 @@ def release_run_rollout_freeze(
 
     :param flow: the flow whose run ended, which names the run's log lines.
     :param flow_run: the run, whose ``run_id`` parameter names the freeze released.
-    :param state: the Cancelling or Crashed state the run entered (unused; part of the hook
-        signature Prefect calls).
+    :param state: the Cancelling, Crashed or TimedOut state the run entered (unused; part
+        of the hook signature Prefect calls).
     :raise KubectlError: when the AppProject cannot be read or patched.
     """
     logger = flow_run_logger(flow_run, flow)

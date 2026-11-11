@@ -260,7 +260,9 @@ def test_session_logs_that_it_left_the_endpoint_for_the_hook(
         raise TerminationSignal(15)
 
     [record] = [
-        r for r in caplog.records if "crash or cancellation hook" in r.getMessage()
+        r
+        for r in caplog.records
+        if "crash, cancellation or timeout hook" in r.getMessage()
     ]
     # Logged as an error naming the state and the recipe that destroys from it, since a
     # signal no hook answers leaves the endpoint billing with this line its only trace.

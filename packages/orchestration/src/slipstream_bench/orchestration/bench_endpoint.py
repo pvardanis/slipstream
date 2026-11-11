@@ -231,9 +231,9 @@ def open_bench_endpoint(
             if not isinstance(error, Exception):
                 destroy_armed = False
                 _LOGGER.error(
-                    "bench endpoint not destroyed on %s; it is left for the run's crash "
-                    'or cancellation hook. If the run page shows no "%s" line from '
-                    "that hook, destroy it from %s with `just bench-endpoint-down` (an "
+                    "bench endpoint not destroyed on %s; it is left for the run's crash, "
+                    'cancellation or timeout hook. If the run page shows no "%s" line '
+                    "from that hook, destroy it from %s with `just bench-endpoint-down` (an "
                     "apply cut off mid-way can leave resources the state never recorded)",
                     type(error).__name__,
                     HOOK_DESTROYED_LINE % run_id,
