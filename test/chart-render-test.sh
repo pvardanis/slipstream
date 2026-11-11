@@ -3,10 +3,9 @@
 # is linted and rendered with its ci/test-values.yaml, and the output is validated
 # against the Kubernetes and CRD schemas, so a wrong apiVersion, a misspelt field or
 # a template that fails to render fails CI rather than a paid cluster-up (ADR-0002's
-# no-cloud tier). The root Application's app-of-apps chart (k8s/argocd/apps) is linted
-# with the cluster values Terraform hands it; it renders no child app yet, so it has
-# nothing to validate against the schemas. Needs helm and kubeconform on PATH; no
-# cluster.
+# no-cloud tier). The root Application's app-of-apps chart (k8s/argocd/apps) gets the
+# same lint, render and schema check, except that an empty render passes: a chart with
+# no child Applications is a valid root. Needs helm and kubeconform on PATH; no cluster.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,9 +44,15 @@ for chart in "${charts[@]}"; do
     -schema-location "${crd_schema_location}" <<<"${rendered}"
 done
 
-# The app-of-apps chart Argo CD syncs for the root Application, linted with the cluster
-# values the eks stack passes it (ci/test-values.yaml), so a broken Chart.yaml or a
-# template that fails on those values fails CI rather than the root Application's sync.
+# The app-of-apps chart Argo CD syncs for the root Application, linted and rendered with
+# the cluster values the eks stack passes it (ci/test-values.yaml), so a broken Chart.yaml
+# or a template that fails on those values fails CI rather than the root Application's
+# sync. Its child Applications validate against the Argo CD CRD schema in the catalog.
 apps_chart="${repo_root}/k8s/argocd/apps"
+apps_values="${apps_chart}/ci/test-values.yaml"
 echo "--- ${apps_chart#"${repo_root}/"}"
-helm lint --strict --values "${apps_chart}/ci/test-values.yaml" "${apps_chart}"
+helm lint --strict --values "${apps_values}" "${apps_chart}"
+rendered="$(helm template chart-render-test "${apps_chart}" --values "${apps_values}")"
+kubeconform -strict -summary \
+  -schema-location default \
+  -schema-location "${crd_schema_location}" <<<"${rendered}"
