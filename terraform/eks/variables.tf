@@ -86,3 +86,9 @@ variable "dcgm_exporter_chart_version" {
   type        = string
   default     = "4.8.4"
 }
+
+variable "argocd_chart_version" {
+  description = "Pinned argo-cd Helm chart version from the https://argoproj.github.io/argo-helm repo (appVersion v3.6.1)."
+  type        = string
+  default     = "10.17.2"
+}
