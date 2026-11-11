@@ -1,6 +1,6 @@
 # Cluster values the eks stack's root Application passes in (terraform/eks/argocd.tf,
-# helm.valuesObject); the cluster-specific values only Terraform knows. Empty here: the root Application
-# always supplies them.
+# helm.valuesObject); the cluster-specific values only Terraform knows. Empty here: the
+# root Application always supplies them.
 
 # The orchestration image repository URL (the bootstrap stack's ECR repository).
 orchestrationImageRepository: ""

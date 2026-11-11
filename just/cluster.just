@@ -28,6 +28,18 @@ cluster-up: _bootstrap-init
     region="$(terraform -chdir={{ eks_dir }} output -raw region)"
     aws eks update-kubeconfig --name "${name}" --region "${region}"
     kubectl get nodes
+    # The eks stack hands Argo CD the root Application, but Helm's wait does not cover
+    # custom resources, so the apply succeeds before Argo CD has fetched or synced
+    # anything. Wait for the root to report Synced and Healthy, so a missing revision,
+    # a chart that fails to render or a project denial fails cluster-up here.
+    for check in sync=Synced health=Healthy; do
+      field="${check%%=*}"
+      want="${check#*=}"
+      kubectl -n argocd wait application/root --for=jsonpath="{.status.${field}.status}=${want}" --timeout=300s || {
+        echo "Argo CD's root Application did not report ${want}; see its status.conditions: kubectl -n argocd get application root -o yaml" >&2
+        exit 1
+      }
+    done
 
 # Show the cluster changes `just cluster-up` would apply, without provisioning anything.
 [group('cluster')]
