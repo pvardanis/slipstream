@@ -48,11 +48,10 @@ locals {
       server    = local.argocd_in_cluster_server
       namespace = local.argocd_namespace
     }
-    # Automated with prune and self-heal, so main is what runs: a child app removed from
-    # the chart is deleted (the last one too, by allowEmpty) and hand edits are
-    # reverted. The root applies its child
-    # Application objects server-side; sync options are per Application, so each child
-    # carries its own.
+    # Automated with prune and self-heal, so the tracked revision is what runs: a child
+    # app removed from the chart is deleted (the last one too, by allowEmpty) and hand
+    # edits are reverted. The root applies its child Application objects server-side;
+    # sync options are per Application, so each child carries its own.
     syncPolicy = {
       automated   = { prune = true, selfHeal = true, allowEmpty = true }
       syncOptions = ["ServerSideApply=true"]
