@@ -12,7 +12,7 @@ releases on any exit but a killed run's, which it leaves to the run's hook.
 import json
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -43,10 +43,11 @@ class _FakeAppProject:
         self.resource_version = 41
         self.patches: list[dict[str, Any]] = []
         self.patch_error: Exception | None = None
+        self.written_after_get = False
 
     def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
         if list(args) == _GET:
-            return json.dumps(
+            served = json.dumps(
                 {
                     "metadata": {
                         "name": "workloads",
@@ -55,6 +56,9 @@ class _FakeAppProject:
                     "spec": self.spec,
                 }
             )
+            if self.written_after_get:
+                self.resource_version += 1
+            return served
         assert list(args[:-1]) == _PATCH, f"unexpected kubectl {list(args)}"
         if self.patch_error is not None:
             raise self.patch_error
@@ -156,6 +160,28 @@ def test_release_without_its_run_s_window_leaves_the_project_unpatched() -> None
     assert project.patches == []
 
 
+def test_acquire_fails_rather_than_overwrite_a_window_written_since_its_read() -> None:
+    # A knob sweep and a KV cache A/B acquiring at once: the later patch carries a stale
+    # version, so it fails instead of dropping the other run's window.
+    project = _FakeAppProject([_holder_window("kv-ab-7")])
+    project.written_after_get = True
+
+    with pytest.raises(KubectlError, match="modified"):
+        _freeze(project).acquire("knob-20261111", 68400)
+
+    assert project.spec["syncWindows"] == [_holder_window("kv-ab-7")]
+
+
+def test_acquire_pins_the_schedule_to_the_utc_time_of_a_local_clock() -> None:
+    # 00:30 on 12 Nov in UTC+2 is 22:30 on 11 Nov in UTC, the window's time zone.
+    project = _FakeAppProject()
+    local = datetime(2026, 11, 12, 0, 30, tzinfo=timezone(timedelta(hours=2)))
+
+    AppProjectFreeze(kubectl=project, now=lambda: local).acquire("knob-20261111", 60)
+
+    assert project.spec["syncWindows"][0]["schedule"] == "30 22 11 11 *"
+
+
 def test_a_failed_release_notes_the_window_left_and_how_to_remove_it() -> None:
     # The window freezes the workloads until it lapses, so the error names it and the
     # command that removes it.
@@ -179,16 +205,59 @@ def test_session_holds_the_freeze_around_its_body() -> None:
     assert freeze.calls[-1] == ("release", "knob-20261111")
 
 
-def test_session_releases_the_freeze_when_its_body_fails() -> None:
+# A flow's timeout_seconds raises TimeoutError inside the run, an Exception like any
+# failure, so a timed-out run releases in the session too.
+@pytest.mark.parametrize("failure", [ValueError, TimeoutError])
+def test_session_releases_the_freeze_when_its_body_fails(
+    failure: type[Exception],
+) -> None:
     freeze = RecordingFreeze()
 
     with (
-        pytest.raises(ValueError, match="point failed"),
+        pytest.raises(failure, match="point failed"),
         hold_rollout_freeze(freeze, holder="knob-20261111", duration_s=68400),
+    ):
+        raise failure("point failed")
+
+    assert freeze.calls[-1] == ("release", "knob-20261111")
+
+
+class _FailingReleaseFreeze(RecordingFreeze):
+    """A freeze whose release fails, as a forbidden or conflicting patch does."""
+
+    def release(self, holder: str) -> None:
+        super().release(holder)
+        raise KubectlError("kubectl patch exited 1: forbidden")
+
+
+def test_session_keeps_the_body_s_failure_when_the_release_also_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The run fails for what went wrong in it; the release failure is logged beside it.
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+
+    with (
+        pytest.raises(ValueError, match="point failed"),
+        hold_rollout_freeze(
+            _FailingReleaseFreeze(), holder="knob-20261111", duration_s=68400
+        ),
     ):
         raise ValueError("point failed")
 
-    assert freeze.calls[-1] == ("release", "knob-20261111")
+    [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert "knob-20261111" in record.getMessage()
+    assert record.exc_info is not None
+    assert "forbidden" in str(record.exc_info[1])
+
+
+def test_session_raises_the_release_failure_after_its_body_succeeds() -> None:
+    with (
+        pytest.raises(KubectlError, match="forbidden"),
+        hold_rollout_freeze(
+            _FailingReleaseFreeze(), holder="knob-20261111", duration_s=68400
+        ),
+    ):
+        pass
 
 
 @pytest.mark.parametrize("signal", [TerminationSignal, KeyboardInterrupt])

@@ -9,7 +9,7 @@ destroys that endpoint after the run's session has exited.
 A flow that holds Argo CD off the workloads for its run (ADR-0029) opens its rollout
 freeze here too, through :func:`build_rollout_freeze`, and registers
 :func:`release_run_rollout_freeze` after the destroy hook, which releases a killed run's
-freeze once its endpoint is destroyed.
+freeze once that hook has returned or failed.
 """
 
 import logging
