@@ -60,7 +60,7 @@ worker-config-check-test:
 grafana-mcp-test:
     bash test/grafana-mcp-test.sh
 
-# Assert otel-collector-check.sh finds the Collector's ConfigMap and waits for its Secret, shows why a rollout failed, and passes delivery only once both Grafana Cloud exporters sent and neither failed (kubectl, curl and sleep stubbed).
+# Assert otel-collector-check.sh finds the Collector's ConfigMap and waits for its Secret, waits for Argo CD to create its Deployment, shows why a rollout failed, and passes delivery only once both Grafana Cloud exporters sent and neither failed (kubectl, curl and sleep stubbed).
 [group('test')]
 otel-collector-check-test:
     bash test/otel-collector-check-test.sh

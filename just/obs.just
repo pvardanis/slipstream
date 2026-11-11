@@ -1,34 +1,9 @@
-# Observability lifecycle: the persistent grafana Terraform stack, and the OTel Collector deploy, teardown, and trace pivot.
+# Observability lifecycle: the persistent grafana Terraform stack, and the trace pivot through the OTel Collector Argo CD deploys.
 
-# Deploy the OTel Collector to the cluster. It exports to Grafana Cloud through the
-# grafana-cloud-endpoints ConfigMap `just cluster-up` creates in slipstream and the
-# grafana-cloud-write Secret ESO syncs there, and does not start without them, so
-# both are checked for, the Secret waited for, before the deploy.
-[group('obs')]
-obs-up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    {{ otel_check_tool }} preflight
-    kubectl create namespace slipstream --dry-run=client -o yaml | kubectl apply -f -
-    # The Collector stamps model_id on vLLM spans from model-id; model.yaml is its
-    # source of truth, as for the serving manifest.
-    model="$({{ image_tag_tool }} hf-id)"
-    kubectl create configmap otel-collector-config -n slipstream \
-      --from-file=config.yaml={{ otel_config }} \
-      --from-literal=model-id="${model}" \
-      --dry-run=client -o yaml | kubectl apply -f -
-    kubectl apply -f {{ otel_manifests }}
-    # The Collector reads config.yaml and its env only at start, and an unchanged
-    # Deployment does not roll; restart so a changed config or model takes effect.
-    kubectl -n slipstream rollout restart deploy/otel-collector
-    {{ otel_check_tool }} rollout
-
-# Remove the OTel Collector (leaves the cluster running).
-[group('obs')]
-obs-down:
-    kubectl delete configmap otel-collector-config -n slipstream --ignore-not-found
-    kubectl delete -f {{ otel_manifests }} --ignore-not-found
-
+# Argo CD deploys the Collector (k8s/otel-collector) from the root Application's revision.
+# It exports through the grafana-cloud-endpoints ConfigMap `just cluster-up` creates in
+# slipstream and the grafana-cloud-write Secret ESO syncs there, and does not start without
+# them, so both are checked for, the Secret waited for, before waiting for its rollout.
 # Send one shape-only OTLP trace through the cluster collector, check Grafana Cloud's
 # endpoints accept the Collector's spans and span metrics, and show the trace's request_id
 # log line. Takes up to 95 s, for the span metrics' 60 s flush.
@@ -36,6 +11,7 @@ obs-down:
 obs-pivot:
     #!/usr/bin/env bash
     set -euo pipefail
+    {{ otel_check_tool }} preflight
     {{ otel_check_tool }} rollout
     # The Collector's metrics port goes to local 18888, clear of a local Collector's 8888.
     # port-forward keeps running when only some ports bind, so the metrics port's line is
