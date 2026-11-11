@@ -62,26 +62,41 @@ apps_chart="${repo_root}/k8s/argocd/apps"
 apps_values="${apps_chart}/ci/test-values.yaml"
 echo "--- ${apps_chart#"${repo_root}/"}"
 helm lint --strict --values "${apps_values}" "${apps_chart}"
-rendered="$(helm template chart-render-test "${apps_chart}" --values "${apps_values}")"
+apps_rendered="$(helm template chart-render-test "${apps_chart}" --values "${apps_values}")"
 # Helm prints a `# Source:` header only for a template that renders something, so a
 # child Application gated on a misspelt or missing value shows up as a template with
 # no header. NOTES.txt and _-prefixed helpers never render a manifest.
 templates="$(cd "${apps_chart}" && find templates -type f ! -name NOTES.txt ! -name '_*' | sort)"
-sources="$(sed -n 's|^# Source: [^/]*/||p' <<<"${rendered}" | sort -u)"
+sources="$(sed -n 's|^# Source: [^/]*/||p' <<<"${apps_rendered}" | sort -u)"
 if [[ "${templates}" != "${sources}" ]]; then
   echo "${apps_chart} has templates that render nothing with ci/test-values.yaml:" >&2
   comm -23 <(printf '%s\n' "${templates}") <(printf '%s\n' "${sources}") >&2
   exit 1
 fi
-validate_schemas <<<"${rendered}"
+validate_schemas <<<"${apps_rendered}"
+# Argo CD's sync options are per Application, so each child must carry ServerSideApply
+# itself: without it a sync that drops a field such as replicas resets it.
+without_ssa="$(yq -N 'select(.kind == "Application" and ((.spec.syncPolicy.syncOptions // []) | contains(["ServerSideApply=true"]) | not)) | .metadata.name' <<<"${apps_rendered}")"
+if [[ -n "${without_ssa}" ]]; then
+  echo "${apps_chart} renders Applications without ServerSideApply=true in syncPolicy.syncOptions:" >&2
+  echo "${without_ssa}" >&2
+  exit 1
+fi
 
 # The OTel Collector's chart (k8s/otel-collector), an Argo CD child app, rendered as its
-# Application renders it: with model.yaml as its values file. The served model reaches
-# the Collector as the ConfigMap's model-id, and the pod template carries a checksum of
-# that ConfigMap, so a merged change to the config or the model rolls the pod: the
-# Collector reads both only at start.
-collector_chart="${repo_root}/k8s/otel-collector"
-model_values="${repo_root}/model.yaml"
+# Application renders it: the chart at the Application's path, with its values file,
+# which Argo CD resolves from that path and which must be model.yaml. The served model
+# reaches the Collector as the ConfigMap's model-id, and the pod template carries a
+# checksum of that ConfigMap, so a merged change to the config or the model rolls the
+# pod: the Collector reads both only at start.
+collector_app="$(yq 'select(.kind == "Application" and .metadata.name == "otel-collector") | .spec.source' <<<"${apps_rendered}")"
+collector_chart="${repo_root}/$(yq '.path' <<<"${collector_app}")"
+value_file="$(yq '.helm.valueFiles[0]' <<<"${collector_app}")"
+model_values="$(cd "${collector_chart}/$(dirname "${value_file}")" && pwd)/$(basename "${value_file}")"
+if [[ "${model_values}" != "${repo_root}/model.yaml" ]]; then
+  echo "the otel-collector Application's values file resolves to ${model_values}, not model.yaml" >&2
+  exit 1
+fi
 echo "--- ${collector_chart#"${repo_root}/"}"
 helm lint --strict --values "${model_values}" "${collector_chart}"
 rendered="$(helm template chart-render-test "${collector_chart}" --values "${model_values}")"
