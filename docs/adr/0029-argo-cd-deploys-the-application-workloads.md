@@ -54,9 +54,10 @@ apps under it read them from there and from nowhere else in Terraform.
 
 - **The worker's image tag: Argo CD Image Updater.** Strategy `newest-build`, restricted
   to the immutable content-sha tags the orchestration image workflow pushes (the first 12
-  hex characters of the last commit touching the image's inputs; never `:main`), with the `argocd` write-back method. Git write-back is ruled out: main
-  requires the `ci-ok` check with admins enforced, so a bot cannot push to it.
-  Terraform stops resolving the tag. The tag stays immutable, so a cached image under
+  hex characters of the last commit touching the image's inputs; never `:main`), with
+  the `argocd` write-back method. Git write-back is ruled out: main requires the `ci-ok`
+  check with admins enforced, so a bot cannot push to it. Terraform stops resolving the
+  tag. The tag stays immutable, so a cached image under
   `IfNotPresent` is always the right one, and the dispatch guard can name what the worker
   runs.
 - **Replicas: the autoscaler.** `replicas` never appears in git, and Argo CD syncs with
