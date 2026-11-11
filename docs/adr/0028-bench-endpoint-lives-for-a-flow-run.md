@@ -1,4 +1,4 @@
-<!-- ADR recording that the bench endpoint lives for a flow run: the knob sweep and KV cache A/B flows each apply the bench-endpoint stack from the Prefect worker when they start, wait for the bench host to boot, run their cells against it, and destroy the stack when they end, so the operator passes no instance id and `just stack-up` brings up no endpoint. Covers the worker's bounded infra rights, the baked Terraform, the unattended apply with no saved plan, the refusal to touch an endpoint the run did not create, the state shared with the manual recipes, and what a killed or cancelled run leaves behind. Amends ADR-0004 (lifecycle) and ADR-0015 (worker rights). -->
+<!-- ADR recording that the bench endpoint lives for a flow run: the knob sweep and KV cache A/B flows each apply the bench-endpoint stack from the Prefect worker when they start, wait for the bench host to boot, run their cells against it, and destroy the stack when they end, so the operator passes no instance id and `just stack-up` brings up no endpoint. Covers the worker's bounded infra rights, the baked Terraform, the unattended apply with no saved plan, the refusal to touch an endpoint the run did not create, the state shared with the manual recipes, and what a killed or cancelled run leaves behind. Amended so a killed, cancelled or timed-out run's endpoint is destroyed by a hook. Amends ADR-0004 (lifecycle) and ADR-0015 (worker rights). -->
 
 # ADR-0028: The bench endpoint lives for a flow run
 
@@ -131,3 +131,12 @@ holding the state lock and block the hook's.
   lock hint. A crash hook that runs in the dying process has only the time that process
   has left. The hook destroys whatever the state holds, so it also destroys an endpoint
   from `just bench-endpoint-up` that happens to be up.
+
+## Amendment (2026-11-11): a timed-out run is torn down by a hook too
+
+The knob sweep carries a 19 h Prefect timeout (ADR-0029). Prefect stops a run past it by
+raising a cancellation, a `BaseException`, into its body, so the session leaves the
+destroy to the hooks, as on a kill. The run then ends `TimedOut`, a failure, which runs
+only the flow's `on_failure` hooks, so the knob sweep also registers the destroy there,
+acting only on a `TimedOut` run. The session's log on that path names the "crash,
+cancellation or timeout hook".

@@ -47,6 +47,18 @@ monthly budget catches a leaked bench endpoint; the GPU alarm does not.
 that path in its error. Download it, run `terraform state push` with it from
 `terraform/bench-endpoint`, then `just bench-endpoint-down`.
 
+**The run holds a rollout freeze**
+([ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md)): a deny sync window
+on the `workloads` AppProject, so a merge meanwhile reaches neither the replica nor the
+worker until the run ends. A run that outlives its 19 h timeout is failed by Prefect, and
+its timeout hooks destroy the endpoint and then release the freeze; a cancelled or crashed
+run's hooks do the same. The run page shows `released run <run-id>'s rollout freeze` when
+a hook has released it. With no such line, or after a worker pod killed outright, the
+window holds rollouts for up to 19 h; check the Prefect UI shows no run in flight, then
+remove the window whose description reads `slipstream rollout freeze: run=<run-id>` with
+`kubectl -n argocd edit appproject workloads`. A manual sync in Argo CD goes through the
+window.
+
 **From CI** — Actions → `sweep-dispatch` → Run workflow, **on `main`** (the role trusts
 only `main`). Its one input, `run_id`, is optional and defaults to a UTC timestamp. The
 workflow does not stand the cluster up, and fails before creating the run if no worker is

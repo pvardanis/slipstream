@@ -1,4 +1,4 @@
-<!-- ADR recording the deploy substrate (issue #36): Argo CD deploys the cluster's application workloads. Terraform keeps the cluster, the add-ons, IAM and Pod Identity, and installs Argo CD, Image Updater and one root Application, its only handoff to Argo CD; Argo CD owns the Prefect worker and the OTel Collector now and the serving fleet and Router later; the experiment flows keep the bench Engine. Image Updater is the single writer of the worker's image tag; an autoscaled workload's autoscaler alone owns its replicas; a flow run holds a rollout freeze that expires with the flow's timeout, and the worker's RBAC widens only to that freeze's sync windows; the dispatch guard stays, as a tested script; Argo CD Notifications creates the Sentry release marker; Argo Rollouts is the planned path for progressive delivery; the L3 PostHog split and a future Rollouts traffic router would both write HTTPRoute weights. Records why Flux + Flagger, CI-driven Helm and Terraform were rejected. Settles spec §10's open deploy substrate and names §5.1's marker mechanism; builds on ADR-0015's "Argo, if adopted at all, reconciles the L2a production serving deployment" and reuses ADR-0028's hook discipline. -->
+<!-- ADR recording the deploy substrate (issue #36): Argo CD deploys the cluster's application workloads. Terraform keeps the cluster, the add-ons, IAM and Pod Identity, and installs Argo CD, Image Updater and one root Application, its only handoff to Argo CD; Argo CD owns the Prefect worker and the OTel Collector now and the serving fleet and Router later; the experiment flows keep the bench Engine. Image Updater is the single writer of the worker's image tag; an autoscaled workload's autoscaler alone owns its replicas; a flow run holds a rollout freeze that expires with the flow's timeout, and the worker's RBAC widens only to that freeze's sync windows; the dispatch guard stays, as a tested script; Argo CD Notifications creates the Sentry release marker; Argo Rollouts is the planned path for progressive delivery; the L3 PostHog split and a future Rollouts traffic router would both write HTTPRoute weights. Records why Flux + Flagger, CI-driven Helm and Terraform were rejected. Settles spec §10's open deploy substrate and names §5.1's marker mechanism; builds on ADR-0015's "Argo, if adopted at all, reconciles the L2a production serving deployment" and reuses ADR-0028's hook discipline. Amended with the knob sweep's freeze as built: the 19 h timeout, the window's shape, the failure hooks that tear down a timed-out run, and the Role's patch reaching every field of the AppProject. -->
 
 # ADR-0029: Argo CD deploys the cluster's application workloads
 
@@ -170,3 +170,53 @@ before relying on it at L3.
 - **Every child app syncs the same way.** Each takes its sync policy from
   `slipstream-apps.syncPolicy` (automated prune and selfHeal, `ServerSideApply=true`), and
   `test/chart-render-test.sh` fails any rendered Application without it.
+
+## Amendment (2026-11-11): the knob sweep's rollout freeze as built
+
+The knob sweep holds the freeze (#514); the KV cache A/B gets it in #515.
+
+- **The timeout is 19 h (68400 s).** It sits above the longest GPU session (18 h) and
+  below the 20 h spend-leak alarm (ADR-0025). The window lasts the same 19 h.
+- **The window.** The flow adds one deny window to the `workloads` AppProject's
+  `spec.syncWindows`, through a merge patch carrying the `resourceVersion` it read:
+
+  ```yaml
+  kind: deny
+  schedule: "<min> <hour> <day> <month> *"   # the acquire's UTC minute
+  duration: 68400s
+  applications: ["*"]
+  manualSync: true
+  timeZone: UTC
+  description: "slipstream rollout freeze: run=<run-id>"
+  ```
+
+  The window holds automated syncs and self-heal. `manualSync: true` lets a manual sync
+  through, which the rollback rehearsal relies on. A release removes only the window whose
+  description names its run, and removes nothing when that window is gone. An acquire
+  under a run id that already holds a window replaces it.
+- **A timed-out run is torn down by a failure hook.** Prefect stops a run that outlives
+  its timeout by raising a cancellation, a `BaseException`, into its body, so the run's
+  sessions leave their teardown to its hooks, as on a kill. The run then ends `TimedOut`,
+  a failure, and Prefect runs only its `on_failure` hooks, not its crash or cancellation
+  hooks. The knob sweep registers the endpoint destroy and the freeze release as failure
+  hooks that act only on a `TimedOut` run; a run that failed in its own code tore down in
+  its sessions already.
+- **The destroy runs before the release** in each hook list. The release lets Argo CD
+  roll the worker, which would cut off a destroy still running in it. Prefect runs every
+  hook even when an earlier one raised.
+- **A release that fails on a run already failing** is logged, and the run keeps the
+  body's error.
+- **The worker can patch any field of the `workloads` AppProject.** Its Role grants
+  `get` and `patch` on that one AppProject, and Kubernetes RBAC cannot narrow a patch to
+  `spec.syncWindows`, so "widens only to patching sync windows" above holds for the
+  object, not the field. A ValidatingAdmissionPolicy that rejects the worker's changes
+  outside `spec.syncWindows` would close it; it is not built.
+- **What is left.** A window no release removed matches its schedule again on the same
+  date the next year; a re-run under the same run id replaces it, or
+  `kubectl -n argocd edit appproject workloads` removes it. The schedule starts on the
+  acquire's minute, so the window can end up to 59 s before the timeout. Two acquires
+  racing on the AppProject fail the later one on its stale `resourceVersion`, with no
+  retry.
+- **Not yet checked on a live cluster:** that a merge during a sweep syncs only after it
+  ends. The `otel-collector` child Application above is the first under `workloads` to
+  check it with.
