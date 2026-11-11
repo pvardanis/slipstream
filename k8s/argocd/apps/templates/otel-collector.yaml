@@ -1,0 +1,25 @@
+{{- /*
+The OTel Collector's child app: Argo CD deploys the Collector chart (k8s/otel-collector)
+into slipstream from the root Application's repository and revision, with model.yaml,
+two levels up from the chart, as its values file, so the Collector stamps the served
+model. A config change merged to the tracked revision syncs without operator action.
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: otel-collector
+  namespace: {{ .Release.Namespace }}
+spec:
+  project: workloads
+  source:
+    repoURL: {{ required "source.repoURL is required" .Values.source.repoURL }}
+    targetRevision: {{ required "source.targetRevision is required" .Values.source.targetRevision }}
+    path: k8s/otel-collector
+    helm:
+      valueFiles:
+        - ../../model.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: slipstream
+  syncPolicy:
+    {{- include "slipstream-apps.syncPolicy" . | nindent 4 }}
