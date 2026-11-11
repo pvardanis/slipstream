@@ -71,6 +71,7 @@ from slipstream_bench.orchestration.flows.run_setup import (
     enable_milestone_logging,
     open_run_bench_endpoint,
     open_run_rollout_freeze,
+    release_run_rollout_freeze,
     tag_run_with_group,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
@@ -182,8 +183,8 @@ class KnobSweepInputs:
 @flow(
     name="knob-sweep",
     timeout_seconds=_RUN_TIMEOUT_S,
-    on_cancellation=[destroy_run_bench_endpoint],
-    on_crashed=[destroy_run_bench_endpoint],
+    on_cancellation=[destroy_run_bench_endpoint, release_run_rollout_freeze],
+    on_crashed=[destroy_run_bench_endpoint, release_run_rollout_freeze],
 )
 def knob_sweep_flow(
     *,
