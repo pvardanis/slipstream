@@ -215,8 +215,9 @@ acceptance bar is that one worked pivot, not four-way completeness.
   set per-request goodput, derive exemplar-bearing latency metrics, fan out, batch — no
   tail-sampling). vLLM emits OTel traces.
 - **Deploy → Sentry release marker:** a deploy event creates a Sentry release + commit SHA so a
-  p95 regression attributes to the exact rollout. **Deployer-agnostic** — the marker rides
-  whatever CD mechanism L2a picks (not assumed to be Argo CD).
+  p95 regression attributes to the exact rollout. Once Sentry is integrated, Argo CD
+  Notifications sends it on every successful sync, keyed by the synced commit SHA, so every
+  workload Argo CD owns gets one ([ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md)).
 - **Rehearsed rollback:** rollback is a **run deliverable**, not an assertion — deploy a bad config,
   watch the SLO burn-rate alert fire, revert, confirm recovery. Rides alongside chaos day. Rollback
   you have not run is not rollback.
@@ -354,7 +355,8 @@ The output is public evidence, not the cluster:
                  │  Karpenter (spot nodes) + KEDA/HPA ─────────┘ │
                  │  (scale-to-zero, autoscale on num_requests_waiting)
                  └─────────────────────────────────────────────┘
-   Terraform provisions all of the above.  just cluster-up / just cluster-down.
+   Terraform provisions the cluster and its add-ons; Argo CD deploys the workloads.
+   just cluster-up / just cluster-down.
 ```
 
 ---
@@ -363,9 +365,6 @@ The output is public evidence, not the cluster:
 
 Deliberately deferred — not needed to start Layer 0:
 
-- **Deploy substrate (is Argo CD the CD tool?).** The brief assumes Argo CD; nothing locks it. The
-  deploy→Sentry release marker rides whatever this resolves to. An **L2a** decision (Argo CD vs
-  CI-driven Helm vs Terraform).
 - **Per-phase experiment design detail.** The exact knob-sweep grid (L1), cold-start experiment
   design (L2a), routing eval design (L3), and P/D topology params (L4) are decided as each phase is
   reached. The phase table in §4 specifies each to the resolution this planning spec needs.
@@ -391,3 +390,4 @@ map is [Map: slipstream platform spec](https://github.com/pvardanis/slipstream/i
 | Lock GPU, model, serving substrate | [#9](https://github.com/pvardanis/slipstream/issues/9) |
 | Phase sequencing, per-layer DoD, cut markers | [#10](https://github.com/pvardanis/slipstream/issues/10) |
 | Spec assembly (this document) | [#11](https://github.com/pvardanis/slipstream/issues/11) |
+| Deploy substrate: Argo CD | [#36](https://github.com/pvardanis/slipstream/issues/36) · [ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md) |
