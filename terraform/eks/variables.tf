@@ -92,3 +92,15 @@ variable "argocd_chart_version" {
   type        = string
   default     = "10.17.2"
 }
+
+variable "argocd_apps_chart_version" {
+  description = "Pinned argocd-apps Helm chart version from the https://argoproj.github.io/argo-helm repo; renders the AppProjects and the root Application."
+  type        = string
+  default     = "2.0.8"
+}
+
+variable "argocd_target_revision" {
+  description = "Git revision of this repo the root Application syncs the app-of-apps chart from. main in normal use; a branch name verifies a bootstrap change on a live cluster before merge."
+  type        = string
+  default     = "main"
+}
