@@ -4,9 +4,8 @@
 # against the Kubernetes and CRD schemas, so a wrong apiVersion, a misspelt field or
 # a template that fails to render fails CI rather than a paid cluster-up (ADR-0002's
 # no-cloud tier). The root Application's app-of-apps chart (k8s/argocd/apps) gets the
-# same lint, render and schema check, except that an empty render passes: a chart with
-# no child Applications is a valid root. Each of its templates must still render. The
-# OTel Collector's chart (k8s/otel-collector), which Argo CD deploys, is linted, rendered
+# same lint, render and schema check; each of its templates must render, and each
+# Application it renders must carry the shared sync policy. The OTel Collector's chart (k8s/otel-collector), which Argo CD deploys, is linted, rendered
 # and validated with model.yaml as its values file, and must stamp model.yaml's model and
 # roll its pod on a change to its config or that model.
 # Needs helm, kubeconform and yq on PATH; no cluster.
@@ -77,7 +76,8 @@ validate_schemas <<<"${apps_rendered}"
 # Argo CD's sync policy is per Application, so each child must carry the shared one
 # itself: automated prune and selfHeal, so a merged change syncs without an operator, and
 # ServerSideApply, without which a sync that drops a field such as replicas resets it.
-if [[ "$(yq -N 'select(.kind == "Application") | .metadata.name' <<<"${apps_rendered}")" == "" ]]; then
+app_names="$(yq -N 'select(.kind == "Application") | .metadata.name' <<<"${apps_rendered}")"
+if [[ -z "${app_names}" ]]; then
   echo "${apps_chart} renders no Applications with ci/test-values.yaml" >&2
   exit 1
 fi
@@ -99,8 +99,16 @@ if [[ -z "${collector_app}" ]]; then
   echo "${apps_chart} renders no otel-collector Application" >&2
   exit 1
 fi
-collector_chart="${repo_root}/$(yq -e '.spec.source.path' <<<"${collector_app}")"
-value_file="$(yq -e '.spec.source.helm.valueFiles[0]' <<<"${collector_app}")"
+# Prints a field of the otel-collector Application, and fails naming the field when the
+# Application has none.
+get_collector_app_field() {
+  yq -e "$1" <<<"${collector_app}" || {
+    echo "the otel-collector Application has no $1" >&2
+    return 1
+  }
+}
+collector_chart="${repo_root}/$(get_collector_app_field '.spec.source.path')"
+value_file="$(get_collector_app_field '.spec.source.helm.valueFiles[0]')"
 model_values="$(cd "${collector_chart}/$(dirname "${value_file}")" && pwd)/$(basename "${value_file}")"
 if [[ "${model_values}" != "${repo_root}/model.yaml" ]]; then
   echo "the otel-collector Application's values file resolves to ${model_values}, not model.yaml" >&2
@@ -111,8 +119,9 @@ helm lint --strict --values "${model_values}" "${collector_chart}"
 rendered="$(helm template chart-render-test "${collector_chart}" --values "${model_values}")"
 validate_schemas <<<"${rendered}"
 # Argo CD applies the chart into the Application's destination namespace; a manifest
-# naming another namespace would land outside it.
-destination="$(yq -e '.spec.destination.namespace' <<<"${collector_app}")"
+# naming another namespace would land outside it. Every manifest in the chart names its
+# namespace, so one without a namespace fails here too.
+destination="$(get_collector_app_field '.spec.destination.namespace')"
 elsewhere="$(yq -N "select(.metadata.namespace != \"${destination}\") | .kind + \"/\" + .metadata.name" <<<"${rendered}")"
 if [[ -n "${elsewhere}" ]]; then
   echo "${collector_chart} renders manifests outside its Application's destination namespace ${destination}:" >&2
@@ -127,11 +136,10 @@ if [[ "${rendered_model_id}" != "${model_id}" ]]; then
 fi
 
 # Prints the Collector pod template's config checksum from the chart rendered with the
-# values files given, and fails when the chart does not render or carries none.
+# values file given, and fails when the chart does not render or carries none.
 get_config_checksum() {
-  local chart="$1" checksum
-  shift
-  checksum="$(helm template chart-render-test "${chart}" "${@/#/--values=}" |
+  local chart="$1" values="$2" checksum
+  checksum="$(helm template chart-render-test "${chart}" --values "${values}" |
     yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/config"]')"
   if [[ ! "${checksum}" =~ ^[0-9a-f]{64}$ ]]; then
     echo "${chart}'s pod template has no checksum/config of its ConfigMap, so a config change would not roll the Collector: '${checksum}'" >&2
