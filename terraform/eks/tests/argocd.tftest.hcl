@@ -116,3 +116,94 @@ run "argocd_install_is_pinned" {
     error_message = "Dex must be disabled: no SSO is configured."
   }
 }
+
+run "root_application_carries_cluster_values" {
+  command = plan
+
+  # The argocd-apps chart renders the AppProjects and the root Application as a Helm
+  # release ordered after the Argo CD install, so their CRDs exist before they apply.
+  assert {
+    condition     = helm_release.argocd_apps.repository == "https://argoproj.github.io/argo-helm"
+    error_message = "The root Application must install from the upstream argo-helm repository."
+  }
+  assert {
+    condition     = helm_release.argocd_apps.chart == "argocd-apps"
+    error_message = "The root Application release must deploy the argocd-apps chart."
+  }
+  assert {
+    condition     = helm_release.argocd_apps.version == "2.0.8"
+    error_message = "The argocd-apps chart must be pinned to 2.0.8."
+  }
+  assert {
+    condition     = helm_release.argocd_apps.namespace == "argocd"
+    error_message = "The root Application must live in Argo CD's own namespace."
+  }
+
+  # The root Application syncs the app-of-apps chart on main from this repo, in its own
+  # project, writing child Applications into Argo CD's namespace.
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.project == "root"
+    error_message = "The root Application must belong to the root project."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.repoURL == "https://github.com/pvardanis/slipstream.git"
+    error_message = "The root Application must sync from the slipstream repository."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.path == "k8s/argocd/apps"
+    error_message = "The root Application must sync the app-of-apps chart at k8s/argocd/apps."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.targetRevision == "main"
+    error_message = "The root Application must track main by default."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.destination == { server = "https://kubernetes.default.svc", namespace = "argocd" }
+    error_message = "The root Application must write its child Applications into the in-cluster argocd namespace."
+  }
+
+  # The cluster values Terraform knows, handed to the app-of-apps chart: the
+  # orchestration image repository (bootstrap ECR), the worker's Pod Identity-bound
+  # ServiceAccount, and the ConfigMaps this stack publishes.
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageRepository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+    error_message = "The root Application must carry the orchestration image repository URL from the bootstrap stack."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.serviceAccounts == { prefectWorker = "prefect-worker" }
+    error_message = "The root Application must carry the worker ServiceAccount name Pod Identity binds."
+  }
+  assert {
+    condition = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.configMaps == {
+      benchEndpointTopology = "bench-endpoint-topology"
+      grafanaCloudEndpoints = "grafana-cloud-endpoints"
+    }
+    error_message = "The root Application must carry the bench-endpoint topology and Grafana Cloud endpoints ConfigMap names."
+  }
+
+  # Argo CD applies server-side, so a manifest that omits a field (an autoscaler-owned
+  # `replicas`) never resets it, and keeps the cluster on what main says.
+  assert {
+    condition     = contains(yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.syncOptions, "ServerSideApply=true")
+    error_message = "The root Application must sync with ServerSideApply=true."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.automated == { prune = true, selfHeal = true }
+    error_message = "The root Application must sync automatically, pruning removed apps and reverting drift."
+  }
+}
+
+# The tracked revision is a knob so the live bootstrap can be verified from a branch
+# before its app-of-apps chart reaches main.
+run "root_application_revision_is_configurable" {
+  command = plan
+
+  variables {
+    argocd_target_revision = "feat/argocd-bootstrap"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.targetRevision == "feat/argocd-bootstrap"
+    error_message = "The root Application's revision must come from var.argocd_target_revision."
+  }
+}
