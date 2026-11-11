@@ -176,10 +176,18 @@ run "root_application_carries_cluster_values" {
     error_message = "The root Application must write its child Applications into the in-cluster argocd namespace."
   }
 
-  # The cluster values Terraform knows, handed to the app-of-apps chart: the
-  # orchestration image repository (bootstrap ECR) and the content-sha tag resolved from
-  # its :main image, the Prefect server's namespace and in-cluster API URL, the worker's
-  # Pod Identity-bound ServiceAccount, and the ConfigMaps this stack publishes.
+  # The cluster values Terraform knows, handed to the app-of-apps chart: the repository
+  # and revision its child apps sync from (the root's own), the orchestration image
+  # repository (bootstrap ECR) and the content-sha tag resolved from its :main image, the
+  # Prefect server's namespace and in-cluster API URL, the worker's Pod Identity-bound
+  # ServiceAccount, and the bench endpoint topology ConfigMap name the worker reads.
+  assert {
+    condition = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.source == {
+      repoURL        = "https://github.com/pvardanis/slipstream.git"
+      targetRevision = "main"
+    }
+    error_message = "The root Application must hand its child apps the repository and revision it syncs from."
+  }
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageRepository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
     error_message = "The root Application must carry the orchestration image repository URL from the bootstrap stack."
@@ -203,9 +211,8 @@ run "root_application_carries_cluster_values" {
   assert {
     condition = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.configMaps == {
       benchEndpointTopology = "bench-endpoint-topology"
-      grafanaCloudEndpoints = "grafana-cloud-endpoints"
     }
-    error_message = "The root Application must carry the bench-endpoint topology and Grafana Cloud endpoints ConfigMap names."
+    error_message = "The root Application must carry the bench-endpoint topology ConfigMap name."
   }
 
   # The root applies its child Application objects server-side. Sync options are per
@@ -228,6 +235,7 @@ run "root_application_carries_cluster_values" {
       && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.serviceAccounts) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).serviceAccounts)
       && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.configMaps) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).configMaps)
       && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.namespaces) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).namespaces)
+      && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.source) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).source)
     )
     error_message = "The root Application's values must have exactly the keys k8s/argocd/apps/values.yaml declares."
   }
@@ -245,6 +253,11 @@ run "root_application_revision_is_configurable" {
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.targetRevision == "feat/argocd-bootstrap"
     error_message = "The root Application's revision must come from var.argocd_target_revision."
+  }
+  # Its child apps sync from the same revision, so a branch verifies them too.
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.source.targetRevision == "feat/argocd-bootstrap"
+    error_message = "The child apps' revision must be the root Application's."
   }
 }
 

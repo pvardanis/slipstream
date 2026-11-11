@@ -22,12 +22,14 @@ locals {
 
   # The root app-of-apps Application: it syncs k8s/argocd/apps from this repo and writes
   # the child Applications that chart renders into Argo CD's namespace. Its Helm values
-  # are the cluster-specific values only Terraform knows — the orchestration image
-  # repository from the bootstrap stack and the worker's image tag resolved from it, the
-  # Prefect server's namespace and API URL, the ServiceAccount Pod Identity binds, and
-  # the ConfigMaps this stack publishes — and they are the only Terraform-to-Argo CD
-  # handoff. Referencing the ConfigMaps orders the root after them, so no child app syncs
-  # before what it reads exists.
+  # are the repository and revision its child apps sync from (its own), and the
+  # cluster-specific values only Terraform knows — the orchestration image repository
+  # from the bootstrap stack and the worker's image tag resolved from it, the Prefect
+  # server's namespace and API URL, the ServiceAccount Pod Identity binds, and the bench
+  # endpoint topology ConfigMap the worker reads — and they are the only Terraform-to-Argo
+  # CD handoff. Referencing that ConfigMap orders the root after it; the Collector's
+  # grafana-cloud-endpoints ConfigMap is ordered by the depends_on on
+  # helm_release.argocd_apps below.
   argocd_root_application = {
     namespace = local.argocd_namespace
     project   = "root"
@@ -37,6 +39,10 @@ locals {
       path           = "k8s/argocd/apps"
       helm = {
         valuesObject = {
+          source = {
+            repoURL        = local.argocd_source_repo
+            targetRevision = var.argocd_target_revision
+          }
           orchestrationImageRepository = local.orchestration_repo_url
           orchestrationImageTag        = local.worker_image_tag
           prefectApiUrl                = local.prefect_server_api_url
@@ -48,7 +54,6 @@ locals {
           }
           configMaps = {
             benchEndpointTopology = kubernetes_config_map_v1.bench_endpoint_topology.metadata[0].name
-            grafanaCloudEndpoints = kubernetes_config_map_v1.grafana_cloud_endpoints.metadata[0].name
           }
         }
       }
@@ -151,10 +156,13 @@ resource "helm_release" "argocd_apps" {
   # absent, so the root (and the worker app it writes) waits for the server to be Ready.
   # Pod Identity credentials are injected when a pod is admitted, and Argo CD never
   # restarts a pod that started without them, so the worker's association exists before
-  # the root writes the worker app.
+  # the root writes the worker app. The OTel Collector's app reads the
+  # grafana-cloud-endpoints ConfigMap under its fixed name (k8s/otel-collector), so the
+  # root applies only once that ConfigMap exists.
   depends_on = [
     helm_release.argocd,
     helm_release.prefect_server,
     aws_eks_pod_identity_association.prefect_worker,
+    kubernetes_config_map_v1.grafana_cloud_endpoints,
   ]
 }
