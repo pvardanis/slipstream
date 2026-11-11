@@ -40,7 +40,7 @@ root:
   `gpu-down`, `cpu-completion`, `gpu-completion`.
 - `bench.just` — `_bench-image-ref`, `bench-image`, `bench`, `knob-sweep`,
   `bench-results-sync`, `prefix-cache`, `bench-endpoint-up`, `bench-endpoint-down`.
-- `obs.just` — `obs-up`, `obs-down`, `obs-pivot`.
+- `obs.just` — `obs-pivot`.
 - `test.just` — `cli-test`, `obs-test`, `image-tag-test`, `build-image-test`.
 - `orchestrate.just` — `stack-up`, `stack-down`, `cloud-verify`, `_zero-leak-sweep`.
 

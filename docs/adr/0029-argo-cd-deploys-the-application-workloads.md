@@ -152,3 +152,21 @@ before relying on it at L3.
 - The worker's tag names the last commit that touched the image's inputs, not main's
   head, so it does not match the Sentry release version; the Application's synced
   revision does.
+
+## Amendment (2026-11-11, #510): the Collector app and what the root hands it
+
+- **The Collector is a chart.** Argo CD syncs `k8s/otel-collector` as the `otel-collector`
+  child Application in the `workloads` project, with the repo-root `model.yaml` as its Helm
+  values file, so the model it stamps follows the synced revision. No `just` recipe applies
+  it; `just obs-pivot` waits for Argo CD to create the Deployment.
+- **The root also hands over its source.** The root Application passes its own `repoURL`
+  and `targetRevision` to the child apps, so a child syncs from the revision the root
+  tracks, branch deploys included.
+- **One ConfigMap is read by name, not through the root.** The Collector reads
+  `grafana-cloud-endpoints` under its fixed name, the same way it reads the
+  `grafana-cloud-write` Secret. Terraform orders the root after that ConfigMap with an
+  explicit `depends_on`, so the Collector never syncs before it exists. The root's values
+  still carry the names the worker reads (`bench-endpoint-topology`, its ServiceAccount).
+- **Every child app syncs the same way.** Each takes its sync policy from
+  `slipstream-apps.syncPolicy` (automated prune and selfHeal, `ServerSideApply=true`), and
+  `test/chart-render-test.sh` fails any rendered Application without it.
