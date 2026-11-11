@@ -5,7 +5,8 @@
 # pinned upstream chart into the prefect namespace, server-side, with the worker's
 # values — every cluster-specific one taken from the root's values, the image tag
 # included. The upstream chart is then rendered with those values, so a key the chart
-# does not read fails here rather than leaving the worker on a chart default. A render
+# does not read fails here when it feeds an asserted Deployment field, rather than leaving
+# the worker on a chart default. A render
 # with any cluster value missing must fail. Needs helm, yq and the prefect-helm chart
 # repository; no cluster.
 set -euo pipefail
@@ -16,7 +17,12 @@ apps_values="${apps_chart}/ci/test-values.yaml"
 
 fail=0
 
-rendered="$(helm template argocd-apps-test "${apps_chart}" --values "${apps_values}")"
+# The app-of-apps chart rendered with the root's CI values, plus any extra helm flags.
+render_apps() {
+  helm template argocd-apps-test "${apps_chart}" --values "${apps_values}" "$@"
+}
+
+rendered="$(render_apps)"
 worker_app="$(yq 'select(.kind == "Application" and .metadata.name == "prefect-worker")' <<<"${rendered}")"
 if [[ -z "${worker_app}" ]]; then
   echo "FAIL: ${apps_chart} renders no prefect-worker Application" >&2
@@ -44,6 +50,11 @@ expect() {
   expect_in "${worker_app}" "$@"
 }
 
+# expect on the worker Application's Helm values, at yq path $1 under them.
+expect_value() {
+  expect "${worker_values_path}$1" "${@:2}"
+}
+
 worker_values_path='.spec.source.helm.valuesObject'
 
 work_pool="$(sed -n 's/^prefect_work_pool := "\(.*\)"$/\1/p' "${repo_root}/justfile")"
@@ -64,20 +75,20 @@ expect '.spec.syncPolicy.syncOptions | length' '1' 'server-side apply is the one
 expect '.spec.syncPolicy.syncOptions[0]' 'ServerSideApply=true' 'server-side apply'
 
 # --- Worker values ---
-expect "${worker_values_path}.worker.image.repository" "$(root_value '.orchestrationImageRepository')" "the image repository from the root's values"
-expect "${worker_values_path}.worker.image.prefectTag" "$(root_value '.orchestrationImageTag')" "the image tag from the root's values"
-expect "${worker_values_path}.worker.image.pullPolicy" 'IfNotPresent' 'the tag is an immutable content-sha, so a cached image is always the right one'
-expect "${worker_values_path}.worker.config.type" 'process' 'a process worker runs the serial single-GPU sweep as a subprocess'
-expect "${worker_values_path}.worker.config.workPool" "${work_pool}" 'the work pool just prefect-up creates (justfile prefect_work_pool)'
-expect "${worker_values_path}.worker.apiConfig" 'selfHostedServer' 'the in-cluster self-hosted server'
-expect "${worker_values_path}.worker.selfHostedServerApiConfig.apiUrl" "$(root_value '.prefectApiUrl')" "the server's in-cluster API URL from the root's values"
-expect "${worker_values_path}.worker.replicaCount" '1' 'one worker drains the concurrency-1 pool'
-expect "${worker_values_path}.worker.extraEnvVarsCMs | length" '1' 'the worker loads one ConfigMap into its environment'
-expect "${worker_values_path}.worker.extraEnvVarsCMs[0]" "$(root_value '.configMaps.benchEndpointTopology')" "the bench-endpoint topology ConfigMap from the root's values"
-expect "${worker_values_path}.serviceAccount.create" 'true' 'the chart creates the ServiceAccount Pod Identity binds'
-expect "${worker_values_path}.serviceAccount.name" "$(root_value '.serviceAccounts.prefectWorker')" "the ServiceAccount name from the root's values"
-expect "${worker_values_path}.role.create" 'false' 'the eks stack owns the worker RBAC'
-expect "${worker_values_path}.rolebinding.create" 'false' 'the eks stack owns the worker RBAC'
+expect_value '.worker.image.repository' "$(root_value '.orchestrationImageRepository')" "the image repository from the root's values"
+expect_value '.worker.image.prefectTag' "$(root_value '.orchestrationImageTag')" "the image tag from the root's values"
+expect_value '.worker.image.pullPolicy' 'IfNotPresent' 'the tag is an immutable content-sha, so a cached image is always the right one'
+expect_value '.worker.config.type' 'process' 'a process worker runs the serial single-GPU sweep as a subprocess'
+expect_value '.worker.config.workPool' "${work_pool}" 'the work pool just prefect-up creates (justfile prefect_work_pool)'
+expect_value '.worker.apiConfig' 'selfHostedServer' 'the in-cluster self-hosted server'
+expect_value '.worker.selfHostedServerApiConfig.apiUrl' "$(root_value '.prefectApiUrl')" "the server's in-cluster API URL from the root's values"
+expect_value '.worker.replicaCount' '1' 'one worker drains the concurrency-1 pool'
+expect_value '.worker.extraEnvVarsCMs | length' '1' 'the worker loads one ConfigMap into its environment'
+expect_value '.worker.extraEnvVarsCMs[0]' "$(root_value '.configMaps.benchEndpointTopology')" "the bench-endpoint topology ConfigMap from the root's values"
+expect_value '.serviceAccount.create' 'true' 'the chart creates the ServiceAccount Pod Identity binds'
+expect_value '.serviceAccount.name' "$(root_value '.serviceAccounts.prefectWorker')" "the ServiceAccount name from the root's values"
+expect_value '.role.create' 'false' 'the eks stack owns the worker RBAC'
+expect_value '.rolebinding.create' 'false' 'the eks stack owns the worker RBAC'
 
 # --- The upstream chart, rendered with the worker's values ---
 # What Argo CD syncs: the pinned prefect-worker chart rendered with the Application's
@@ -90,13 +101,17 @@ fi
 worker_values="$(mktemp)"
 trap 'rm -f "${worker_values}"' EXIT
 yq "${worker_values_path}" <<<"${worker_app}" >"${worker_values}"
-worker_rendered="$(helm template prefect-worker "$(yq '.spec.source.chart' <<<"${worker_app}")" \
-  --repo "$(yq '.spec.source.repoURL' <<<"${worker_app}")" --version "${version}" \
+chart="$(yq '.spec.source.chart' <<<"${worker_app}")"
+repo_url="$(yq '.spec.source.repoURL' <<<"${worker_app}")"
+worker_rendered="$(helm template prefect-worker "${chart}" --repo "${repo_url}" --version "${version}" \
   --namespace "$(root_value '.namespaces.prefect')" --values "${worker_values}")"
 deployment="$(yq 'select(.kind == "Deployment")' <<<"${worker_rendered}")"
 container='.spec.template.spec.containers[0]'
 expect_in "${deployment}" '.metadata.name' 'prefect-worker' 'the Deployment the dispatch guard reads the worker image from'
 expect_in "${deployment}" '.spec.replicas' '1' 'one worker'
+# cluster-up waits for the worker's image as the Application's only one.
+expect_in "${deployment}" '.spec.template.spec.containers | length' '1' "the worker's container is the pod's only one"
+expect_in "${deployment}" '.spec.template.spec.initContainers | length' '0' "no init container image beside the worker's"
 expect_in "${deployment}" "${container}.image" "$(root_value '.orchestrationImageRepository'):$(root_value '.orchestrationImageTag')" "the image from the root's values"
 expect_in "${deployment}" "${container}.imagePullPolicy" 'IfNotPresent' 'the immutable content-sha tag'
 expect_in "${deployment}" "${container}.args | join(\" \")" "prefect worker start --type process --pool ${work_pool} --install-policy prompt" 'a process worker on the work pool'
@@ -114,7 +129,7 @@ fi
 # does not pass it would, must fail the render naming it.
 for key in orchestrationImageRepository orchestrationImageTag prefectApiUrl \
   namespaces.prefect serviceAccounts.prefectWorker configMaps.benchEndpointTopology; do
-  if missing_render="$(helm template argocd-apps-test "${apps_chart}" --values "${apps_values}" --set "${key}=" 2>&1)"; then
+  if missing_render="$(render_apps --set "${key}=" 2>&1)"; then
     echo "FAIL: ${apps_chart} renders with ${key} empty" >&2
     fail=1
   elif [[ "${missing_render}" != *"${key} is required"* ]]; then
