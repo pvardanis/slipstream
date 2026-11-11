@@ -83,8 +83,8 @@ variables {
 run "argocd_install_is_pinned" {
   command = plan
 
-  # The literal pins are the source of truth: bumping a chart is a deliberate change
-  # that has to touch this test too, so an apply can never float onto an untested chart.
+  # The test repeats the pins as literals, so bumping a chart default in variables.tf is
+  # a deliberate change that has to touch this test too.
   assert {
     condition     = helm_release.argocd.repository == "https://argoproj.github.io/argo-helm"
     error_message = "Argo CD must install from the upstream argo-helm repository."
@@ -139,6 +139,13 @@ run "root_application_carries_cluster_values" {
     error_message = "The root Application must live in Argo CD's own namespace."
   }
 
+  # A rejected AppProject or Application fails cluster-up and rolls the release back,
+  # rather than leaving the projects without the root Application.
+  assert {
+    condition     = helm_release.argocd_apps.atomic == true
+    error_message = "The root Application release must be atomic so a rejected apply rolls back."
+  }
+
   # The root Application syncs the app-of-apps chart on main from this repo, in its own
   # project, writing child Applications into Argo CD's namespace.
   assert {
@@ -181,15 +188,27 @@ run "root_application_carries_cluster_values" {
     error_message = "The root Application must carry the bench-endpoint topology and Grafana Cloud endpoints ConfigMap names."
   }
 
-  # The root applies its child Application objects server-side, so a field Terraform
-  # omits from one is left to whoever owns it instead of being reset.
+  # The root applies its child Application objects server-side. Sync options are per
+  # Application, so this covers the root's own sync only.
   assert {
     condition     = contains(yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.syncOptions, "ServerSideApply=true")
     error_message = "The root Application must sync with ServerSideApply=true."
   }
   assert {
-    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.automated == { prune = true, selfHeal = true }
-    error_message = "The root Application must sync automatically, pruning removed apps and reverting drift."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.automated == { prune = true, selfHeal = true, allowEmpty = true }
+    error_message = "The root Application must sync automatically, pruning removed apps (down to none) and reverting drift."
+  }
+
+  # Helm ignores a value the chart never reads, so a key renamed on one side only would
+  # hand every child app an empty string. The keys Terraform passes must be the keys the
+  # app-of-apps chart declares.
+  assert {
+    condition = (
+      keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")))
+      && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.serviceAccounts) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).serviceAccounts)
+      && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.configMaps) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).configMaps)
+    )
+    error_message = "The root Application's values must have exactly the keys k8s/argocd/apps/values.yaml declares."
   }
 }
 
@@ -213,7 +232,8 @@ run "app_projects_are_scoped" {
 
   # The root project may only write Application objects into Argo CD's namespace. A
   # wider grant there would reach Argo CD's own ConfigMaps and Secrets (argocd-cm,
-  # argocd-rbac-cm), letting a commit to the app-of-apps chart rewrite Argo CD itself.
+  # argocd-rbac-cm, argocd-secret), letting a commit to the app-of-apps chart rewrite
+  # Argo CD itself.
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.root.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
     error_message = "The root project must source only from the slipstream repository."
@@ -227,9 +247,8 @@ run "app_projects_are_scoped" {
     error_message = "The root project must manage only Argo CD Application objects."
   }
 
-  # The workloads project — the one a rollout freeze's sync windows land on — deploys
-  # from this repo into the namespaces the application workloads run in, and nowhere
-  # else.
+  # The workloads project deploys from this repo into the namespaces the application
+  # workloads run in, and nowhere else.
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
     error_message = "The workloads project must source only from the slipstream repository."
@@ -243,8 +262,8 @@ run "app_projects_are_scoped" {
   }
 
   # Argo CD denies every cluster-scoped kind a project does not whitelist, so neither
-  # project may carry a cluster resource whitelist: no app can create a namespace, CRD
-  # or ClusterRole.
+  # project may carry a cluster resource whitelist: no app in them creates a namespace,
+  # CRD or ClusterRole.
   assert {
     condition = alltrue([
       for name, project in yamldecode(helm_release.argocd_apps.values[0]).projects :
