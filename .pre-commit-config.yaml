@@ -10,9 +10,9 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
         args: [--allow-multiple-documents]
-        # The Argo CD charts' templates include named templates, which is not YAML until
-        # Helm renders it; test/chart-render-test.sh validates their render instead.
-        exclude: ^k8s/.+/templates/
+        # The app-of-apps chart's templates include named templates, which is not YAML
+        # until Helm renders it; test/chart-render-test.sh validates their render instead.
+        exclude: ^k8s/argocd/apps/templates/
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: detect-private-key

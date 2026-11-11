@@ -567,8 +567,9 @@ run "metrics_stack_rejects_a_remote_write_url_that_is_not_https" {
 }
 
 # The Collector (k8s/otel-collector/templates/otel-collector.yaml) reads where to send
-# from this ConfigMap: traces over OTLP to the hosted Tempo and span metrics by remote_write to the hosted Prometheus,
-# each authenticating as its own instance ID with the write token.
+# from this ConfigMap: traces over OTLP to the hosted Tempo and span metrics by
+# remote_write to the hosted Prometheus, each authenticating as its own instance ID with
+# the write token.
 run "collector_endpoints_name_the_hosted_tempo_and_prometheus" {
   command = plan
 

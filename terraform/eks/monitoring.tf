@@ -130,8 +130,8 @@ locals {
           }]
         }
         # The OTel Collector's Service (k8s/otel-collector/templates/otel-collector.yaml),
-        # on the port serving its own metrics. Only each exporter's sent and failed counts are kept, which show
-        # whether Grafana Cloud takes what the Collector sends.
+        # on the port serving its own metrics. Only each exporter's sent and failed counts
+        # are kept, which show whether Grafana Cloud takes what the Collector sends.
         otel-collector = {
           namespaceSelector = { matchNames = [kubernetes_namespace_v1.slipstream.metadata[0].name] }
           selector          = { matchLabels = { app = "otel-collector" } }
