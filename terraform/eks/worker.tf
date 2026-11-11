@@ -165,8 +165,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
 }
 
 # Binds the worker's ServiceAccount (created by the worker's chart, which Argo CD syncs
-# into the prefect namespace) to the role. A standalone resource, so — unlike the EBS CSI association, a module.eks
-# input — the plan test can assert its namespace/SA wiring.
+# into the prefect namespace) to the role. A standalone resource, so — unlike the EBS CSI
+# association, a module.eks input — the plan test can assert its namespace/SA wiring.
 resource "aws_eks_pod_identity_association" "prefect_worker" {
   cluster_name    = module.eks.cluster_name
   namespace       = local.prefect_namespace

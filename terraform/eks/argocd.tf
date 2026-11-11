@@ -88,12 +88,12 @@ locals {
       namespaceResourceWhitelist = [{ group = "argoproj.io", kind = "Application" }]
     }
     # The application workloads' project: it deploys into the namespaces the worker and
-    # the OTel Collector run in, from this repo and the upstream chart repository the
-    # worker's chart comes from.
+    # the OTel Collector run in, from this repo and the prefect-helm chart repository the
+    # worker's chart comes from (the Prefect server's, too).
     workloads = {
       namespace   = local.argocd_namespace
-      description = "The cluster's application workloads, deployed from this repo."
-      sourceRepos = [local.argocd_source_repo, "https://prefecthq.github.io/prefect-helm"]
+      description = "The cluster's application workloads, deployed from this repo and the charts it pins."
+      sourceRepos = [local.argocd_source_repo, helm_release.prefect_server.repository]
       destinations = [
         { server = local.argocd_in_cluster_server, namespace = local.prefect_namespace },
         { server = local.argocd_in_cluster_server, namespace = kubernetes_namespace_v1.slipstream.metadata[0].name },

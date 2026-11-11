@@ -2,9 +2,8 @@
 # Static check of the child Applications the app-of-apps chart (k8s/argocd/apps) renders
 # for the root Application: the chart is rendered with the cluster values the eks stack
 # passes (ci/test-values.yaml), and the Prefect worker's Application must deploy the
-# pinned upstream chart into the prefect namespace, server-side, with the worker values
-# Terraform used to release it with — every cluster-specific one taken from the root's
-# values, the image tag included. Needs helm and yq; no cluster.
+# pinned upstream chart into the prefect namespace, server-side, with the worker's values —
+# every cluster-specific one taken from the root's values, the image tag included. Needs helm and yq; no cluster.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,9 +19,9 @@ if [[ -z "${worker_app}" ]]; then
   exit 1
 fi
 
-# The value at yq path $1 in a root value file ($2), as yq prints it.
-value_of() {
-  yq "$1" "$2"
+# The root's value at yq path $1, as yq prints it.
+root_value() {
+  yq "$1" "${apps_values}"
 }
 
 # Fails when the worker Application's value at yq path $1 is not $2, naming what $3 says
@@ -36,7 +35,7 @@ expect() {
   fi
 }
 
-values='.spec.source.helm.valuesObject'
+worker_values_path='.spec.source.helm.valuesObject'
 
 # --- Placement: project, source chart, destination, sync ---
 expect '.metadata.namespace' 'argocd' "child Applications live in Argo CD's namespace"
@@ -45,25 +44,25 @@ expect '.spec.source.repoURL' 'https://prefecthq.github.io/prefect-helm' 'the up
 expect '.spec.source.chart' 'prefect-worker' 'the upstream prefect-worker chart'
 expect '.spec.source.targetRevision' '2026.9.26234203' 'the pinned chart version, matching the prefect-server chart'
 expect '.spec.destination.server' 'https://kubernetes.default.svc' 'the cluster Argo CD runs in'
-expect '.spec.destination.namespace' "$(value_of '.namespaces.prefect' "${apps_values}")" "the prefect namespace from the root's values, where Pod Identity binds the worker"
+expect '.spec.destination.namespace' "$(root_value '.namespaces.prefect')" "the prefect namespace from the root's values, where Pod Identity binds the worker"
 expect '.spec.syncPolicy.automated' "$(printf 'prune: true\nselfHeal: true')" 'automated sync that prunes and reverts drift'
 expect '.spec.syncPolicy.syncOptions | length' '1' 'server-side apply is the one sync option'
 expect '.spec.syncPolicy.syncOptions[0]' 'ServerSideApply=true' 'server-side apply'
 
 # --- Worker values ---
-expect "${values}.worker.image.repository" "$(value_of '.orchestrationImageRepository' "${apps_values}")" "the image repository from the root's values"
-expect "${values}.worker.image.prefectTag" "$(value_of '.orchestrationImageTag' "${apps_values}")" "the image tag from the root's values"
-expect "${values}.worker.image.pullPolicy" 'IfNotPresent' 'the tag is an immutable content-sha, so a cached image is always the right one'
-expect "${values}.worker.config.type" 'process' 'a process worker runs the serial single-GPU sweep as a subprocess'
-expect "${values}.worker.config.workPool" "$(sed -n 's/^prefect_work_pool := "\(.*\)"$/\1/p' "${repo_root}/justfile")" 'the work pool just prefect-up creates (justfile prefect_work_pool)'
-expect "${values}.worker.apiConfig" 'selfHostedServer' 'the in-cluster self-hosted server'
-expect "${values}.worker.selfHostedServerApiConfig.apiUrl" "$(value_of '.prefectApiUrl' "${apps_values}")" "the server's in-cluster API URL from the root's values"
-expect "${values}.worker.replicaCount" '1' 'one worker drains the concurrency-1 pool'
-expect "${values}.worker.extraEnvVarsCMs | length" '1' 'the worker loads one ConfigMap into its environment'
-expect "${values}.worker.extraEnvVarsCMs[0]" "$(value_of '.configMaps.benchEndpointTopology' "${apps_values}")" "the bench-endpoint topology ConfigMap from the root's values"
-expect "${values}.serviceAccount.create" 'true' 'the chart creates the ServiceAccount Pod Identity binds'
-expect "${values}.serviceAccount.name" "$(value_of '.serviceAccounts.prefectWorker' "${apps_values}")" "the ServiceAccount name from the root's values"
-expect "${values}.role.create" 'false' 'the eks stack owns the worker RBAC'
-expect "${values}.rolebinding.create" 'false' 'the eks stack owns the worker RBAC'
+expect "${worker_values_path}.worker.image.repository" "$(root_value '.orchestrationImageRepository')" "the image repository from the root's values"
+expect "${worker_values_path}.worker.image.prefectTag" "$(root_value '.orchestrationImageTag')" "the image tag from the root's values"
+expect "${worker_values_path}.worker.image.pullPolicy" 'IfNotPresent' 'the tag is an immutable content-sha, so a cached image is always the right one'
+expect "${worker_values_path}.worker.config.type" 'process' 'a process worker runs the serial single-GPU sweep as a subprocess'
+expect "${worker_values_path}.worker.config.workPool" "$(sed -n 's/^prefect_work_pool := "\(.*\)"$/\1/p' "${repo_root}/justfile")" 'the work pool just prefect-up creates (justfile prefect_work_pool)'
+expect "${worker_values_path}.worker.apiConfig" 'selfHostedServer' 'the in-cluster self-hosted server'
+expect "${worker_values_path}.worker.selfHostedServerApiConfig.apiUrl" "$(root_value '.prefectApiUrl')" "the server's in-cluster API URL from the root's values"
+expect "${worker_values_path}.worker.replicaCount" '1' 'one worker drains the concurrency-1 pool'
+expect "${worker_values_path}.worker.extraEnvVarsCMs | length" '1' 'the worker loads one ConfigMap into its environment'
+expect "${worker_values_path}.worker.extraEnvVarsCMs[0]" "$(root_value '.configMaps.benchEndpointTopology')" "the bench-endpoint topology ConfigMap from the root's values"
+expect "${worker_values_path}.serviceAccount.create" 'true' 'the chart creates the ServiceAccount Pod Identity binds'
+expect "${worker_values_path}.serviceAccount.name" "$(root_value '.serviceAccounts.prefectWorker')" "the ServiceAccount name from the root's values"
+expect "${worker_values_path}.role.create" 'false' 'the eks stack owns the worker RBAC'
+expect "${worker_values_path}.rolebinding.create" 'false' 'the eks stack owns the worker RBAC'
 
 exit "${fail}"
