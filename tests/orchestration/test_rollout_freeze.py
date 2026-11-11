@@ -23,6 +23,7 @@ from slipstream_bench.orchestration.rollout_freeze import (
     AppProjectFreeze,
     hold_rollout_freeze,
 )
+from tests.orchestration.rollout_freeze_fakes import RecordingFreeze
 
 _LOGGER_NAME = "slipstream_bench.orchestration.rollout_freeze"
 _NOW = datetime(2026, 11, 11, 14, 7, 33, tzinfo=UTC)
@@ -152,21 +153,8 @@ def test_release_without_its_run_s_window_leaves_the_project_unpatched() -> None
     assert project.patches == []
 
 
-class _RecordingFreeze:
-    """Record each acquire and release the session makes, in order."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, ...]] = []
-
-    def acquire(self, holder: str, duration_s: int) -> None:
-        self.calls.append(("acquire", holder, str(duration_s)))
-
-    def release(self, holder: str) -> None:
-        self.calls.append(("release", holder))
-
-
 def test_session_holds_the_freeze_around_its_body() -> None:
-    freeze = _RecordingFreeze()
+    freeze = RecordingFreeze()
 
     with hold_rollout_freeze(freeze, holder="knob-20261111", duration_s=68400):
         assert freeze.calls == [("acquire", "knob-20261111", "68400")]
@@ -175,7 +163,7 @@ def test_session_holds_the_freeze_around_its_body() -> None:
 
 
 def test_session_releases_the_freeze_when_its_body_fails() -> None:
-    freeze = _RecordingFreeze()
+    freeze = RecordingFreeze()
 
     with (
         pytest.raises(ValueError, match="point failed"),
@@ -192,7 +180,7 @@ def test_session_leaves_the_release_to_the_hook_when_the_run_is_killed(
 ) -> None:
     # The hooks destroy the bench endpoint before they release the freeze, so a rollout
     # Argo CD started on a release here could restart the worker under that destroy.
-    freeze = _RecordingFreeze()
+    freeze = RecordingFreeze()
 
     with (
         pytest.raises(signal),
@@ -207,7 +195,7 @@ def test_session_logs_its_acquire_and_release(caplog: pytest.LogCaptureFixture) 
     caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
 
     with hold_rollout_freeze(
-        _RecordingFreeze(), holder="knob-20261111", duration_s=68400
+        RecordingFreeze(), holder="knob-20261111", duration_s=68400
     ):
         pass
 
@@ -225,7 +213,7 @@ def test_session_logs_that_it_left_the_freeze_for_the_hook(
     with (
         pytest.raises(TerminationSignal),
         hold_rollout_freeze(
-            _RecordingFreeze(), holder="knob-20261111", duration_s=68400
+            RecordingFreeze(), holder="knob-20261111", duration_s=68400
         ),
     ):
         raise TerminationSignal(15)

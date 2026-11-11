@@ -5,6 +5,9 @@ the Prefect-free core's INFO milestones reach the UI, the run joins the ``run=<r
 filter, and its cells run on a bench endpoint opened from the worker's environment. Both
 register :func:`destroy_run_bench_endpoint` as their crash and cancellation hook, which
 destroys that endpoint after the run's session has exited.
+
+A flow that holds Argo CD off the workloads for its run (ADR-0029) opens its rollout
+freeze here too, through :func:`build_rollout_freeze`.
 """
 
 import logging
@@ -33,6 +36,11 @@ from slipstream_bench.orchestration.cluster import (
     Kubectl,
     build_kubectl,
     read_vllm_api_key,
+)
+from slipstream_bench.orchestration.rollout_freeze import (
+    AppProjectFreeze,
+    RolloutFreeze,
+    hold_rollout_freeze,
 )
 
 # The package whose stdlib loggers carry the Prefect-free core's milestone lines. The
@@ -100,6 +108,31 @@ def open_run_bench_endpoint(
         api_key=read_vllm_api_key(kubectl),
         results_bucket=bucket,
         run_id=run_id,
+    )
+
+
+def build_rollout_freeze(kubectl: Kubectl) -> RolloutFreeze:
+    """Build the production :class:`RolloutFreeze`: a deny window on the workloads project.
+
+    :param kubectl: the transport the AppProject is read and patched through.
+    :return: the freeze a run holds Argo CD off the workloads with.
+    """
+    return AppProjectFreeze(kubectl=kubectl)
+
+
+def open_run_rollout_freeze(
+    *, kubectl: Kubectl, run_id: str, duration_s: int
+) -> AbstractContextManager[None]:
+    """Open the run's rollout freeze, which lapses unreleased after ``duration_s``.
+
+    :param kubectl: the transport the freeze is acquired and released through.
+    :param run_id: the run the freeze is held for.
+    :param duration_s: how long the freeze lasts unreleased, in seconds — the run's
+        timeout.
+    :return: the session, which holds the freeze and releases it on exit.
+    """
+    return hold_rollout_freeze(
+        build_rollout_freeze(kubectl), holder=run_id, duration_s=duration_s
     )
 
 
