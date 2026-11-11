@@ -105,6 +105,21 @@ BOUNDARY_RULES: tuple[BoundaryRule, ...] = (
         ),
     ),
     BoundaryRule(
+        package="slipstream_bench.orchestration.rollout_freeze",
+        # The rollout freeze is the flows' Prefect-free core for holding Argo CD off the
+        # workloads during a run: each flow holds it around its session, and its tests drive
+        # it against a fake kubectl with no Prefect runtime. forbidden blocks Prefect in the
+        # subprocess probe; allowed holds the module's own source to the stdlib and the
+        # kubectl transport it shares with the cluster module. The rule governs this one
+        # module, not the orchestration package around it.
+        forbidden=frozenset({"prefect", "prefect_aws"}),
+        allowed=frozenset(sys.stdlib_module_names) | {"slipstream_bench"},
+        probe=(
+            "import slipstream_bench.orchestration.rollout_freeze as rollout_freeze\n"
+            "assert rollout_freeze.AppProjectFreeze is not None\n"
+        ),
+    ),
+    BoundaryRule(
         package="slipstream_bench.executor",
         # The bench executor the image installs depends inward on the contract kernel
         # alone (ADR-0017): never Prefect or the plotting stack the image does not ship.
