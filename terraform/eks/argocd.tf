@@ -49,25 +49,27 @@ locals {
       namespace = local.argocd_namespace
     }
     # Automated with prune and self-heal, so main is what runs: a child app removed from
-    # the chart is deleted and hand edits are reverted. The root applies its child
+    # the chart is deleted (the last one too, by allowEmpty) and hand edits are
+    # reverted. The root applies its child
     # Application objects server-side; sync options are per Application, so each child
     # carries its own.
     syncPolicy = {
-      automated   = { prune = true, selfHeal = true }
+      automated   = { prune = true, selfHeal = true, allowEmpty = true }
       syncOptions = ["ServerSideApply=true"]
     }
   }
 
-  # Two projects, so the root Application's right to write Application objects into
-  # Argo CD's namespace is not a right to deploy workloads, nor the workloads' a right
-  # to touch Argo CD. Argo CD's built-in default project stays permissive, and a child
-  # Application names its own project, so the app-of-apps chart must name workloads.
-  # Neither whitelists a cluster-scoped kind, and Argo CD denies every cluster-scoped kind
-  # a project does not whitelist: no app creates a namespace, CRD or ClusterRole.
+  # Two projects scope what each layer may deploy: root writes only Application objects
+  # into Argo CD's namespace, and workloads deploys only into the prefect and slipstream
+  # namespaces. Neither whitelists a cluster-scoped kind, and Argo CD denies every
+  # cluster-scoped kind a project does not whitelist. Argo CD's built-in default project
+  # is left permissive, and a child Application names its own project, so these limits
+  # hold for the child Applications that name workloads.
   argocd_projects = {
     # The root project manages only Application objects in Argo CD's namespace. Any wider
     # grant there would reach Argo CD's own ConfigMaps and Secrets (argocd-cm,
-    # argocd-rbac-cm), letting a commit to the app-of-apps chart rewrite Argo CD.
+    # argocd-rbac-cm, argocd-secret), letting a commit to the app-of-apps chart rewrite
+    # Argo CD.
     root = {
       namespace   = local.argocd_namespace
       description = "The root app-of-apps Application: writes the child Applications."
@@ -77,11 +79,11 @@ locals {
       ]
       namespaceResourceWhitelist = [{ group = "argoproj.io", kind = "Application" }]
     }
-    # The application workloads' project, the one a rollout freeze's sync windows land
-    # on: it deploys into the namespaces the worker and the OTel Collector run in.
+    # The application workloads' project: it deploys into the namespaces the worker and
+    # the OTel Collector run in.
     workloads = {
       namespace   = local.argocd_namespace
-      description = "The cluster's application workloads, deployed from main."
+      description = "The cluster's application workloads, deployed from this repo."
       sourceRepos = [local.argocd_source_repo]
       destinations = [
         { server = local.argocd_in_cluster_server, namespace = local.prefect_namespace },
@@ -124,6 +126,13 @@ resource "helm_release" "argocd_apps" {
   repository       = "https://argoproj.github.io/argo-helm"
   chart            = "argocd-apps"
   version          = var.argocd_apps_chart_version
+
+  # Roll back atomically when the API server rejects an AppProject or the root
+  # Application, so cluster-up fails without leaving the projects half-applied. Helm's
+  # wait does not cover custom resources; cluster-up waits on the root Application's
+  # sync and health itself.
+  wait   = true
+  atomic = true
 
   values = [yamlencode(local.argocd_apps_helm_values)]
 
