@@ -1,1 +1,3 @@
+{{- /* Helm notes, shown on a manual `helm install` only; Argo CD ignores them. The file
+keeps templates/ in git so the chart lints with no child Application templates. */ -}}
 slipstream-apps: the child Argo CD Applications for the slipstream cluster's workloads, synced by the root Application.

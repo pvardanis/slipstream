@@ -95,7 +95,7 @@ run "argocd_install_is_pinned" {
   }
   assert {
     condition     = helm_release.argocd.version == "10.17.2"
-    error_message = "The argo-cd chart must be pinned to 10.17.2 (Argo CD v3.6.1)."
+    error_message = "The argo-cd chart must be pinned to 10.17.2."
   }
   assert {
     condition     = helm_release.argocd.namespace == "argocd"
@@ -181,8 +181,8 @@ run "root_application_carries_cluster_values" {
     error_message = "The root Application must carry the bench-endpoint topology and Grafana Cloud endpoints ConfigMap names."
   }
 
-  # Argo CD applies server-side, so a manifest that omits a field (an autoscaler-owned
-  # `replicas`) never resets it, and keeps the cluster on what main says.
+  # The root applies its child Application objects server-side, so a field Terraform
+  # omits from one is left to whoever owns it instead of being reset.
   assert {
     condition     = contains(yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.syncOptions, "ServerSideApply=true")
     error_message = "The root Application must sync with ServerSideApply=true."
@@ -231,15 +231,15 @@ run "app_projects_are_scoped" {
   # from this repo into the namespaces the application workloads run in, and nowhere
   # else.
   assert {
-    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.slipstream.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
-    error_message = "The slipstream project must source only from the slipstream repository."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
+    error_message = "The workloads project must source only from the slipstream repository."
   }
   assert {
-    condition = yamldecode(helm_release.argocd_apps.values[0]).projects.slipstream.destinations == [
+    condition = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.destinations == [
       { server = "https://kubernetes.default.svc", namespace = "prefect" },
       { server = "https://kubernetes.default.svc", namespace = "slipstream" },
     ]
-    error_message = "The slipstream project must deploy only into the in-cluster prefect and slipstream namespaces."
+    error_message = "The workloads project must deploy only into the in-cluster prefect and slipstream namespaces."
   }
 
   # Argo CD denies every cluster-scoped kind a project does not whitelist, so neither
@@ -253,7 +253,7 @@ run "app_projects_are_scoped" {
     error_message = "No AppProject may whitelist cluster-scoped resources."
   }
   assert {
-    condition     = keys(yamldecode(helm_release.argocd_apps.values[0]).projects) == ["root", "slipstream"]
-    error_message = "Argo CD must have exactly the root and slipstream projects."
+    condition     = keys(yamldecode(helm_release.argocd_apps.values[0]).projects) == ["root", "workloads"]
+    error_message = "Terraform must hand Argo CD exactly the root and workloads projects."
   }
 }
