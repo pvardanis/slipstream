@@ -215,9 +215,9 @@ acceptance bar is that one worked pivot, not four-way completeness.
   set per-request goodput, derive exemplar-bearing latency metrics, fan out, batch — no
   tail-sampling). vLLM emits OTel traces.
 - **Deploy → Sentry release marker:** a deploy event creates a Sentry release + commit SHA so a
-  p95 regression attributes to the exact rollout. Argo CD Notifications sends it on every
-  successful sync, keyed by the synced commit SHA, so every workload Argo CD owns gets one
-  ([ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md)).
+  p95 regression attributes to the exact rollout. Once Sentry is integrated, Argo CD
+  Notifications sends it on every successful sync, keyed by the synced commit SHA, so every
+  workload Argo CD owns gets one ([ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md)).
 - **Rehearsed rollback:** rollback is a **run deliverable**, not an assertion — deploy a bad config,
   watch the SLO burn-rate alert fire, revert, confirm recovery. Rides alongside chaos day. Rollback
   you have not run is not rollback.
