@@ -238,7 +238,7 @@ for call in "get configmap" wait; do
 done
 # Rollout passes when the Deployment rolls out, and on a failed one shows why the pod waits.
 check_passes "rollout passes" rollout
-if [[ "$(grep -n . "${tmp}/kubectl-calls" | grep -E 'wait --for=create deploy/otel-collector|rollout status' | cut -d: -f2-)" == "$(printf '%s\n' "-n slipstream wait --for=create deploy/otel-collector --timeout=300s" "-n slipstream rollout status deploy/otel-collector --timeout=120s")" ]]; then
+if [[ "$(grep -E 'wait --for=create deploy/otel-collector|rollout status' "${tmp}/kubectl-calls")" == "$(printf '%s\n' "-n slipstream wait --for=create deploy/otel-collector --timeout=300s" "-n slipstream rollout status deploy/otel-collector --timeout=120s")" ]]; then
   ok "rollout waits for Argo CD to create the Deployment first"
 else
   bad "rollout waits for Argo CD to create the Deployment first: $(cat "${tmp}/kubectl-calls")"
