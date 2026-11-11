@@ -149,5 +149,14 @@ resource "helm_release" "argocd_apps" {
   # applies only once Argo CD is installed, and uninstalls before it at cluster-down. The
   # worker connects to the Prefect server on startup and creates the work pool if it is
   # absent, so the root (and the worker app it writes) waits for the server to be Ready.
-  depends_on = [helm_release.argocd, helm_release.prefect_server]
+  # Pod Identity credentials are injected when a pod is admitted, and Argo CD never
+  # restarts a pod that started without them, so the worker's association, its role's
+  # policy and its vllm-gpu RBAC exist before the root writes the worker app.
+  depends_on = [
+    helm_release.argocd,
+    helm_release.prefect_server,
+    aws_eks_pod_identity_association.prefect_worker,
+    aws_iam_role_policy.prefect_worker,
+    kubernetes_role_binding_v1.vllm_gpu_manage,
+  ]
 }
