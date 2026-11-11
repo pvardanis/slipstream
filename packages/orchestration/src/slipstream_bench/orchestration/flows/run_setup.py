@@ -7,7 +7,9 @@ register :func:`destroy_run_bench_endpoint` as their crash and cancellation hook
 destroys that endpoint after the run's session has exited.
 
 A flow that holds Argo CD off the workloads for its run (ADR-0029) opens its rollout
-freeze here too, through :func:`build_rollout_freeze`.
+freeze here too, through :func:`build_rollout_freeze`, and registers
+:func:`release_run_rollout_freeze` after the destroy hook, which releases a killed run's
+freeze once its endpoint is destroyed.
 """
 
 import logging
@@ -38,6 +40,7 @@ from slipstream_bench.orchestration.cluster import (
     read_vllm_api_key,
 )
 from slipstream_bench.orchestration.rollout_freeze import (
+    HOOK_RELEASED_LINE,
     AppProjectFreeze,
     RolloutFreeze,
     hold_rollout_freeze,
@@ -173,3 +176,30 @@ def destroy_run_bench_endpoint(
         run_id=run_id,
     )
     logger.info(HOOK_DESTROYED_LINE, run_id)
+
+
+def release_run_rollout_freeze(
+    flow: Flow[..., Any], flow_run: FlowRun, state: State
+) -> None:
+    """Release a crashed or cancelled run's rollout freeze: the flows' state hook.
+
+    A killed run's freeze session leaves the release to this hook, which the flows register
+    after :func:`destroy_run_bench_endpoint`: the release lets Argo CD roll the worker, which
+    would cut off a destroy still running in it. Like the destroy hook, it rebuilds its
+    transport from the worker's environment and logs its release's start and end on the run
+    itself; a failure leaves no end line, and the window lapses after the run's timeout.
+
+    Prefect's runner passes the arguments by keyword and the in-process engine passes them
+    in order, so both their names and their order are fixed.
+
+    :param flow: the flow whose run ended, which names the run's log lines.
+    :param flow_run: the run, whose ``run_id`` parameter names the freeze released.
+    :param state: the Cancelling or Crashed state the run entered (unused; part of the hook
+        signature Prefect calls).
+    :raise KubectlError: when the AppProject cannot be read or patched.
+    """
+    logger = flow_run_logger(flow_run, flow)
+    run_id = flow_run.parameters["run_id"]
+    logger.info("releasing run %s's rollout freeze", run_id)
+    build_rollout_freeze(build_kubectl()).release(run_id)
+    logger.info(HOOK_RELEASED_LINE, run_id)

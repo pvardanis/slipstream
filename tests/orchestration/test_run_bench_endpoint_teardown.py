@@ -150,8 +150,10 @@ def test_hook_names_the_errored_state_copy_after_the_run(
 def test_both_flows_destroy_their_endpoint_on_a_crash_or_cancellation(
     parent_flow: Any,
 ) -> None:
-    assert parent_flow.on_cancellation_hooks == [destroy_run_bench_endpoint]
-    assert parent_flow.on_crashed_hooks == [destroy_run_bench_endpoint]
+    # The destroy runs first: any hook after it (the knob sweep's freeze release) could
+    # let Argo CD roll the worker the destroy runs in.
+    assert parent_flow.on_cancellation_hooks[0] is destroy_run_bench_endpoint
+    assert parent_flow.on_crashed_hooks[0] is destroy_run_bench_endpoint
 
 
 def _hook_messages(caplog: pytest.LogCaptureFixture) -> list[tuple[int, str]]:
