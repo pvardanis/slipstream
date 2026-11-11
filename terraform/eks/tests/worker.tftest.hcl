@@ -1,7 +1,8 @@
 # Plan-level tests for the Prefect worker layer on the eks stack (#178): the worker's
 # IAM role + least-privilege policy (S3 results bucket read and prefix-scoped writes, SSM
 # SendCommand to the bench host), its Pod Identity association, the ServiceAccount RBAC
-# scoped to managing deploy/vllm-gpu, and the prefect-worker Helm release. They run offline —
+# scoped to managing deploy/vllm-gpu, and the worker image and identity the root Application
+# hands Argo CD, which deploys the worker (k8s/argocd/apps). They run offline —
 # the aws, helm, and kubernetes providers are mocked, and the bootstrap remote state
 # and the orchestration ECR image are stubbed with override_data — so the assertions
 # check the install's shape without standing a cluster up (ADR-0002 tier-1). A worker
@@ -261,64 +262,14 @@ run "worker_layer_shape" {
     error_message = "The RoleBinding must reference the vllm-gpu-manage Role."
   }
 
-  # --- Helm release: the worker itself ---
+  # --- The worker's handoff to Argo CD ---
 
-  # The worker deploys into the prefect namespace — alongside the server, where its SA
-  # and Pod Identity association live.
+  # Argo CD deploys the worker (k8s/argocd/apps); Terraform hands it the worker's image
+  # through the root Application's values only. The repository comes from the bootstrap
+  # ECR output and the tag is the content-sha resolved from the :main image (the non-main
+  # tag on that manifest).
   assert {
-    condition     = helm_release.prefect_worker.namespace == "prefect"
-    error_message = "The worker must deploy into the prefect namespace."
-  }
-  assert {
-    condition     = helm_release.prefect_worker.repository == "https://prefecthq.github.io/prefect-helm"
-    error_message = "The worker must install from the upstream prefect-helm repository."
-  }
-  assert {
-    condition     = helm_release.prefect_worker.chart == "prefect-worker"
-    error_message = "Helm release must deploy the prefect-worker chart."
-  }
-  assert {
-    condition     = helm_release.prefect_worker.version == var.prefect_worker_chart_version
-    error_message = "Chart version must be pinned to var.prefect_worker_chart_version."
-  }
-  assert {
-    condition     = helm_release.prefect_worker.wait == true
-    error_message = "The worker release must wait for the Deployment so a broken install fails the apply."
-  }
-  assert {
-    condition     = helm_release.prefect_worker.atomic == true
-    error_message = "The worker release must be atomic so a failed install rolls back instead of leaving a half-up worker."
-  }
-
-  # A process worker (not kubernetes): the sweep runs as a subprocess in the worker
-  # pod, matching the serial single-GPU sweep (ADR-0015 amendment).
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.config.type == "process"
-    error_message = "The worker must be a process worker, not kubernetes."
-  }
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.config.workPool == var.prefect_work_pool
-    error_message = "The worker must poll the sweep work pool (var.prefect_work_pool)."
-  }
-  # A single replica: one worker draining a concurrency-1 pool, so the single-GPU sweep
-  # never runs two points at once.
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.replicaCount == 1
-    error_message = "The worker must run a single replica for the serial single-GPU sweep."
-  }
-  # Connects to the in-cluster self-hosted server over cluster DNS, no public endpoint.
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.apiConfig == "selfHostedServer"
-    error_message = "The worker must target the self-hosted in-cluster server."
-  }
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.selfHostedServerApiConfig.apiUrl == "http://prefect-server.prefect.svc.cluster.local:4200/api"
-    error_message = "The worker must reach the server over cluster DNS."
-  }
-  # Runs the orchestration image: repository from the bootstrap ECR output, tag the
-  # content-sha resolved from the :main image (the non-main tag on that manifest).
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.image.repository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageRepository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
     error_message = "The worker image repository must come from the bootstrap orchestration_image_repo_url output."
   }
   # The ECR lookup keys off the repository path, not the full registry URL — trimprefix
@@ -329,34 +280,23 @@ run "worker_layer_shape" {
     error_message = "The ECR lookup must strip the registry host to the repository path (slipstream/orchestration)."
   }
   assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.image.prefectTag == "orchestrator-abc123"
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageTag == "orchestrator-abc123"
     error_message = "The worker image tag must be the content-sha tag resolved from the orchestration :main image."
   }
-  # The ref is an immutable content-sha tag, so IfNotPresent is safe and correct: the
-  # tag uniquely identifies content, so a cached image on a node is always the right one
-  # (a floating :main + IfNotPresent would silently run a stale cached image).
+  # The worker's ServiceAccount and namespace Argo CD deploys into are the ones the Pod
+  # Identity association binds, so the worker pod gets the role's credentials.
   assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.image.pullPolicy == "IfNotPresent"
-    error_message = "The worker image pullPolicy must be IfNotPresent — the content-sha tag is immutable."
-  }
-  # The chart creates the SA (which Pod Identity binds); RBAC is owned by this stack,
-  # so the chart's own Role/RoleBinding are off — the chart's default role grants
-  # kubernetes-worker permissions a process worker does not need.
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).serviceAccount.create == true
-    error_message = "The chart must create the worker ServiceAccount (which Pod Identity binds)."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.serviceAccounts.prefectWorker == aws_eks_pod_identity_association.prefect_worker.service_account
+    error_message = "The root Application must hand Argo CD the ServiceAccount the Pod Identity association binds."
   }
   assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).serviceAccount.name == "prefect-worker"
-    error_message = "The chart must name the ServiceAccount prefect-worker to match the Pod Identity association."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.namespaces.prefect == aws_eks_pod_identity_association.prefect_worker.namespace
+    error_message = "The root Application must hand Argo CD the namespace the Pod Identity association binds."
   }
+  # The worker reaches the self-hosted server over cluster DNS, no public endpoint.
   assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).role.create == false
-    error_message = "The chart's own Role must be off — this stack owns the scoped RBAC."
-  }
-  assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).rolebinding.create == false
-    error_message = "The chart's own RoleBinding must be off — this stack owns the scoped RBAC."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.prefectApiUrl == "http://prefect-server.prefect.svc.cluster.local:4200/api"
+    error_message = "The worker must reach the server over cluster DNS."
   }
 
   # The slipstream namespace is created here (not just by `just gpu-deploy`) so the

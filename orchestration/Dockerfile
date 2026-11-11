@@ -6,9 +6,9 @@
 # serves or tokenizes, so it shares no base with the bench-client image (bench/Dockerfile).
 # It also carries the Terraform CLI, the bench-endpoint stack and that stack's providers, so
 # the worker can apply and destroy the bench endpoint around a sweep with no registry access.
-# The eks worker layer (terraform/eks/worker.tf) runs it under the prefect-worker Helm
-# chart, which supplies the container command; the CMD here only makes a bare `docker run`
-# do something sane.
+# Argo CD runs it as the Prefect worker (k8s/argocd/apps/templates/prefect-worker.yaml)
+# under the prefect-worker Helm chart, which supplies the container command; the CMD here
+# only makes a bare `docker run` do something sane.
 #
 # Two stages: a uv builder resolves the locked dependency set into a venv, and a Prefect
 # runtime (prefecthq/prefect) carries that venv on top of the worker runtime contract the

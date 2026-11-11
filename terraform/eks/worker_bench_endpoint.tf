@@ -395,10 +395,11 @@ resource "kubernetes_role_binding_v1" "vllm_api_key_read" {
 }
 
 # The topology as a ConfigMap the worker loads into its environment (worker.extraEnvVarsCMs
-# in worker.tf). A ConfigMap rather than inline Helm env, so the module ids, unknown until
-# the cluster exists, stay out of the release's values and those values stay known at plan.
-# Pod env is read at start: the release references the ConfigMap so the worker never
-# starts without it, and a change to it reaches the worker only when its pod restarts.
+# in k8s/argocd/apps/templates/prefect-worker.yaml). A ConfigMap rather than inline Helm
+# env, so the module ids, unknown until the cluster exists, stay out of the root
+# Application's values and those values stay known at plan. Pod env is read at start: the
+# root Application references the ConfigMap, so the worker's Application is not written
+# before it exists, and a change to it reaches the worker only when its pod restarts.
 resource "kubernetes_config_map_v1" "bench_endpoint_topology" {
   metadata {
     name      = "bench-endpoint-topology"

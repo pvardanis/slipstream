@@ -7,6 +7,9 @@
 
 locals {
   prefect_namespace = "prefect"
+  # The server's in-cluster API URL over cluster DNS, the one the worker polls; the
+  # chart names the Service after the release below.
+  prefect_server_api_url = "http://${helm_release.prefect_server.name}.${local.prefect_namespace}.svc.cluster.local:4200/api"
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. Postgres off / SQLite on is the database-backend choice; the PVC

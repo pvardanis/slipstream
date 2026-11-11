@@ -177,11 +177,24 @@ run "root_application_carries_cluster_values" {
   }
 
   # The cluster values Terraform knows, handed to the app-of-apps chart: the
-  # orchestration image repository (bootstrap ECR), the worker's Pod Identity-bound
-  # ServiceAccount, and the ConfigMaps this stack publishes.
+  # orchestration image repository (bootstrap ECR) and the content-sha tag resolved from
+  # its :main image, the Prefect server's namespace and in-cluster API URL, the worker's
+  # Pod Identity-bound ServiceAccount, and the ConfigMaps this stack publishes.
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageRepository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
     error_message = "The root Application must carry the orchestration image repository URL from the bootstrap stack."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageTag == "orchestrator-abc123"
+    error_message = "The root Application must carry the content-sha tag resolved from the orchestration :main image."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.namespaces == { prefect = "prefect" }
+    error_message = "The root Application must carry the prefect namespace the Prefect server runs in."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.prefectApiUrl == "http://prefect-server.prefect.svc.cluster.local:4200/api"
+    error_message = "The root Application must carry the Prefect server's in-cluster API URL."
   }
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.serviceAccounts == { prefectWorker = "prefect-worker" }
@@ -214,6 +227,7 @@ run "root_application_carries_cluster_values" {
       keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")))
       && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.serviceAccounts) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).serviceAccounts)
       && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.configMaps) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).configMaps)
+      && keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.namespaces) == keys(yamldecode(file("${path.module}/../../k8s/argocd/apps/values.yaml")).namespaces)
     )
     error_message = "The root Application's values must have exactly the keys k8s/argocd/apps/values.yaml declares."
   }
@@ -254,11 +268,12 @@ run "app_projects_are_scoped" {
     error_message = "The root project must manage only Argo CD Application objects."
   }
 
-  # The workloads project deploys from this repo into the namespaces the application
-  # workloads run in, and nowhere else.
+  # The workloads project deploys from this repo and the upstream prefect-helm chart
+  # repository (the worker's chart) into the namespaces the application workloads run
+  # in, and nowhere else.
   assert {
-    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
-    error_message = "The workloads project must source only from the slipstream repository."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.sourceRepos == ["https://github.com/pvardanis/slipstream.git", "https://prefecthq.github.io/prefect-helm"]
+    error_message = "The workloads project must source only from the slipstream repository and the prefect-helm chart repository."
   }
   assert {
     condition = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.destinations == [

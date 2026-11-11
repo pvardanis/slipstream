@@ -7,6 +7,10 @@
 # runs per cell (ADR-0012): it drives the sweep, issuing SSM SendCommand to the bench
 # host and reconfiguring deploy/vllm-gpu, but never serves the model itself.
 #
+# Argo CD deploys the worker itself (k8s/argocd/apps/templates/prefect-worker.yaml); this
+# stack resolves its image tag and hands it over through the root Application's values
+# (argocd.tf), and keeps what the worker is bound to in AWS and the cluster.
+#
 # Auth is keyless: a Pod Identity association grants the worker's ServiceAccount S3
 # (results bucket) + SSM SendCommand (bench host), and an in-namespace Role scopes it
 # to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys). The
@@ -24,10 +28,10 @@ locals {
 
   # The worker image: repository from the bootstrap ECR output, pinned to the immutable
   # content-sha tag the publish workflow puts on the :main manifest alongside :main (the
-  # non-main tag on that manifest, resolved in data.tf). The Deployment pins the sha, so a
-  # re-apply re-resolves to a new immutable ref (a real rollout) and a cached image on a
-  # node is always the right one under IfNotPresent. repository_name is the path after the
-  # registry host, which is what the ECR data source looks the image up by.
+  # non-main tag on that manifest, resolved in data.tf). The worker's Application pins the
+  # sha, so a re-apply re-resolves to a new immutable ref (a real rollout) and a cached
+  # image on a node is always the right one under IfNotPresent. repository_name is the
+  # path after the registry host, which is what the ECR data source looks the image up by.
   orchestration_repo_url  = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
   orchestration_repo_name = trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/")
   # The bootstrap stack's bench-results bucket, the worker's S3 target. try() turns a
@@ -38,42 +42,6 @@ locals {
   # comprehension's [0] resolves it — and an empty list (a loosened postcondition or
   # drifted filter) fails the plan loudly instead of pinning "".
   worker_image_tag = [for t in data.aws_ecr_image.orchestration.image_tags : t if t != "main"][0]
-
-  # Helm values as a map so the test can read the wiring back; encoded to YAML for the
-  # release below. A process worker (subprocess, not a per-run Job) matches the serial
-  # single-GPU sweep; the chart creates the SA that Pod Identity binds, but this stack
-  # owns the scoped RBAC, so the chart's own Role/RoleBinding (kubernetes-worker
-  # permissions a process worker never uses) are off.
-  prefect_worker_helm_values = {
-    worker = {
-      image = {
-        repository = local.orchestration_repo_url
-        prefectTag = local.worker_image_tag
-        # The tag is an immutable content-sha, so IfNotPresent is safe: the ref uniquely
-        # identifies content, so a cached image on a node is always the right one.
-        pullPolicy = "IfNotPresent"
-      }
-      config = {
-        workPool = var.prefect_work_pool
-        type     = "process"
-      }
-      apiConfig = "selfHostedServer"
-      selfHostedServerApiConfig = {
-        apiUrl = "http://prefect-server.${local.prefect_namespace}.svc.cluster.local:4200/api"
-      }
-      replicaCount = 1
-      # The bench-endpoint topology (worker_bench_endpoint.tf), loaded into the worker's
-      # environment for the flows that apply the stack. Referencing the ConfigMap orders
-      # the release after it, so the worker never starts without it.
-      extraEnvVarsCMs = [kubernetes_config_map_v1.bench_endpoint_topology.metadata[0].name]
-    }
-    serviceAccount = {
-      create = true
-      name   = local.worker_service_account
-    }
-    role        = { create = false }
-    rolebinding = { create = false }
-  }
 }
 
 # Scopes the SSM instance ARN to this account rather than a wildcard.
@@ -196,8 +164,8 @@ resource "aws_iam_role_policy" "prefect_worker" {
   }
 }
 
-# Binds the worker's ServiceAccount (created by the chart, in the prefect namespace) to
-# the role. A standalone resource, so — unlike the EBS CSI association, a module.eks
+# Binds the worker's ServiceAccount (created by the worker's chart, which Argo CD syncs
+# into the prefect namespace) to the role. A standalone resource, so — unlike the EBS CSI association, a module.eks
 # input — the plan test can assert its namespace/SA wiring.
 resource "aws_eks_pod_identity_association" "prefect_worker" {
   cluster_name    = module.eks.cluster_name
@@ -281,26 +249,4 @@ resource "kubernetes_role_binding_v1" "vllm_gpu_manage" {
     name      = local.worker_service_account
     namespace = local.prefect_namespace
   }
-}
-
-resource "helm_release" "prefect_worker" {
-  namespace        = local.prefect_namespace
-  create_namespace = false
-  name             = "prefect-worker"
-  repository       = "https://prefecthq.github.io/prefect-helm"
-  chart            = "prefect-worker"
-  version          = var.prefect_worker_chart_version
-
-  # Block apply until the worker Deployment is Ready and roll back atomically on
-  # failure, so a broken install (bad image, unreachable server, crashloop) fails the
-  # apply loudly rather than leaving a half-up worker.
-  wait   = true
-  atomic = true
-
-  values = [yamlencode(local.prefect_worker_helm_values)]
-
-  # The worker connects to the server on startup and creates the work pool if it is
-  # absent, so it must come up after the server is Ready; the prefect namespace the
-  # release deploys into is the one the server release created.
-  depends_on = [helm_release.prefect_server]
 }

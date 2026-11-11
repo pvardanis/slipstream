@@ -436,7 +436,7 @@ run "worker_bench_endpoint_topology" {
     error_message = "The worker must launch the bench host under the eks-owned instance profile."
   }
   assert {
-    condition     = yamldecode(helm_release.prefect_worker.values[0]).worker.extraEnvVarsCMs == [kubernetes_config_map_v1.bench_endpoint_topology.metadata[0].name]
-    error_message = "The worker must load the topology ConfigMap into its environment."
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.configMaps.benchEndpointTopology == kubernetes_config_map_v1.bench_endpoint_topology.metadata[0].name
+    error_message = "The root Application must hand Argo CD the topology ConfigMap the worker loads into its environment."
   }
 }
