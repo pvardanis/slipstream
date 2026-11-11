@@ -110,6 +110,12 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Spread** — how far one rung's metric varies across an arm's runs, reported as the median
   and the range.
 
+## Delivery
+
+- **Rollout** — a change on main reaching the workloads of a live cluster: what a Sentry
+  release marks. Not a redeploy, the experiment step that restarts the bench Engine with a
+  point's or arm run's engine knobs.
+
 ## Observability
 
 - **Request-ID** — one identifier carried across Grafana (fleet health), Sentry (code-path
