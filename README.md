@@ -237,7 +237,7 @@ days of history outlive every `just stack-down`
   ([`terraform/eks/remote-write-allowlist.yaml`](terraform/eks/remote-write-allowlist.yaml)),
   which keeps the fleet under the free tier's 10k active series.
 - **Traces:** vLLM emits one `llm_request` span per request to the OTel Collector
-  ([`k8s/otel-collector-config.yaml`](k8s/otel-collector-config.yaml)). The Collector
+  ([`k8s/otel-collector/config.yaml`](k8s/otel-collector/config.yaml)). The Collector
   renames vLLM's attributes to `request_id`, `prompt_tokens` and `completion_tokens`,
   adds `model_id` and the request's `ttft_ms`, and marks each request `slo_met` against
   the bench's goodput gates (TTFT ≤ 1 s and TPOT ≤ 50 ms). Its span metrics give live

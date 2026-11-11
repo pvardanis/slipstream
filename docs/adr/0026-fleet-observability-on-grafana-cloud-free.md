@@ -435,3 +435,14 @@ routing (L3) the breakdown shows the imbalance.
 - This replaces "the exemplar does not link to the trace" in "Export and exemplars" above:
   an exemplar on the e2e latency panel opens its trace in Tempo. It also replaces reading
   rather than managing the hosted Prometheus data source, for the dashboards' queries.
+
+## Amendment (2026-11-11, #510): Argo CD deploys the Collector
+
+- **Lifecycle:** Argo CD deploys the Collector from the root Application's revision
+  (ADR-0029), so it comes up with `just cluster-up`; `just stack-up` runs `just obs-pivot`
+  after it to check the trace path. Its config is `k8s/otel-collector/config.yaml`, still the single source
+  the spine test runs.
+- **`model_id`:** the Collector's chart takes `model.yaml` as its values file and writes its
+  `hfId` into the Collector's ConfigMap. The pod template carries a checksum of that
+  ConfigMap, so a merged change to the model or the config rolls the Collector, which reads
+  both only at start.
