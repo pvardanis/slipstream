@@ -24,7 +24,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/otel-collector-check.sh"
 # The Grafana Cloud exporters as the Collector's config names them, so the scrapes below
 # carry the IDs the Collector counts under.
-config="${repo_root}/k8s/otel-collector-config.yaml"
+config="${repo_root}/k8s/otel-collector/config.yaml"
 spans_exporter="$(yq '.service.pipelines.traces.exporters[] | select(test("grafana-cloud"))' "${config}")"
 points_exporter="$(yq '.service.pipelines.metrics.exporters[] | select(test("grafana-cloud"))' "${config}")"
 tmp="$(mktemp -d)"

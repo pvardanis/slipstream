@@ -3,14 +3,19 @@
 # telemetry — request_id and all — to its stdout, readable with `kubectl logs`, and
 # exports the traces to Grafana Cloud Traces and their span metrics to Grafana
 # Cloud's Prometheus, and serves its own metrics on 8888. The collector config is a
-# separate file (k8s/otel-collector-config.yaml) loaded into a ConfigMap by `just
-# obs-up`, so the same config the local test exercises is what the cluster runs.
+# separate file (config.yaml, beside Chart.yaml) the chart loads into a ConfigMap
+# (configmap.yaml), so the same config the local test exercises is what the cluster
+# runs. Argo CD deploys this chart from the root Application's tracked revision.
 # Reachable in-cluster as otel-collector.slipstream.svc:4317; no public endpoint.
 #
 # The slipstream namespace is created by the eks stack (`just cluster-up`), and
-# `just obs-up` and k8s/vllm.yaml apply it too; it is deliberately not declared
-# here so `just obs-down` (kubectl delete -f) removes only the collector, never the
-# shared namespace.
+# k8s/vllm.yaml applies it too; it is deliberately not declared here: the workloads
+# AppProject whitelists no cluster-scoped kind, and pruning this app removes only the
+# collector, never the shared namespace.
+#
+# Plain YAML apart from the quoted checksum annotation, so the tests that read the
+# Deployment and Service (tests/test_otel_collector_wiring.py, the monitoring plan test)
+# parse this file as it is.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,6 +32,10 @@ spec:
     metadata:
       labels:
         app: otel-collector
+      annotations:
+        # The Collector reads its config and MODEL_ID only at start, so a change to
+        # either rolls the pod.
+        checksum/config: '{{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}'
     spec:
       # We reach the collector by DNS, not the per-Service env vars Kubernetes
       # would otherwise inject; keep the container env clean.

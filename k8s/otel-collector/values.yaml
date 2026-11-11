@@ -1,0 +1,5 @@
+# The Collector chart's values. Empty here: its Application passes model.yaml, whose keys
+# these mirror.
+model:
+  # The served model's Hugging Face id, stamped as model_id on vLLM spans.
+  hfId: ""
