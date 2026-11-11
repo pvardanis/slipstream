@@ -275,6 +275,13 @@ run "app_projects_are_scoped" {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.sourceRepos == ["https://github.com/pvardanis/slipstream.git", "https://prefecthq.github.io/prefect-helm"]
     error_message = "The workloads project must source only from the slipstream repository and the prefect-helm chart repository."
   }
+  # The worker's chart (pinned in its Application, which Argo CD syncs from git) and the
+  # server's (pinned here) are one prefect-helm release, so the worker speaks the server's
+  # Prefect version.
+  assert {
+    condition     = regex("targetRevision: (\\S+)", file("${path.module}/../../k8s/argocd/apps/templates/prefect-worker.yaml"))[0] == var.prefect_server_chart_version
+    error_message = "The prefect-worker Application's chart version must equal var.prefect_server_chart_version."
+  }
   assert {
     condition = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.destinations == [
       { server = "https://kubernetes.default.svc", namespace = "prefect" },

@@ -41,7 +41,7 @@ cluster-up: _bootstrap-init
         field="${check%%=*}"
         want="${check#*=}"
         kubectl -n argocd wait "$@" --for=jsonpath="{.status.${field}.status}=${want}" --timeout=300s || {
-          echo "Argo CD's $* did not report ${want}; see the status.conditions: kubectl -n argocd get applications -o yaml" >&2
+          echo "Argo CD Application(s) not ${want} after 300s (kubectl -n argocd wait $*); see the status.conditions: kubectl -n argocd get applications -o yaml" >&2
           exit 1
         }
       done
