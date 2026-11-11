@@ -319,13 +319,18 @@ jobs:
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.10.21
-          install_args: helm kubeconform
+          install_args: helm kubeconform yq
       # Lints and renders every local chart under terraform/*/charts/ and validates the
       # output against the Kubernetes and CRD schemas, so a chart Terraform installs at
       # cluster-up fails here, not at cluster-up, on a template that fails to render or a
       # resource the API server would reject.
       - name: Render and validate the local Helm charts
         run: bash test/chart-render-test.sh
+      # Checks the child Applications the root Application's app-of-apps chart renders:
+      # the worker's chart pin, sync policy and values, with every cluster-specific value
+      # taken from the root's values.
+      - name: Check the app-of-apps chart's child Applications
+        run: bash test/argocd-apps-test.sh
 
   # The one required status check (ADR-0027). It fails when any job failed or was
   # cancelled and passes when each succeeded or was skipped, so a docs-only change
