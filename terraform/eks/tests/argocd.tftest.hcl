@@ -207,3 +207,53 @@ run "root_application_revision_is_configurable" {
     error_message = "The root Application's revision must come from var.argocd_target_revision."
   }
 }
+
+run "app_projects_are_scoped" {
+  command = plan
+
+  # The root project may only write Application objects into Argo CD's namespace. A
+  # wider grant there would reach Argo CD's own ConfigMaps and Secrets (argocd-cm,
+  # argocd-rbac-cm), letting a commit to the app-of-apps chart rewrite Argo CD itself.
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.root.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
+    error_message = "The root project must source only from the slipstream repository."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.root.destinations == [{ server = "https://kubernetes.default.svc", namespace = "argocd" }]
+    error_message = "The root project must deploy only into the in-cluster argocd namespace."
+  }
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.root.namespaceResourceWhitelist == [{ group = "argoproj.io", kind = "Application" }]
+    error_message = "The root project must manage only Argo CD Application objects."
+  }
+
+  # The workloads project — the one a rollout freeze's sync windows land on — deploys
+  # from this repo into the namespaces the application workloads run in, and nowhere
+  # else.
+  assert {
+    condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.slipstream.sourceRepos == ["https://github.com/pvardanis/slipstream.git"]
+    error_message = "The slipstream project must source only from the slipstream repository."
+  }
+  assert {
+    condition = yamldecode(helm_release.argocd_apps.values[0]).projects.slipstream.destinations == [
+      { server = "https://kubernetes.default.svc", namespace = "prefect" },
+      { server = "https://kubernetes.default.svc", namespace = "slipstream" },
+    ]
+    error_message = "The slipstream project must deploy only into the in-cluster prefect and slipstream namespaces."
+  }
+
+  # Argo CD denies every cluster-scoped kind a project does not whitelist, so neither
+  # project may carry a cluster resource whitelist: no app can create a namespace, CRD
+  # or ClusterRole.
+  assert {
+    condition = alltrue([
+      for name, project in yamldecode(helm_release.argocd_apps.values[0]).projects :
+      !contains(keys(project), "clusterResourceWhitelist")
+    ])
+    error_message = "No AppProject may whitelist cluster-scoped resources."
+  }
+  assert {
+    condition     = keys(yamldecode(helm_release.argocd_apps.values[0]).projects) == ["root", "slipstream"]
+    error_message = "Argo CD must have exactly the root and slipstream projects."
+  }
+}

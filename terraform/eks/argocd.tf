@@ -5,6 +5,10 @@
 
 locals {
   argocd_namespace = "argocd"
+  # The repo Argo CD syncs from (public, so no repository credentials) and the cluster
+  # it deploys into: the one it runs in.
+  argocd_source_repo = "https://github.com/pvardanis/slipstream.git"
+  argocd_in_cluster  = "https://kubernetes.default.svc"
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. No SSO is configured — the UI is reached over `kubectl port-forward`
@@ -24,7 +28,7 @@ locals {
     namespace = local.argocd_namespace
     project   = "root"
     source = {
-      repoURL        = "https://github.com/pvardanis/slipstream.git"
+      repoURL        = local.argocd_source_repo
       targetRevision = var.argocd_target_revision
       path           = "k8s/argocd/apps"
       helm = {
@@ -41,7 +45,7 @@ locals {
       }
     }
     destination = {
-      server    = "https://kubernetes.default.svc"
+      server    = local.argocd_in_cluster
       namespace = local.argocd_namespace
     }
     # Automated with prune and self-heal, so main is what runs: a child app removed from
@@ -53,7 +57,38 @@ locals {
     }
   }
 
+  # Two projects, so the root Application's right to write Application objects into
+  # Argo CD's namespace never extends to the workloads, nor theirs to Argo CD itself.
+  # Neither whitelists a cluster-scoped kind, and Argo CD denies every cluster-scoped kind
+  # a project does not whitelist: no app creates a namespace, CRD or ClusterRole.
+  argocd_projects = {
+    # The root project manages only Application objects in Argo CD's namespace. Any wider
+    # grant there would reach Argo CD's own ConfigMaps and Secrets (argocd-cm,
+    # argocd-rbac-cm), letting a commit to the app-of-apps chart rewrite Argo CD.
+    root = {
+      namespace   = local.argocd_namespace
+      description = "The root app-of-apps Application: writes the child Applications."
+      sourceRepos = [local.argocd_source_repo]
+      destinations = [
+        { server = local.argocd_in_cluster, namespace = local.argocd_namespace },
+      ]
+      namespaceResourceWhitelist = [{ group = "argoproj.io", kind = "Application" }]
+    }
+    # The application workloads' project, the one a rollout freeze's sync windows land
+    # on: it deploys into the namespaces the worker and the OTel Collector run in.
+    slipstream = {
+      namespace   = local.argocd_namespace
+      description = "The cluster's application workloads, deployed from main."
+      sourceRepos = [local.argocd_source_repo]
+      destinations = [
+        { server = local.argocd_in_cluster, namespace = local.prefect_namespace },
+        { server = local.argocd_in_cluster, namespace = kubernetes_namespace_v1.slipstream.metadata[0].name },
+      ]
+    }
+  }
+
   argocd_apps_helm_values = {
+    projects     = local.argocd_projects
     applications = { root = local.argocd_root_application }
   }
 }
