@@ -1,0 +1,18 @@
+# Cluster values the eks stack's root Application passes in (terraform/eks/argocd.tf,
+# helm.valuesObject); the names only Terraform knows. Empty here: the root Application
+# always supplies them.
+
+# The orchestration image repository URL (the bootstrap stack's ECR repository).
+orchestrationImageRepository: ""
+
+# ServiceAccount names the eks stack binds to IAM through Pod Identity.
+serviceAccounts:
+  # The Prefect worker's ServiceAccount, in the prefect namespace.
+  prefectWorker: ""
+
+# ConfigMap names the eks stack publishes.
+configMaps:
+  # The bench-endpoint topology the worker loads into its environment (prefect namespace).
+  benchEndpointTopology: ""
+  # The Grafana Cloud endpoints the OTel Collector exports to (slipstream namespace).
+  grafanaCloudEndpoints: ""

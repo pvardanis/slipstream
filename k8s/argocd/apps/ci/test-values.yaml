@@ -1,0 +1,8 @@
+# The cluster values the eks stack's root Application passes, as its plan test stubs them
+# (terraform/eks/tests/argocd.tftest.hcl), so the lint runs on what a sync renders.
+orchestrationImageRepository: 111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration
+serviceAccounts:
+  prefectWorker: prefect-worker
+configMaps:
+  benchEndpointTopology: bench-endpoint-topology
+  grafanaCloudEndpoints: grafana-cloud-endpoints
