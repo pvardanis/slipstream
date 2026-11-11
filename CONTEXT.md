@@ -81,9 +81,9 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Bench host** — the machine outside the cluster that runs the bench-client image and
   drives the cells against the bench endpoint. The measurement vantage: both arms of a
   comparison are measured from it.
-- **Redeploy** — an experiment flow restarting the bench Engine with a point's or arm run's
-  engine knobs, so the measurement that follows runs against them. The flow owns it; it is
-  never a rollout.
+- **Redeploy** — the knob sweep or KV cache A/B restarting the Engine behind the bench
+  endpoint with a point's or arm run's engine knobs, so the measurement that follows runs
+  against them. Never a rollout.
 
 ## KV cache A/B
 
@@ -116,7 +116,7 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 ## Delivery
 
 - **Rollout** — a change on main reaching the workloads of a live cluster: what a Sentry
-  release marks. Not a redeploy.
+  deploy marks, under the release named by main's commit. Not a redeploy.
 
 ## Observability
 
