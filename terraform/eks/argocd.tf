@@ -12,9 +12,12 @@ locals {
 
   # Helm values as a map so the test can read the wiring back; encoded to YAML for the
   # release below. No SSO is configured — the UI is reached over `kubectl port-forward`
-  # with the admin login — so Dex would be an idle pod on the CPU node.
+  # with the admin login — so Dex would be an idle pod on the CPU node. The CRDs are not
+  # kept on uninstall: they come off with the release at cluster-down, taking any
+  # remaining Applications and AppProjects with them.
   argocd_helm_values = {
-    dex = { enabled = false }
+    dex  = { enabled = false }
+    crds = { keep = false }
   }
 
   # The root app-of-apps Application: it syncs k8s/argocd/apps from this repo and writes

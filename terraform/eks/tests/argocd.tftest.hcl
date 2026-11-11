@@ -115,6 +115,13 @@ run "argocd_install_is_pinned" {
     condition     = yamldecode(helm_release.argocd.values[0]).dex.enabled == false
     error_message = "Dex must be disabled: no SSO is configured."
   }
+
+  # The CRDs come off with the release, so cluster-down's uninstall leaves nothing
+  # behind and reports no kept resources.
+  assert {
+    condition     = yamldecode(helm_release.argocd.values[0]).crds.keep == false
+    error_message = "The Argo CD CRDs must not be kept on uninstall."
+  }
 }
 
 run "root_application_carries_cluster_values" {
