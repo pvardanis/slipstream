@@ -38,7 +38,8 @@ mock_provider "aws" {
   }
   # The orchestration image the worker runs: the :main pointer resolves to one manifest
   # carrying exactly its own content-sha tag, so image_tags is [main, <sha>]. The stack
-  # picks the non-main tag to pin the Deployment to an immutable ref.
+  # picks the non-main tag the root Application hands Argo CD, pinning the worker to an
+  # immutable ref.
   mock_data "aws_ecr_image" {
     defaults = { image_tags = ["main", "orchestrator-abc123"] }
   }

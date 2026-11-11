@@ -1,6 +1,6 @@
 # The Prefect worker's child Application (#511): a process worker that polls the
 # self-hosted server's work pool and runs a sweep as a subprocess in its own pod, deployed
-# from the upstream prefect-worker chart. Its image tag and every cluster-specific name
+# from the upstream prefect-worker chart. Its image and every cluster-specific value
 # come from the root Application's values (terraform/eks/argocd.tf); `required` fails the
 # root's sync on a missing one rather than deploying a worker with an empty image or
 # identity. The IAM role, Pod Identity association and scoped RBAC stay in the eks stack
@@ -15,7 +15,8 @@ spec:
   source:
     repoURL: https://prefecthq.github.io/prefect-helm
     chart: prefect-worker
-    # Matches the prefect-server chart the eks stack installs (appVersion 3.8.7, Prefect 3).
+    # Matches the prefect-server chart the eks stack installs (appVersion 3.8.7, Prefect 3);
+    # terraform/eks/tests/argocd.tftest.hcl fails when the two differ.
     targetRevision: 2026.9.26234203
     helm:
       valuesObject:

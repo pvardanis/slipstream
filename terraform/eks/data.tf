@@ -1,8 +1,9 @@
 # Read-only references the Prefect worker layer (worker.tf) and the sweep-dispatch access
 # (sweep_dispatch.tf) need: the bootstrap stack's outputs and the orchestration image it
 # holds. The orchestration ECR repository lives in bootstrap because it must outlive
-# `just cluster-down`; the worker reads its URL here and resolves the current content-sha
-# tag from ECR to pin the worker's Application (argocd.tf) to an immutable ref.
+# `just cluster-down`; the stack reads its URL here and resolves the current content-sha
+# tag from ECR, which the root Application (argocd.tf) hands the worker's Application as
+# an immutable ref.
 
 # The bootstrap stack's outputs: the orchestration image repository URL, the
 # sweep-dispatch role ARN, and the cluster name and Prefect namespace the sweep-dispatch

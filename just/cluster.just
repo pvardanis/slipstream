@@ -46,7 +46,15 @@ cluster-up: _bootstrap-init
         }
       done
     }
+    # On a re-run that hands the worker a new image, every Application still shows the
+    # previous sync's Synced and Healthy until Argo CD reconciles, so first wait for the
+    # worker's Application to report the image the root now carries.
+    worker_image="$(kubectl -n argocd get application/root -o jsonpath='{.spec.source.helm.valuesObject.orchestrationImageRepository}:{.spec.source.helm.valuesObject.orchestrationImageTag}')"
     wait_synced_and_healthy application/root
+    kubectl -n argocd wait application/prefect-worker --for=jsonpath="{.status.summary.images[0]}=${worker_image}" --timeout=300s || {
+      echo "Argo CD's prefect-worker Application did not report image ${worker_image} after 300s; see its status: kubectl -n argocd get application prefect-worker -o yaml" >&2
+      exit 1
+    }
     wait_synced_and_healthy applications --all
 
 # Show the cluster changes `just cluster-up` would apply, without provisioning anything.
