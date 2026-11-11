@@ -60,7 +60,7 @@ grafana-mcp-test:
 otel-collector-check-test:
     bash test/otel-collector-check-test.sh
 
-# Lint and render every local Helm chart under terraform/*/charts/ and validate it against the Kubernetes and CRD schemas, and the root Application's app-of-apps chart (needs helm and kubeconform, no cluster).
+# Lint and render every local Helm chart under terraform/*/charts/, and the root Application's app-of-apps chart under k8s/argocd/apps, and validate them against the Kubernetes and CRD schemas (needs helm and kubeconform, no cluster).
 [group('test')]
 chart-render-test:
     bash test/chart-render-test.sh
