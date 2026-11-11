@@ -22,10 +22,11 @@ locals {
 
   # The root app-of-apps Application: it syncs k8s/argocd/apps from this repo and writes
   # the child Applications that chart renders into Argo CD's namespace. Its Helm values
-  # are the cluster-specific names only Terraform knows — the orchestration image
-  # repository from the bootstrap stack, the ServiceAccount Pod Identity binds, and the
-  # ConfigMaps this stack publishes — and they are the only Terraform-to-Argo CD handoff.
-  # Referencing the ConfigMaps orders the root after them, so no child app syncs
+  # are the cluster-specific values only Terraform knows — the orchestration image
+  # repository from the bootstrap stack and the worker's image tag resolved from it, the
+  # Prefect server's namespace and API URL, the ServiceAccount Pod Identity binds, and
+  # the ConfigMaps this stack publishes — and they are the only Terraform-to-Argo CD
+  # handoff. Referencing the ConfigMaps orders the root after them, so no child app syncs
   # before what it reads exists.
   argocd_root_application = {
     namespace = local.argocd_namespace
@@ -37,6 +38,11 @@ locals {
       helm = {
         valuesObject = {
           orchestrationImageRepository = local.orchestration_repo_url
+          orchestrationImageTag        = local.worker_image_tag
+          prefectApiUrl                = local.prefect_server_api_url
+          namespaces = {
+            prefect = local.prefect_namespace
+          }
           serviceAccounts = {
             prefectWorker = local.worker_service_account
           }
@@ -82,11 +88,12 @@ locals {
       namespaceResourceWhitelist = [{ group = "argoproj.io", kind = "Application" }]
     }
     # The application workloads' project: it deploys into the namespaces the worker and
-    # the OTel Collector run in.
+    # the OTel Collector run in, from this repo and the upstream chart repository the
+    # worker's chart comes from.
     workloads = {
       namespace   = local.argocd_namespace
       description = "The cluster's application workloads, deployed from this repo."
-      sourceRepos = [local.argocd_source_repo]
+      sourceRepos = [local.argocd_source_repo, "https://prefecthq.github.io/prefect-helm"]
       destinations = [
         { server = local.argocd_in_cluster_server, namespace = local.prefect_namespace },
         { server = local.argocd_in_cluster_server, namespace = kubernetes_namespace_v1.slipstream.metadata[0].name },
@@ -139,6 +146,8 @@ resource "helm_release" "argocd_apps" {
   values = [yamlencode(local.argocd_apps_helm_values)]
 
   # The Application and AppProject CRDs ship with the Argo CD chart, so this release
-  # applies only once Argo CD is installed, and uninstalls before it at cluster-down.
-  depends_on = [helm_release.argocd]
+  # applies only once Argo CD is installed, and uninstalls before it at cluster-down. The
+  # worker connects to the Prefect server on startup and creates the work pool if it is
+  # absent, so the root (and the worker app it writes) waits for the server to be Ready.
+  depends_on = [helm_release.argocd, helm_release.prefect_server]
 }

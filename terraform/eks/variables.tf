@@ -47,12 +47,6 @@ variable "prefect_sqlite_volume_size" {
   default     = "1Gi"
 }
 
-variable "prefect_worker_chart_version" {
-  description = "Pinned prefect-worker Helm chart version from the https://prefecthq.github.io/prefect-helm repo (matches the prefect-server chart, appVersion 3.8.7, Prefect 3)."
-  type        = string
-  default     = "2026.9.26234203"
-}
-
 variable "state_bucket" {
   description = "Name of the S3 bucket holding the bootstrap stack's remote state, read for the orchestration image repository URL, the sweep-dispatch role ARN, and the cluster name and Prefect namespace the sweep-dispatch preconditions check. Supplied by `just cluster-up` from the bootstrap state_bucket_name output; the backend itself is configured separately at init (backend.tf)."
   type        = string
@@ -61,12 +55,6 @@ variable "state_bucket" {
     condition     = length(var.state_bucket) > 0
     error_message = "state_bucket must be non-empty; a failed bootstrap output lookup would otherwise read state from an empty bucket name."
   }
-}
-
-variable "prefect_work_pool" {
-  description = "Name of the process work pool the worker polls; matches the pool `just prefect-up` creates (justfile prefect_work_pool)."
-  type        = string
-  default     = "sweep-pool"
 }
 
 variable "external_secrets_chart_version" {

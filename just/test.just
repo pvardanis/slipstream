@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker config check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, and the local Helm chart render check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker config check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, the local Helm chart render check, and the app-of-apps chart's child Applications (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -69,3 +69,8 @@ otel-collector-check-test:
 [group('test')]
 chart-render-test:
     bash test/chart-render-test.sh
+
+# Assert the app-of-apps chart renders the Prefect worker's Application with the pinned upstream chart, server-side sync, and the worker values, every cluster-specific one (image tag included) from the root Application's values (needs helm and yq, no cluster).
+[group('test')]
+argocd-apps-test:
+    bash test/argocd-apps-test.sh

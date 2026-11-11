@@ -5,6 +5,19 @@
 # The orchestration image repository URL (the bootstrap stack's ECR repository).
 orchestrationImageRepository: ""
 
+# The orchestration image's immutable content-sha tag the Prefect worker runs, resolved
+# from the repository's :main image.
+orchestrationImageTag: ""
+
+# The Prefect server's in-cluster API URL the worker polls.
+prefectApiUrl: ""
+
+# Namespace names the eks stack creates.
+namespaces:
+  # The Prefect server's namespace, where the worker runs and Pod Identity binds its
+  # ServiceAccount.
+  prefect: ""
+
 # ServiceAccount names the eks stack binds to IAM through Pod Identity.
 serviceAccounts:
   # The Prefect worker's ServiceAccount, in the prefect namespace.

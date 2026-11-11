@@ -1,0 +1,64 @@
+# The Prefect worker's child Application (#511): a process worker that polls the
+# self-hosted server's work pool and runs a sweep as a subprocess in its own pod, deployed
+# from the upstream prefect-worker chart. Its image tag and every cluster-specific name
+# come from the root Application's values (terraform/eks/argocd.tf); `required` fails the
+# root's sync on a missing one rather than deploying a worker with an empty image or
+# identity. The IAM role, Pod Identity association and scoped RBAC stay in the eks stack
+# (terraform/eks/worker.tf).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prefect-worker
+  namespace: argocd
+spec:
+  project: workloads
+  source:
+    repoURL: https://prefecthq.github.io/prefect-helm
+    chart: prefect-worker
+    # Matches the prefect-server chart the eks stack installs (appVersion 3.8.7, Prefect 3).
+    targetRevision: 2026.9.26234203
+    helm:
+      valuesObject:
+        worker:
+          image:
+            repository: '{{ required "orchestrationImageRepository is required" .Values.orchestrationImageRepository }}'
+            prefectTag: '{{ required "orchestrationImageTag is required" .Values.orchestrationImageTag }}'
+            # The tag is an immutable content-sha, so IfNotPresent is safe: the ref uniquely
+            # identifies content, so a cached image on a node is always the right one.
+            pullPolicy: IfNotPresent
+          # A process worker (subprocess, not a per-run Job) matches the serial single-GPU
+          # sweep. The pool is the one `just prefect-up` creates (justfile prefect_work_pool).
+          config:
+            workPool: sweep-pool
+            type: process
+          apiConfig: selfHostedServer
+          selfHostedServerApiConfig:
+            apiUrl: '{{ required "prefectApiUrl is required" .Values.prefectApiUrl }}'
+          # One worker draining a concurrency-1 pool, so the single-GPU sweep never runs two
+          # points at once.
+          replicaCount: 1
+          # The bench-endpoint topology, loaded into the worker's environment for the flows
+          # that apply the bench-endpoint stack.
+          extraEnvVarsCMs:
+            - '{{ required "configMaps.benchEndpointTopology is required" .Values.configMaps.benchEndpointTopology }}'
+        # The chart creates the ServiceAccount Pod Identity binds; the eks stack owns the
+        # scoped RBAC, so the chart's own Role/RoleBinding (kubernetes-worker permissions a
+        # process worker never uses) are off.
+        serviceAccount:
+          create: true
+          name: '{{ required "serviceAccounts.prefectWorker is required" .Values.serviceAccounts.prefectWorker }}'
+        role:
+          create: false
+        rolebinding:
+          create: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: '{{ required "namespaces.prefect is required" .Values.namespaces.prefect }}'
+  # Automated with prune and self-heal, so the chart version and values in git are what
+  # runs. Server-side apply, the sync default for every Argo CD-owned workload.
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
