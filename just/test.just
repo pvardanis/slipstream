@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, and the local Helm chart render check (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker config check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, and the local Helm chart render check (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -49,6 +49,11 @@ orchestration-image-check-test:
 [group('test')]
 terraform-pin-check-test:
     bash test/terraform-pin-check-test.sh
+
+# Assert worker-config-check.sh passes when the one running worker image's config equals main's, shows it in the job summary, and fails on a differing config or on zero or several running worker images (kubectl stubbed, throwaway git repo).
+[group('test')]
+worker-config-check-test:
+    bash test/worker-config-check-test.sh
 
 # Assert grafana-mcp.sh starts the server read-only at its pinned version with the stack URL, from the environment, tfvars or the grafana stack's state, and the token from the bootstrap secret, and aborts before starting it on a failed read (terraform, aws and uvx stubbed).
 [group('test')]
