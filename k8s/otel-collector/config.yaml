@@ -10,8 +10,8 @@
 # This file is the single source of truth for the collector config: the local
 # integration test (test/otel_spine_test.sh) runs the real collector against it,
 # swapping the Grafana Cloud sinks for the debug exporter and flushing span metrics
-# faster (test/otel-spine-sinks.yaml), and the Collector chart (Chart.yaml, beside
-# this file) loads it verbatim into the cluster ConfigMap. The GRAFANA_CLOUD_*
+# faster (test/otel-spine-sinks.yaml), and the Collector chart's
+# templates/configmap.yaml loads it verbatim into the cluster ConfigMap. The GRAFANA_CLOUD_*
 # variables come from the eks stack's grafana-cloud-endpoints ConfigMap and the
 # grafana-cloud-write Secret.
 extensions:

@@ -1,6 +1,6 @@
 # Cluster values the eks stack's root Application passes in (terraform/eks/argocd.tf,
-# helm.valuesObject); the cluster-specific values only Terraform knows. Empty here: the
-# root Application always supplies them.
+# helm.valuesObject): the root's own repository and revision, and the cluster-specific
+# values only Terraform knows. Empty here: the root Application always supplies them.
 
 # The repository and revision the child apps sync from: the root Application's own.
 source:
