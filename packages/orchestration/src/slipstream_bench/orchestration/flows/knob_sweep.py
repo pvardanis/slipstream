@@ -70,6 +70,7 @@ from slipstream_bench.orchestration.flows.run_setup import (
     destroy_run_bench_endpoint,
     enable_milestone_logging,
     open_run_bench_endpoint,
+    open_run_rollout_freeze,
     tag_run_with_group,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
@@ -78,6 +79,11 @@ from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
+
+# The knob sweep's run timeout, which its rollout freeze lasts too (ADR-0029): above the
+# longest legitimate GPU session (18 h) and under the 20 h spend-leak alarm (ADR-0025), so
+# a run that hangs is failed, and a freeze no hook released lapses, before the alarm fires.
+_RUN_TIMEOUT_S = 19 * 3600
 
 # The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
@@ -175,6 +181,7 @@ class KnobSweepInputs:
 
 @flow(
     name="knob-sweep",
+    timeout_seconds=_RUN_TIMEOUT_S,
     on_cancellation=[destroy_run_bench_endpoint],
     on_crashed=[destroy_run_bench_endpoint],
 )
@@ -203,7 +210,8 @@ def knob_sweep_flow(
     raises; its topology comes from the worker's ``BENCH_ENDPOINT_*`` environment and its
     vLLM api-key from the cluster Secret. After the loop, a terminal task folds the whole run
     off S3 and renders its ceiling and goodput-cliff tables to this parent run page as
-    markdown artifacts (ADR-0018).
+    markdown artifacts (ADR-0018). Argo CD's rollouts of the workloads are frozen from before
+    the endpoint opens until the render is done (ADR-0029), and the run times out after 19 h.
 
     The parameters are all serializable (Prefect persists them through
     ``serialize_parameters``); the live handles are built inside the flow, never passed in.
@@ -263,46 +271,54 @@ def knob_sweep_flow(
     kubectl = build_kubectl()
     s3_client = build_s3_client(region)
     task = cell_task(bucket, retries=retries)
-    # The bench endpoint lives for the point loop only: everything that can reject the run
-    # cheaply (its inputs, the cell storage preflight) runs before its apply, and the render
-    # below reads only S3, so the endpoint is destroyed before it. A destroy that fails
-    # fails the run before the render: the cells are already in S3, and the state it leaves
-    # must be destroyed (`just bench-endpoint-down`) before a re-run can open the endpoint.
-    with open_run_bench_endpoint(
-        kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
-    ) as host:
-        deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
-            build_knob_sweep_collaborators(
-                inputs,
-                host=host,
-                kubectl=kubectl,
-                ssm_client=build_ssm_client(region),
-                s3_client=s3_client,
-                task=task,
+    # Argo CD holds off the workloads from before the endpoint opens until the render has
+    # drawn the run, so a merge meanwhile rolls neither the replica nor the worker under
+    # it (ADR-0029); what merged syncs once the freeze is released.
+    with open_run_rollout_freeze(
+        kubectl=kubectl, run_id=run_id, duration_s=_RUN_TIMEOUT_S
+    ):
+        # The bench endpoint lives for the point loop only: everything that can reject
+        # the run cheaply (its inputs, the cell storage preflight) runs before its
+        # apply, and the render below reads only S3, so the endpoint is destroyed before
+        # it. A destroy that fails fails the run before the render: the cells are
+        # already in S3, and the state it leaves must be destroyed (`just
+        # bench-endpoint-down`) before a re-run can open the endpoint.
+        with open_run_bench_endpoint(
+            kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
+        ) as host:
+            deploy_fn, scrape_fn, point_sweep_fn, has_pending_cells = (
+                build_knob_sweep_collaborators(
+                    inputs,
+                    host=host,
+                    kubectl=kubectl,
+                    ssm_client=build_ssm_client(region),
+                    s3_client=s3_client,
+                    task=task,
+                )
             )
+            outcome = drive_knob_sweep(
+                points=points,
+                deploy_fn=deploy_fn,
+                scrape_fn=scrape_fn,
+                point_sweep_fn=point_sweep_fn,
+                has_pending_cells=has_pending_cells,
+            )
+        # The point loop has persisted every cell to S3; render the whole run's ceiling
+        # and goodput-cliff tables and plots to this parent run page as a terminal task
+        # (ADR-0018). It folds the complete grid off S3 — a resumed sweep's cached
+        # points fold in too — so the render is isolated from the persisted cells: a
+        # publish, materialize, or plot failure fails only the render, and a re-run
+        # re-renders off S3 without re-running a cell (no automatic retry).
+        render_results(
+            grid=grid,
+            run_prefix=get_knob_sweep_prefix(run_id),
+            bucket=bucket,
+            region=region,
+            s3_client=s3_client,
+            model=inputs.model,
+            publish=create_markdown_artifact,
+            publish_image=create_image_artifact,
         )
-        outcome = drive_knob_sweep(
-            points=points,
-            deploy_fn=deploy_fn,
-            scrape_fn=scrape_fn,
-            point_sweep_fn=point_sweep_fn,
-            has_pending_cells=has_pending_cells,
-        )
-    # The point loop has persisted every cell to S3; render the whole run's ceiling and
-    # goodput-cliff tables and plots to this parent run page as a terminal task (ADR-0018). It
-    # folds the complete grid off S3 — a resumed sweep's cached points fold in too — so the
-    # render is isolated from the persisted cells: a publish, materialize, or plot failure fails
-    # only the render, and a re-run re-renders off S3 without re-running a cell (no automatic retry).
-    render_results(
-        grid=grid,
-        run_prefix=get_knob_sweep_prefix(run_id),
-        bucket=bucket,
-        region=region,
-        s3_client=s3_client,
-        model=inputs.model,
-        publish=create_markdown_artifact,
-        publish_image=create_image_artifact,
-    )
     logger.info("render published to the run page")
     logger.info(build_sweep_summary(run_id, outcome))
     return list(outcome.pointers)

@@ -61,6 +61,7 @@ from tests.orchestration.bench_endpoint_fakes import (
     RecordingSession,
 )
 from tests.orchestration.cell_object_fakes import ServingCellS3
+from tests.orchestration.rollout_freeze_fakes import RecordingFreeze
 
 # Typer colours an option name when a terminal forces colour (CI does), rendering
 # ``--results-dir`` with a reset between the dashes so the literal hides from a
@@ -417,6 +418,9 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     session = RecordingSession(captures["events"])
     captures["session"] = session
     monkeypatch.setattr(run_setup_module, "open_bench_endpoint", session)
+    freeze = RecordingFreeze(captures["events"])
+    captures["freeze"] = freeze
+    monkeypatch.setattr(run_setup_module, "build_rollout_freeze", lambda _k: freeze)
     # Every cell reads as cached, so a real driver skips each point's redeploy and scrape.
     monkeypatch.setattr(knob_sweep_module, "is_cell_cached", lambda *_a, **_k: True)
     monkeypatch.setattr(knob_sweep_module, "build_kubectl", lambda: _FakeKubectl())
@@ -426,6 +430,23 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(knob_sweep_module, "create_markdown_artifact", _fake_publish)
     monkeypatch.setattr(knob_sweep_module, "create_image_artifact", _fake_publish_image)
     return captures
+
+
+def test_knob_sweep_freezes_rollouts_for_the_run_s_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
+) -> None:
+    # The window outlasts no run and lapses with a run no hook released: it lasts the
+    # flow's timeout, 19 h, above the longest legitimate sweep and under the 20 h
+    # spend-leak alarm (ADR-0025).
+    model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
+    captures = _stub_transports(monkeypatch)
+    monkeypatch.setattr(knob_sweep_module, "run_point_sweep", lambda **_k: ["ptr"])
+
+    _run_flow(model_yaml, grid_yaml, manifest)
+
+    assert knob_sweep_flow.timeout_seconds == 19 * 3600
+    assert captures["freeze"].calls[0] == ("acquire", "run1", str(19 * 3600))
+    assert captures["freeze"].calls[-1] == ("release", "run1")
 
 
 def test_knob_sweep_drives_the_grids_points_and_echoes_pointers(
@@ -1023,7 +1044,9 @@ def test_knob_sweep_flow_runs_its_cells_on_the_bench_host_it_opens(
 def test_knob_sweep_flow_closes_the_bench_endpoint_before_the_render(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
-    # The render only reads S3, so the bench endpoint is torn down before it runs.
+    # The render only reads S3, so the bench endpoint is torn down before it runs. Argo CD
+    # must not roll the replica or the worker under the run (ADR-0029), so the rollout
+    # freeze is held from before the endpoint opens until the render has drawn the run.
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
     captures = _stub_transports(monkeypatch)
 
@@ -1040,10 +1063,17 @@ def test_knob_sweep_flow_closes_the_bench_endpoint_before_the_render(
 
     _run_flow(model_yaml, grid_yaml, manifest)
 
-    assert captures["events"] == ["open", "point", "close", "render"]
+    assert captures["events"] == [
+        "freeze acquire",
+        "open",
+        "point",
+        "close",
+        "render",
+        "freeze release",
+    ]
 
 
-def test_knob_sweep_flow_closes_the_bench_endpoint_when_a_point_fails(
+def test_knob_sweep_flow_closes_the_endpoint_and_releases_the_freeze_when_a_point_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)
@@ -1057,7 +1087,7 @@ def test_knob_sweep_flow_closes_the_bench_endpoint_when_a_point_fails(
     with pytest.raises(RuntimeError, match="cell failed"):
         _run_flow(model_yaml, grid_yaml, manifest)
 
-    assert captures["events"] == ["open", "close"]
+    assert captures["events"] == ["freeze acquire", "open", "close", "freeze release"]
 
 
 def test_knob_sweep_flow_rejects_unreadable_sweep_args_before_the_bench_endpoint_opens(
