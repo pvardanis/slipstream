@@ -2,6 +2,11 @@
 # helm.valuesObject); the cluster-specific values only Terraform knows. Empty here: the
 # root Application always supplies them.
 
+# The repository and revision the child apps sync from: the root Application's own.
+source:
+  repoURL: ""
+  targetRevision: ""
+
 # The orchestration image repository URL (the bootstrap stack's ECR repository).
 orchestrationImageRepository: ""
 
@@ -27,5 +32,3 @@ serviceAccounts:
 configMaps:
   # The bench-endpoint topology the worker loads into its environment (prefect namespace).
   benchEndpointTopology: ""
-  # The Grafana Cloud endpoints the OTel Collector exports to (slipstream namespace).
-  grafanaCloudEndpoints: ""
