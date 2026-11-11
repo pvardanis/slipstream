@@ -1,0 +1,15 @@
+# The Collector's config and the model it stamps on vLLM spans. The config is config.yaml
+# verbatim, the same file test/otel_spine_test.sh runs a local Collector against. The
+# Deployment's checksum/config annotation hashes this render, so a change to either rolls
+# the Collector, which reads both only at start.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: slipstream
+  labels:
+    app: otel-collector
+data:
+  config.yaml: |
+    {{- .Files.Get "config.yaml" | nindent 4 }}
+  model-id: '{{ required "model.hfId is required: the Collector Application passes model.yaml as its values file" .Values.model.hfId }}'

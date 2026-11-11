@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Static goodput parity check: the Collector's slo_met gates
-# (k8s/otel-collector-config.yaml, in seconds) must equal the goodput gates every
+# (k8s/otel-collector/config.yaml, in seconds) must equal the goodput gates every
 # bench config passes to `vllm bench serve` (["ttft:1000", "tpot:50"], in ms), so
 # live and offline goodput cannot drift apart (ADR-0026). Dashboard queries may
 # compare ttft_ms only as span.ttft_ms > <ms>, at the same TTFT gate, in a query of
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-collector_config="${OTEL_COLLECTOR_CONFIG:-${repo_root}/k8s/otel-collector-config.yaml}"
+collector_config="${OTEL_COLLECTOR_CONFIG:-${repo_root}/k8s/otel-collector/config.yaml}"
 bench_configs_dir="${BENCH_CONFIGS_DIR:-${repo_root}/bench/configs}"
 dashboards_dir="${DASHBOARDS_DIR:-${repo_root}/terraform/grafana/dashboards}"
 

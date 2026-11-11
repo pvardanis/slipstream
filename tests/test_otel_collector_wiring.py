@@ -1,8 +1,9 @@
 """Tests that the Collector's Deployment reads what the eks stack publishes.
 
-k8s/otel-collector.yaml takes its Grafana Cloud endpoints from the grafana-cloud-endpoints
-ConfigMap (terraform/eks/otel_collector.tf) and its write token from the grafana-cloud-write
-Secret (terraform/eks/external_secrets.tf). Kubernetes only checks a reference when the pod
+The Collector chart's Deployment (k8s/otel-collector/templates/otel-collector.yaml) takes
+its Grafana Cloud endpoints from the grafana-cloud-endpoints ConfigMap
+(terraform/eks/otel_collector.tf) and its write token from the grafana-cloud-write Secret
+(terraform/eks/external_secrets.tf). Kubernetes only checks a reference when the pod
 starts, so a renamed key on either side would pass every plan and apply and leave the
 Collector in CreateContainerConfigError. A variable wired to the wrong key, or one the
 Collector config names but the Deployment never sets, starts a Collector that exports with
@@ -16,8 +17,9 @@ from typing import Any
 import yaml
 
 _REPO = Path(__file__).resolve().parents[1]
-_MANIFEST = _REPO / "k8s" / "otel-collector.yaml"
-_COLLECTOR_CONFIG = _REPO / "k8s" / "otel-collector-config.yaml"
+_CHART = _REPO / "k8s" / "otel-collector"
+_MANIFEST = _CHART / "templates" / "otel-collector.yaml"
+_COLLECTOR_CONFIG = _CHART / "config.yaml"
 _CONFIG_MAP_TF = _REPO / "terraform" / "eks" / "otel_collector.tf"
 _EXTERNAL_SECRETS_TF = _REPO / "terraform" / "eks" / "external_secrets.tf"
 

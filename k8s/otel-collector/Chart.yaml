@@ -1,0 +1,10 @@
+# The OTel Collector's chart, an Argo CD child app the root Application's app-of-apps
+# chart (k8s/argocd/apps) renders: the Collector's Deployment and Service
+# (templates/otel-collector.yaml) and the ConfigMap holding its config (config.yaml) and
+# the served model (templates/configmap.yaml). Its Application passes model.yaml as its
+# values file, so model.yaml's model.hfId is the model-id the Collector stamps.
+apiVersion: v2
+name: otel-collector
+description: The slipstream cluster's OTel Collector, exporting to Grafana Cloud.
+type: application
+version: 0.1.0

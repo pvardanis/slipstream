@@ -109,7 +109,9 @@ metadata:
 """
 
 _COMMITTED_MANIFEST = Path(__file__).resolve().parents[2] / "k8s" / "vllm-gpu.yaml"
-_COLLECTOR_MANIFEST = _COMMITTED_MANIFEST.parent / "otel-collector.yaml"
+_COLLECTOR_MANIFEST = (
+    _COMMITTED_MANIFEST.parent / "otel-collector" / "templates" / "otel-collector.yaml"
+)
 
 _POINT = EnginePoint(max_num_seqs=64, kv_cache_dtype="fp8", prefix_caching=True)
 _FP16_OFF = EnginePoint(max_num_seqs=128, kv_cache_dtype="fp16", prefix_caching=False)

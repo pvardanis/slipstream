@@ -398,19 +398,19 @@ run "service_monitors_scrape_vllm_karpenter_dcgm_exporter_and_the_collector" {
     error_message = "The dcgm-exporter ServiceMonitor's last relabeling must drop exported_pod, exported_namespace and exported_container, and keep pod, namespace and container."
   }
 
-  # The Collector's Service (k8s/otel-collector.yaml), on the port serving its own
-  # metrics, read against the manifest so a label, port or namespace renamed on one side
-  # fails here.
+  # The Collector's Service (k8s/otel-collector/templates/otel-collector.yaml), on the
+  # port serving its own metrics, read against the manifest so a label, port or namespace
+  # renamed on one side fails here.
   assert {
     condition = alltrue([
-      for d in [for doc in split("\n---\n", file("../../k8s/otel-collector.yaml")) : yamldecode(doc)] : (
+      for d in [for doc in split("\n---\n", file("../../k8s/otel-collector/templates/otel-collector.yaml")) : yamldecode(doc)] : (
         yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.namespaceSelector == { matchNames = [d.metadata.namespace] }
         && yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.selector == { matchLabels = { app = d.metadata.labels.app } }
         && [for e in yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.otel-collector.endpoints : e.port] == ["metrics"]
         && contains([for p in d.spec.ports : p.name], "metrics")
       ) if d.kind == "Service"
     ])
-    error_message = "The Collector's ServiceMonitor must select the Service in k8s/otel-collector.yaml by its app label and namespace and scrape its metrics port."
+    error_message = "The Collector's ServiceMonitor must select the Service in k8s/otel-collector/templates/otel-collector.yaml by its app label and namespace and scrape its metrics port."
   }
 
   # Of the Collector's own metrics only the exporters' sent and failed counts are kept,
@@ -566,8 +566,8 @@ run "metrics_stack_rejects_a_remote_write_url_that_is_not_https" {
   expect_failures = [helm_release.kube_prometheus_stack]
 }
 
-# The Collector (k8s/otel-collector.yaml) reads where to send from this ConfigMap: traces
-# over OTLP to the hosted Tempo and span metrics by remote_write to the hosted Prometheus,
+# The Collector (k8s/otel-collector/templates/otel-collector.yaml) reads where to send
+# from this ConfigMap: traces over OTLP to the hosted Tempo and span metrics by remote_write to the hosted Prometheus,
 # each authenticating as its own instance ID with the write token.
 run "collector_endpoints_name_the_hosted_tempo_and_prometheus" {
   command = plan

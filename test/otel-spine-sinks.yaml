@@ -1,5 +1,5 @@
 # Overlay the spine test (test/otel_spine_test.sh) merges over
-# k8s/otel-collector-config.yaml: the same pipelines, with the Grafana Cloud exporters
+# k8s/otel-collector/config.yaml: the same pipelines, with the Grafana Cloud exporters
 # swapped for the debug exporter, so the test reads what would be sent on the
 # collector's stdout without reaching Grafana Cloud. The Collector merges maps and
 # replaces lists, so only the sinks, the auth extensions they need and the flush

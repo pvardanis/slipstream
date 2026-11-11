@@ -1,7 +1,7 @@
-# Where the OpenTelemetry Collector (k8s/otel-collector.yaml, deployed by `just obs-up`)
+# Where the OpenTelemetry Collector (the k8s/otel-collector chart, which Argo CD deploys)
 # sends to Grafana Cloud: traces over OTLP to the hosted Tempo and span metrics by
 # remote_write to the hosted Prometheus. Published as a ConfigMap in the Collector's
-# namespace from the grafana stack's outputs, so `just obs-up` needs no Terraform state of
+# namespace from the grafana stack's outputs, so the Collector needs no Terraform state of
 # its own and nothing is copied by hand. The write token both authenticate with is the
 # grafana-cloud-write Secret ESO syncs into the same namespace (external_secrets.tf).
 

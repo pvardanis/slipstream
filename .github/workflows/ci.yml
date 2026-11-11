@@ -320,10 +320,10 @@ jobs:
         with:
           version: 2026.10.21
           install_args: helm kubeconform yq
-      # Lints and renders every local chart under terraform/*/charts/ and validates the
-      # output against the Kubernetes and CRD schemas, so a chart Terraform installs at
-      # cluster-up fails here, not at cluster-up, on a template that fails to render or a
-      # resource the API server would reject.
+      # Lints and renders every local chart under terraform/*/charts/, the app-of-apps
+      # chart and the Collector chart Argo CD deploys, and validates the output against
+      # the Kubernetes and CRD schemas, so a chart fails here, not on a live cluster, on a
+      # template that fails to render or a resource the API server would reject.
       - name: Render and validate the local Helm charts
         run: bash test/chart-render-test.sh
       # Checks the child Applications the root Application's app-of-apps chart renders:

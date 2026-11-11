@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Integration test for the request-ID spine: runs the real OTel Collector
-# (the same k8s/otel-collector-config.yaml the cluster deploys) in a local
+# (the same k8s/otel-collector/config.yaml the cluster deploys) in a local
 # container, pushes one OTLP trace carrying a request_id plus shape-only fields
 # and a sentinel prompt attribute, then asserts the debug exporter's stdout
 # keeps the request_id and shape-only fields, drops the prompt content, and
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-config="${repo_root}/k8s/otel-collector-config.yaml"
+config="${repo_root}/k8s/otel-collector/config.yaml"
 sinks="${repo_root}/test/otel-spine-sinks.yaml"
 image="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.160.0}"
 container="otel-spine-test-$$"
@@ -33,7 +33,7 @@ request_id="req-abc-123"
 model_id="Qwen/Qwen2.5-0.5B-Instruct"
 prefix_hash="9f86d081"
 # The model the Collector stamps on vLLM spans as model_id; the cluster sets it
-# from model.yaml (just obs-up), the test from this value.
+# from model.yaml (the Collector chart's values file), the test from this value.
 collector_model_id="test-org/test-model"
 # Stands in for the vLLM replica's pod name, its resource's k8s.pod.name.
 pod_name="vllm-gpu-test-pod"
