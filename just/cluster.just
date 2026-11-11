@@ -31,15 +31,23 @@ cluster-up: _bootstrap-init
     # The eks stack hands Argo CD the root Application, but Helm's wait does not cover
     # custom resources, so the apply succeeds before Argo CD has fetched or synced
     # anything. Wait for the root to report Synced and Healthy, so a missing revision,
-    # a chart that fails to render or a project denial fails cluster-up here.
-    for check in sync=Synced health=Healthy; do
-      field="${check%%=*}"
-      want="${check#*=}"
-      kubectl -n argocd wait application/root --for=jsonpath="{.status.${field}.status}=${want}" --timeout=300s || {
-        echo "Argo CD's root Application did not report ${want}; see its status.conditions: kubectl -n argocd get application root -o yaml" >&2
-        exit 1
-      }
-    done
+    # a chart that fails to render or a project denial fails cluster-up here. A Synced
+    # root has written every child Application, and the root's health does not follow
+    # theirs, so then wait for every Application: a worker that cannot pull its image or
+    # crashloops fails cluster-up rather than the first dispatch.
+    wait_synced_and_healthy() {
+      local check field want
+      for check in sync=Synced health=Healthy; do
+        field="${check%%=*}"
+        want="${check#*=}"
+        kubectl -n argocd wait "$@" --for=jsonpath="{.status.${field}.status}=${want}" --timeout=300s || {
+          echo "Argo CD's $* did not report ${want}; see the status.conditions: kubectl -n argocd get applications -o yaml" >&2
+          exit 1
+        }
+      done
+    }
+    wait_synced_and_healthy application/root
+    wait_synced_and_healthy applications --all
 
 # Show the cluster changes `just cluster-up` would apply, without provisioning anything.
 [group('cluster')]
