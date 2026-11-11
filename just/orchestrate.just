@@ -9,13 +9,13 @@
 # `obs-pivot` checks that Grafana Cloud accepts what the Collector exports before any GPU spend.
 # Run against it as often as you like, then `just stack-down` at the end of the day to
 # return spend to zero.
-# Ordered cluster-up -> obs-up -> obs-pivot -> prefect-up -> gpu-pool-up -> gpu-deploy: the
-# server (a helm_release in the eks stack) comes up with the cluster, the Collector after
-# the endpoints ConfigMap and write-token Secret cluster-up provides, then the server's work
-# pool is created, then the GPU pool a worker's runs target (ADR-0015 amendment), then the
-# GPU replica on it.
+# Ordered cluster-up -> obs-pivot -> prefect-up -> gpu-pool-up -> gpu-deploy: the server
+# (a helm_release in the eks stack) comes up with the cluster, and Argo CD deploys the
+# Collector after the endpoints ConfigMap cluster-up provides; obs-pivot waits for the
+# write-token Secret and the Collector's rollout. Then the server's work pool is created,
+# then the GPU pool a worker's runs target (ADR-0015 amendment), then the GPU replica on it.
 [group('orchestrate')]
-stack-up: cluster-up obs-up obs-pivot prefect-up gpu-pool-up gpu-deploy
+stack-up: cluster-up obs-pivot prefect-up gpu-pool-up gpu-deploy
 
 # Tear the whole benchmark stack down, returning GPU and cluster spend to zero,
 # then sweep AWS to confirm nothing tagged Project=slipstream is still billing.

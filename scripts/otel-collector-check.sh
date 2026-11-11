@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Checks around the OTel Collector in slipstream (`just obs-up`, `just obs-pivot`). preflight
-# passes once what the Collector reads at start exists: the grafana-cloud-endpoints
-# ConfigMap the eks stack creates and the grafana-cloud-write Secret ESO syncs. Kubernetes
-# checks neither until the pod starts, and a pod that starts without them waits in
-# CreateContainerConfigError until the rollout times out. rollout waits for the
-# Deployment to roll out and, when it does not, prints why each Collector pod waits.
+# Checks around the OTel Collector in slipstream, which Argo CD deploys (`just obs-pivot`).
+# preflight passes once what the Collector reads at start exists: the
+# grafana-cloud-endpoints ConfigMap the eks stack creates and the grafana-cloud-write
+# Secret ESO syncs. Kubernetes checks neither until the pod starts, and a pod that starts
+# without them waits in CreateContainerConfigError until the rollout times out. rollout
+# waits for Argo CD to create the Deployment, then for it to roll out and, when it does
+# not, prints why each Collector pod waits.
 # delivery reads the Collector's own metrics at <metrics-url> every 5 s and passes when,
 # since the baseline scrape on stdin, its OTLP receiver has accepted a span and both
 # Grafana Cloud exporters have sent more. It fails as soon as either exporter has failed
@@ -44,6 +45,16 @@ preflight() {
 }
 
 rollout() {
+  local err
+  # Argo CD syncs the Collector's Application only after cluster-up's apply, so the
+  # Deployment may not exist yet; the root Application's health does not cover it.
+  if ! err="$(kubectl -n "${namespace}" wait --for=create deploy/otel-collector --timeout=300s 2>&1 >/dev/null)"; then
+    case "${err}" in
+    *"timed out"*) echo "Argo CD has not created the Collector's Deployment in ${namespace} after 300 s: see why its otel-collector Application has not synced in \`kubectl -n argocd get application otel-collector -o yaml\`" >&2 ;;
+    *) report_kubectl_failure "${err}" ;;
+    esac
+    return 1
+  fi
   if kubectl -n "${namespace}" rollout status deploy/otel-collector --timeout=120s; then
     return 0
   fi

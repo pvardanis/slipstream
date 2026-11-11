@@ -6,9 +6,11 @@
 #   grafana-cloud-write ExternalSecret is Ready; a missing ConfigMap or ExternalSecret
 #   names `just cluster-up`, an unsynced one the describe command and the setup recipe,
 #   and any other kubectl failure is shown with kubectl's current context;
-# - rollout passes once the Deployment rolls out, and otherwise prints each Collector
-#   pod's waiting reason and message, its last exit and why it is unscheduled, with the
-#   describe and `logs --previous` commands;
+# - rollout waits for Argo CD to create the Deployment, naming the otel-collector
+#   Application when it never appears and showing any other kubectl failure with
+#   kubectl's current context; it passes once the Deployment rolls out, and otherwise
+#   prints each Collector pod's waiting reason and message, its last exit and why it is
+#   unscheduled, with the describe and `logs --previous` commands;
 # - delivery passes once the OTLP receiver's accepted spans and both Grafana Cloud
 #   exporters' sent counts, under the IDs the Collector config names, rise above the
 #   baseline scrape on stdin; it fails at the first scrape where either's failed count
@@ -106,6 +108,12 @@ case "\$*" in
       "wait unreachable") unreachable ;;
     esac
     echo externalsecret.external-secrets.io/grafana-cloud-write condition met ;;
+  "wait --for=create deploy/otel-collector --timeout=300s")
+    case "\${KUBECTL_FAIL:-}" in
+      "create") echo 'error: timed out waiting for the condition on deployments/otel-collector' >&2; exit 1 ;;
+      "create unreachable") unreachable ;;
+    esac
+    echo deployment.apps/otel-collector condition met ;;
   "rollout status deploy/otel-collector --timeout=120s")
     [[ "\${KUBECTL_FAIL:-}" != rollout* ]] || { echo 'error: timed out waiting for the condition' >&2; exit 1; } ;;
   "get pods -l app=otel-collector -o jsonpath="*)
@@ -230,6 +238,15 @@ for call in "get configmap" wait; do
 done
 # Rollout passes when the Deployment rolls out, and on a failed one shows why the pod waits.
 check_passes "rollout passes" rollout
+if [[ "$(grep -n . "${tmp}/kubectl-calls" | grep -E 'wait --for=create deploy/otel-collector|rollout status' | cut -d: -f2-)" == "$(printf '%s\n' "-n slipstream wait --for=create deploy/otel-collector --timeout=300s" "-n slipstream rollout status deploy/otel-collector --timeout=120s")" ]]; then
+  ok "rollout waits for Argo CD to create the Deployment first"
+else
+  bad "rollout waits for Argo CD to create the Deployment first: $(cat "${tmp}/kubectl-calls")"
+fi
+KUBECTL_FAIL="create" check_fails "a Deployment Argo CD never creates names its Application" "kubectl -n argocd get application otel-collector -o yaml" rollout
+if grep -qF "rollout status" "${tmp}/kubectl-calls"; then bad "a missing Deployment fails before the rollout wait"; else ok "a missing Deployment fails before the rollout wait"; fi
+KUBECTL_FAIL="create unreachable" check_fails "unreachable cluster at the Deployment wait names the context" "kubectl's current context is arn:aws:eks:eu-west-1:123456789012:cluster/slipstream" rollout
+if grep -qF "otel-collector Application" "${tmp}/stderr"; then bad "unreachable cluster at the Deployment wait is not a missing Deployment"; else ok "unreachable cluster at the Deployment wait is not a missing Deployment"; fi
 WHOLE_LINE=1
 KUBECTL_FAIL="rollout" check_fails "failed rollout shows the pod's waiting reason" \
   "otel-collector-7d9f: waiting CreateContainerConfigError couldn't find key traces-endpoint in ConfigMap slipstream/grafana-cloud-endpoints" rollout
