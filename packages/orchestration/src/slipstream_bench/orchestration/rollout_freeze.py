@@ -12,12 +12,15 @@ reaches the cluster through :data:`~slipstream_bench.orchestration.cluster.Kubec
 ``spec.syncWindows`` over ``kubectl`` under a grant (``terraform/eks/worker_rollout_freeze.tf``)
 of get and patch on that one AppProject. Each window names its run in its description, so a
 release removes only its own run's window and leaves the others in place.
+:func:`hold_rollout_freeze` holds a freeze around a run's work and releases it on exit.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -31,6 +34,12 @@ _PROJECT = "workloads"
 
 # The description a run's window carries, which a release matches its own window by.
 _DESCRIPTION = "slipstream rollout freeze: run={holder}"
+
+# The line a parent flow's crash or cancellation hook logs on the run once it has
+# released the run's freeze; the session's error names it as what to look for.
+HOOK_RELEASED_LINE = "released run %s's rollout freeze"
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RolloutFreeze(Protocol):
@@ -149,3 +158,49 @@ def _get_other_windows(project: dict[str, Any], holder: str) -> list[dict[str, A
 def _get_windows(project: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the project's sync windows; a project with none omits the field."""
     return project["spec"].get("syncWindows") or []
+
+
+@contextmanager
+def hold_rollout_freeze(
+    freeze: RolloutFreeze, *, holder: str, duration_s: int
+) -> Iterator[None]:
+    """Acquire ``holder``'s rollout freeze, yield, and release it on exit.
+
+    The release follows a body that returns or raises an ``Exception``. A run being killed
+    (a ``BaseException`` that is not an ``Exception``, such as Prefect's termination
+    signal) skips it and leaves it to the flow's crash or cancellation hook, which
+    destroys the run's bench endpoint first: a rollout Argo CD started on a release here
+    could restart the worker under that destroy. The window's own duration lifts the
+    freeze if no hook answers.
+
+    :param freeze: the freeze to acquire and release.
+    :param holder: the run the freeze is held for.
+    :param duration_s: how long the freeze lasts unreleased, in seconds — the run's
+        timeout.
+    :return: a context manager holding the freeze for its body.
+    """
+    freeze.acquire(holder, duration_s)
+    _LOGGER.info("rollout freeze held for run %s (%ds)", holder, duration_s)
+    release_armed = True
+    try:
+        yield
+    except BaseException as error:
+        if not isinstance(error, Exception):
+            release_armed = False
+            # Logged as an error naming the recovery, since a signal no hook answers
+            # leaves the workloads frozen until the window lapses.
+            _LOGGER.error(
+                "rollout freeze not released on %s; it is left for the run's crash or "
+                'cancellation hook. If the run page shows no "%s" line from that hook, '
+                'remove the "%s" window with `kubectl -n %s edit appproject %s`',
+                type(error).__name__,
+                HOOK_RELEASED_LINE % holder,
+                _DESCRIPTION.format(holder=holder),
+                _NAMESPACE,
+                _PROJECT,
+            )
+        raise
+    finally:
+        if release_armed:
+            freeze.release(holder)
+            _LOGGER.info("rollout freeze released for run %s", holder)
