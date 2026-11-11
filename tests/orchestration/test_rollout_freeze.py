@@ -3,7 +3,7 @@
 Exercises the AppProject freeze against a fake kubectl that serves the AppProject's JSON
 and applies merge patches to it, rejecting one whose resourceVersion is stale as the API
 server does — no cluster. Asserts the window a freeze adds (deny, active from the current
-UTC minute, lasting the run's timeout, manual syncs denied too), that it keeps every other
+UTC minute, lasting the run's timeout, manual syncs let through), that it keeps every other
 window on the project, and that a release removes only its own run's window. Drives
 the session that holds a freeze around a run's work against a recording freeze: it
 releases on any exit but a killed run's, which it leaves to the run's hook.
@@ -42,6 +42,7 @@ class _FakeAppProject:
         self.spec: dict[str, Any] = {} if windows is None else {"syncWindows": windows}
         self.resource_version = 41
         self.patches: list[dict[str, Any]] = []
+        self.patch_error: Exception | None = None
 
     def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
         if list(args) == _GET:
@@ -55,6 +56,8 @@ class _FakeAppProject:
                 }
             )
         assert list(args[:-1]) == _PATCH, f"unexpected kubectl {list(args)}"
+        if self.patch_error is not None:
+            raise self.patch_error
         patch = json.loads(args[-1])
         if patch["metadata"]["resourceVersion"] != str(self.resource_version):
             raise KubectlError(
@@ -151,6 +154,20 @@ def test_release_without_its_run_s_window_leaves_the_project_unpatched() -> None
     _freeze(project).release("knob-20261111")
 
     assert project.patches == []
+
+
+def test_a_failed_release_notes_the_window_left_and_how_to_remove_it() -> None:
+    # The window freezes the workloads until it lapses, so the error names it and the
+    # command that removes it.
+    project = _FakeAppProject([_holder_window("knob-20261111")])
+    project.patch_error = KubectlError("kubectl patch exited 1: forbidden")
+
+    with pytest.raises(KubectlError) as raised:
+        _freeze(project).release("knob-20261111")
+
+    [note] = raised.value.__notes__
+    assert "slipstream rollout freeze: run=knob-20261111" in note
+    assert "kubectl -n argocd edit appproject workloads" in note
 
 
 def test_session_holds_the_freeze_around_its_body() -> None:
