@@ -53,9 +53,8 @@ apps under it read them from there and from nowhere else in Terraform.
 ### One writer per field
 
 - **The worker's image tag: Argo CD Image Updater.** Strategy `newest-build`, restricted
-  to the immutable content-sha tags the orchestration image workflow pushes (the short
-  SHA, at least 12 hex characters, of the last commit touching the image's inputs; never
-  `:main`), with the `argocd` write-back method. Git write-back is ruled out: main
+  to the immutable content-sha tags the orchestration image workflow pushes (the first 12
+  hex characters of the last commit touching the image's inputs; never `:main`), with the `argocd` write-back method. Git write-back is ruled out: main
   requires the `ci-ok` check with admins enforced, so a bot cannot push to it.
   Terraform stops resolving the tag. The tag stays immutable, so a cached image under
   `IfNotPresent` is always the right one, and the dispatch guard can name what the worker
@@ -134,9 +133,10 @@ before relying on it at L3.
   and the Collector come up only once Argo CD has synced them.
 - The Image Updater's override lives on the Application, not in git, so git does not show
   the worker's running tag; the Application and the dispatch guard do.
-- A worker sync can succeed on main's commit before Image Updater rolls that commit's
-  image, so the release for that commit gets one deploy for the manifests and another
-  when the image rolls.
+- Argo CD syncs automatically only when an app is out of sync, so a merge that changes
+  none of an app's manifests marks no release. A merge that changes both the worker's
+  manifests and its image's inputs syncs twice, once for the manifests and again when
+  Image Updater rolls the image, so that release gets two deploys.
 - The worker's tag names the last commit that touched the image's inputs, not main's
   head, so it does not match the Sentry release version; the Application's synced
   revision does.
