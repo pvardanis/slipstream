@@ -74,12 +74,17 @@ if [[ "${templates}" != "${sources}" ]]; then
   exit 1
 fi
 validate_schemas <<<"${apps_rendered}"
-# Argo CD's sync options are per Application, so each child must carry ServerSideApply
-# itself: without it a sync that drops a field such as replicas resets it.
-without_ssa="$(yq -N 'select(.kind == "Application" and ((.spec.syncPolicy.syncOptions // []) | contains(["ServerSideApply=true"]) | not)) | .metadata.name' <<<"${apps_rendered}")"
-if [[ -n "${without_ssa}" ]]; then
-  echo "${apps_chart} renders Applications without ServerSideApply=true in syncPolicy.syncOptions:" >&2
-  echo "${without_ssa}" >&2
+# Argo CD's sync policy is per Application, so each child must carry the shared one
+# itself: automated prune and selfHeal, so a merged change syncs without an operator, and
+# ServerSideApply, without which a sync that drops a field such as replicas resets it.
+if [[ "$(yq -N 'select(.kind == "Application") | .metadata.name' <<<"${apps_rendered}")" == "" ]]; then
+  echo "${apps_chart} renders no Applications with ci/test-values.yaml" >&2
+  exit 1
+fi
+without_sync_policy="$(yq -N 'select(.kind == "Application" and ((.spec.syncPolicy.automated.prune == true and .spec.syncPolicy.automated.selfHeal == true and ((.spec.syncPolicy.syncOptions // []) | any_c(. == "ServerSideApply=true"))) | not)) | .metadata.name' <<<"${apps_rendered}")"
+if [[ -n "${without_sync_policy}" ]]; then
+  echo "${apps_chart} renders Applications without automated prune and selfHeal and ServerSideApply=true in syncPolicy:" >&2
+  echo "${without_sync_policy}" >&2
   exit 1
 fi
 
@@ -89,9 +94,13 @@ fi
 # reaches the Collector as the ConfigMap's model-id, and the pod template carries a
 # checksum of that ConfigMap, so a merged change to the config or the model rolls the
 # pod: the Collector reads both only at start.
-collector_app="$(yq 'select(.kind == "Application" and .metadata.name == "otel-collector") | .spec.source' <<<"${apps_rendered}")"
-collector_chart="${repo_root}/$(yq '.path' <<<"${collector_app}")"
-value_file="$(yq '.helm.valueFiles[0]' <<<"${collector_app}")"
+collector_app="$(yq 'select(.kind == "Application" and .metadata.name == "otel-collector")' <<<"${apps_rendered}")"
+if [[ -z "${collector_app}" ]]; then
+  echo "${apps_chart} renders no otel-collector Application" >&2
+  exit 1
+fi
+collector_chart="${repo_root}/$(yq -e '.spec.source.path' <<<"${collector_app}")"
+value_file="$(yq -e '.spec.source.helm.valueFiles[0]' <<<"${collector_app}")"
 model_values="$(cd "${collector_chart}/$(dirname "${value_file}")" && pwd)/$(basename "${value_file}")"
 if [[ "${model_values}" != "${repo_root}/model.yaml" ]]; then
   echo "the otel-collector Application's values file resolves to ${model_values}, not model.yaml" >&2
@@ -101,6 +110,15 @@ echo "--- ${collector_chart#"${repo_root}/"}"
 helm lint --strict --values "${model_values}" "${collector_chart}"
 rendered="$(helm template chart-render-test "${collector_chart}" --values "${model_values}")"
 validate_schemas <<<"${rendered}"
+# Argo CD applies the chart into the Application's destination namespace; a manifest
+# naming another namespace would land outside it.
+destination="$(yq -e '.spec.destination.namespace' <<<"${collector_app}")"
+elsewhere="$(yq -N "select(.metadata.namespace != \"${destination}\") | .kind + \"/\" + .metadata.name" <<<"${rendered}")"
+if [[ -n "${elsewhere}" ]]; then
+  echo "${collector_chart} renders manifests outside its Application's destination namespace ${destination}:" >&2
+  echo "${elsewhere}" >&2
+  exit 1
+fi
 model_id="$(yq '.model.hfId' "${model_values}")"
 rendered_model_id="$(yq 'select(.kind == "ConfigMap" and .metadata.name == "otel-collector-config") | .data["model-id"]' <<<"${rendered}")"
 if [[ "${rendered_model_id}" != "${model_id}" ]]; then
@@ -109,28 +127,31 @@ if [[ "${rendered_model_id}" != "${model_id}" ]]; then
 fi
 
 # Prints the Collector pod template's config checksum from the chart rendered with the
-# values files given.
+# values files given, and fails when the chart does not render or carries none.
 get_config_checksum() {
-  local chart="$1"
+  local chart="$1" checksum
   shift
-  helm template chart-render-test "${chart}" "${@/#/--values=}" |
-    yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/config"]'
+  checksum="$(helm template chart-render-test "${chart}" "${@/#/--values=}" |
+    yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/config"]')"
+  if [[ ! "${checksum}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "${chart}'s pod template has no checksum/config of its ConfigMap, so a config change would not roll the Collector: '${checksum}'" >&2
+    return 1
+  fi
+  echo "${checksum}"
 }
 checksum="$(get_config_checksum "${collector_chart}" "${model_values}")"
-if [[ ! "${checksum}" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "${collector_chart}'s pod template has no checksum/config of its ConfigMap, so a config change would not roll the Collector: '${checksum}'" >&2
-  exit 1
-fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 printf 'model:\n  hfId: other-org/other-model\n' >"${tmp}/other-model.yaml"
-if [[ "$(get_config_checksum "${collector_chart}" "${tmp}/other-model.yaml")" == "${checksum}" ]]; then
+other_model_checksum="$(get_config_checksum "${collector_chart}" "${tmp}/other-model.yaml")"
+if [[ "${other_model_checksum}" == "${checksum}" ]]; then
   echo "${collector_chart}'s checksum/config does not change with the model, so a model change would not roll the Collector" >&2
   exit 1
 fi
 cp -R "${collector_chart}" "${tmp}/chart"
 echo '# a merged config change' >>"${tmp}/chart/config.yaml"
-if [[ "$(get_config_checksum "${tmp}/chart" "${model_values}")" == "${checksum}" ]]; then
+other_config_checksum="$(get_config_checksum "${tmp}/chart" "${model_values}")"
+if [[ "${other_config_checksum}" == "${checksum}" ]]; then
   echo "${collector_chart}'s checksum/config does not change with config.yaml, so a config change would not roll the Collector" >&2
   exit 1
 fi
