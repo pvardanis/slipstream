@@ -10,9 +10,10 @@
 Three writers decide what runs on a live cluster:
 
 - **Terraform** creates the cluster and its add-ons, and installs the Prefect worker as a
-  `helm_release` whose image tag it resolves at `just cluster-up` (`terraform/eks/worker.tf`).
+  `helm_release` whose image tag it resolves at `just cluster-up`
+  (`terraform/eks/worker.tf`).
 - **`just` recipes** `kubectl apply` the OTel Collector (`just obs-up`) and the Engine
-  manifests (`just deploy`, `just gpu-deploy`).
+  manifests (`just cpu-deploy`, `just gpu-deploy`).
 - **The experiment flows** redeploy the bench Engine with each point's or arm run's engine
   knobs (ADR-0015).
 
@@ -52,9 +53,10 @@ apps under it read them from there and from nowhere else in Terraform.
 ### One writer per field
 
 - **The worker's image tag: Argo CD Image Updater.** Strategy `newest-build`, restricted
-  to the immutable content-sha tags the orchestration image workflow pushes (12 hex
-  characters, never `:main`), with the `argocd` write-back method. Git write-back is ruled
-  out: main requires the `ci-ok` check with admins enforced, so a bot cannot push to it.
+  to the immutable content-sha tags the orchestration image workflow pushes (the short
+  SHA, at least 12 hex characters, of the last commit touching the image's inputs; never
+  `:main`), with the `argocd` write-back method. Git write-back is ruled out: main
+  requires the `ci-ok` check with admins enforced, so a bot cannot push to it.
   Terraform stops resolving the tag. The tag stays immutable, so a cached image under
   `IfNotPresent` is always the right one, and the dispatch guard can name what the worker
   runs.
@@ -66,8 +68,8 @@ apps under it read them from there and from nowhere else in Terraform.
 
 A flow run never has a rollout land under it:
 
-- At start, the run adds a deny sync window to the AppProject with `manualSync: true`,
-  lasting the flow run's timeout, so it expires on its own if the run dies.
+- At start, the flow run adds a deny sync window to the AppProject with `manualSync: true`,
+  lasting the flow run's timeout, so it expires on its own if the flow run dies.
 - The flow's `finally` and its crash and cancel hooks remove the window early, with the same
   hook discipline as ADR-0028's bench-endpoint destroy.
 - A merge during the freeze syncs once the window ends. The window blocks syncs, not
@@ -81,7 +83,8 @@ A flow run never has a rollout land under it:
 
 **The dispatch guard stays.** Image Updater polls, and a held freeze delays a sync, so a
 dispatch can still race a pending rollout. The guard compares the running worker's image to
-the image behind main's `:main` tag and fails with "rollout pending — retry once it lands".
+the image behind main's `:main` tag and fails with "rollout pending — retry once it
+lands".
 It also fails when there is not exactly one running worker. It moves out of the inline
 workflow step into a tested script.
 
@@ -97,9 +100,9 @@ notifications can replace it.
 
 Spec §5.2 rules canary and shadow proper out for a single-version demonstrator with no
 live users, so no deployment strategy is chosen now. When a progressive-delivery gate is
-wanted, a `Rollout` replaces a `Deployment` in the same Argo CD app, and an HPA or KEDA
-`ScaledObject` can target it, so the substrate decision does not reopen. Blue/green is
-declined: it doubles GPU capacity and nothing calls for it.
+wanted, an Argo Rollouts `Rollout` resource replaces a `Deployment` in the same Argo CD
+app, and an HPA or KEDA `ScaledObject` can target it, so the substrate decision does not
+reopen. Blue/green is declined: it doubles GPU capacity and nothing calls for it.
 
 **HTTPRoute weights would have two writers.** The L3 PostHog flag-driven split and a
 Rollouts traffic router would both set weights on the same HTTPRoute. Whichever is built
@@ -115,7 +118,7 @@ before relying on it at L3.
   what is out of sync. Argo Rollouts covers what Flagger would.
 - **CI-driven Helm.** A `helm upgrade` from a workflow on merge. It gives the worker's tag
   a second writer beside Terraform, does not correct drift, and needs cluster credentials
-  in CI for every rollout. A freeze would have to be a CI-side lock that a crashed run
+  in CI for every rollout. A freeze would have to be a CI-side lock that a crashed flow run
   cannot release.
 - **Terraform.** Keep the worker as a `helm_release` and roll by re-applying the eks
   stack. A rollout then needs an operator or a CI job holding the eks stack's rights, every
@@ -125,13 +128,16 @@ before relying on it at L3.
 
 - A merge to main reaches the idle worker without re-applying the eks stack, once its
   image is built and Image Updater's next poll sees it.
-- A merge during a flow run waits for the run to end. A run that crashes without its hooks
+- A merge during a flow run waits for it to end. A flow run that crashes without its hooks
   running holds rollouts until its timeout.
 - `just cluster-up` installs Argo CD and Image Updater on every bring-up, and the worker
   and the Collector come up only once Argo CD has synced them.
 - The Image Updater's override lives on the Application, not in git, so git does not show
   the worker's running tag; the Application and the dispatch guard do.
 - A worker sync can succeed on main's commit before Image Updater rolls that commit's
-  image, so the worker's Sentry release can be marked once for the manifests and again
-  for the image.
-- The CPU Engine (`just deploy`) is not touched by this decision.
+  image, so the release for that commit gets one deploy for the manifests and another
+  when the image rolls.
+- The worker's tag names the last commit that touched the image's inputs, not main's
+  head, so it does not match the Sentry release version; the Application's synced
+  revision does.
+- The CPU Engine (`just cpu-deploy`) is not touched by this decision.
