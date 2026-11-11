@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Check the Prefect worker runs main's copy of a flow's config before flow-dispatch.yml
 # creates a run, and show that config in the job summary. The worker reads the config
-# baked into its image, not this checkout, and the worker image's tag is the commit it
-# was built from (orchestration-image.yml), so that commit's copy of the file is the
-# config the worker runs. A config that differs from main's means the worker has not
-# been re-pinned since the config changed. Run from a checkout of main with full history.
+# baked into its image, not this checkout, and the worker image's tag is the last commit
+# that touched the image's inputs, the baked configs among them (orchestration-image.yml),
+# so that commit's copy of the file is the config the worker runs. A config that differs
+# from main's means the worker has not been re-pinned since the config changed. Run from
+# a checkout of main with full history.
 # Usage: worker-config-check.sh <prefect-namespace> <config-repo-path> <summary-heading> <flow-run-id>
 set -euo pipefail
 
