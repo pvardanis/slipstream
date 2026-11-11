@@ -4,17 +4,27 @@ Exercises the AppProject freeze against a fake kubectl that serves the AppProjec
 and applies merge patches to it, rejecting one whose resourceVersion is stale as the API
 server does — no cluster. Asserts the window a freeze adds (deny, active from the current
 UTC minute, lasting the run's timeout, manual syncs denied too), that it keeps every other
-window on the project, and that a release removes only its own run's window.
+window on the project, and that a release removes only its own run's window. Drives
+the session that holds a freeze around a run's work against a recording freeze: it
+releases on any exit but a killed run's, which it leaves to the run's hook.
 """
 
 import json
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from slipstream_bench.orchestration.cluster import KubectlError
-from slipstream_bench.orchestration.rollout_freeze import AppProjectFreeze
+import pytest
+from prefect.exceptions import TerminationSignal
 
+from slipstream_bench.orchestration.cluster import KubectlError
+from slipstream_bench.orchestration.rollout_freeze import (
+    AppProjectFreeze,
+    hold_rollout_freeze,
+)
+
+_LOGGER_NAME = "slipstream_bench.orchestration.rollout_freeze"
 _NOW = datetime(2026, 11, 11, 14, 7, 33, tzinfo=UTC)
 _GET = ["-n", "argocd", "get", "appproject", "workloads", "-o", "json"]
 _PATCH = ["-n", "argocd", "patch", "appproject", "workloads", "--type=merge", "-p"]
@@ -140,3 +150,89 @@ def test_release_without_its_run_s_window_leaves_the_project_unpatched() -> None
     _freeze(project).release("knob-20261111")
 
     assert project.patches == []
+
+
+class _RecordingFreeze:
+    """Record each acquire and release the session makes, in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def acquire(self, holder: str, duration_s: int) -> None:
+        self.calls.append(("acquire", holder, str(duration_s)))
+
+    def release(self, holder: str) -> None:
+        self.calls.append(("release", holder))
+
+
+def test_session_holds_the_freeze_around_its_body() -> None:
+    freeze = _RecordingFreeze()
+
+    with hold_rollout_freeze(freeze, holder="knob-20261111", duration_s=68400):
+        assert freeze.calls == [("acquire", "knob-20261111", "68400")]
+
+    assert freeze.calls[-1] == ("release", "knob-20261111")
+
+
+def test_session_releases_the_freeze_when_its_body_fails() -> None:
+    freeze = _RecordingFreeze()
+
+    with (
+        pytest.raises(ValueError, match="point failed"),
+        hold_rollout_freeze(freeze, holder="knob-20261111", duration_s=68400),
+    ):
+        raise ValueError("point failed")
+
+    assert freeze.calls[-1] == ("release", "knob-20261111")
+
+
+@pytest.mark.parametrize("signal", [TerminationSignal, KeyboardInterrupt])
+def test_session_leaves_the_release_to_the_hook_when_the_run_is_killed(
+    signal: type[BaseException],
+) -> None:
+    # The hooks destroy the bench endpoint before they release the freeze, so a rollout
+    # Argo CD started on a release here could restart the worker under that destroy.
+    freeze = _RecordingFreeze()
+
+    with (
+        pytest.raises(signal),
+        hold_rollout_freeze(freeze, holder="knob-20261111", duration_s=68400),
+    ):
+        raise signal(*((15,) if signal is TerminationSignal else ()))
+
+    assert ("release", "knob-20261111") not in freeze.calls
+
+
+def test_session_logs_its_acquire_and_release(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+
+    with hold_rollout_freeze(
+        _RecordingFreeze(), holder="knob-20261111", duration_s=68400
+    ):
+        pass
+
+    assert [r.getMessage() for r in caplog.records if r.name == _LOGGER_NAME] == [
+        "rollout freeze held for run knob-20261111 (68400s)",
+        "rollout freeze released for run knob-20261111",
+    ]
+
+
+def test_session_logs_that_it_left_the_freeze_for_the_hook(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+
+    with (
+        pytest.raises(TerminationSignal),
+        hold_rollout_freeze(
+            _RecordingFreeze(), holder="knob-20261111", duration_s=68400
+        ),
+    ):
+        raise TerminationSignal(15)
+
+    [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
+    # Names the line the hook logs on the run once it has released, so its absence is
+    # what calls for the manual removal, and the window that removal targets.
+    assert "released run knob-20261111's rollout freeze" in record.getMessage()
+    assert "slipstream rollout freeze: run=knob-20261111" in record.getMessage()
+    assert "kubectl -n argocd edit appproject workloads" in record.getMessage()
