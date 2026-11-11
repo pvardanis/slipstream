@@ -5,13 +5,13 @@
 # a template that fails to render fails CI rather than a paid cluster-up (ADR-0002's
 # no-cloud tier). The root Application's app-of-apps chart (k8s/argocd/apps) gets the
 # same lint, render and schema check, except that an empty render passes: a chart with
-# no child Applications is a valid root. Needs helm and kubeconform on PATH; no cluster.
+# no child Applications is a valid root. Each of its templates must still render. Needs helm and kubeconform on PATH; no cluster.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Schemas for kinds outside core Kubernetes (the External Secrets Operator's
-# SecretStore and ExternalSecret), from the datreeio CRDs catalog pinned to one
+# SecretStore and ExternalSecret, Argo CD's Application), from the datreeio CRDs catalog pinned to one
 # commit so a catalog change cannot move the check. kubeconform fails a kind it has
 # no schema for, so a chart adding a CRD kind the catalog lacks fails here.
 crd_catalog="https://raw.githubusercontent.com/datreeio/CRDs-catalog/3eb90d47aba8d61919d4419dd38301536e32a94b"
@@ -53,6 +53,16 @@ apps_values="${apps_chart}/ci/test-values.yaml"
 echo "--- ${apps_chart#"${repo_root}/"}"
 helm lint --strict --values "${apps_values}" "${apps_chart}"
 rendered="$(helm template chart-render-test "${apps_chart}" --values "${apps_values}")"
+# Helm prints a `# Source:` header only for a template that renders something, so a
+# child Application gated on a misspelt or missing value shows up as a template with
+# no header. NOTES.txt and _-prefixed helpers never render a manifest.
+templates="$(cd "${apps_chart}" && find templates -type f ! -name NOTES.txt ! -name '_*' | sort)"
+sources="$(sed -n 's|^# Source: [^/]*/||p' <<<"${rendered}" | sort -u)"
+if [[ "${templates}" != "${sources}" ]]; then
+  echo "${apps_chart} has templates that render nothing with ci/test-values.yaml:" >&2
+  comm -23 <(printf '%s\n' "${templates}") <(printf '%s\n' "${sources}") >&2
+  exit 1
+fi
 kubeconform -strict -summary \
   -schema-location default \
   -schema-location "${crd_schema_location}" <<<"${rendered}"
