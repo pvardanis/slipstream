@@ -39,7 +39,7 @@ _EDIT_COMMAND = f"kubectl -n {_NAMESPACE} edit appproject {_PROJECT}"
 # The description a run's window carries, which a release matches its own window by.
 _DESCRIPTION = "slipstream rollout freeze: run={holder}"
 
-# The line a parent flow's crash or cancellation hook logs on the run once it has
+# The line a parent flow's crash, cancellation or timeout hook logs on the run once it has
 # released the run's freeze; the session's error names it as what to look for.
 HOOK_RELEASED_LINE = "released run %s's rollout freeze"
 
@@ -179,8 +179,9 @@ def hold_rollout_freeze(
     The release follows a body that returns or raises an ``Exception``; when the body has
     raised, a release that fails too is logged and the body's error is the one raised. A
     run being killed (a ``BaseException`` that is not an ``Exception``, such as Prefect's
-    termination signal) skips it and leaves it to the flow's crash or cancellation hooks,
-    where it runs after the bench endpoint's destroy hook has returned or failed: a
+    termination signal, or the cancellation its timeout raises) skips it and leaves it to
+    the flow's crash, cancellation or timeout hooks, where it runs after the bench
+    endpoint's destroy hook has returned or failed: a
     rollout Argo CD started on a release here could restart the worker under that
     destroy. The window's own duration lifts the freeze if no hook answers.
 
@@ -206,9 +207,9 @@ def hold_rollout_freeze(
         # Logged as an error naming the recovery, since a signal no hook answers leaves
         # the workloads frozen until the window lapses.
         _LOGGER.error(
-            "rollout freeze not released on %s; it is left for the run's crash or "
-            'cancellation hook. If the run page shows no "%s" line from that hook, '
-            'remove the "%s" window with `%s`',
+            "rollout freeze not released on %s; it is left for the run's crash, "
+            'cancellation or timeout hook. If the run page shows no "%s" line from that '
+            'hook, remove the "%s" window with `%s`',
             type(error).__name__,
             HOOK_RELEASED_LINE % holder,
             _DESCRIPTION.format(holder=holder),
