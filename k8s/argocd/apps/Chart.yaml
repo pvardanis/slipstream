@@ -1,0 +1,9 @@
+# The app-of-apps chart the root Application syncs (terraform/eks/argocd.tf): it renders
+# one Argo CD Application per workload Argo CD owns, from the cluster values the eks stack
+# passes in. It renders none yet, so the root Application is Synced and Healthy with no
+# child apps.
+apiVersion: v2
+name: slipstream-apps
+description: Child Argo CD Applications for the slipstream cluster's workloads.
+type: application
+version: 0.1.0

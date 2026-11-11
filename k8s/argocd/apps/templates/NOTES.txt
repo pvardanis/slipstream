@@ -1,0 +1,1 @@
+slipstream-apps: the child Argo CD Applications for the slipstream cluster's workloads, synced by the root Application.
