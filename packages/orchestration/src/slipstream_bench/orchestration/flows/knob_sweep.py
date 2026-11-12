@@ -67,12 +67,12 @@ from slipstream_bench.orchestration.flows.point_sweep import (
     run_point_sweep,
 )
 from slipstream_bench.orchestration.flows.run_setup import (
-    destroy_run_bench_endpoint,
+    RUN_TEARDOWN_HOOKS,
+    RUN_TIMEOUT_HOOKS,
+    RUN_TIMEOUT_S,
     enable_milestone_logging,
-    on_run_timeout,
     open_run_bench_endpoint,
     open_run_rollout_freeze,
-    release_run_rollout_freeze,
     tag_run_with_group,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
@@ -81,11 +81,6 @@ from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
 from slipstream_bench.orchestration.tasks.render import render_results
 
 _LOGGER = logging.getLogger(__name__)
-
-# The knob sweep's run timeout, which its rollout freeze lasts too (ADR-0029): above the
-# longest legitimate GPU session (18 h) and under the 20 h spend-leak alarm (ADR-0025), so
-# a run that hangs is failed, and a freeze no hook released lapses, before the alarm fires.
-_RUN_TIMEOUT_S = 19 * 3600
 
 # The GPU redeploy for one engine point's knobs (Tier-1). Returns nothing: the flow
 # sequences it for its side effect, the rollout of ``deploy/vllm-gpu``.
@@ -183,13 +178,10 @@ class KnobSweepInputs:
 
 @flow(
     name="knob-sweep",
-    timeout_seconds=_RUN_TIMEOUT_S,
-    on_cancellation=[destroy_run_bench_endpoint, release_run_rollout_freeze],
-    on_crashed=[destroy_run_bench_endpoint, release_run_rollout_freeze],
-    on_failure=[
-        on_run_timeout(destroy_run_bench_endpoint),
-        on_run_timeout(release_run_rollout_freeze),
-    ],
+    timeout_seconds=RUN_TIMEOUT_S,
+    on_cancellation=list(RUN_TEARDOWN_HOOKS),
+    on_crashed=list(RUN_TEARDOWN_HOOKS),
+    on_failure=list(RUN_TIMEOUT_HOOKS),
 )
 def knob_sweep_flow(
     *,
@@ -282,7 +274,7 @@ def knob_sweep_flow(
     # drawn the run, so a merge meanwhile rolls neither the replica nor the worker under
     # it (ADR-0029); what merged syncs once the freeze is released.
     with open_run_rollout_freeze(
-        kubectl=kubectl, run_id=run_id, duration_s=_RUN_TIMEOUT_S
+        kubectl=kubectl, run_id=run_id, duration_s=RUN_TIMEOUT_S
     ):
         # The bench endpoint lives for the point loop only: everything that can reject
         # the run cheaply (its inputs, the cell storage preflight) runs before its

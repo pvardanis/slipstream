@@ -2,9 +2,9 @@
 
 A killed run's freeze session leaves the release to this hook, which Prefect runs after
 the run's process has ended. These tests call the hook as Prefect does, on a run carrying
-the knob sweep's real parameter names, with the freeze swapped for a recording fake, check
-it releases the run's freeze and logs that on the run, and check the knob sweep registers
-it after the hook that destroys the bench endpoint.
+each parent flow's real parameter names, with the freeze swapped for a recording fake,
+check it releases the run's freeze and logs that on the run, and check the knob sweep and
+the KV cache A/B register it after the hook that destroys the bench endpoint.
 """
 
 import inspect
@@ -21,6 +21,7 @@ from prefect.states import Cancelling, Crashed
 import slipstream_bench.orchestration.flows.run_setup as run_setup_module
 from slipstream_bench.orchestration.cluster import Kubectl, KubectlError
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
+from slipstream_bench.orchestration.flows.kv_ab import kv_ab_flow
 from slipstream_bench.orchestration.flows.run_setup import (
     destroy_run_bench_endpoint,
     release_run_rollout_freeze,
@@ -63,10 +64,16 @@ def _flow_run(parent_flow: Any) -> FlowRun:
     )
 
 
+_FLOWS = [knob_sweep_flow, kv_ab_flow]
+
+
+@pytest.mark.parametrize("parent_flow", _FLOWS)
 @pytest.mark.parametrize("state", [Cancelling(), Crashed()])
-def test_hook_releases_the_run_s_freeze(freeze: RecordingFreeze, state: Any) -> None:
+def test_hook_releases_the_run_s_freeze(
+    freeze: RecordingFreeze, parent_flow: Any, state: Any
+) -> None:
     release_run_rollout_freeze(
-        flow=knob_sweep_flow, flow_run=_flow_run(knob_sweep_flow), state=state
+        flow=parent_flow, flow_run=_flow_run(parent_flow), state=state
     )
 
     assert freeze.calls == [("release", "run-7")]
@@ -116,10 +123,13 @@ def test_hook_logs_no_released_line_when_the_release_fails(
     ] == ["releasing run run-7's rollout freeze"]
 
 
-def test_knob_sweep_releases_its_freeze_after_destroying_its_endpoint() -> None:
+@pytest.mark.parametrize("parent_flow", _FLOWS)
+def test_flow_releases_its_freeze_after_destroying_its_endpoint(
+    parent_flow: Any,
+) -> None:
     # The release lets Argo CD roll the worker, which would cut off a destroy still
     # running in it, so it runs last.
     hooks = [destroy_run_bench_endpoint, release_run_rollout_freeze]
 
-    assert knob_sweep_flow.on_cancellation_hooks == hooks
-    assert knob_sweep_flow.on_crashed_hooks == hooks
+    assert parent_flow.on_cancellation_hooks == hooks
+    assert parent_flow.on_crashed_hooks == hooks

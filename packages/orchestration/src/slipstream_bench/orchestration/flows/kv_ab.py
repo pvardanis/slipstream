@@ -17,7 +17,8 @@ Prefect deployment registers: it builds the live transports inside the flow, so 
 serializable parameters cross the flow boundary, drives the loop inside the run's own bench
 endpoint (:func:`slipstream_bench.orchestration.flows.run_setup.open_run_bench_endpoint`),
 destroys it, then renders the run's tables and chart to its run page
-(:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`).
+(:mod:`slipstream_bench.orchestration.tasks.kv_ab_render`), all under the run's rollout
+freeze, so no rollout lands between its arm runs (ADR-0029).
 """
 
 import logging
@@ -57,9 +58,12 @@ from slipstream_bench.orchestration.config_artifact import (
 )
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.run_setup import (
-    destroy_run_bench_endpoint,
+    RUN_TEARDOWN_HOOKS,
+    RUN_TIMEOUT_HOOKS,
+    RUN_TIMEOUT_S,
     enable_milestone_logging,
     open_run_bench_endpoint,
+    open_run_rollout_freeze,
     tag_run_with_group,
 )
 from slipstream_bench.orchestration.kv_ab_cell import (
@@ -233,8 +237,10 @@ class KvAbInputs:
 
 @flow(
     name="kv-cache-extension-ab",
-    on_cancellation=[destroy_run_bench_endpoint],
-    on_crashed=[destroy_run_bench_endpoint],
+    timeout_seconds=RUN_TIMEOUT_S,
+    on_cancellation=list(RUN_TEARDOWN_HOOKS),
+    on_crashed=list(RUN_TEARDOWN_HOOKS),
+    on_failure=list(RUN_TIMEOUT_HOOKS),
 )
 def kv_ab_flow(
     *,
@@ -259,7 +265,10 @@ def kv_ab_flow(
     environment and its vLLM api-key from the cluster Secret. Re-invoked with the same run
     id, it reads a run whose rungs are all cached from the cache and redoes any other run
     whole. The parameters are all serializable; the three paths name in-image files read
-    on the worker. The run is tagged ``run=<run-id>``.
+    on the worker. The run is tagged ``run=<run-id>``. Argo CD's rollouts of the workloads
+    are frozen from before the endpoint opens until the render is done (ADR-0029). The run
+    times out after 19 h, and its failure hooks then destroy the endpoint and release the
+    freeze.
 
     :param run_id: the A/B's run id, which its cells and labels nest under.
     :param region: the AWS region of the host and bucket.
@@ -306,41 +315,47 @@ def kv_ab_flow(
         bucket=bucket,
         model=read_model_id(model_yaml),
     )
-    # The bench endpoint lives for the arm runs only: a workload the rig rules out is
-    # refused before its apply, and the render below reads only S3, so the endpoint is
-    # destroyed before it. A destroy that fails fails the run before the render: the cells
-    # are already in S3, and the state it leaves must be destroyed
-    # (`just bench-endpoint-down`) before a re-run can open the endpoint.
     check_fits_rig(config, inputs.rig)
     kubectl = build_kubectl()
     ssm_client = build_ssm_client(region)
     s3_client = build_s3_client(region)
     task = kv_ab_cell_task(bucket, retries=retries)
-    with open_run_bench_endpoint(
-        kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
-    ) as host:
-        collaborators = build_kv_ab_collaborators(
-            inputs,
-            host=host,
-            kubectl=kubectl,
-            ssm_client=ssm_client,
+    # Argo CD holds off the workloads from before the endpoint opens until the render has
+    # drawn the run, so a merge meanwhile rolls neither the replica nor the worker between
+    # or under its arm runs (ADR-0029); what merged syncs once the freeze is released.
+    with open_run_rollout_freeze(
+        kubectl=kubectl, run_id=run_id, duration_s=RUN_TIMEOUT_S
+    ):
+        # The bench endpoint lives for the arm runs only: a workload the rig rules out is
+        # refused before its apply, and the render below reads only S3, so the endpoint
+        # is destroyed before it. A destroy that fails fails the run before the render:
+        # the cells are already in S3, and the state it leaves must be destroyed
+        # (`just bench-endpoint-down`) before a re-run can open the endpoint.
+        with open_run_bench_endpoint(
+            kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
+        ) as host:
+            collaborators = build_kv_ab_collaborators(
+                inputs,
+                host=host,
+                kubectl=kubectl,
+                ssm_client=ssm_client,
+                s3_client=s3_client,
+                task=task,
+                read_metrics=partial(fetch_metrics, metrics_url),
+            )
+            result = drive_kv_ab(config, inputs.rig, collaborators)
+        # Every rung's raw result and labels are in S3; fold them into the tables and
+        # chart on this run page as a terminal task, so a render failure leaves them
+        # intact and a re-run resumes every cached run and re-renders.
+        render_kv_ab_results(
+            pointers=result.pointers,
+            run_id=run_id,
+            bucket=bucket,
+            region=region,
             s3_client=s3_client,
-            task=task,
-            read_metrics=partial(fetch_metrics, metrics_url),
+            publish_artifact=create_markdown_artifact,
+            publish_image=create_image_artifact,
         )
-        result = drive_kv_ab(config, inputs.rig, collaborators)
-    # Every rung's raw result and labels are in S3; fold them into the tables and chart on
-    # this run page as a terminal task, so a render failure leaves them intact and a re-run
-    # resumes every cached run and re-renders.
-    render_kv_ab_results(
-        pointers=result.pointers,
-        run_id=run_id,
-        bucket=bucket,
-        region=region,
-        s3_client=s3_client,
-        publish_artifact=create_markdown_artifact,
-        publish_image=create_image_artifact,
-    )
     logger.info(
         "kv-ab run=%s complete: %d cells (%d runs run, %d resumed)",
         run_id,

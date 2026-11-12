@@ -6,12 +6,12 @@ filter, and its cells run on a bench endpoint opened from the worker's environme
 register :func:`destroy_run_bench_endpoint` as their crash and cancellation hook, which
 destroys that endpoint after the run's session has exited.
 
-A flow that holds Argo CD off the workloads for its run (ADR-0029) opens its rollout
-freeze here too, through :func:`build_rollout_freeze`, and registers
-:func:`release_run_rollout_freeze` after the destroy hook, which releases a killed run's
-freeze once that hook has returned or failed. A flow with a timeout registers both again
-as failure hooks through :func:`on_run_timeout`, since a timed-out run runs no crash or
-cancellation hook.
+Both hold Argo CD off the workloads for their run (ADR-0029): they open their rollout
+freeze here too, through :func:`build_rollout_freeze`, lasting :data:`RUN_TIMEOUT_S`, and
+register :func:`release_run_rollout_freeze` after the destroy hook, which releases a killed
+run's freeze once that hook has returned or failed (:data:`RUN_TEARDOWN_HOOKS`). Both
+register the two again as failure hooks through :func:`on_run_timeout`
+(:data:`RUN_TIMEOUT_HOOKS`), since a timed-out run runs no crash or cancellation hook.
 """
 
 import functools
@@ -52,6 +52,11 @@ from slipstream_bench.orchestration.rollout_freeze import (
 
 # The name Prefect gives the Failed state of a run that outlived its timeout_seconds.
 _TIMED_OUT = "TimedOut"
+
+# A parent flow's run timeout, which its rollout freeze lasts too (ADR-0029): above the
+# longest legitimate GPU session (18 h) and under the 20 h spend-leak alarm (ADR-0025), so
+# a run that hangs is failed, and a freeze no hook released lapses, before the alarm fires.
+RUN_TIMEOUT_S = 19 * 3600
 
 # The package whose stdlib loggers carry the Prefect-free core's milestone lines. The
 # image's PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench attaches a handler to this logger
@@ -233,3 +238,11 @@ def release_run_rollout_freeze(
     logger.info("releasing run %s's rollout freeze", run_id)
     build_rollout_freeze(build_kubectl()).release(run_id)
     logger.info(HOOK_RELEASED_LINE, run_id)
+
+
+# A parent flow's crash and cancellation hooks, in the order they run: the destroy before
+# the release, since the release lets Argo CD roll the worker the destroy runs in.
+RUN_TEARDOWN_HOOKS = (destroy_run_bench_endpoint, release_run_rollout_freeze)
+
+# The same hooks as failure hooks, which act on a timed-out run alone.
+RUN_TIMEOUT_HOOKS = tuple(on_run_timeout(hook) for hook in RUN_TEARDOWN_HOOKS)
