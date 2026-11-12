@@ -56,7 +56,7 @@ cluster-up: _bootstrap-init
     wait_synced_and_healthy application/root
     tag_parameter='{.spec.source.helm.parameters[?(@.name=="worker.image.prefectTag")].value}'
     kubectl -n argocd wait application/prefect-worker --for=jsonpath="${tag_parameter}" --timeout=300s || {
-      echo "Image Updater wrote no image tag onto Argo CD's prefect-worker Application after 300s; see its logs: kubectl -n argocd logs deploy/argocd-image-updater" >&2
+      echo "Image Updater wrote no image tag onto Argo CD's prefect-worker Application after 300s; see its logs: kubectl -n argocd logs deploy/argocd-image-updater-controller" >&2
       exit 1
     }
     worker_image="$(kubectl -n argocd get application/prefect-worker -o jsonpath='{.spec.source.helm.parameters[?(@.name=="worker.image.repository")].value}:'"${tag_parameter}")"
