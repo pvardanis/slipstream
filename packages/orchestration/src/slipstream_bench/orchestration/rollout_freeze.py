@@ -155,21 +155,6 @@ class AppProjectFreeze:
         )
 
 
-def _get_other_windows(project: dict[str, Any], holder: str) -> list[dict[str, Any]]:
-    """Return the project's sync windows other than ``holder``'s, in their order."""
-    description = _DESCRIPTION.format(holder=holder)
-    return [
-        window
-        for window in _get_windows(project)
-        if window.get("description") != description
-    ]
-
-
-def _get_windows(project: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the project's sync windows; a project with none omits the field."""
-    return project["spec"].get("syncWindows") or []
-
-
 @contextmanager
 def hold_rollout_freeze(
     freeze: RolloutFreeze, *, holder: str, duration_s: int
@@ -222,3 +207,18 @@ def hold_rollout_freeze(
 def _release(freeze: RolloutFreeze, holder: str) -> None:
     freeze.release(holder)
     _LOGGER.info("rollout freeze released for run %s", holder)
+
+
+def _get_other_windows(project: dict[str, Any], holder: str) -> list[dict[str, Any]]:
+    """Return the project's sync windows other than ``holder``'s, in their order."""
+    description = _DESCRIPTION.format(holder=holder)
+    return [
+        window
+        for window in _get_windows(project)
+        if window.get("description") != description
+    ]
+
+
+def _get_windows(project: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the project's sync windows; a project with none omits the field."""
+    return project["spec"].get("syncWindows") or []
