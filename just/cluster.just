@@ -18,10 +18,10 @@ cluster-up: _bootstrap-init
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw state_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output state_bucket_name is empty" >&2; exit 1; }
     terraform -chdir={{ eks_dir }} init -input=false -backend-config="bucket=${bucket}"
-    # The worker layer requires the orchestration image published: the eks stack reads the
-    # bootstrap orchestration ECR repo URL (via the remote state in state_bucket) and
-    # resolves the image's content-sha tag, failing loudly if its manifest carries no
-    # single content tag. The check first fails a missing :main with the publish step.
+    # The worker requires the orchestration image published: Image Updater rolls it to
+    # the newest content-sha tag in the bootstrap orchestration ECR repo, so with none
+    # there the worker never comes up. The check fails a missing :main with the publish
+    # step.
     {{ justfile_directory() }}/orchestration/orchestration-image-check.sh {{ bootstrap_dir }}
     terraform -chdir={{ eks_dir }} apply -auto-approve -var="state_bucket=${bucket}"
     name="$(terraform -chdir={{ eks_dir }} output -raw cluster_name)"
@@ -46,17 +46,24 @@ cluster-up: _bootstrap-init
         }
       done
     }
-    # On a re-run that hands the worker a new image, every Application keeps the previous
-    # sync's Synced and Healthy until Argo CD reconciles, so once the root syncs, wait for
-    # the worker's Application to report the image the root carries before waiting on
-    # every Application. The worker's container is the app's only image, so it is
-    # images[0] once any older pod is gone.
-    worker_image="$(kubectl -n argocd get application/root -o jsonpath='{.spec.source.helm.valuesObject.orchestrationImageRepository}:{.spec.source.helm.valuesObject.orchestrationImageTag}')"
-    [[ "${worker_image}" != :* && "${worker_image}" != *: ]] || {
-      echo "Argo CD's root Application carries no orchestrationImageRepository or orchestrationImageTag (got '${worker_image}'); see helm.valuesObject in terraform/eks/argocd.tf" >&2
+    # The worker's image tag has one writer, Image Updater, which writes it onto the
+    # worker's Application as Helm parameters on its first cycle after the worker app
+    # appears; until then the worker runs the chart's default tag and cannot pull it. So
+    # once the root syncs, wait for those parameters, then for the worker's Application to
+    # report the image they name before waiting on every Application, which would
+    # otherwise still report a previous sync's Synced and Healthy. The worker's container
+    # is the app's only image, so it is images[0] once any older pod is gone.
+    wait_synced_and_healthy application/root
+    tag_parameter='{.spec.source.helm.parameters[?(@.name=="worker.image.prefectTag")].value}'
+    kubectl -n argocd wait application/prefect-worker --for=jsonpath="${tag_parameter}" --timeout=300s || {
+      echo "Image Updater wrote no image tag onto Argo CD's prefect-worker Application after 300s; see its logs: kubectl -n argocd logs deploy/argocd-image-updater" >&2
       exit 1
     }
-    wait_synced_and_healthy application/root
+    worker_image="$(kubectl -n argocd get application/prefect-worker -o jsonpath='{.spec.source.helm.parameters[?(@.name=="worker.image.repository")].value}:'"${tag_parameter}")"
+    [[ "${worker_image}" != :* && "${worker_image}" != *: ]] || {
+      echo "Argo CD's prefect-worker Application carries no worker.image.repository or worker.image.prefectTag Helm parameter (got '${worker_image}'); see the Image Updater annotations in k8s/argocd/apps/templates/prefect-worker.yaml" >&2
+      exit 1
+    }
     kubectl -n argocd wait application/prefect-worker --for=jsonpath="{.status.summary.images[0]}=${worker_image}" --timeout=300s || {
       echo "Argo CD's prefect-worker Application did not report image ${worker_image} after 300s; see its status: kubectl -n argocd get application prefect-worker -o yaml" >&2
       exit 1

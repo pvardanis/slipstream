@@ -1,11 +1,9 @@
-# Read-only references the Prefect worker layer (worker.tf) and the sweep-dispatch access
-# (sweep_dispatch.tf) need: the bootstrap stack's outputs and the orchestration image it
-# holds. The orchestration ECR repository lives in bootstrap because it must outlive
-# `just cluster-down`; the stack reads its URL here and resolves the current content-sha
-# tag from ECR, which the root Application (argocd.tf) hands the worker's Application as
-# an immutable ref.
+# Read-only references the Prefect worker layer (worker.tf), Image Updater
+# (image_updater.tf) and the sweep-dispatch access (sweep_dispatch.tf) need: the bootstrap
+# stack's outputs. The orchestration ECR repository lives in bootstrap because it must
+# outlive `just cluster-down`; the stack reads its URL and ARN here.
 
-# The bootstrap stack's outputs: the orchestration image repository URL, the
+# The bootstrap stack's outputs: the orchestration image repository URL and ARN, the
 # sweep-dispatch role ARN, and the cluster name and Prefect namespace the sweep-dispatch
 # preconditions check.
 data "terraform_remote_state" "bootstrap" {
@@ -14,25 +12,5 @@ data "terraform_remote_state" "bootstrap" {
     bucket = var.state_bucket
     key    = "bootstrap/terraform.tfstate"
     region = var.region
-  }
-}
-
-# The orchestration image's :main pointer resolves to one manifest; the stack pins the
-# worker to that manifest's immutable content-sha tag, never the floating :main
-# (a floating tag + IfNotPresent would silently run a stale cached image across nodes). The
-# :main pointer is read only to discover the current sha, so the image must be published
-# before `just cluster-up`.
-data "aws_ecr_image" "orchestration" {
-  repository_name = local.orchestration_repo_name
-  image_tag       = "main"
-
-  # The publish workflow tags every build :main and :<sha>, so the :main manifest carries
-  # exactly one non-main tag. Fail the plan loudly if it does not, rather than pinning the
-  # worker to a blank or ambiguous tag Helm would resolve to something unintended.
-  lifecycle {
-    postcondition {
-      condition     = length([for t in self.image_tags : t if t != "main"]) == 1
-      error_message = "The orchestration :main image must carry exactly one content-sha tag to pin (the publish workflow tags every build :main and :<sha>)."
-    }
   }
 }

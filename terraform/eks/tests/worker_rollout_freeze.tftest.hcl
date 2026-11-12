@@ -28,9 +28,6 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
-  mock_data "aws_ecr_image" {
-    defaults = { image_tags = ["main", "orchestrator-abc123"] }
-  }
 }
 
 mock_provider "aws" {

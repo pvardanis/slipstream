@@ -1,13 +1,12 @@
 # Plan-level tests for the Prefect worker layer on the eks stack (#178): the worker's
 # IAM role + least-privilege policy (S3 results bucket read and prefix-scoped writes, SSM
 # SendCommand to the bench host), its Pod Identity association, the ServiceAccount RBAC
-# scoped to managing deploy/vllm-gpu, and the worker image and identity the root Application
-# hands Argo CD, which deploys the worker (k8s/argocd/apps). They run offline —
-# the aws, helm, and kubernetes providers are mocked, and the bootstrap remote state
-# and the orchestration ECR image are stubbed with override_data — so the assertions
-# check the install's shape without standing a cluster up (ADR-0002 tier-1). A worker
-# actually registering against the pool and running a sweep is the cloud tier (#92 /
-# manual).
+# scoped to managing deploy/vllm-gpu, and the worker image repository and identity the
+# root Application hands Argo CD, which deploys the worker (k8s/argocd/apps). They run
+# offline — the aws, helm, and kubernetes providers are mocked, and the bootstrap remote
+# state is stubbed with override_data — so the assertions check the install's shape
+# without standing a cluster up (ADR-0002 tier-1). A worker actually registering against
+# the pool and running a sweep is the cloud tier (#92 / manual).
 #
 # The permission policy and trust policy are jsonencode()'d inline (not
 # aws_iam_policy_document data sources), so their statements are known at plan and
@@ -36,13 +35,6 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
-  # The orchestration image the worker runs: the :main pointer resolves to one manifest
-  # carrying exactly its own content-sha tag, so image_tags is [main, <sha>]. The stack
-  # picks the non-main tag the root Application hands Argo CD, pinning the worker to an
-  # immutable ref.
-  mock_data "aws_ecr_image" {
-    defaults = { image_tags = ["main", "orchestrator-abc123"] }
-  }
 }
 
 mock_provider "aws" {
@@ -52,8 +44,7 @@ mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
 # Plan against mocked bootstrap remote state instead of reaching for real S3. The
-# orchestration ECR repository URL is the worker image's repository; the content-sha
-# tag is resolved from ECR (mock_data aws_ecr_image above).
+# orchestration ECR repository URL is the worker image's repository.
 override_data {
   target = data.terraform_remote_state.bootstrap
   values = {
@@ -267,23 +258,11 @@ run "worker_layer_shape" {
   # --- The worker's handoff to Argo CD ---
 
   # Argo CD deploys the worker (k8s/argocd/apps); Terraform hands it the worker's image
-  # through the root Application's values only. The repository comes from the bootstrap
-  # ECR output and the tag is the content-sha resolved from the :main image (the non-main
-  # tag on that manifest).
+  # repository, from the bootstrap ECR output, through the root Application's values
+  # only. Image Updater writes the tag (image_updater.tftest.hcl).
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageRepository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
     error_message = "The worker image repository must come from the bootstrap orchestration_image_repo_url output."
-  }
-  # The ECR lookup keys off the repository path, not the full registry URL — trimprefix
-  # must strip the host. A bug there (wrong split, leftover slash) would only surface as a
-  # real-ECR lookup miss, so pin the transform here where the input is known at plan.
-  assert {
-    condition     = data.aws_ecr_image.orchestration.repository_name == "slipstream/orchestration"
-    error_message = "The ECR lookup must strip the registry host to the repository path (slipstream/orchestration)."
-  }
-  assert {
-    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageTag == "orchestrator-abc123"
-    error_message = "The worker image tag must be the content-sha tag resolved from the orchestration :main image."
   }
   # The worker's ServiceAccount and namespace Argo CD deploys into are the ones the Pod
   # Identity association binds, so the worker pod gets the role's credentials.
@@ -307,38 +286,6 @@ run "worker_layer_shape" {
     condition     = kubernetes_namespace_v1.slipstream.metadata[0].name == "slipstream"
     error_message = "The worker layer must create the slipstream namespace for the vllm-gpu RBAC."
   }
-}
-
-# The :main image must carry exactly one content-sha tag for the pin to be unambiguous.
-# If the resolve finds none (only :main present), the worker fails the plan loudly
-# rather than deploying with a blank tag Helm would resolve to something unintended.
-run "worker_requires_a_content_tag" {
-  command = plan
-
-  override_data {
-    target = data.aws_ecr_image.orchestration
-    values = {
-      image_tags = ["main"]
-    }
-  }
-
-  expect_failures = [data.aws_ecr_image.orchestration]
-}
-
-# The other side of the ==1 postcondition: a :main manifest carrying two content-sha tags
-# is as ambiguous as none — [0] would pin an arbitrary one — so the worker fails
-# the plan loudly rather than guessing which tag to deploy.
-run "worker_rejects_multiple_content_tags" {
-  command = plan
-
-  override_data {
-    target = data.aws_ecr_image.orchestration
-    values = {
-      image_tags = ["main", "orchestrator-abc123", "orchestrator-def456"]
-    }
-  }
-
-  expect_failures = [data.aws_ecr_image.orchestration]
 }
 
 # The bootstrap remote state is read from state_bucket, so an empty bucket name (a failed

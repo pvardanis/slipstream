@@ -24,8 +24,7 @@ locals {
   # the child Applications that chart renders into Argo CD's namespace. Its Helm values
   # are the repository and revision its child apps sync from (its own), and the
   # cluster-specific values only Terraform knows — the orchestration image repository
-  # from the bootstrap stack and the worker's image tag resolved from it, the Prefect
-  # server's namespace and API URL, the ServiceAccount Pod Identity binds, and the bench
+  # from the bootstrap stack, the Prefect server's namespace and API URL, the ServiceAccount Pod Identity binds, and the bench
   # endpoint topology ConfigMap the worker reads — and they are the only Terraform-to-Argo
   # CD handoff. Referencing that ConfigMap orders the root after it; the Collector's
   # grafana-cloud-endpoints ConfigMap is ordered by the depends_on on
@@ -44,7 +43,6 @@ locals {
             targetRevision = var.argocd_target_revision
           }
           orchestrationImageRepository = local.orchestration_repo_url
-          orchestrationImageTag        = local.worker_image_tag
           prefectApiUrl                = local.prefect_server_api_url
           namespaces = {
             prefect = local.prefect_namespace
@@ -68,8 +66,17 @@ locals {
     # sync options are per Application, so each child carries its own.
     syncPolicy = {
       automated   = { prune = true, selfHeal = true, allowEmpty = true }
-      syncOptions = ["ServerSideApply=true"]
+      syncOptions = ["ServerSideApply=true", "RespectIgnoreDifferences=true"]
     }
+    # Image Updater (image_updater.tf) writes the worker's image tag onto its child
+    # Application as a Helm parameter, which the app-of-apps chart never sets. The root
+    # ignores that field in its diff and, by RespectIgnoreDifferences, keeps the live value
+    # when it syncs, so self-heal never reverts the tag.
+    ignoreDifferences = [{
+      group        = "argoproj.io"
+      kind         = "Application"
+      jsonPointers = ["/spec/source/helm/parameters"]
+    }]
   }
 
   # Two projects scope what each layer may deploy: root writes only Application objects

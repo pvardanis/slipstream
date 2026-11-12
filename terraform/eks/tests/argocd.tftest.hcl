@@ -30,10 +30,6 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
-  # The worker layer plans with the stack; its image resolves to one content-sha tag.
-  mock_data "aws_ecr_image" {
-    defaults = { image_tags = ["main", "orchestrator-abc123"] }
-  }
 }
 
 # The Karpenter chart is pulled through a second, us-east-1-pinned aws provider
@@ -179,9 +175,9 @@ run "root_application_carries_cluster_values" {
 
   # The cluster values Terraform knows, handed to the app-of-apps chart: the repository
   # and revision its child apps sync from (the root's own), the orchestration image
-  # repository (bootstrap ECR) and the content-sha tag resolved from its :main image, the
-  # Prefect server's namespace and in-cluster API URL, the worker's Pod Identity-bound
-  # ServiceAccount, and the bench endpoint topology ConfigMap name the worker reads.
+  # repository (bootstrap ECR), the Prefect server's namespace and in-cluster API URL, the
+  # worker's Pod Identity-bound ServiceAccount, and the bench endpoint topology ConfigMap
+  # name the worker reads.
   assert {
     condition = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.source == {
       repoURL        = "https://github.com/pvardanis/slipstream.git"
@@ -193,9 +189,11 @@ run "root_application_carries_cluster_values" {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageRepository == "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
     error_message = "The root Application must carry the orchestration image repository URL from the bootstrap stack."
   }
+  # Image Updater is the worker's image tag's single writer (image_updater.tf), so
+  # Terraform hands over no tag.
   assert {
-    condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.orchestrationImageTag == "orchestrator-abc123"
-    error_message = "The root Application must carry the content-sha tag resolved from the orchestration :main image."
+    condition     = !contains(keys(yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject), "orchestrationImageTag")
+    error_message = "The root Application must carry no worker image tag: Image Updater is its only writer."
   }
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.source.helm.valuesObject.namespaces == { prefect = "prefect" }
@@ -221,6 +219,21 @@ run "root_application_carries_cluster_values" {
   assert {
     condition     = contains(yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.syncOptions, "ServerSideApply=true")
     error_message = "The root Application must sync with ServerSideApply=true."
+  }
+  # Image Updater writes the worker's tag onto its child Application as a Helm parameter,
+  # which the root's chart never sets. The root ignores that field on its child
+  # Applications, in its diff and its syncs, so self-heal never reverts the tag.
+  assert {
+    condition = yamldecode(helm_release.argocd_apps.values[0]).applications.root.ignoreDifferences == [{
+      group        = "argoproj.io"
+      kind         = "Application"
+      jsonPointers = ["/spec/source/helm/parameters"]
+    }]
+    error_message = "The root Application must ignore the Helm parameters Image Updater writes onto its child Applications."
+  }
+  assert {
+    condition     = contains(yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.syncOptions, "RespectIgnoreDifferences=true")
+    error_message = "The root Application's syncs must keep the Helm parameters Image Updater writes (RespectIgnoreDifferences=true)."
   }
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).applications.root.syncPolicy.automated == { prune = true, selfHeal = true, allowEmpty = true }

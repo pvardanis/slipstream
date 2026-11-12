@@ -10,10 +10,6 @@ source:
 # The orchestration image repository URL (the bootstrap stack's ECR repository).
 orchestrationImageRepository: ""
 
-# The orchestration image's immutable content-sha tag the Prefect worker runs, resolved
-# from the repository's :main image.
-orchestrationImageTag: ""
-
 # The Prefect server's in-cluster API URL the worker polls.
 prefectApiUrl: ""
 

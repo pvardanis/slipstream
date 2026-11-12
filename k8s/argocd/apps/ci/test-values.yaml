@@ -4,7 +4,6 @@ source:
   repoURL: https://github.com/pvardanis/slipstream.git
   targetRevision: main
 orchestrationImageRepository: 111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration
-orchestrationImageTag: orchestrator-abc123
 prefectApiUrl: http://prefect-server.prefect.svc.cluster.local:4200/api
 namespaces:
   prefect: prefect
