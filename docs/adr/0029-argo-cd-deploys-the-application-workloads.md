@@ -1,4 +1,4 @@
-<!-- ADR recording the deploy substrate (issue #36): Argo CD deploys the cluster's application workloads. Terraform keeps the cluster, the add-ons, IAM and Pod Identity, and installs Argo CD, Image Updater and one root Application, its only handoff to Argo CD; Argo CD owns the Prefect worker and the OTel Collector now and the serving fleet and Router later; the experiment flows keep the bench Engine. Image Updater is the single writer of the worker's image tag; an autoscaled workload's autoscaler alone owns its replicas; a flow run holds a rollout freeze that expires with the flow's timeout, and the worker's RBAC widens only to that freeze's sync windows; the dispatch guard stays, as a tested script; Argo CD Notifications creates the Sentry release marker; Argo Rollouts is the planned path for progressive delivery; the L3 PostHog split and a future Rollouts traffic router would both write HTTPRoute weights. Records why Flux + Flagger, CI-driven Helm and Terraform were rejected. Settles spec §10's open deploy substrate and names §5.1's marker mechanism; builds on ADR-0015's "Argo, if adopted at all, reconciles the L2a production serving deployment" and reuses ADR-0028's hook discipline. Amended with the knob sweep's freeze as built: the 19 h timeout, the window's shape, the failure hooks that tear down a timed-out run, and the Role's patch reaching every field of the AppProject. -->
+<!-- ADR recording the deploy substrate (issue #36): Argo CD deploys the cluster's application workloads. Terraform keeps the cluster, the add-ons, IAM and Pod Identity, and installs Argo CD, Image Updater and one root Application, its only handoff to Argo CD; Argo CD owns the Prefect worker and the OTel Collector now and the serving fleet and Router later; the experiment flows keep the bench Engine. Image Updater is the single writer of the worker's image tag; an autoscaled workload's autoscaler alone owns its replicas; a flow run holds a rollout freeze that expires with the flow's timeout, and the worker's RBAC widens only to that freeze's sync windows; the dispatch guard stays, as a tested script; Argo CD Notifications creates the Sentry release marker; Argo Rollouts is the planned path for progressive delivery; the L3 PostHog split and a future Rollouts traffic router would both write HTTPRoute weights. Records why Flux + Flagger, CI-driven Helm and Terraform were rejected. Settles spec §10's open deploy substrate and names §5.1's marker mechanism; builds on ADR-0015's "Argo, if adopted at all, reconciles the L2a production serving deployment" and reuses ADR-0028's hook discipline. Amended with the knob sweep's freeze as built: the 19 h timeout, the window's shape, the failure hooks that tear down a timed-out run, and the Role's patch reaching every field of the AppProject. Amended with Image Updater as built: the ImageUpdater resource that reads the worker app's annotations, its ECR login, the root ignoring the tag it writes, and the worker's bring-up before the first write. -->
 
 # ADR-0029: Argo CD deploys the cluster's application workloads
 
@@ -221,3 +221,40 @@ and hooks.
 - **Not yet checked on a live cluster:** that a merge during a sweep or an A/B syncs only
   after it ends. The `otel-collector` child Application above is the first under
   `workloads` to check it with.
+
+## Amendment (2026-11-12, #512): Image Updater as built
+
+- **Configured by an ImageUpdater resource.** Image Updater v1 reads its settings from
+  `ImageUpdater` resources. The eks stack installs the pinned `argocd-image-updater`
+  chart, and then one resource from a local chart (`terraform/eks/charts/image-updater-apps`)
+  in a release of its own, since the resource's kind exists only once the first release's
+  CRD does. The resource selects the Applications labelled
+  `slipstream.io/image-updater: enabled` and reads every setting from their
+  `argocd-image-updater.argoproj.io/*` annotations, so the worker's settings live on its
+  Application in git, beside its chart values. Image Updater's docs call these
+  annotations legacy; if a release drops them, the settings move into the resource.
+- **The worker app's settings.** The image is the orchestration repository the root
+  hands over, `newest-build`, tags matching `^[0-9a-f]{12}$`, `argocd` write-back, and
+  the tag and repository written as the worker chart's `worker.image.prefectTag` and
+  `worker.image.repository` Helm parameters.
+- **The tag is cut, not abbreviated.** The orchestration image workflow tags each build
+  with the first 12 characters of the full commit hash. `git log --abbrev=12` gives at
+  least 12 and lengthens the hash when 12 are ambiguous, which the pattern would skip.
+- **ECR login.** A script mounted into the Image Updater pod runs
+  `aws ecr get-login-password` under its Pod Identity credentials, and the registry
+  re-reads it after 11 h, before the 12 h token expires. The role holds
+  `ecr:GetAuthorizationToken`, which takes no resource, and only reads (`ListImages`,
+  `DescribeImages`, `BatchGetImage`, `GetDownloadUrlForLayer`) on the orchestration
+  repository.
+- **The root leaves the tag alone.** The root Application ignores
+  `/spec/source/helm/parameters` on its child Applications and syncs with
+  `RespectIgnoreDifferences=true`, so self-heal never reverts what Image Updater writes.
+- **Bring-up.** Terraform hands the worker no tag, so a fresh worker runs the chart's
+  default tag and cannot pull it until Image Updater's first cycle writes one.
+  `just cluster-up` waits for that write, then for the worker's Application to report
+  the image it names.
+- **A hand swap stops Image Updater.** Running a branch image on the worker means
+  scaling Image Updater to zero and writing the parameters by hand; scaling it back up
+  restores the newest content tag (`.claude/skills/e2e-test-orchestration-branch`).
+- **Not yet checked on a live cluster:** that a merge to main rolls the idle worker with
+  no `cluster-up`.
