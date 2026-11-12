@@ -1,0 +1,2 @@
+# No values: the selector label is fixed, and the Applications that carry it
+# (k8s/argocd/apps) are rendered with the same label.

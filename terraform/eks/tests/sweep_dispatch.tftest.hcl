@@ -47,6 +47,7 @@ override_data {
   values = {
     outputs = {
       orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+      orchestration_image_repo_arn    = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream/orchestration"
       bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
       bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
       sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
@@ -160,6 +161,7 @@ run "sweep_dispatch_rejects_a_different_bootstrap_cluster" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        orchestration_image_repo_arn    = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream/orchestration"
         bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
         bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
@@ -181,6 +183,7 @@ run "sweep_dispatch_rejects_a_different_bootstrap_namespace" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        orchestration_image_repo_arn    = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream/orchestration"
         bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
         bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
@@ -205,6 +208,7 @@ run "sweep_dispatch_rejects_a_bootstrap_without_target_outputs" {
     values = {
       outputs = {
         orchestration_image_repo_url    = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
+        orchestration_image_repo_arn    = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream/orchestration"
         bench_image_repo_arn            = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream-bench"
         bench_results_bucket_arn        = "arn:aws:s3:::slipstream-bench-results-abc123"
         sweep_dispatch_role_arn         = "arn:aws:iam::111122223333:role/slipstream-sweep-dispatch"
