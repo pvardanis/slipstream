@@ -1,0 +1,16 @@
+# Selects the Applications labelled for Image Updater, in the release's namespace (Argo
+# CD's), and reads every setting from their argocd-image-updater.argoproj.io/*
+# annotations, so each app's image settings live beside it in git. The label is the one
+# k8s/argocd/apps puts on the Applications it opts in; test/argocd-apps-test.sh fails when
+# the two differ.
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: annotated-applications
+spec:
+  applicationRefs:
+    - namePattern: "*"
+      labelSelectors:
+        matchLabels:
+          slipstream.io/image-updater: enabled
+      useAnnotations: true

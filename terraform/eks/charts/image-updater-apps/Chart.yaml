@@ -1,0 +1,9 @@
+# The ImageUpdater resource that has Argo CD Image Updater read its settings from the
+# annotations of the Applications carrying its selector label. A chart of its own,
+# installed after the Image Updater release, because its kind exists only once that
+# release's CRD does.
+apiVersion: v2
+name: image-updater-apps
+description: Points Argo CD Image Updater at the annotated Applications.
+type: application
+version: 0.1.0

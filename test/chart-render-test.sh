@@ -14,11 +14,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Schemas for kinds outside core Kubernetes (the External Secrets Operator's
-# SecretStore and ExternalSecret, Argo CD's Application), from the datreeio CRDs
-# catalog pinned to one commit so a catalog change cannot move the check. kubeconform
-# fails a kind it has no schema for, so a chart adding a CRD kind the catalog lacks
-# fails here.
-crd_catalog="https://raw.githubusercontent.com/datreeio/CRDs-catalog/3eb90d47aba8d61919d4419dd38301536e32a94b"
+# SecretStore and ExternalSecret, Argo CD's Application, Image Updater's
+# ImageUpdater), from the datreeio CRDs catalog pinned to one commit so a catalog
+# change cannot move the check. kubeconform fails a kind it has no schema for, so a
+# chart adding a CRD kind the catalog lacks fails here.
+crd_catalog="https://raw.githubusercontent.com/datreeio/CRDs-catalog/510ab7f7305427d21ff2bbceecd1ba16eb186c16"
 crd_schema_location="${crd_catalog}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
 
 # Validates the rendered manifests on stdin against the Kubernetes and CRD schemas.
