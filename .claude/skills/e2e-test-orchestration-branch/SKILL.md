@@ -35,15 +35,21 @@ Run the build in the background; it is slow under emulation. Done when `docker p
 
 ## Step 2 — Swap the worker onto it
 
-Record the current image first, so Step 6 can restore it:
+Argo CD deploys the worker, so a `kubectl set image` on its Deployment is reverted as drift. The tag lives on the `prefect-worker` Application as the Helm parameter Image Updater writes, so stop Image Updater and write the parameter yourself:
 
 ```bash
-kubectl -n prefect get deploy prefect-worker -o jsonpath='{.spec.template.spec.containers[0].image}'
-kubectl -n prefect set image deploy/prefect-worker prefect-worker="<repo>:<tag>"
+kubectl -n argocd get application prefect-worker -o jsonpath='{.status.summary.images[0]}'
+kubectl -n argocd scale deploy/argocd-image-updater --replicas=0
+kubectl -n argocd patch application prefect-worker --type json -p '[{"op": "replace", "path": "/spec/source/helm/parameters", "value": [{"name": "worker.image.repository", "value": "<repo>"}, {"name": "worker.image.prefectTag", "value": "<tag>"}]}]'
+kubectl -n argocd wait application/prefect-worker --for=jsonpath='{.status.summary.images[0]}=<repo>:<tag>' --timeout=300s
 kubectl -n prefect rollout status deploy/prefect-worker
 ```
 
-Done when the rollout reports success. Terraform does not see this swap; `just stack-down` discards it.
+- Scaled to zero, Image Updater cannot write the newest content tag back over yours; it would also never pick a `qa-` tag, which its `^[0-9a-f]{12}$` filter skips.
+- The root Application ignores its child Applications' Helm parameters, so it leaves the patch in place.
+- A rollout freeze held by a running flow blocks the sync; wait for the run to end.
+
+Done when the rollout reports success. `just stack-down` discards the swap.
 
 ## Step 3 — Register from the branch
 
@@ -88,5 +94,5 @@ Separate what the scenario tests from what the rig did: a slow engine or a rende
 
 - Post the scenario table with each `run_id` and its observed outcome as a comment on the top PR.
 - Offer an issue for each defect found outside the branch's scope.
-- Restore the worker: `just stack-down`, or `kubectl -n prefect set image deploy/prefect-worker prefect-worker=<image recorded in Step 2>`.
+- Restore the worker: `just stack-down`, or `kubectl -n argocd scale deploy/argocd-image-updater --replicas=1`, after which Image Updater's first cycle writes the newest content tag back and Argo CD rolls the worker to it.
 - With the user's go-ahead, delete the tag (`aws ecr batch-delete-image --repository-name "${repo#*/}" --image-ids imageTag=<tag>`) and `trash /tmp/qa-<label>`.
