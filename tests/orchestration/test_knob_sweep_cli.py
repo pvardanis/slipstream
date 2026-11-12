@@ -435,7 +435,7 @@ def _stub_transports(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def test_knob_sweep_freezes_rollouts_for_the_run_s_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _harness: None
 ) -> None:
-    # The window outlasts no run and lapses with a run no hook released: it lasts the
+    # No run outlasts the window, and a window no hook released lapses: it lasts the
     # flow's timeout, 19 h, above the longest legitimate sweep and under the 20 h
     # spend-leak alarm (ADR-0025).
     model_yaml, grid_yaml, manifest = _write_inputs(tmp_path)

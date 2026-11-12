@@ -11,7 +11,9 @@ bench-endpoint session for a recording one, and its rollout freeze for a recordi
 import base64
 import io
 import json
+import logging
 import re
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -448,13 +450,15 @@ def _drive_flow(
     session: RecordingSession | None = None,
     edits: Sequence[tuple[str, str]] = (),
     freeze: RecordingFreeze | None = None,
+    parent_flow: Any = kv_ab_flow,
 ) -> tuple[list[str], list[str]]:
     """Drive the flow over a one-run-per-arm workload, returning its pointers and the
     metrics URLs it scraped.
 
     The flow opens its bench endpoint from the worker's environment through ``session``
     and holds its rollout freeze through ``freeze``; each ``(old, new)`` of ``edits`` is
-    replaced in the workload's text.
+    replaced in the workload's text. ``parent_flow`` is the flow run, by default
+    :func:`kv_ab_flow` itself.
     """
     workload = tmp_path / "kv-ab.yaml"
     agent = (
@@ -486,7 +490,7 @@ def _drive_flow(
     held = RecordingFreeze() if freeze is None else freeze
     monkeypatch.setattr(run_setup_module, "build_rollout_freeze", lambda _k: held)
 
-    pointers = kv_ab_flow(
+    pointers = parent_flow(
         run_id="ab1",
         region="us-east-1",
         bucket="bench",
@@ -527,7 +531,7 @@ def test_the_flow_drives_its_workload_renders_it_and_returns_the_labels_pointers
 def test_the_flow_freezes_rollouts_for_the_run_s_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The window outlasts no run and lapses with a run no hook released: it lasts the
+    # No run outlasts the window, and a window no hook released lapses: it lasts the
     # flow's timeout, 19 h, above the longest legitimate GPU session and under the 20 h
     # spend-leak alarm (ADR-0025).
     freeze = RecordingFreeze()
@@ -603,6 +607,52 @@ def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_rende
     ]
 
 
+def test_a_timed_out_run_is_torn_down_by_its_hooks_destroy_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Prefect stops a run past its timeout with a cancellation, which the freeze session
+    # leaves to the run's failure hooks; they rebuild the teardown from the run's own
+    # parameters and destroy the endpoint before releasing the freeze.
+    session = RecordingSession()
+    freeze = RecordingFreeze(session.events)
+    monkeypatch.setattr(kv_ab_module, "drive_kv_ab", lambda *_a: time.sleep(10))
+    monkeypatch.setattr(run_setup_module, "build_terraform", lambda: None)
+    monkeypatch.setattr(run_setup_module, "build_s3_client", lambda _region: None)
+    monkeypatch.setattr(run_setup_module, "build_kubectl", _Kubectl)
+    monkeypatch.setattr(
+        run_setup_module,
+        "destroy_bench_endpoint",
+        lambda **k: session.events.append(f"hook destroy {k['run_id']}"),
+    )
+
+    with pytest.raises(TimeoutError):
+        _drive_flow(
+            tmp_path,
+            monkeypatch,
+            _S3(),
+            session,
+            freeze=freeze,
+            parent_flow=kv_ab_flow.with_options(timeout_seconds=1),
+        )
+
+    assert session.events == [
+        "freeze acquire",
+        "open",
+        "close",
+        "hook destroy ab1",
+        "freeze release",
+    ]
+    assert freeze.calls[-1] == ("release", "ab1")
+    # The session logged that it left the release to the run's hooks.
+    [left] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "slipstream_bench.orchestration.rollout_freeze"
+        and r.levelno == logging.ERROR
+    ]
+    assert left.startswith("rollout freeze not released on CancelledError")
+
+
 @pytest.mark.parametrize(
     "failing", ["/warmup/", "off-r1/pshare90_burst1.0_mc2"], ids=["warmup", "rung"]
 )
@@ -628,16 +678,25 @@ def test_a_failed_destroy_fails_the_flow_before_the_render(
 ) -> None:
     # The cells are in S3, but the state the destroy left must be cleared before a re-run
     # can open the endpoint, so the run fails rather than rendering over a leaked endpoint.
+    # Argo CD may roll the workloads again once the run has failed, so its freeze is
+    # released all the same.
     session = RecordingSession(destroy_error=RuntimeError("destroy failed"))
-    renders: list[object] = []
     monkeypatch.setattr(
-        kv_ab_module, "render_kv_ab_results", lambda **k: renders.append(k)
+        kv_ab_module,
+        "render_kv_ab_results",
+        lambda **_k: session.events.append("render"),
     )
 
     with pytest.raises(RuntimeError, match="destroy failed"):
-        _drive_flow(tmp_path, monkeypatch, _S3(), session)
+        _drive_flow(
+            tmp_path,
+            monkeypatch,
+            _S3(),
+            session,
+            freeze=RecordingFreeze(session.events),
+        )
 
-    assert renders == []
+    assert session.events == ["freeze acquire", "open", "close", "freeze release"]
 
 
 def test_a_workload_the_rig_rules_out_is_refused_before_the_bench_endpoint_opens(
@@ -692,12 +751,22 @@ def test_a_failed_render_fails_the_flow_with_every_rungs_labels_already_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     s3 = _S3(chart_error=OSError("chart upload failed"))
+    events: list[str] = []
+    real_render = kv_ab_module.render_kv_ab_results
+
+    def _recording_render(**kwargs: Any) -> None:
+        events.append("render")
+        real_render(**kwargs)
+
+    monkeypatch.setattr(kv_ab_module, "render_kv_ab_results", _recording_render)
 
     with pytest.raises(OSError, match="chart upload failed"):
-        _drive_flow(tmp_path, monkeypatch, s3)
+        _drive_flow(tmp_path, monkeypatch, s3, freeze=RecordingFreeze(events))
 
-    # The labels are in S3, so a re-run resumes every run and re-renders.
+    # The labels are in S3, so a re-run resumes every run and re-renders. The render ran
+    # under the freeze, which is released on its failure.
     assert sorted(s3.puts) == sorted(_LABELS_KEYS)
+    assert events == ["freeze acquire", "render", "freeze release"]
 
 
 def test_the_flow_publishes_the_ab_config_it_ran_on_the_run_page(
