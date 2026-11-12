@@ -315,47 +315,12 @@ def kv_ab_flow(
         bucket=bucket,
         model=read_model_id(model_yaml),
     )
+    # A workload the rig rules out is refused here, before the run freezes rollouts or
+    # applies its bench endpoint.
     check_fits_rig(config, inputs.rig)
-    kubectl = build_kubectl()
-    ssm_client = build_ssm_client(region)
-    s3_client = build_s3_client(region)
-    task = kv_ab_cell_task(bucket, retries=retries)
-    # Argo CD holds off the workloads from before the endpoint opens until the render has
-    # drawn the run, so a merge meanwhile rolls neither the replica nor the worker between
-    # or under its arm runs (ADR-0029); what merged syncs once the freeze is released.
-    with open_run_rollout_freeze(
-        kubectl=kubectl, run_id=run_id, duration_s=RUN_TIMEOUT_S
-    ):
-        # The bench endpoint lives for the arm runs only: a workload the rig rules out is
-        # refused before its apply, and the render below reads only S3, so the endpoint
-        # is destroyed before it. A destroy that fails fails the run before the render:
-        # the cells are already in S3, and the state it leaves must be destroyed
-        # (`just bench-endpoint-down`) before a re-run can open the endpoint.
-        with open_run_bench_endpoint(
-            kubectl=kubectl, s3_client=s3_client, bucket=bucket, run_id=run_id
-        ) as host:
-            collaborators = build_kv_ab_collaborators(
-                inputs,
-                host=host,
-                kubectl=kubectl,
-                ssm_client=ssm_client,
-                s3_client=s3_client,
-                task=task,
-                read_metrics=partial(fetch_metrics, metrics_url),
-            )
-            result = drive_kv_ab(config, inputs.rig, collaborators)
-        # Every rung's raw result and labels are in S3; fold them into the tables and
-        # chart on this run page as a terminal task, so a render failure leaves them
-        # intact and a re-run resumes every cached run and re-renders.
-        render_kv_ab_results(
-            pointers=result.pointers,
-            run_id=run_id,
-            bucket=bucket,
-            region=region,
-            s3_client=s3_client,
-            publish_artifact=create_markdown_artifact,
-            publish_image=create_image_artifact,
-        )
+    result = _measure_and_render(
+        inputs, region=region, metrics_url=metrics_url, retries=retries
+    )
     logger.info(
         "kv-ab run=%s complete: %d cells (%d runs run, %d resumed)",
         run_id,
@@ -481,6 +446,63 @@ class _Rung:
     digest: str
     point_slug: str
     cell_name: str
+
+
+def _measure_and_render(
+    inputs: KvAbInputs, *, region: str, metrics_url: str, retries: int
+) -> KvAbResult:
+    """Drive the arm runs on the run's bench endpoint and render them, under its freeze.
+
+    :param inputs: the per-A/B inputs every arm run shares.
+    :param region: the AWS region of the host and bucket.
+    :param metrics_url: the GPU engine's /metrics URL, reachable from the worker.
+    :param retries: opt-in cell retries for a transient transport fault.
+    :return: the result — the cell pointers and the run/resume split.
+    """
+    kubectl = build_kubectl()
+    ssm_client = build_ssm_client(region)
+    s3_client = build_s3_client(region)
+    task = kv_ab_cell_task(inputs.bucket, retries=retries)
+    # Argo CD holds off the workloads from before the endpoint opens until the render has
+    # drawn the run, so a merge meanwhile rolls neither the replica nor the worker between
+    # or under its arm runs (ADR-0029); what merged syncs once the freeze is released.
+    with open_run_rollout_freeze(
+        kubectl=kubectl, run_id=inputs.run, duration_s=RUN_TIMEOUT_S
+    ):
+        # The bench endpoint lives for the arm runs only: a workload the rig rules out is
+        # refused before its apply, and the render below reads only S3, so the endpoint
+        # is destroyed before it. A destroy that fails fails the run before the render:
+        # the cells are already in S3, and the state it leaves must be destroyed
+        # (`just bench-endpoint-down`) before a re-run can open the endpoint.
+        with open_run_bench_endpoint(
+            kubectl=kubectl,
+            s3_client=s3_client,
+            bucket=inputs.bucket,
+            run_id=inputs.run,
+        ) as host:
+            collaborators = build_kv_ab_collaborators(
+                inputs,
+                host=host,
+                kubectl=kubectl,
+                ssm_client=ssm_client,
+                s3_client=s3_client,
+                task=task,
+                read_metrics=partial(fetch_metrics, metrics_url),
+            )
+            result = drive_kv_ab(inputs.config, inputs.rig, collaborators)
+        # Every rung's raw result and labels are in S3; fold them into the tables and
+        # chart on this run page as a terminal task, so a render failure leaves them
+        # intact and a re-run resumes every cached run and re-renders.
+        render_kv_ab_results(
+            pointers=result.pointers,
+            run_id=inputs.run,
+            bucket=inputs.bucket,
+            region=region,
+            s3_client=s3_client,
+            publish_artifact=create_markdown_artifact,
+            publish_image=create_image_artifact,
+        )
+    return result
 
 
 def _prepare_run(
