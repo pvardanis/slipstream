@@ -37,6 +37,8 @@ Run the build in the background; it is slow under emulation. Done when `docker p
 
 Argo CD deploys the worker, so a `kubectl set image` on its Deployment is reverted as drift. The tag lives on the `prefect-worker` Application as the Helm parameter Image Updater writes, so stop Image Updater and write the parameter yourself:
 
+Record the worker's current image first; Step 6 waits for it to come back before the branch tag is deleted.
+
 ```bash
 kubectl -n argocd get application prefect-worker -o jsonpath='{.status.summary.images[0]}'
 kubectl -n argocd scale deploy/argocd-image-updater-controller --replicas=0
@@ -94,5 +96,13 @@ Separate what the scenario tests from what the rig did: a slow engine or a rende
 
 - Post the scenario table with each `run_id` and its observed outcome as a comment on the top PR.
 - Offer an issue for each defect found outside the branch's scope.
-- Restore the worker: `just stack-down`, or `kubectl -n argocd scale deploy/argocd-image-updater-controller --replicas=1`, after which Image Updater's first cycle writes the newest content tag back and Argo CD rolls the worker to it.
+- Restore the worker: `just stack-down`, or scale Image Updater back up, after which its first cycle writes the newest content tag back and Argo CD rolls the worker to it. Wait for that before deleting anything: if Image Updater cannot write the tag (an ECR login or IAM failure), the worker stays on the branch image, and deleting its tag leaves the next pod on a fresh node in ImagePullBackOff. `<image>` is the one recorded in Step 2, unless `main` pushed a newer content tag since.
+
+  ```bash
+  kubectl -n argocd scale deploy/argocd-image-updater-controller --replicas=1
+  kubectl -n argocd wait application/prefect-worker --for=jsonpath='{.status.summary.images[0]}=<image>' --timeout=300s
+  kubectl -n prefect rollout status deploy/prefect-worker
+  ```
+
+  On a timeout, read `kubectl -n argocd logs deploy/argocd-image-updater-controller` and keep the branch tag until the worker is off it.
 - With the user's go-ahead, delete the tag (`aws ecr batch-delete-image --repository-name "${repo#*/}" --image-ids imageTag=<tag>`) and `trash /tmp/qa-<label>`.
