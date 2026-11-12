@@ -123,7 +123,7 @@ resource "aws_iam_role_policy" "image_updater" {
       {
         Sid      = "ReadOrchestrationImages"
         Effect   = "Allow"
-        Action   = ["ecr:BatchGetImage", "ecr:DescribeImages", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"]
+        Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"]
         Resource = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_arn
       },
     ]

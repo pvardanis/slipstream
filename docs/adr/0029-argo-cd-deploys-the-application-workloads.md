@@ -244,7 +244,7 @@ and hooks.
   `aws ecr get-login-password` under its Pod Identity credentials, and the registry
   re-reads it after 11 h, before the 12 h token expires. The role holds
   `ecr:GetAuthorizationToken`, which takes no resource, and only reads (`ListImages`,
-  `DescribeImages`, `BatchGetImage`, `GetDownloadUrlForLayer`) on the orchestration
+  `BatchGetImage`, `GetDownloadUrlForLayer`) on the orchestration
   repository.
 - **The root leaves the tag alone.** The root Application ignores
   `/spec/source/helm/parameters` on its child Applications and syncs with

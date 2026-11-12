@@ -185,7 +185,7 @@ run "image_updater_ecr_access_is_read_only" {
       {
         Sid      = "ReadOrchestrationImages"
         Effect   = "Allow"
-        Action   = ["ecr:BatchGetImage", "ecr:DescribeImages", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"]
+        Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:ListImages"]
         Resource = "arn:aws:ecr:eu-west-1:111122223333:repository/slipstream/orchestration"
       },
     ]
