@@ -236,7 +236,7 @@ def open_bench_endpoint(
                     "from that hook, destroy it from %s with `just bench-endpoint-down` (an "
                     "apply cut off mid-way can leave resources the state never recorded)",
                     type(error).__name__,
-                    HOOK_DESTROYED_LINE % run_id,
+                    HOOK_DESTROYED_LINE % "<run-id>",
                     _get_state_url(topology),
                 )
             raise
