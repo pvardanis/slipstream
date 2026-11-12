@@ -101,7 +101,6 @@ expect "${updater_annotation}image-list\"]" "worker=$(root_value '.orchestration
 expect "${updater_annotation}worker.update-strategy\"]" 'newest-build' 'the most recently built image wins'
 expect "${updater_annotation}worker.allow-tags\"]" 'regexp:^[0-9a-f]{12}$' 'only the 12-hex content-sha tags, never :main'
 expect "${updater_annotation}write-back-method\"]" 'argocd' "the tag is written onto the Application, since main's required check blocks a bot's git push"
-tag_parameter="$(yq "${updater_annotation}worker.helm.image-tag\"]" <<<"${worker_app}")"
 expect "${updater_annotation}worker.helm.image-name\"]" 'worker.image.repository' "the worker chart's image repository value"
 expect "${updater_annotation}worker.helm.image-tag\"]" 'worker.image.prefectTag' "the worker chart's image tag value"
 
@@ -120,6 +119,8 @@ yq "${worker_values_path}" <<<"${worker_app}" >"${worker_values}"
 chart="$(yq '.spec.source.chart' <<<"${worker_app}")"
 repo_url="$(yq '.spec.source.repoURL' <<<"${worker_app}")"
 content_tag='0123456789ab'
+# The Helm parameter Image Updater writes the tag to, as the worker app names it.
+tag_parameter="$(yq "${updater_annotation}worker.helm.image-tag\"]" <<<"${worker_app}")"
 worker_rendered="$(helm template prefect-worker "${chart}" --repo "${repo_url}" --version "${version}" \
   --namespace "$(root_value '.namespaces.prefect')" --values "${worker_values}" \
   --set "${tag_parameter}=${content_tag}")"

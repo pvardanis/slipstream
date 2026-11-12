@@ -4,8 +4,8 @@
 # value come from the root Application's values (terraform/eks/argocd.tf); `required`
 # fails the root's sync on a missing one rather than deploying a worker with an empty
 # image or identity. Argo CD Image Updater (terraform/eks/image_updater.tf) is the single
-# writer of its image tag. The IAM role, Pod Identity association and scoped RBAC stay in the eks stack
-# (terraform/eks/worker.tf).
+# writer of its image tag. The IAM role, Pod Identity association and scoped RBAC stay
+# in the eks stack (terraform/eks/worker.tf).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

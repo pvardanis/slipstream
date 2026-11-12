@@ -24,9 +24,9 @@ locals {
   # the child Applications that chart renders into Argo CD's namespace. Its Helm values
   # are the repository and revision its child apps sync from (its own), and the
   # cluster-specific values only Terraform knows — the orchestration image repository
-  # from the bootstrap stack, the Prefect server's namespace and API URL, the ServiceAccount Pod Identity binds, and the bench
-  # endpoint topology ConfigMap the worker reads — and they are the only Terraform-to-Argo
-  # CD handoff. Referencing that ConfigMap orders the root after it; the Collector's
+  # from the bootstrap stack, the Prefect server's namespace and API URL, the
+  # ServiceAccount Pod Identity binds, and the bench endpoint topology ConfigMap the
+  # worker reads — and they are the only Terraform-to-Argo CD handoff. Referencing that ConfigMap orders the root after it; the Collector's
   # grafana-cloud-endpoints ConfigMap is ordered by the depends_on on
   # helm_release.argocd_apps below.
   argocd_root_application = {
