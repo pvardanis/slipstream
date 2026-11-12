@@ -94,11 +94,10 @@ jobs:
           # trip `set -e`, so a bare assignment is what makes an error here fail the job
           # rather than write an empty tag to GITHUB_OUTPUT.
           # The tag is cut from the full hash rather than taken from git's short hash, which
-          # is only a minimum width: git lengthens it when 12 characters are ambiguous, and
-          # it grows with history. A fixed cut keeps the tag for a commit constant, so the
-          # presence probe below finds it, and keeps every tag inside the ^[0-9a-f]{12}$
-          # pattern Image Updater rolls the worker to
-          # (k8s/argocd/apps/templates/prefect-worker.yaml).
+          # is only a minimum width: git lengthens it when 12 characters are ambiguous. A
+          # fixed cut keeps the tag for a commit constant, so the presence probe below finds
+          # it, and keeps every tag inside the ^[0-9a-f]{12}$ pattern Image Updater rolls
+          # the worker to (k8s/argocd/apps/templates/prefect-worker.yaml).
           sha="$(git log -1 --format=%H -- \
             packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
             model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
