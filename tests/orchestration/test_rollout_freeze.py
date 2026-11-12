@@ -301,7 +301,10 @@ def test_session_logs_that_it_left_the_freeze_for_the_hook(
 
     [record] = [r for r in caplog.records if r.levelno == logging.ERROR]
     # Names the line the hook logs on the run once it has released, so its absence is
-    # what calls for the manual removal, and the window that removal targets.
-    assert "released run knob-20261111's rollout freeze" in record.getMessage()
+    # what calls for the manual removal, and the window that removal targets. The line is
+    # named in its general form, so a search of the run's logs for the hook's line finds
+    # the hook's and not this one.
+    assert "released run <run-id>'s rollout freeze" in record.getMessage()
+    assert "released run knob-20261111's rollout freeze" not in record.getMessage()
     assert "slipstream rollout freeze: run=knob-20261111" in record.getMessage()
     assert "kubectl -n argocd edit appproject workloads" in record.getMessage()

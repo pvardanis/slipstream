@@ -211,7 +211,7 @@ def hold_rollout_freeze(
             'cancellation or timeout hook. If the run page shows no "%s" line from that '
             'hook, remove the "%s" window with `%s`',
             type(error).__name__,
-            HOOK_RELEASED_LINE % holder,
+            HOOK_RELEASED_LINE % "<run-id>",
             _DESCRIPTION.format(holder=holder),
             _EDIT_COMMAND,
         )
