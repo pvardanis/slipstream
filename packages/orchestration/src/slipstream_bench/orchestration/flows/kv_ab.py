@@ -451,9 +451,10 @@ class _Rung:
 def _measure_and_render(
     inputs: KvAbInputs, *, region: str, metrics_url: str, retries: int
 ) -> KvAbResult:
-    """Drive the arm runs on the run's bench endpoint and render them, under its freeze.
+    """Drive the arm runs on the run's bench endpoint and render them, all under its freeze.
 
-    :param inputs: the per-A/B inputs every arm run shares.
+    :param inputs: the per-A/B inputs every arm run shares, whose workload has passed
+        :func:`check_fits_rig`.
     :param region: the AWS region of the host and bucket.
     :param metrics_url: the GPU engine's /metrics URL, reachable from the worker.
     :param retries: opt-in cell retries for a transient transport fault.
@@ -469,9 +470,9 @@ def _measure_and_render(
     with open_run_rollout_freeze(
         kubectl=kubectl, run_id=inputs.run, duration_s=RUN_TIMEOUT_S
     ):
-        # The bench endpoint lives for the arm runs only: a workload the rig rules out is
-        # refused before its apply, and the render below reads only S3, so the endpoint
-        # is destroyed before it. A destroy that fails fails the run before the render:
+        # The bench endpoint lives for the arm runs only: a workload the rig rules out was
+        # refused by the flow before its apply, and the render below reads only S3, so
+        # the endpoint is destroyed before it. A destroy that fails fails the run before the render:
         # the cells are already in S3, and the state it leaves must be destroyed
         # (`just bench-endpoint-down`) before a re-run can open the endpoint.
         with open_run_bench_endpoint(
