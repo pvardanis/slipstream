@@ -100,6 +100,15 @@ expect '.metadata.labels | to_entries | map(.key + "=" + .value) | join(",")' "$
 expect "${updater_annotation}image-list\"]" "worker=$(root_value '.orchestrationImageRepository')" "the orchestration image from the root's values, under the alias worker"
 expect "${updater_annotation}worker.update-strategy\"]" 'newest-build' 'the most recently built image wins'
 expect "${updater_annotation}worker.allow-tags\"]" 'regexp:^[0-9a-f]{12}$' 'only the 12-hex content-sha tags, never :main'
+# The tag CI pushes must pass that filter, or newest-build keeps the worker on the newest
+# older image with nothing failing. The pattern is read from the annotation, so a change
+# to either side fails here.
+content_tag="$("${repo_root}/orchestration/content-tag.sh")"
+allow_tags="$(yq "${updater_annotation}worker.allow-tags\"]" <<<"${worker_app}")"
+if [[ ! "${content_tag}" =~ ${allow_tags#regexp:} ]]; then
+  echo "FAIL: orchestration/content-tag.sh prints '${content_tag}', which the worker's allow-tags '${allow_tags}' rejects" >&2
+  fail=1
+fi
 expect "${updater_annotation}write-back-method\"]" 'argocd' "the tag is written onto the Application, since main's required check blocks a bot's git push"
 expect "${updater_annotation}worker.helm.image-name\"]" 'worker.image.repository' "the worker chart's image repository value"
 expect "${updater_annotation}worker.helm.image-tag\"]" 'worker.image.prefectTag' "the worker chart's image tag value"
@@ -118,7 +127,6 @@ trap 'rm -f "${worker_values}"' EXIT
 yq "${worker_values_path}" <<<"${worker_app}" >"${worker_values}"
 chart="$(yq '.spec.source.chart' <<<"${worker_app}")"
 repo_url="$(yq '.spec.source.repoURL' <<<"${worker_app}")"
-content_tag='0123456789ab'
 # The Helm parameter Image Updater writes the tag to, as the worker app names it.
 tag_parameter="$(yq "${updater_annotation}worker.helm.image-tag\"]" <<<"${worker_app}")"
 worker_rendered="$(helm template prefect-worker "${chart}" --repo "${repo_url}" --version "${version}" \

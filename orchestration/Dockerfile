@@ -148,8 +148,8 @@ ENV PREFECT_LOGGING_EXTRA_LOGGERS=slipstream_bench
 # the redeploy template both render, whose serving image ref folds into the deep digest
 # (ADR-0012). The worker has no source tree, so they are baked rather than fetched. Copied low
 # and narrowly so a config edit rebuilds only this layer, never the dependency install above it.
-# These files are image inputs: the content tag in orchestration-image.yml hashes them and the
-# build triggers watch them, so an edit republishes a new image.
+# These files are image inputs: the content tag (orchestration/content-tag.sh) hashes them and
+# the build triggers watch them, so an edit republishes a new image.
 COPY model.yaml /app/model.yaml
 COPY bench/configs/sweep-grid.yaml /app/bench/configs/sweep-grid.yaml
 COPY bench/configs/kv-cache-extension-ab.yaml /app/bench/configs/kv-cache-extension-ab.yaml

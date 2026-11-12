@@ -58,7 +58,7 @@ jobs:
           # image_sha tags from committed history), but the set of paths watched is
           # the same.
           # orchestration_image: the orchestration image inputs, the content-tag
-          # pathspec in orchestration-image.yml (Derive image tags).
+          # pathspec in orchestration/content-tag.sh.
           # Both image filters exclude markdown, as their pathspecs do, so no change
           # the code filter reads as docs-only can touch an image input.
           # scan_config: the Trivy waivers, the scan workflow and the check scripts it runs,

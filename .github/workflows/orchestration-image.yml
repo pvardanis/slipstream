@@ -64,8 +64,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The content tag is the short sha of the last commit touching the image's
-          # inputs, so the tag derivation needs full history rather than a shallow clone.
+          # The content tag derives from the last commit touching the image's inputs
+          # (orchestration/content-tag.sh), so it needs full history, not a shallow clone.
           fetch-depth: 0
 
       - name: Derive image tags
@@ -76,38 +76,12 @@ jobs:
           # configure-aws-credentials as a vague error (mirrors the ECR_REPOSITORY guard
           # in the probe step below).
           : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
-          # The immutable content tag is the first 12 hex characters of the hash of the
-          # last commit that touched any image input — the package source, the whole
-          # packages/ tree (the slipstream-bench-contract workspace member it installs;
-          # only installed members belong there, so the tree needs no per-member list),
-          # its locked dependency set, the build definition, and the deep-config files the
-          # image bakes for the worker (model.yaml, the sweep grid, the kv-ab workload,
-          # the vLLM redeploy manifest), and the bench-endpoint stack for the worker to
-          # apply with the Terraform CLI configuration that installs its providers from
-          # the image; the stack's tests are not baked. A change to any of these is what a
-          # new content tag must capture; a change elsewhere (docs, the other terraform
-          # stacks, the bench-endpoint stack's tests) leaves the image identical, so the
-          # probe below finds the tag present and skips the rebuild. Markdown is excluded:
-          # CI reads a markdown-only change as docs-only (ADR-0027), so it must not name
-          # an image nothing builds.
-          # Assign before writing: a failing substitution inside an echo argument does not
-          # trip `set -e`, so a bare assignment is what makes an error here fail the job
-          # rather than write an empty tag to GITHUB_OUTPUT.
-          # The tag is cut from the full hash rather than taken from git's short hash, which
-          # is only a minimum width: git lengthens it when 12 characters are ambiguous. A
-          # fixed cut keeps the tag for a commit constant, so the presence probe below finds
-          # it, and keeps every tag inside the ^[0-9a-f]{12}$ pattern Image Updater rolls
-          # the worker to (k8s/argocd/apps/templates/prefect-worker.yaml).
-          sha="$(git log -1 --format=%H -- \
-            packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
-            model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
-            k8s/vllm-gpu.yaml orchestration/provider-mirror.tfrc terraform/bench-endpoint \
-            ':(exclude)terraform/bench-endpoint/tests' ':(exclude,glob)**/*.md')"
-          sha_tag="${sha:0:12}"
-          if [[ -z "${sha_tag}" ]]; then
-            echo "::error::could not derive a content tag — no commit touches the image inputs"
-            exit 1
-          fi
+          # The immutable content tag: the first 12 hex characters of the hash of the last
+          # commit touching the image's inputs (orchestration/content-tag.sh). Assign
+          # before writing: a failing substitution inside an echo argument does not trip
+          # `set -e`, so a bare assignment is what makes an error here fail the job rather
+          # than write an empty tag to GITHUB_OUTPUT.
+          sha_tag="$(orchestration/content-tag.sh)"
           {
             echo "sha_tag=${sha_tag}"
             echo "main_tag=main"

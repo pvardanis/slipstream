@@ -40,7 +40,7 @@ A `changes` job in `ci.yml` runs before the gated jobs and emits three outputs:
   `reports/**` or `.claude/skills/**`.
 - `bench_image`: the change touches a bench image input (the `bench/image-tag.sh` pathspec).
 - `orchestration_scan`: the change touches an orchestration image input (the
-  `orchestration-image.yml` content-tag pathspec) or the scan's configuration
+  `orchestration/content-tag.sh` pathspec) or the scan's configuration
   (`.trivyignore` and the scan workflow), which can change the scan's verdict without
   changing the image.
 
@@ -98,7 +98,7 @@ floating pointer lags until the next push that is not all docs.
 
 - the docs denylist differs across `ci.yml` and both publish workflows;
 - the bench image filter differs from `bench/image-tag.sh`, or the orchestration image
-  filter from the content-tag pathspec in `orchestration-image.yml`;
+  filter from the content-tag pathspec in `orchestration/content-tag.sh`;
 - the `code` filter includes anything narrower than everything;
 - `scan_config` does not name `.trivyignore` and the scan workflow `ci.yml` calls;
 - an output reads a filter that does not exist, or fails open on a missing result;

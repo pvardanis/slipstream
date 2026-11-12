@@ -2,13 +2,13 @@
 # Static check of ci.yml's path gating (ADR-0027). The image input filters in the
 # `changes` job must name the same paths as the git pathspecs that derive each image's
 # content tag: the bench_image filter against bench/image-tag.sh (image_sha), the
-# orchestration_image filter against orchestration-image.yml's tag derivation. The
+# orchestration_image filter against orchestration/content-tag.sh. The
 # docs-only `code` filter must match everything outside its excludes, and its excludes
 # must equal the push paths-ignore of both publish workflows. scan_config must name
 # .trivyignore and the scan workflow ci.yml calls, every filter output the job reads
 # must exist and fail closed, and `ci-ok` must need every other job and run always(), so
 # no gated job can drop out of the required check. Then runs the checks against mutated
-# copies of the files that must fail. Reads the workflows with yq and bench/image-tag.sh
+# copies of the files that must fail. Reads the workflows with yq and the two tag scripts
 # with awk; runs no git, build or network call.
 set -euo pipefail
 
@@ -16,6 +16,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ci_workflow="${CI_WORKFLOW:-${repo_root}/.github/workflows/ci.yml}"
 orchestration_workflow="${ORCHESTRATION_WORKFLOW:-${repo_root}/.github/workflows/orchestration-image.yml}"
 bench_image_tag="${BENCH_IMAGE_TAG:-${repo_root}/bench/image-tag.sh}"
+orchestration_content_tag="${ORCHESTRATION_CONTENT_TAG:-${repo_root}/orchestration/content-tag.sh}"
 bench_workflow="${BENCH_WORKFLOW:-${repo_root}/.github/workflows/bench-image.yml}"
 
 fail=0
@@ -90,9 +91,8 @@ check_same "ci.yml bench_image filter" "$(ci_filter bench_image)" \
   "bench/image-tag.sh pathspec" "$(pathspec_of <"${bench_image_tag}" | as_filter_patterns)"
 
 check_same "ci.yml orchestration_image filter" "$(ci_filter orchestration_image)" \
-  "orchestration-image.yml pathspec" \
-  "$(yq '.jobs.publish.steps[] | select(.id == "tags") | .run' "${orchestration_workflow}" |
-    pathspec_of | as_filter_patterns)"
+  "orchestration/content-tag.sh pathspec" \
+  "$(pathspec_of <"${orchestration_content_tag}" | as_filter_patterns)"
 
 # Every pattern in the code filter other than its excludes: a narrower include would
 # read a code change as docs-only and skip the tests.
@@ -162,6 +162,7 @@ check_mutation_fails() {
   CI_WORKFLOW) original="${ci_workflow}" ;;
   BENCH_IMAGE_TAG) original="${bench_image_tag}" ;;
   ORCHESTRATION_WORKFLOW) original="${orchestration_workflow}" ;;
+  ORCHESTRATION_CONTENT_TAG) original="${orchestration_content_tag}" ;;
   BENCH_WORKFLOW) original="${bench_workflow}" ;;
   *)
     echo "FAIL: no file is read from ${env_var}" >&2
@@ -198,7 +199,7 @@ if [[ -z "${CI_PATHS_PARITY_MUTATION:-}" ]]; then
     "s/ pyproject.toml model.yaml / pyproject.toml /" "ci.yml bench_image filter"
   check_mutation_fails "a broken continuation in image_sha" BENCH_IMAGE_TAG \
     's/ .dockerignore \\$/ .dockerignore/' "ci.yml bench_image filter"
-  check_mutation_fails "uv.lock dropped from the orchestration pathspec" ORCHESTRATION_WORKFLOW \
+  check_mutation_fails "uv.lock dropped from the orchestration pathspec" ORCHESTRATION_CONTENT_TAG \
     "s/ uv.lock / /" "ci.yml orchestration_image filter"
   check_mutation_fails "the match-all dropped from code" CI_WORKFLOW \
     "/^              - '\*\*'$/d" "ci.yml code filter includes"
