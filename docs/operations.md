@@ -126,9 +126,10 @@ runs one unrecorded warmup cell, then the concurrency ladder.
 **The run brings its own bench endpoint**, as the knob sweep does: it applies the
 bench-endpoint stack before its first arm run and destroys it after its last, before it
 renders the results. Refusals, a failed destroy, cancelling, the 19 h timeout and the
-rollout freeze behave as for the [knob sweep](#knob-sweep). A failed destroy fails the run before the render; once the
-endpoint is down, re-run under the same `run_id` to render. Every cell is cached, so the
-re-run measures nothing new, though it still brings an endpoint up and down.
+rollout freeze behave as for the [knob sweep](#knob-sweep). A failed destroy fails the
+run before the render; once the endpoint is down, re-run under the same `run_id` to
+render. Every cell is cached, so the re-run measures nothing new, though it still brings
+an endpoint up and down.
 
 **The workload** is [`bench/configs/kv-cache-extension-ab.yaml`](../bench/configs/kv-cache-extension-ab.yaml),
 the one config the orchestration image bakes and the deployment runs. Other workloads are
