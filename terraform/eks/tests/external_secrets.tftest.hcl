@@ -33,10 +33,6 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
-  # The worker layer plans with the stack; its image resolves to one content-sha tag.
-  mock_data "aws_ecr_image" {
-    defaults = { image_tags = ["main", "orchestrator-abc123"] }
-  }
 }
 
 # The Karpenter chart is pulled through a second, us-east-1-pinned aws provider (public

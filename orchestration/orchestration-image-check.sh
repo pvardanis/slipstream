@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Check the orchestration image's floating :main tag is published to the bootstrap ECR
-# repo, which the eks stack resolves to deploy the Prefect worker. Run before an eks plan
-# or apply so a missing image fails with the publish step to take, not a bare ECR error.
+# repo, whose content-sha tags Image Updater rolls the Prefect worker to. Run before an
+# eks plan or apply so a missing image fails with the publish step to take, not a worker
+# that never comes up.
 # Usage: orchestration-image-check.sh <bootstrap-dir>
 set -euo pipefail
 

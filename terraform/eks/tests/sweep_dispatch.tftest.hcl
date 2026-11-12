@@ -28,9 +28,6 @@ mock_provider "aws" {
   mock_data "aws_iam_session_context" {
     defaults = { issuer_arn = "arn:aws:iam::111122223333:role/test" }
   }
-  mock_data "aws_ecr_image" {
-    defaults = { image_tags = ["main", "orchestrator-abc123"] }
-  }
 }
 
 mock_provider "aws" {
@@ -40,8 +37,7 @@ mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
 # Plan against mocked bootstrap remote state instead of reaching for real S3. The
-# orchestration ECR repository URL is the worker image's repository; the content-sha
-# tag is resolved from ECR (mock_data aws_ecr_image above).
+# orchestration ECR repository URL is the worker image's repository.
 override_data {
   target = data.terraform_remote_state.bootstrap
   values = {

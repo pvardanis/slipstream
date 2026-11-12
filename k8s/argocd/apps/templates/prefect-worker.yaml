@@ -1,15 +1,33 @@
 # The Prefect worker's child Application (#511): a process worker that polls the
 # self-hosted server's work pool and runs a sweep as a subprocess in its own pod, deployed
-# from the upstream prefect-worker chart. Its image and every cluster-specific value
-# come from the root Application's values (terraform/eks/argocd.tf); `required` fails the
-# root's sync on a missing one rather than deploying a worker with an empty image or
-# identity. The IAM role, Pod Identity association and scoped RBAC stay in the eks stack
+# from the upstream prefect-worker chart. Its image repository and every cluster-specific
+# value come from the root Application's values (terraform/eks/argocd.tf); `required`
+# fails the root's sync on a missing one rather than deploying a worker with an empty
+# image or identity. Argo CD Image Updater (terraform/eks/image_updater.tf) is the single
+# writer of its image tag. The IAM role, Pod Identity association and scoped RBAC stay in the eks stack
 # (terraform/eks/worker.tf).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: prefect-worker
   namespace: argocd
+  # The label the ImageUpdater resource (terraform/eks/charts/image-updater-apps) selects
+  # Applications by, so Image Updater reads the annotations below.
+  labels:
+    slipstream.io/image-updater: enabled
+  # Image Updater tracks the orchestration image's content-sha tags, exactly 12 hex
+  # characters of the commit that last touched the image's inputs (never the floating
+  # :main), and rolls the worker to the most recently built one. It writes the tag onto
+  # this Application as the chart's worker.image.prefectTag Helm parameter (the argocd
+  # write-back: main's required check blocks a bot's git push), which the root Application
+  # leaves in place (terraform/eks/argocd.tf ignoreDifferences).
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: 'worker={{ required "orchestrationImageRepository is required" .Values.orchestrationImageRepository }}'
+    argocd-image-updater.argoproj.io/write-back-method: argocd
+    argocd-image-updater.argoproj.io/worker.update-strategy: newest-build
+    argocd-image-updater.argoproj.io/worker.allow-tags: 'regexp:^[0-9a-f]{12}$'
+    argocd-image-updater.argoproj.io/worker.helm.image-name: worker.image.repository
+    argocd-image-updater.argoproj.io/worker.helm.image-tag: worker.image.prefectTag
 spec:
   project: workloads
   source:
@@ -23,9 +41,9 @@ spec:
         worker:
           image:
             repository: '{{ required "orchestrationImageRepository is required" .Values.orchestrationImageRepository }}'
-            prefectTag: '{{ required "orchestrationImageTag is required" .Values.orchestrationImageTag }}'
-            # The tag is an immutable content-sha, so IfNotPresent is safe: the ref uniquely
-            # identifies content, so a cached image on a node is always the right one.
+            # The tag Image Updater writes is an immutable content-sha, so IfNotPresent is
+            # safe: the ref uniquely identifies content, so a cached image on a node is
+            # always the right one.
             pullPolicy: IfNotPresent
           # A process worker (subprocess, not a per-run Job) matches the serial single-GPU
           # sweep. The pool is the one `just prefect-up` creates (justfile prefect_work_pool).

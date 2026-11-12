@@ -7,9 +7,10 @@
 # runs per cell (ADR-0012): it drives the sweep, issuing SSM SendCommand to the bench
 # host and reconfiguring deploy/vllm-gpu, but never serves the model itself.
 #
-# Argo CD deploys the worker itself (k8s/argocd/apps/templates/prefect-worker.yaml); this
-# stack resolves its image tag and hands it over through the root Application's values
-# (argocd.tf), and keeps what the worker is bound to in AWS and the cluster.
+# Argo CD deploys the worker itself (k8s/argocd/apps/templates/prefect-worker.yaml), and
+# Image Updater writes its image tag (image_updater.tf); this stack hands over its image
+# repository through the root Application's values (argocd.tf), and keeps what the
+# worker is bound to in AWS and the cluster.
 #
 # Auth is keyless: a Pod Identity association grants the worker's ServiceAccount S3
 # (results bucket) + SSM SendCommand (bench host), and an in-namespace Role scopes it
@@ -26,22 +27,12 @@ locals {
   vllm_namespace  = "slipstream"
   vllm_deployment = "vllm-gpu"
 
-  # The worker image: repository from the bootstrap ECR output, pinned to the immutable
-  # content-sha tag the publish workflow puts on the :main manifest alongside :main (the
-  # non-main tag on that manifest, resolved in data.tf). The worker's Application pins the
-  # sha, so a re-apply re-resolves to a new immutable ref (a real rollout) and a cached
-  # image on a node is always the right one under IfNotPresent. repository_name is the
-  # path after the registry host, which is what the ECR data source looks the image up by.
-  orchestration_repo_url  = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
-  orchestration_repo_name = trimprefix(local.orchestration_repo_url, "${split("/", local.orchestration_repo_url)[0]}/")
+  # The worker image's repository, from the bootstrap ECR output.
+  orchestration_repo_url = data.terraform_remote_state.bootstrap.outputs.orchestration_image_repo_url
   # The bootstrap stack's bench-results bucket, the worker's S3 target. try() turns a
   # bootstrap applied before the bucket existed into the worker policy's precondition
   # failure rather than an unsupported-attribute error.
   bench_results_arn = try(data.terraform_remote_state.bootstrap.outputs.bench_results_bucket_arn, "")
-  # The ECR data source's postcondition guarantees exactly one non-main tag, so the list
-  # comprehension's [0] resolves it — and an empty list (a loosened postcondition or
-  # drifted filter) fails the plan loudly instead of pinning "".
-  worker_image_tag = [for t in data.aws_ecr_image.orchestration.image_tags : t if t != "main"][0]
 }
 
 # Scopes the SSM instance ARN to this account rather than a wildcard.

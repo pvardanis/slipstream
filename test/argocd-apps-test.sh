@@ -3,12 +3,12 @@
 # for the root Application: the chart is rendered with the cluster values the eks stack
 # passes (ci/test-values.yaml), and the Prefect worker's Application must deploy the
 # pinned upstream chart into the prefect namespace, server-side, with the worker's
-# values — every cluster-specific one taken from the root's values, the image tag
-# included. The upstream chart is then rendered with those values, so a key the chart
-# does not read fails here when it feeds an asserted Deployment field, rather than leaving
-# the worker on a chart default. A render
-# with any cluster value missing must fail. Needs helm, yq and the prefect-helm chart
-# repository; no cluster.
+# values — every cluster-specific one taken from the root's values — and opt in to Argo
+# CD Image Updater, the single writer of its image tag. The upstream chart is then
+# rendered with those values and the tag Image Updater writes, so a key the chart does
+# not read fails here when it feeds an asserted Deployment field, rather than leaving the
+# worker on a chart default. A render with any cluster value missing must fail. Needs
+# helm, yq and the prefect-helm chart repository; no cluster.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -76,7 +76,7 @@ expect '.spec.syncPolicy.syncOptions[0]' 'ServerSideApply=true' 'server-side app
 
 # --- Worker values ---
 expect_value '.worker.image.repository' "$(root_value '.orchestrationImageRepository')" "the image repository from the root's values"
-expect_value '.worker.image.prefectTag' "$(root_value '.orchestrationImageTag')" "the image tag from the root's values"
+expect_value '.worker.image.prefectTag' 'null' 'Image Updater writes the tag, so git sets none'
 expect_value '.worker.image.pullPolicy' 'IfNotPresent' 'the tag is an immutable content-sha, so a cached image is always the right one'
 expect_value '.worker.config.type' 'process' 'a process worker runs the serial single-GPU sweep as a subprocess'
 expect_value '.worker.config.workPool' "${work_pool}" 'the work pool just prefect-up creates (justfile prefect_work_pool)'
@@ -90,9 +90,25 @@ expect_value '.serviceAccount.name' "$(root_value '.serviceAccounts.prefectWorke
 expect_value '.role.create' 'false' 'the eks stack owns the worker RBAC'
 expect_value '.rolebinding.create' 'false' 'the eks stack owns the worker RBAC'
 
+# --- Image Updater: the single writer of the worker's image tag ---
+# The ImageUpdater resource (terraform/eks/charts/image-updater-apps) reads the settings
+# of the Applications carrying its selector label from their annotations.
+updater_annotation='.metadata.annotations["argocd-image-updater.argoproj.io/'
+selector="$(helm template image-updater-apps "${repo_root}/terraform/eks/charts/image-updater-apps" |
+  yq '.spec.applicationRefs[0].labelSelectors.matchLabels | to_entries | .[0] | .key + "=" + .value')"
+expect '.metadata.labels | to_entries | map(.key + "=" + .value) | join(",")' "${selector}" "the label the ImageUpdater resource selects Applications by"
+expect "${updater_annotation}image-list\"]" "worker=$(root_value '.orchestrationImageRepository')" "the orchestration image from the root's values, under the alias worker"
+expect "${updater_annotation}worker.update-strategy\"]" 'newest-build' 'the most recently built image wins'
+expect "${updater_annotation}worker.allow-tags\"]" 'regexp:^[0-9a-f]{12}$' 'only the 12-hex content-sha tags, never :main'
+expect "${updater_annotation}write-back-method\"]" 'argocd' "the tag is written onto the Application, since main's required check blocks a bot's git push"
+tag_parameter="$(yq "${updater_annotation}worker.helm.image-tag\"]" <<<"${worker_app}")"
+expect "${updater_annotation}worker.helm.image-name\"]" 'worker.image.repository' "the worker chart's image repository value"
+expect "${updater_annotation}worker.helm.image-tag\"]" 'worker.image.prefectTag' "the worker chart's image tag value"
+
 # --- The upstream chart, rendered with the worker's values ---
 # What Argo CD syncs: the pinned prefect-worker chart rendered with the Application's
-# values into its destination namespace, under its name as the release name.
+# values and the tag Image Updater writes as a Helm parameter, into its destination
+# namespace, under its name as the release name.
 version="$(yq '.spec.source.targetRevision' <<<"${worker_app}")"
 if [[ ! "${version}" =~ ^[0-9][0-9.]*$ ]]; then
   echo "FAIL: prefect-worker Application targetRevision '${version}' is not a pinned chart version" >&2
@@ -103,8 +119,10 @@ trap 'rm -f "${worker_values}"' EXIT
 yq "${worker_values_path}" <<<"${worker_app}" >"${worker_values}"
 chart="$(yq '.spec.source.chart' <<<"${worker_app}")"
 repo_url="$(yq '.spec.source.repoURL' <<<"${worker_app}")"
+content_tag='0123456789ab'
 worker_rendered="$(helm template prefect-worker "${chart}" --repo "${repo_url}" --version "${version}" \
-  --namespace "$(root_value '.namespaces.prefect')" --values "${worker_values}")"
+  --namespace "$(root_value '.namespaces.prefect')" --values "${worker_values}" \
+  --set "${tag_parameter}=${content_tag}")"
 deployment="$(yq 'select(.kind == "Deployment")' <<<"${worker_rendered}")"
 container='.spec.template.spec.containers[0]'
 expect_in "${deployment}" '.metadata.name' 'prefect-worker' 'the Deployment the dispatch guard reads the worker image from'
@@ -112,7 +130,7 @@ expect_in "${deployment}" '.spec.replicas' '1' 'one worker'
 # cluster-up waits for the worker's image as the Application's only one.
 expect_in "${deployment}" '.spec.template.spec.containers | length' '1' "the worker's container is the pod's only one"
 expect_in "${deployment}" '.spec.template.spec.initContainers | length' '0' "no init container image beside the worker's"
-expect_in "${deployment}" "${container}.image" "$(root_value '.orchestrationImageRepository'):$(root_value '.orchestrationImageTag')" "the image from the root's values"
+expect_in "${deployment}" "${container}.image" "$(root_value '.orchestrationImageRepository'):${content_tag}" "the image from the root's values, at the tag Image Updater writes"
 expect_in "${deployment}" "${container}.imagePullPolicy" 'IfNotPresent' 'the immutable content-sha tag'
 expect_in "${deployment}" "${container}.args | join(\" \")" "prefect worker start --type process --pool ${work_pool} --install-policy prompt" 'a process worker on the work pool'
 expect_in "${deployment}" "${container}.env[] | select(.name == \"PREFECT_API_URL\") | .value" "$(root_value '.prefectApiUrl')" "the server's API URL from the root's values"
@@ -127,7 +145,7 @@ fi
 # --- A missing cluster value fails the render ---
 # Each cluster value the worker's Application reads, emptied in turn as a root that
 # does not pass it would, must fail the render naming it.
-for key in orchestrationImageRepository orchestrationImageTag prefectApiUrl \
+for key in orchestrationImageRepository prefectApiUrl \
   namespaces.prefect serviceAccounts.prefectWorker configMaps.benchEndpointTopology; do
   if missing_render="$(render_apps --set "${key}=" 2>&1)"; then
     echo "FAIL: ${apps_chart} renders with ${key} empty" >&2
