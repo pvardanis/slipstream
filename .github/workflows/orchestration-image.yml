@@ -76,8 +76,8 @@ jobs:
           # configure-aws-credentials as a vague error (mirrors the ECR_REPOSITORY guard
           # in the probe step below).
           : "${AWS_REGION:?repo variable AWS_REGION is empty — set it from the bootstrap region output (see README)}"
-          # The immutable content tag is the short hash of the last commit that touched any
-          # image input — the package source, the whole packages/ tree (the
+          # The immutable content tag is the first 12 hex characters of the hash of the last
+          # commit that touched any image input — the package source, the whole packages/ tree (the
           # slipstream-bench-contract workspace member it installs; only installed members
           # belong there, so the tree needs no per-member list), its locked dependency set,
           # the build definition, and the deep-config files the image bakes for the worker
@@ -92,14 +92,18 @@ jobs:
           # Assign before writing: a failing substitution inside an echo argument does not
           # trip `set -e`, so a bare assignment is what makes an error here fail the job
           # rather than write an empty tag to GITHUB_OUTPUT.
-          # The width is pinned with --abbrev so the immutable tag for a commit stays
-          # constant: git's default short hash grows with history, which would otherwise
-          # re-tag the same content and defeat the presence probe below.
-          sha_tag="$(git log -1 --abbrev=12 --format=%h -- \
+          # The tag is cut from the full hash rather than taken from git's short hash, which
+          # is only a minimum width: git lengthens it when 12 characters are ambiguous, and
+          # it grows with history. A fixed cut keeps the tag for a commit constant, so the
+          # presence probe below finds it, and keeps every tag inside the ^[0-9a-f]{12}$
+          # pattern Image Updater rolls the worker to
+          # (k8s/argocd/apps/templates/prefect-worker.yaml).
+          sha="$(git log -1 --format=%H -- \
             packages pyproject.toml uv.lock orchestration/Dockerfile .dockerignore \
             model.yaml bench/configs/sweep-grid.yaml bench/configs/kv-cache-extension-ab.yaml \
             k8s/vllm-gpu.yaml orchestration/provider-mirror.tfrc terraform/bench-endpoint \
             ':(exclude)terraform/bench-endpoint/tests' ':(exclude,glob)**/*.md')"
+          sha_tag="${sha:0:12}"
           if [[ -z "${sha_tag}" ]]; then
             echo "::error::could not derive a content tag — no commit touches the image inputs"
             exit 1
