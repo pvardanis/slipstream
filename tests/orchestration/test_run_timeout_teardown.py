@@ -3,9 +3,9 @@
 Prefect stops a run that outlives its ``timeout_seconds`` by raising a cancellation, a
 ``BaseException``, into its body, so the run's sessions leave their teardown to its hooks;
 the run then ends ``TimedOut``, a failure, which runs only its failure hooks. These tests
-check the failure hooks act on a timed-out run alone, that the knob sweep registers the
-destroy and then the release there, and, on a real run under a Prefect test server, that a
-timed-out run's freeze is released by its hook.
+check the failure hooks act on a timed-out run alone, that the knob sweep and the KV cache
+A/B register the destroy and then the release there, and, on a real run under a Prefect
+test server, that a timed-out run's freeze is released by its hook.
 """
 
 import inspect
@@ -23,6 +23,7 @@ from prefect.testing.utilities import prefect_test_harness
 
 import slipstream_bench.orchestration.flows.run_setup as run_setup_module
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
+from slipstream_bench.orchestration.flows.kv_ab import kv_ab_flow
 from slipstream_bench.orchestration.flows.run_setup import (
     destroy_run_bench_endpoint,
     on_run_timeout,
@@ -65,8 +66,9 @@ def test_timeout_hook_leaves_a_run_that_failed_in_its_own_code() -> None:
     assert calls == []
 
 
-def test_knob_sweep_tears_a_timed_out_run_down_destroy_first() -> None:
-    hooks = knob_sweep_flow.on_failure_hooks
+@pytest.mark.parametrize("parent_flow", [knob_sweep_flow, kv_ab_flow])
+def test_flow_tears_a_timed_out_run_down_destroy_first(parent_flow: Any) -> None:
+    hooks = parent_flow.on_failure_hooks
 
     # Wrapped, so a run that failed in its own code is not torn down a second time.
     assert all(inspect.unwrap(hook) is not hook for hook in hooks)

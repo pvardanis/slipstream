@@ -4,8 +4,8 @@
 the ladder rungs, and the pending-run gate to kubectl, SSM, S3, the engine's /metrics, and
 the bench host. These tests drive :func:`drive_kv_ab` over them, with real Prefect tasks
 whose storage is a tmp local filesystem, and assert what each arm run deploys, runs, and
-labels. The flow is driven with its transport builders swapped for the same fakes and its
-bench-endpoint session for a recording one.
+labels. The flow is driven with its transport builders swapped for the same fakes, its
+bench-endpoint session for a recording one, and its rollout freeze for a recording one.
 """
 
 import base64
@@ -53,6 +53,7 @@ from tests.orchestration.bench_endpoint_fakes import (
     WORKER_ENV,
     RecordingSession,
 )
+from tests.orchestration.rollout_freeze_fakes import RecordingFreeze
 
 _REPO = Path(__file__).parents[2]
 # One run per arm keeps the script short: off-r1, then on-r1.
@@ -446,12 +447,14 @@ def _drive_flow(
     s3: _S3,
     session: RecordingSession | None = None,
     edits: Sequence[tuple[str, str]] = (),
+    freeze: RecordingFreeze | None = None,
 ) -> tuple[list[str], list[str]]:
     """Drive the flow over a one-run-per-arm workload, returning its pointers and the
     metrics URLs it scraped.
 
-    The flow opens its bench endpoint from the worker's environment through ``session``;
-    each ``(old, new)`` of ``edits`` is replaced in the workload's text.
+    The flow opens its bench endpoint from the worker's environment through ``session``
+    and holds its rollout freeze through ``freeze``; each ``(old, new)`` of ``edits`` is
+    replaced in the workload's text.
     """
     workload = tmp_path / "kv-ab.yaml"
     agent = (
@@ -480,6 +483,8 @@ def _drive_flow(
     monkeypatch.setattr(
         run_setup_module, "open_bench_endpoint", session or RecordingSession()
     )
+    held = RecordingFreeze() if freeze is None else freeze
+    monkeypatch.setattr(run_setup_module, "build_rollout_freeze", lambda _k: held)
 
     pointers = kv_ab_flow(
         run_id="ab1",
@@ -519,6 +524,20 @@ def test_the_flow_drives_its_workload_renders_it_and_returns_the_labels_pointers
     assert list(s3.charts) == ["kv-offload-ab/ab1/charts/kv-ab-by-max-concurrency.png"]
 
 
+def test_the_flow_freezes_rollouts_for_the_run_s_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The window outlasts no run and lapses with a run no hook released: it lasts the
+    # flow's timeout, 19 h, above the longest legitimate GPU session and under the 20 h
+    # spend-leak alarm (ADR-0025).
+    freeze = RecordingFreeze()
+
+    _drive_flow(tmp_path, monkeypatch, _S3(), freeze=freeze)
+
+    assert kv_ab_flow.timeout_seconds == 19 * 3600
+    assert freeze.calls == [("acquire", "ab1", str(19 * 3600)), ("release", "ab1")]
+
+
 def test_the_flow_runs_every_script_on_the_bench_host_its_endpoint_booted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -551,7 +570,10 @@ def test_the_flow_runs_every_script_on_the_bench_host_its_endpoint_booted(
 def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_render(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The render only reads S3, so the bench endpoint stops billing before it runs.
+    # The render only reads S3, so the bench endpoint stops billing before it runs. Argo
+    # CD must not roll the replica or the worker between or under the arm runs
+    # (ADR-0029), so the rollout freeze is held from before the endpoint opens until the
+    # render has drawn the run.
     session = RecordingSession()
     real_drive = kv_ab_module.drive_kv_ab
 
@@ -567,23 +589,38 @@ def test_the_flow_closes_its_bench_endpoint_after_the_cells_and_before_the_rende
         lambda **_k: session.events.append("render"),
     )
 
-    _drive_flow(tmp_path, monkeypatch, _S3(), session)
+    _drive_flow(
+        tmp_path, monkeypatch, _S3(), session, freeze=RecordingFreeze(session.events)
+    )
 
-    assert session.events == ["open", "6 cells", "close", "render"]
+    assert session.events == [
+        "freeze acquire",
+        "open",
+        "6 cells",
+        "close",
+        "render",
+        "freeze release",
+    ]
 
 
 @pytest.mark.parametrize(
     "failing", ["/warmup/", "off-r1/pshare90_burst1.0_mc2"], ids=["warmup", "rung"]
 )
-def test_the_flow_closes_its_bench_endpoint_when_a_cell_fails(
+def test_the_flow_closes_its_endpoint_and_releases_its_freeze_when_a_cell_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str
 ) -> None:
     session = RecordingSession()
 
     with pytest.raises(InvalidCellError):
-        _drive_flow(tmp_path, monkeypatch, _S3(failing=(failing,)), session)
+        _drive_flow(
+            tmp_path,
+            monkeypatch,
+            _S3(failing=(failing,)),
+            session,
+            freeze=RecordingFreeze(session.events),
+        )
 
-    assert session.events == ["open", "close"]
+    assert session.events == ["freeze acquire", "open", "close", "freeze release"]
 
 
 def test_a_failed_destroy_fails_the_flow_before_the_render(
@@ -608,8 +645,10 @@ def test_a_workload_the_rig_rules_out_is_refused_before_the_bench_endpoint_opens
 ) -> None:
     # Opening the endpoint applies the stack and waits its host's boot, minutes of billed
     # time a workload the rig refuses should not spend. A pool ten times the configured
-    # size holds the whole working set, so offload has nothing to add.
+    # size holds the whole working set, so offload has nothing to add. Nor does it
+    # freeze rollouts for a run that never starts.
     session = RecordingSession()
+    freeze = RecordingFreeze()
 
     with pytest.raises(KvAbWorkloadError, match="working set"):
         _drive_flow(
@@ -623,9 +662,11 @@ def test_a_workload_the_rig_rules_out_is_refused_before_the_bench_endpoint_opens
                     "kv_cache_memory_bytes: 12079595520",
                 )
             ],
+            freeze=freeze,
         )
 
     assert session.calls == []
+    assert freeze.calls == []
 
 
 @pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])
