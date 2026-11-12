@@ -1,14 +1,13 @@
-{{- /*
-The OTel Collector's child app: Argo CD deploys the Collector chart (k8s/otel-collector)
-into slipstream from the root Application's repository and revision, with model.yaml,
-two levels up from the chart, as its values file, so the Collector stamps the served
-model. A config change merged to the tracked revision syncs without operator action.
-*/ -}}
+# The OTel Collector's child Application (#510): Argo CD deploys the Collector chart
+# (k8s/otel-collector) into slipstream from the root Application's repository and
+# revision, with model.yaml, two levels up from the chart, as its values file, so the
+# Collector stamps the served model. A config change merged to the tracked revision syncs
+# without operator action.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: otel-collector
-  namespace: {{ .Release.Namespace }}
+  namespace: argocd
 spec:
   project: workloads
   source:

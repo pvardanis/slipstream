@@ -56,10 +56,6 @@ spec:
     server: https://kubernetes.default.svc
     namespace: '{{ required "namespaces.prefect is required" .Values.namespaces.prefect }}'
   # Automated with prune and self-heal, so the chart version and values in git are what
-  # runs. Server-side apply, the sync default for every Argo CD-owned workload.
+  # runs, and server-side apply: the sync policy every child app shares (_helpers.tpl).
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - ServerSideApply=true
+    {{- include "slipstream-apps.syncPolicy" . | nindent 4 }}
