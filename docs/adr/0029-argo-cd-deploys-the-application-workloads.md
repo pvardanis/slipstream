@@ -173,7 +173,8 @@ before relying on it at L3.
 
 ## Amendment (2026-11-11): the knob sweep's rollout freeze as built
 
-The knob sweep holds the freeze (#514); the KV cache A/B gets it in #515.
+The knob sweep (#514) and the KV cache A/B (#515) hold the freeze, with the same timeout
+and hooks.
 
 - **The timeout is 19 h (68400 s).** It sits above the longest GPU session (18 h) and
   below the 20 h spend-leak alarm (ADR-0025). The window lasts the same 19 h.
@@ -198,7 +199,7 @@ The knob sweep holds the freeze (#514); the KV cache A/B gets it in #515.
   its timeout by raising a cancellation, a `BaseException`, into its body, so the run's
   sessions leave their teardown to its hooks, as on a kill. The run then ends `TimedOut`,
   a failure, and Prefect runs only its `on_failure` hooks, not its crash or cancellation
-  hooks. The knob sweep registers the endpoint destroy and the freeze release as failure
+  hooks. Each flow registers the endpoint destroy and the freeze release as failure
   hooks that act only on a `TimedOut` run; a run that failed in its own code tore down in
   its sessions already.
 - **The destroy runs before the release** in each hook list. The release lets Argo CD
@@ -217,6 +218,6 @@ The knob sweep holds the freeze (#514); the KV cache A/B gets it in #515.
   acquire's minute, so the window can end up to 59 s before the timeout. Two acquires
   racing on the AppProject fail the later one on its stale `resourceVersion`, with no
   retry.
-- **Not yet checked on a live cluster:** that a merge during a sweep syncs only after it
-  ends. The `otel-collector` child Application above is the first under `workloads` to
-  check it with.
+- **Not yet checked on a live cluster:** that a merge during a sweep or an A/B syncs only
+  after it ends. The `otel-collector` child Application above is the first under
+  `workloads` to check it with.

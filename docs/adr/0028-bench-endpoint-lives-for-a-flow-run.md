@@ -134,9 +134,9 @@ holding the state lock and block the hook's.
 
 ## Amendment (2026-11-11): a timed-out run is torn down by a hook too
 
-The knob sweep carries a 19 h Prefect timeout (ADR-0029). Prefect stops a run past it by
-raising a cancellation, a `BaseException`, into its body, so the session leaves the
-destroy to the hooks, as on a kill. The run then ends `TimedOut`, a failure, which runs
-only the flow's `on_failure` hooks, so the knob sweep also registers the destroy there,
-acting only on a `TimedOut` run. The session's log on that path names the "crash,
+The knob sweep and the KV cache A/B carry a 19 h Prefect timeout (ADR-0029). Prefect
+stops a run past it by raising a cancellation, a `BaseException`, into its body, so the
+session leaves the destroy to the hooks, as on a kill. The run then ends `TimedOut`, a
+failure, which runs only the flow's `on_failure` hooks, so each flow also registers the
+destroy there, acting only on a `TimedOut` run. The session's log on that path names the "crash,
 cancellation or timeout hook".
