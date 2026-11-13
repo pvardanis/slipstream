@@ -61,6 +61,7 @@ def read_cold_start_breakdown(
     events = _list_container_events(kubectl, pod, container=container)
     pulling = _get_event_time(events, "Pulling", pod=pod, container=container)
     pulled = _get_event_time(events, "Pulled", pod=pod, container=container)
+
     return ColdStartBreakdown(
         run=run,
         total_s=_seconds(created, ready),
