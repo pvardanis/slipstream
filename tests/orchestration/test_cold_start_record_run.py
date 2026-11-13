@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from slipstream_bench.orchestration.cold_start import ColdStartMarkerError
+from slipstream_bench.orchestration.cold_start_cluster import ColdStartMarkerError
 from slipstream_bench.orchestration.flows.cold_start import (
     build_cold_start_collaborators,
     record_cold_start,
