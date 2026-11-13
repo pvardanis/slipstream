@@ -81,7 +81,8 @@ the flow reads from the cluster or the engine's log:**
   is not visible from these events.
 - **Weight download is derived from one line.** vLLM v0.29.0 logs `Time spent downloading
   weights` with a duration and has no INFO-level line marking the start, so the start is
-  the line's timestamp minus that duration.
+  the line's timestamp minus that duration. vLLM logs the line only when the download
+  takes over 0.5 s; on a true zero the weights are always fetched, so it is always there.
 - **Weight download and engine init are separate phases** because fetching weights and
   loading them onto the GPU are removed by different strategies (a weight cache against
   a faster loader or a persisted compile cache).
@@ -91,8 +92,8 @@ the flow reads from the cluster or the engine's log:**
   cache sizing, torch.compile and CUDA graph capture. `Model loading took` was rejected as
   a marker: its timer includes the download, so it would count the download twice.
 - **Readiness lag runs from `Starting vLLM server on` to the pod's Ready condition.** It
-  is the gap between the server listening and the kubelet's probes passing, so the
-  replica's probe periods (startup every 15 s, readiness every 10 s) set most of it.
+  is the gap between the server listening and the kubelet's probes passing. Ready can
+  turn true only after the startup probe passes, so its 15 s period sets most of it.
 
 ### An unattributed remainder makes the phases add up
 
@@ -133,6 +134,9 @@ container's log through the existing `Kubectl` transport.** Prometheus was rejec
 only cold-start series is Karpenter's pod-provisioning histogram, which gives a bucketed
 total, starts at the last scheduling attempt and has no phases.
 
+- **Log lines are timed by the container runtime**, read with `kubectl logs
+  --timestamps`, not by vLLM's own prefix, which has one-second resolution and no year or
+  time zone.
 - **Collection happens as soon as the pod is Ready.** Events expire (after about 1 h by
   default), so each run's events, conditions and log are read before the next run starts.
 - **A missing marker fails the run with its name.** No download line, no `Launched`
@@ -140,7 +144,8 @@ total, starts at the last scheduling attempt and has no phases.
   raise an error naming what was missing, so a run never quietly reports a wrong phase.
 - **The worker's cold-start rights are read-only.** It gets `get`/`list`/`watch` on
   `nodeclaims.karpenter.sh` and `nodes` in a ClusterRole, its first cluster-scoped grants,
-  and `list` on `events` in its namespaced Role.
+  and `list` on `events` in its namespaced Role. Scaling the replica uses the `patch` on
+  the vllm-gpu Deployment it already holds; no `deployments/scale` grant is added.
 
 ### No bench endpoint, but the rollout freeze is held
 
@@ -157,10 +162,15 @@ rollout landing mid-run would restart the replica and corrupt the cold start.
 - The markers are log text. An engine upgrade past vLLM v0.29.0 must re-check every line
   named here; a renamed line fails the run with the missing marker's name rather than
   skewing a phase.
-- Kubernetes timestamps have one-second resolution, while the engine's durations are
-  finer, so each phase carries up to about a second of rounding. The unattributed
-  remainder absorbs it and can read slightly negative; a remainder well below zero means
-  two markers overlap.
+- An elimination change that removes the weight download (a weight cache, weights baked
+  into the image) also removes the download line, which fails the run as a missing marker.
+  That change has to make weight download a phase that can read zero before its run can
+  be compared against the baseline.
+- Kubernetes object and event timestamps have one-second resolution, while the log's
+  timestamps and the engine's durations are finer, so a phase bounded by a Kubernetes
+  timestamp carries up to about a second of rounding. The unattributed remainder absorbs
+  it and can read slightly negative; a remainder well below zero means two markers
+  overlap.
 - The breakdown cannot tell a slow image pull's network path from its unpacking, nor
   split node launch into EC2 boot, registration and device-plugin start. Those belong to
   the elimination work.
