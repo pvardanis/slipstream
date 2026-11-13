@@ -8,6 +8,7 @@ its acquire and release among the cluster's steps.
 """
 
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -25,8 +26,11 @@ from tests.orchestration.rollout_freeze_fakes import RecordingFreeze
 class _RecordingS3:
     def __init__(self) -> None:
         self.puts: list[dict[str, Any]] = []
+        self.fails = False
 
     def put_object(self, **kwargs: Any) -> dict[str, Any]:
+        if self.fails:
+            raise OSError("S3 PutObject: AccessDenied")
         self.puts.append(kwargs)
         return {}
 
@@ -122,3 +126,30 @@ def test_a_failed_cycle_releases_the_freeze_and_records_nothing() -> None:
     assert run.cluster.steps[-2:] == ["scale 0", "freeze release"]
     assert run.s3.puts == []
     assert run.artifacts == []
+
+
+def test_a_failed_write_leaves_the_breakdown_in_the_run_s_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run = _Run(CyclingCluster())
+    run.s3.fails = True
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(OSError, match="AccessDenied"):
+        run.record()
+
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "slipstream_bench.orchestration.flows.cold_start"
+    ] == [
+        (
+            logging.INFO,
+            (
+                "cold-start run=cs-1 measured {'run': 1, 'total_s': 545.0, "
+                "'capacity_wait_s': 3.0, 'node_launch_s': 47.0, 'image_pull_s': "
+                "264.0, 'unattributed_s': 231.0}; writing it to "
+                "s3://bench/cold-start/cs-1/r1.json"
+            ),
+        )
+    ]
