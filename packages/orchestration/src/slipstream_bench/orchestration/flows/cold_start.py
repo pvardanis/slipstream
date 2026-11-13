@@ -92,15 +92,15 @@ def scale_run_replica_to_zero(
 # The run's crash, cancellation and timeout hooks, in the order they run: the scale to
 # zero before the release, since the release lets Argo CD roll the worker the scale runs
 # in.
-_TEARDOWN_HOOKS = (scale_run_replica_to_zero, release_run_rollout_freeze)
-
-
 @flow(
     name="cold-start-breakdown",
     timeout_seconds=_RUN_TIMEOUT_S,
-    on_cancellation=list(_TEARDOWN_HOOKS),
-    on_crashed=list(_TEARDOWN_HOOKS),
-    on_failure=[on_run_timeout(hook) for hook in _TEARDOWN_HOOKS],
+    on_cancellation=[scale_run_replica_to_zero, release_run_rollout_freeze],
+    on_crashed=[scale_run_replica_to_zero, release_run_rollout_freeze],
+    on_failure=[
+        on_run_timeout(scale_run_replica_to_zero),
+        on_run_timeout(release_run_rollout_freeze),
+    ],
 )
 def cold_start_flow(*, run_id: str, region: str, bucket: str) -> str:
     """Measure one true-zero cold start's cluster-side phases as one Prefect flow.
@@ -224,6 +224,7 @@ def record_cold_start(
     """
     with freeze:
         breakdown = drive_cold_start(collaborators, run=_RUN)
+
     key = f"{_RECORD_ROOT}/{run_id}/r{breakdown.run}.json"
     pointer = f"s3://{bucket}/{key}"
     # Logged before the write, so a write that fails still leaves the measurement.
