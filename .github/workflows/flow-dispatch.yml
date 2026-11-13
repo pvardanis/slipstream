@@ -1,17 +1,17 @@
 # The shared body of the manual CI triggers for the unattended Prefect flows (ADR-0015 'CI
 # later' arm, ADR-0012 'CI/CD later'): sweep-dispatch.yml calls it for the knob sweep,
 # kv-ab-dispatch.yml for the KV cache A/B and cold-start-dispatch.yml for the cold-start
-# breakdown. It fires `prefect deployment run` against the
-# self-hosted, no-public-endpoint Prefect server, so a run is kicked off from the GitHub
-# UI without a workstation's kubectl. It registers the flow's deployment (the same
-# `register-*` command its `just prefect-register-*` recipe runs), then triggers a run of
-# it against a live cluster; the sweep and the A/B each open and close their own bench
-# endpoint, and the cold-start breakdown opens none. Registration overwrites the deployment, so every dispatch runs with
-# defaults resolved from the live stack and main, including after a cluster-down wiped the
-# server's SQLite. It does not stand the cluster up (`just stack-up`), which stays a
-# deliberate operator step that brackets the GPU spend (ADR-0015). The run itself executes
-# in-cluster on the worker to completion; this workflow returns as soon as the run is
-# created (no --watch), consistent with the ADR's fire-and-forget trigger.
+# breakdown. It fires `prefect deployment run` against the self-hosted, no-public-endpoint
+# Prefect server, so a run is kicked off from the GitHub UI without a workstation's
+# kubectl. It registers the flow's deployment (the same `register-*` command its `just
+# prefect-register-*` recipe runs), then triggers a run of it against a live cluster; the
+# sweep and the A/B each open and close their own bench endpoint, and the cold-start
+# breakdown opens none. Registration overwrites the deployment, so every dispatch runs
+# with defaults resolved from the live stack and main, including after a cluster-down
+# wiped the server's SQLite. It does not stand the cluster up (`just stack-up`), which
+# stays a deliberate operator step that brackets the GPU spend (ADR-0015). The run itself
+# executes in-cluster on the worker to completion; this workflow returns as soon as the
+# run is created (no --watch), consistent with the ADR's fire-and-forget trigger.
 # Dispatch the callers from main: the OIDC role trusts only main-branch runs, and a called
 # workflow runs in its caller's context, so the caller's ref is the one the role sees.
 name: flow-dispatch
@@ -156,17 +156,21 @@ jobs:
 
       - name: Resolve the deployment's registration inputs
         id: registration
+        env:
+          BENCH_IMAGE: ${{ steps.flow.outputs.bench_image }}
         run: |
           set -euo pipefail
           : "${EKS_CLUSTER_NAME:?repo variable EKS_CLUSTER_NAME is empty — set it from the eks cluster_name output (see README)}"
-          : "${ECR_REPOSITORY:?repo variable ECR_REPOSITORY is empty — set it to the bench-client ECR repository name (see README)}"
-          # The same bench-client image ref `_bench-image-ref` resolves locally with no
-          # bench_image_tag pin: the bootstrap repository URL
-          # (<account>.dkr.ecr.<region>.amazonaws.com/<name>) and the floating main tag
-          # image-tag.sh derives from model.yaml.
-          account="$(aws sts get-caller-identity --query Account --output text)"
-          tag="$(bench/image-tag.sh main-tag)"
-          echo "image_ref=${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${tag}" >>"${GITHUB_OUTPUT}"
+          # Only a flow that sends requests takes the bench-client image: the same ref
+          # `_bench-image-ref` resolves locally with no bench_image_tag pin, the bootstrap
+          # repository URL (<account>.dkr.ecr.<region>.amazonaws.com/<name>) and the
+          # floating main tag image-tag.sh derives from model.yaml.
+          if [[ "${BENCH_IMAGE}" == "true" ]]; then
+            : "${ECR_REPOSITORY:?repo variable ECR_REPOSITORY is empty — set it to the bench-client ECR repository name (see README)}"
+            account="$(aws sts get-caller-identity --query Account --output text)"
+            tag="$(bench/image-tag.sh main-tag)"
+            echo "image_ref=${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${tag}" >>"${GITHUB_OUTPUT}"
+          fi
 
           # The bootstrap stack names the bench-results bucket by prefix
           # (${cluster_name}-bench-results-<suffix>), so the suffix changes whenever the
@@ -202,7 +206,6 @@ jobs:
         run: |
           set -euo pipefail
           : "${BUCKET:?resolved results bucket is empty}"
-          : "${IMAGE_REF:?resolved bench-client image ref is empty}"
           : "${PREFECT_NAMESPACE:?repo variable PREFECT_NAMESPACE is empty — set it from the eks prefect_namespace output (see README)}"
           # An empty run id means "generate one" — the same UTC-timestamp default the
           # manual `just bench` arm uses, so a CI-triggered run is named like a local one.
@@ -225,6 +228,7 @@ jobs:
           # is absent. Only a flow that sends requests takes the bench-client image.
           register_args=(--region "${AWS_REGION}" --bucket "${BUCKET}")
           if [[ "${BENCH_IMAGE}" == "true" ]]; then
+            : "${IMAGE_REF:?resolved bench-client image ref is empty}"
             register_args+=(--image-ref "${IMAGE_REF}")
           fi
           uv run slipstream-orchestrate "${REGISTER}" "${register_args[@]}"
