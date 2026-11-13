@@ -98,8 +98,8 @@ _MEMORY_LIMIT_OFFLOAD = "12Gi"
 _MEMORY_LIMIT_DEFAULT = "8Gi"
 
 # The worker's RBAC scopes it to the slipstream namespace's vllm-gpu Deployment.
-_NAMESPACE = "slipstream"
-_DEPLOYMENT = "vllm-gpu"
+VLLM_NAMESPACE = "slipstream"
+VLLM_DEPLOYMENT = "vllm-gpu"
 
 # The vLLM api-key the bench endpoint publishes to its bench host, read from the one
 # Secret the worker's RBAC (terraform/eks/worker_bench_endpoint.tf) can get.
@@ -209,7 +209,9 @@ def render_gpu_manifest(
     return rendered
 
 
-def extract_deployment_doc(manifest_text: str, *, deployment: str = _DEPLOYMENT) -> str:
+def extract_deployment_doc(
+    manifest_text: str, *, deployment: str = VLLM_DEPLOYMENT
+) -> str:
     """Return just the named Deployment document from a multi-document manifest.
 
     The worker's RBAC grants get/patch on ``deploy/vllm-gpu`` only — not the manifest's
@@ -241,8 +243,8 @@ def deploy_gpu(
     kv_cache_offload: bool,
     manifest_text: str,
     kubectl: Kubectl,
-    namespace: str = _NAMESPACE,
-    deployment: str = _DEPLOYMENT,
+    namespace: str = VLLM_NAMESPACE,
+    deployment: str = VLLM_DEPLOYMENT,
     rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
     restarted_at: str | None = None,
 ) -> None:
@@ -296,8 +298,8 @@ def deploy_gpu_point(
     grid: SweepGrid,
     manifest_text: str,
     kubectl: Kubectl,
-    namespace: str = _NAMESPACE,
-    deployment: str = _DEPLOYMENT,
+    namespace: str = VLLM_NAMESPACE,
+    deployment: str = VLLM_DEPLOYMENT,
     rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
 ) -> None:
     """Redeploy the GPU for one engine point's knobs and wait for the rollout (Tier-1).
@@ -328,8 +330,8 @@ def scrape_ceiling(
     point: EnginePoint,
     *,
     kubectl: Kubectl,
-    namespace: str = _NAMESPACE,
-    deployment: str = _DEPLOYMENT,
+    namespace: str = VLLM_NAMESPACE,
+    deployment: str = VLLM_DEPLOYMENT,
 ) -> str:
     """Read the redeployed engine's predicted concurrency ceiling from its startup log.
 
@@ -363,8 +365,8 @@ def scrape_ceiling(
 def scrape_gpu_kv_pool(
     *,
     kubectl: Kubectl,
-    namespace: str = _NAMESPACE,
-    deployment: str = _DEPLOYMENT,
+    namespace: str = VLLM_NAMESPACE,
+    deployment: str = VLLM_DEPLOYMENT,
 ) -> int:
     """Read the redeployed engine's GPU KV cache pool size, in tokens, from its log.
 
@@ -394,7 +396,7 @@ def scrape_gpu_kv_pool(
     return tokens
 
 
-def read_vllm_api_key(kubectl: Kubectl, *, namespace: str = _NAMESPACE) -> str:
+def read_vllm_api_key(kubectl: Kubectl, *, namespace: str = VLLM_NAMESPACE) -> str:
     """Read the vLLM api-key from its cluster Secret.
 
     The Secret lives in the vLLM namespace and the worker in another, so it is read through
