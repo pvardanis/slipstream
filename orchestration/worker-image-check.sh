@@ -25,9 +25,9 @@ if [[ -z "${worker_images}" || "${worker_images}" == *$'\n'* ]]; then
   echo "::error::expected one running prefect-worker image, got: ${worker_images:-none}"
   exit 1
 fi
-worker_commit="${worker_images##*:}"
-config_yaml="$(git show "${worker_commit}:${config_repo_path}")" || {
-  echo "::error::cannot read ${config_repo_path} at worker image commit ${worker_commit}"
+worker_tag="${worker_images##*:}"
+config_yaml="$(git show "${worker_tag}:${config_repo_path}")" || {
+  echo "::error::cannot read ${config_repo_path} at worker image commit ${worker_tag}"
   exit 1
 }
 {
@@ -43,7 +43,7 @@ config_yaml="$(git show "${worker_commit}:${config_repo_path}")" || {
 # execute flow code or config main no longer holds. Checked after the summary, so the
 # job page still shows the config the worker would have run.
 main_tag="$("$(dirname "${BASH_SOURCE[0]}")/content-tag.sh")"
-if [[ "${worker_commit}" != "${main_tag}" ]]; then
-  echo "::error::rollout pending: the worker runs image ${worker_commit}, main's latest is ${main_tag}; retry once the rollout lands"
+if [[ "${worker_tag}" != "${main_tag}" ]]; then
+  echo "::error::rollout pending — the worker runs image ${worker_tag}, main's latest is ${main_tag}; retry once it lands, or fix main's orchestration-image run if it failed"
   exit 1
 fi

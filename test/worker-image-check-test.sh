@@ -50,8 +50,8 @@ cp "${repo_root}/orchestration/worker-image-check.sh" "${repo_root}/orchestratio
   "${repo}/orchestration/"
 script="${repo}/orchestration/worker-image-check.sh"
 image_repo="123.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-worker_tag="${main_commit:0:12}"
-worker_image="${image_repo}:${worker_tag}"
+main_tag="${main_commit:0:12}"
+worker_image="${image_repo}:${main_tag}"
 
 failures=0
 fail() {
@@ -88,7 +88,7 @@ while IFS='|' read -r name commit config; do
   if WORKER_IMAGES="${image_repo}:${commit:0:12}"$'\n' run_check; then
     fail "${name}: exited zero"
   else
-    expected="::error::rollout pending: the worker runs image ${commit:0:12}, main's latest is ${main_commit:0:12}; retry once the rollout lands"
+    expected="::error::rollout pending — the worker runs image ${commit:0:12}, main's latest is ${main_tag}; retry once it lands, or fix main's orchestration-image run if it failed"
     grep -qxF "${expected}" "${tmp}/out" || fail "${name}: no rollout-pending message: $(cat "${tmp}/out" "${tmp}/err")"
     grep -qxF "${config}" "${tmp}/summary" || fail "${name}: summary does not show the worker's config"
   fi
