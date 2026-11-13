@@ -113,6 +113,18 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Spread** — how far one rung's metric varies across an arm's runs, reported as the median
   and the range.
 
+## Cold start (L2a)
+
+- **Cold start** — the time from a replica being asked for while no GPU node is up (its pod
+  created) until that replica is ready to serve. What L2a measures and later eliminates.
+  Not the wake of L2b, which runs until the first token reaches a client.
+- **Cold-start breakdown** — a cold start split into its phases, in order: **capacity wait**
+  (until a GPU node launches that will take the pod), **node launch** (until that node is
+  ready and offers its GPU), **image pull**, **weight download** (fetching the model's
+  weights), **engine init** (weights onto the GPU, KV cache sizing, compilation and graph
+  capture), and **readiness lag** (until the engine is marked ready). Time between phases no
+  marker covers is reported as **unattributed**, so the phases add up to the cold start.
+
 ## Delivery
 
 - **Rollout** — a change on main reaching the workloads of a live cluster: what a Sentry
