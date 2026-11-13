@@ -3,8 +3,8 @@
 # Cold-start fixtures
 
 One cold start from a true zero on the Rig (on-demand g5.xlarge, vLLM v0.29.0), recorded on
-2026-11-13. These are the raw cluster and engine responses the cold-start breakdown's
-`Kubectl` fake replays, so its parsing is tested against real output.
+2026-11-13. These are the raw cluster and engine responses for the cold-start breakdown's
+`Kubectl` fake to replay, so its parsing is tested against real output.
 
 ## How it was run
 
@@ -15,7 +15,7 @@ Ready at 15:30:48Z. Everything was captured right after Ready, before events exp
 | File | Command |
 |---|---|
 | `pod.json` | `kubectl -n slipstream get pod vllm-gpu-bcd494f9-xsjvl -o json` |
-| `events.json` | `kubectl -n slipstream get events -o json` |
+| `events.json` | `kubectl -n slipstream get events -o json` (the whole namespace, so it also holds an unrelated External Secrets `SecretStore` event) |
 | `nodeclaim.json` | `kubectl get nodeclaim gpu-xqwqj -o json` (the NodeClaim whose `status.nodeName` is the pod's node) |
 | `node.json` | `kubectl get node ip-10-0-17-228.eu-west-1.compute.internal -o json` |
 | `engine.log` | `kubectl -n slipstream logs vllm-gpu-bcd494f9-xsjvl -c vllm --timestamps` |
