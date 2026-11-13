@@ -12,7 +12,7 @@ from copy import deepcopy
 import pytest
 
 from slipstream_bench.contract.cold_start_record import ColdStartRecordError
-from slipstream_bench.orchestration.cold_start import (
+from slipstream_bench.orchestration.cold_start_cluster import (
     ColdStartMarkerError,
     read_cold_start_breakdown,
 )
