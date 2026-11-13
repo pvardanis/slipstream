@@ -14,23 +14,147 @@ container. Karpenter's NodeClaim events are cluster-scoped, so the NodeClaim's t
 from its conditions. A missing marker raises :class:`ColdStartMarkerError` naming it, so
 a run never reports a wrong phase. So does an engine container that restarted, since the
 Ready condition then marks its last start rather than its cold start.
+
+Before the read, the flow cycles the replica so its next start is a true-zero cold start:
+:func:`scale_replica` to zero, :func:`wait_for_no_gpu_nodeclaim` until Karpenter has
+removed the warm GPU node, :func:`scale_replica` back to one, and
+:func:`wait_for_replica_ready`. The scale is a patch of the Deployment's replicas, the
+get/patch the worker's RBAC grants on it, not the ``deployments/scale`` subresource.
 """
 
 import json
+import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from slipstream_bench.contract.cold_start_record import ColdStartBreakdown
-from slipstream_bench.orchestration.cluster import VLLM_NAMESPACE, Kubectl
+from slipstream_bench.orchestration.cluster import (
+    ROLLOUT_TIMEOUT_S,
+    VLLM_DEPLOYMENT,
+    VLLM_NAMESPACE,
+    Kubectl,
+    KubectlError,
+)
 
 # The replica's pods carry the Deployment's selector label (k8s/vllm-gpu.yaml).
 _REPLICA_SELECTOR = "app=vllm-gpu"
 # The engine container whose image pull is the image-pull phase.
 _ENGINE_CONTAINER = "vllm"
+# Karpenter labels each NodeClaim with the NodePool it serves (k8s/gpu-node-pool.yaml).
+_GPU_NODECLAIM_SELECTOR = "karpenter.sh/nodepool=gpu"
+# The GPU pool consolidates an empty node after a minute (k8s/gpu-node-pool.yaml), then
+# drains and terminates its instance; 15 min leaves room for a slow termination.
+_NODECLAIM_DRAIN_TIMEOUT_S = 900.0
+_NODECLAIM_POLL_INTERVAL_S = 10.0
 
 
 class ColdStartMarkerError(Exception):
     """A cold start whose cluster objects lack a marker a phase is bounded by."""
+
+
+class ColdStartCycleError(Exception):
+    """A warm GPU node that outlived the replica's scale to zero."""
+
+
+def scale_replica(
+    kubectl: Kubectl,
+    replicas: int,
+    *,
+    namespace: str = VLLM_NAMESPACE,
+    deployment: str = VLLM_DEPLOYMENT,
+) -> None:
+    """Set the GPU replica's Deployment to ``replicas`` pods.
+
+    :param kubectl: the transport the patch is issued through.
+    :param replicas: the pods the Deployment keeps.
+    :param namespace: the namespace the replica runs in.
+    :param deployment: the replica's Deployment.
+    """
+    patch = json.dumps({"spec": {"replicas": replicas}})
+    kubectl(
+        [
+            "-n",
+            namespace,
+            "patch",
+            "deployment",
+            deployment,
+            "--type=merge",
+            "-p",
+            patch,
+        ],
+        None,
+    )
+
+
+def wait_for_no_gpu_nodeclaim(
+    kubectl: Kubectl,
+    *,
+    timeout_s: float = _NODECLAIM_DRAIN_TIMEOUT_S,
+    poll_interval_s: float = _NODECLAIM_POLL_INTERVAL_S,
+    sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], float] = time.monotonic,
+) -> None:
+    """Wait until the GPU pool holds no NodeClaim, so the next start provisions a node.
+
+    :param kubectl: the transport the NodeClaims are listed through.
+    :param timeout_s: the ceiling on how long the warm node may linger.
+    :param poll_interval_s: the wait between polls.
+    :param sleep: the wait function, injected for tests.
+    :param now: the monotonic clock, injected for tests.
+    :raise ColdStartCycleError: when a GPU NodeClaim remains after ``timeout_s``.
+    """
+    deadline = now() + timeout_s
+    while True:
+        claims = _get_json(
+            kubectl, ["get", "nodeclaims", "-l", _GPU_NODECLAIM_SELECTOR]
+        )["items"]
+        if not claims:
+            return
+        if now() >= deadline:
+            names = ", ".join(claim["metadata"]["name"] for claim in claims)
+            raise ColdStartCycleError(
+                f"GPU NodeClaim {names} remained {timeout_s:.0f}s after the replica "
+                f"scaled to zero: a cold start must provision its node, so check "
+                f"Karpenter's consolidation of the gpu NodePool"
+            )
+        sleep(poll_interval_s)
+
+
+def wait_for_replica_ready(
+    kubectl: Kubectl,
+    *,
+    namespace: str = VLLM_NAMESPACE,
+    deployment: str = VLLM_DEPLOYMENT,
+    timeout_s: float = ROLLOUT_TIMEOUT_S,
+) -> None:
+    """Wait for the replica's rollout, which completes once its pod is Ready.
+
+    :param kubectl: the transport the rollout wait is issued through.
+    :param namespace: the namespace the replica runs in.
+    :param deployment: the replica's Deployment.
+    :param timeout_s: the ceiling the wait trips at.
+    :raise ColdStartMarkerError: when the pod is not Ready within ``timeout_s``, or the
+        rollout cannot be read.
+    """
+    try:
+        kubectl(
+            [
+                "rollout",
+                "status",
+                "-n",
+                namespace,
+                f"deployment/{deployment}",
+                f"--timeout={int(timeout_s)}s",
+            ],
+            None,
+        )
+    except KubectlError as error:
+        raise ColdStartMarkerError(
+            f"rollout status of deployment {deployment} failed: its pod was not Ready "
+            f"within {timeout_s:.0f}s or kubectl could not read it, and the cold start "
+            f"is bounded by its Ready condition ({error})"
+        ) from error
 
 
 def read_cold_start_breakdown(
