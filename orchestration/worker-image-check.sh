@@ -7,9 +7,10 @@
 # differs from it means the worker runs code or config main no longer holds: Image
 # Updater has not yet polled the new image, a rollout freeze is holding the rollout back,
 # or the image is still building. The worker reads the config baked into its image, not
-# this checkout, so the summary shows the worker commit's copy. Run from a checkout of
-# main with full history.
-# Usage: worker-image-check.sh <prefect-namespace> <config-repo-path> <summary-heading> <flow-run-id>
+# this checkout, so the summary shows the worker commit's copy; a flow that reads no baked
+# config passes an empty config path, and the summary names the run and the worker image
+# alone. Run from a checkout of main with full history.
+# Usage: worker-image-check.sh <prefect-namespace> <config-repo-path|""> <summary-heading> <flow-run-id>
 set -euo pipefail
 
 prefect_namespace="$1"
@@ -29,19 +30,27 @@ if [[ -z "${worker_images}" || "${worker_images}" == *$'\n'* ]]; then
   exit 1
 fi
 worker_tag="${worker_images##*:}"
-config_yaml="$(git show "${worker_tag}:${config_repo_path}")" || {
-  echo "::error::cannot read ${config_repo_path} at worker image commit ${worker_tag}"
-  exit 1
-}
-{
-  echo "## ${config_heading}"
-  echo
-  echo "Run \`${flow_run_id}\` reads \`${config_repo_path}\` as built into worker image \`${worker_images}\`."
-  echo
-  echo '```yaml'
-  echo "${config_yaml}"
-  echo '```'
-} >>"${GITHUB_STEP_SUMMARY}"
+if [[ -z "${config_repo_path}" ]]; then
+  {
+    echo "## ${config_heading}"
+    echo
+    echo "Run \`${flow_run_id}\` reads no config; it runs worker image \`${worker_images}\`."
+  } >>"${GITHUB_STEP_SUMMARY}"
+else
+  config_yaml="$(git show "${worker_tag}:${config_repo_path}")" || {
+    echo "::error::cannot read ${config_repo_path} at worker image commit ${worker_tag}"
+    exit 1
+  }
+  {
+    echo "## ${config_heading}"
+    echo
+    echo "Run \`${flow_run_id}\` reads \`${config_repo_path}\` as built into worker image \`${worker_images}\`."
+    echo
+    echo '```yaml'
+    echo "${config_yaml}"
+    echo '```'
+  } >>"${GITHUB_STEP_SUMMARY}"
+fi
 # Refuse to create the run unless the worker runs main's latest image: the run would
 # execute flow code or config main no longer holds. Checked after the summary, so the
 # job page still shows the config the worker would have run.

@@ -50,7 +50,7 @@ orchestration-image-check-test:
 terraform-pin-check-test:
     bash test/terraform-pin-check-test.sh
 
-# Assert worker-image-check.sh passes when the one running worker image is main's latest, shows its config in the job summary, passes with several workers on that one image, and fails naming a pending rollout when the worker is behind main, on zero or several running worker images, on a worker commit missing from the history, or on a failing worker listing (kubectl stubbed, throwaway git repo).
+# Assert worker-image-check.sh passes when the one running worker image is main's latest, shows its config in the job summary (or the run and image alone for a flow with no config), passes with several workers on that one image, and fails naming a pending rollout when the worker is behind main, on zero or several running worker images, on a worker commit missing from the history, or on a failing worker listing (kubectl stubbed, throwaway git repo).
 [group('test')]
 worker-image-check-test:
     bash test/worker-image-check-test.sh
