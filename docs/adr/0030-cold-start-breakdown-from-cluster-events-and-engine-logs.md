@@ -20,8 +20,8 @@ after it needs a baseline it can be compared against on the same definitions. Sp
 left the cold-start experiment design to this phase. This ADR records the definitions and
 the measurement; the `cold-start-breakdown` flow, its report and its RBAC implement them.
 
-The engine is vLLM v0.29.0, the version the Rig pins (ADR-0006). Every log marker below
-was checked against its source.
+The engine is vLLM v0.29.0, the version ADR-0006 pins for the GPU replica. Every log
+marker below was checked against its source.
 
 ## Decision
 
@@ -34,8 +34,9 @@ records, and neither depends on the bench endpoint or the request path.
 - *Karpenter's histogram window* was rejected as the definition: it starts at the last
   scheduling attempt, so it hides capacity wait, the phase most likely to dominate on a
   bad day.
-- *Ending at the first token* was rejected: that is L2b's wake, which needs a client and
-  the bench endpoint, and adds the request path to a number meant to measure bring-up.
+- *Ending at the first token* was rejected: that is L2b's wake, which runs until the
+  first token reaches a client, needs the bench endpoint, and adds the request path to a
+  number meant to measure bring-up.
 
 ### Every run starts from a true zero
 
@@ -87,8 +88,8 @@ the flow reads from the cluster or the engine's log:**
 - **Engine init starts where `Loading weights took`'s duration starts and ends at `init
   engine (profile, create kv cache, warmup model) took`.** The first line's timer covers
   loading weights onto the GPU and excludes the download; the second covers profiling, KV
-  cache sizing, torch.compile and CUDA graph capture. `Model loading took` was rejected as a marker: its
-  timer includes the download, so it would count the download twice.
+  cache sizing, torch.compile and CUDA graph capture. `Model loading took` was rejected as
+  a marker: its timer includes the download, so it would count the download twice.
 - **Readiness lag runs from `Starting vLLM server on` to the pod's Ready condition.** It
   is the gap between the server listening and the kubelet's probes passing, so the
   replica's probe periods (startup every 15 s, readiness every 10 s) set most of it.
@@ -137,7 +138,7 @@ total, starts at the last scheduling attempt and has no phases.
 - **A missing marker fails the run with its name.** No download line, no `Launched`
   condition, no `Pulled` event (events expired) and a pod that never becomes Ready each
   raise an error naming what was missing, so a run never quietly reports a wrong phase.
-- **The worker's new rights are read-only.** It gets `get`/`list`/`watch` on
+- **The worker's cold-start rights are read-only.** It gets `get`/`list`/`watch` on
   `nodeclaims.karpenter.sh` and `nodes` in a ClusterRole, its first cluster-scoped grants,
   and `list` on `events` in its namespaced Role.
 
@@ -163,7 +164,7 @@ rollout landing mid-run would restart the replica and corrupt the cold start.
 - The breakdown cannot tell a slow image pull's network path from its unpacking, nor
   split node launch into EC2 boot, registration and device-plugin start. Those belong to
   the elimination work.
-- Each run costs about 10 min of on-demand g5.xlarge time plus the reap wait, roughly
-  $0.50, so the default three runs cost about $1.50.
+- Each run holds an on-demand g5.xlarge for about 10 min, plus the reap wait before the
+  next run can start.
 - The Fleet health dashboard's pod-provisioning cold start panel stays as the live total.
   It reads shorter than this ADR's cold start whenever capacity wait is non-zero.
