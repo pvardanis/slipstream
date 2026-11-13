@@ -3,10 +3,11 @@
 # the running prefect-worker images, and the script runs from a throwaway git repo, with
 # content-tag.sh beside it, whose commits stand in for the worker image's commit and
 # main. It checks that a worker on main's latest image passes and shows its config in the
-# job summary, that a worker behind main fails naming a pending rollout and both commits
-# whether or not its config differs from main's, that zero or several running worker
-# images fail while several workers on one image pass, and that a worker commit missing
-# from the history or a failing worker listing fails.
+# job summary, that a flow reading no config passes naming the run and image alone and
+# still fails behind main, that a worker behind main fails naming a pending rollout and
+# both commits whether or not its config differs from main's, that zero or several
+# running worker images fail while several workers on one image pass, and that a worker
+# commit missing from the history or a failing worker listing fails.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -83,6 +84,34 @@ else
   fail "on main: exited non-zero: $(cat "${tmp}/out" "${tmp}/err")"
 fi
 report "${before}" "a worker on main's latest image passes and shows its config in the summary"
+
+# A flow that reads no baked config passes an empty config path: the summary names the
+# run and the worker image alone, and the rollout check still guards it.
+run_check_without_config() {
+  : >"${tmp}/summary"
+  (cd "${repo}" && GITHUB_STEP_SUMMARY="${tmp}/summary" \
+    "${script}" prefect "" "Cold-start breakdown" run-2) >"${tmp}/out" 2>"${tmp}/err"
+}
+
+before="${failures}"
+if WORKER_IMAGES="${worker_image}"$'\n' run_check_without_config; then
+  expected_summary="$(printf '%s\n' "## Cold-start breakdown" "" \
+    "Run \`run-2\` reads no config; it runs worker image \`${worker_image}\`.")"
+  [[ "$(cat "${tmp}/summary")" == "${expected_summary}" ]] ||
+    fail "no config, on main: summary is not the run and image alone: $(cat "${tmp}/summary")"
+else
+  fail "no config, on main: exited non-zero: $(cat "${tmp}/out" "${tmp}/err")"
+fi
+report "${before}" "a flow with no config on main's latest image passes naming the run and image"
+
+before="${failures}"
+if WORKER_IMAGES="${image_repo}:${config_commit:0:12}"$'\n' run_check_without_config; then
+  fail "no config, behind main: exited zero"
+else
+  grep -qF "::error::rollout pending — the worker runs image ${config_commit:0:12}" "${tmp}/out" ||
+    fail "no config, behind main: no rollout-pending message: $(cat "${tmp}/out" "${tmp}/err")"
+fi
+report "${before}" "a flow with no config fails naming a pending rollout when the worker is behind main"
 
 # Each case: a name, the worker's commit, and the config the summary must show.
 while IFS='|' read -r name commit config; do
