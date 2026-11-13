@@ -17,7 +17,6 @@ is registered as a module-path entrypoint on the process pool with no image buil
 import base64
 import inspect
 import logging
-import re
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -61,16 +60,8 @@ from tests.orchestration.bench_endpoint_fakes import (
     RecordingSession,
 )
 from tests.orchestration.cell_object_fakes import ServingCellS3
+from tests.orchestration.cli_output import plain_output
 from tests.orchestration.rollout_freeze_fakes import RecordingFreeze
-
-# Typer colours an option name when a terminal forces colour (CI does), rendering
-# ``--results-dir`` with a reset between the dashes so the literal hides from a
-# substring check. Strip the escapes before asserting on text.
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _plain(output: str) -> str:
-    return _ANSI.sub("", output)
 
 
 @pytest.fixture
@@ -568,7 +559,7 @@ def test_knob_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "No such option: --results-dir" in _plain(result.output)
+    assert "No such option: --results-dir" in plain_output(result.output)
 
 
 def test_point_sweeps_nest_under_the_one_parent_knob_sweep_run(
@@ -1113,7 +1104,7 @@ def test_knob_sweep_rejects_an_instance_id_option(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "No such option: --instance-id" in _plain(result.output)
+    assert "No such option: --instance-id" in plain_output(result.output)
 
 
 @pytest.mark.parametrize("value", [None, ""], ids=["unset", "empty"])

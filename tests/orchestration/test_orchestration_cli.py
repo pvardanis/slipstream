@@ -7,7 +7,6 @@ runs against, so the CLI's context matches a direct :func:`read_serving_config`.
 context it hands the flow and the pointers it echoes are covered without a live run.
 """
 
-import re
 from pathlib import Path
 from typing import cast
 
@@ -18,16 +17,7 @@ from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import app, build_sweep_context
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.point_sweep import SweepContext
-
-# Typer colours an option name when a terminal forces colour (CI does), rendering
-# ``--results-dir`` with a reset between the dashes so the literal hides from a
-# substring check. Strip the escapes before asserting on text.
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _plain(output: str) -> str:
-    return _ANSI.sub("", output)
-
+from tests.orchestration.cli_output import plain_output
 
 _MODEL_YAML = b"model:\n  hfId: Qwen/Qwen2.5-0.5B-Instruct\n"
 _GRID_YAML = b"engine_points: []\n"
@@ -165,4 +155,4 @@ def test_point_sweep_rejects_a_results_dir_option(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "No such option: --results-dir" in _plain(result.output)
+    assert "No such option: --results-dir" in plain_output(result.output)
