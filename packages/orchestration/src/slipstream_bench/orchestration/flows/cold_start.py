@@ -17,7 +17,7 @@ from functools import partial
 
 from slipstream_bench.contract.cold_start_record import ColdStartBreakdown
 from slipstream_bench.orchestration.cluster import Kubectl
-from slipstream_bench.orchestration.cold_start import (
+from slipstream_bench.orchestration.cold_start_cluster import (
     read_cold_start_breakdown,
     scale_replica,
     wait_for_no_gpu_nodeclaim,
