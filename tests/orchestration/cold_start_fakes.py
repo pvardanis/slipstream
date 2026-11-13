@@ -57,8 +57,10 @@ class CyclingCluster(RecordedCluster):
     NodeClaim outlives ``drain_polls`` polls of the GPU pool's NodeClaims before Karpenter
     removes it; scaled back to one, the recorded NodeClaim hosts the new pod. A rollout
     wait returns once the replica is Ready, or fails as ``kubectl`` does on its timeout
-    when ``ready`` is unset. Each step is appended to ``steps``, which a test may share
-    with a recording freeze to place them among its acquire and release.
+    when ``ready`` is unset. A patch whose 0-based number is in ``failing_patches`` fails
+    as ``kubectl`` does when the API server is unreachable. Each step is appended to
+    ``steps``, which a test may share with a recording freeze to place them among its
+    acquire and release.
     """
 
     def __init__(
@@ -67,6 +69,7 @@ class CyclingCluster(RecordedCluster):
         drain_polls: int = 1,
         ready: bool = True,
         steps: list[str] | None = None,
+        failing_patches: set[int] | None = None,
     ) -> None:
         super().__init__()
         warm = deepcopy(self.nodeclaims[0])
@@ -76,11 +79,20 @@ class CyclingCluster(RecordedCluster):
         self.drain_polls = drain_polls
         self.ready = ready
         self.steps = [] if steps is None else steps
+        self.failing_patches = set() if failing_patches is None else failing_patches
+        self.patches = 0
 
     def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
         if "patch" in args:
             self.calls.append(list(args))
-            self._scale(json.loads(args[args.index("-p") + 1])["spec"]["replicas"])
+            replicas = json.loads(args[args.index("-p") + 1])["spec"]["replicas"]
+            self.patches += 1
+            if self.patches - 1 in self.failing_patches:
+                self.steps.append(f"scale {replicas} failed")
+                raise KubectlError(
+                    f"kubectl {' '.join(args)} exited 1: error: the server is unavailable"
+                )
+            self._scale(replicas)
             return ""
         if "rollout" in args:
             self.calls.append(list(args))

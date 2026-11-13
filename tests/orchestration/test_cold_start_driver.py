@@ -10,6 +10,7 @@ faked, by a cluster that replays the recorded cold start (tests/fixtures/cold-st
 import pytest
 
 from slipstream_bench.contract.cold_start_record import ColdStartBreakdown
+from slipstream_bench.orchestration.cluster import KubectlError
 from slipstream_bench.orchestration.cold_start import (
     ColdStartCycleError,
     ColdStartMarkerError,
@@ -107,7 +108,10 @@ def test_a_replica_never_ready_fails_naming_ready_and_is_left_at_zero() -> None:
 
     with pytest.raises(
         ColdStartMarkerError,
-        match=r"vllm-gpu's pod was not Ready within 1200s.*timed out waiting",
+        match=(
+            r"rollout status of deployment vllm-gpu failed: its pod was not Ready "
+            r"within 1200s or kubectl could not read it.*timed out waiting"
+        ),
     ):
         _drive(cluster)
 
@@ -140,3 +144,26 @@ def test_a_warm_node_that_outlives_the_drain_wait_fails_naming_it() -> None:
     # The replica was never scaled back up, and is left at zero.
     assert "scale 1" not in cluster.steps
     assert cluster.steps[-1] == "scale 0"
+
+
+def test_a_failed_scale_up_fails_and_leaves_the_replica_at_zero() -> None:
+    cluster = CyclingCluster(failing_patches={1})
+
+    with pytest.raises(KubectlError, match=r"replicas.*1"):
+        _drive(cluster)
+
+    assert cluster.steps[-2:] == ["scale 1 failed", "scale 0"]
+
+
+def test_a_failed_final_scale_down_raises_over_the_cycle_s_own_error() -> None:
+    cluster = CyclingCluster(failing_patches={2})
+    cluster.events["items"] = [
+        e for e in cluster.events["items"] if e["reason"] != "Pulled"
+    ]
+
+    with pytest.raises(KubectlError) as raised:
+        _drive(cluster)
+
+    # The operator sees the scale-down's error, with the marker error chained under it.
+    assert isinstance(raised.value.__context__, ColdStartMarkerError)
+    assert cluster.steps[-1] == "scale 0 failed"
