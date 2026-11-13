@@ -112,7 +112,7 @@ _RESTARTED_AT_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
 # A cold g5 must be provisioned by Karpenter, pull the ~10 GB image, and load the AWQ
 # weights before the pod goes ready; the manifest's own progressDeadlineSeconds (1200)
 # fails a stalled rollout, so the wait sits at the same ceiling.
-_ROLLOUT_TIMEOUT_S = 1200.0
+ROLLOUT_TIMEOUT_S = 1200.0
 
 # The kubectl transport: run ``kubectl <args>`` with optional stdin, return stdout, and
 # raise on a non-zero exit. Injected so the redeploy and scrape are testable against a
@@ -245,7 +245,7 @@ def deploy_gpu(
     kubectl: Kubectl,
     namespace: str = VLLM_NAMESPACE,
     deployment: str = VLLM_DEPLOYMENT,
-    rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
+    rollout_timeout_s: float = ROLLOUT_TIMEOUT_S,
     restarted_at: str | None = None,
 ) -> None:
     """Redeploy the GPU with the given engine args and offload switch, then wait.
@@ -300,7 +300,7 @@ def deploy_gpu_point(
     kubectl: Kubectl,
     namespace: str = VLLM_NAMESPACE,
     deployment: str = VLLM_DEPLOYMENT,
-    rollout_timeout_s: float = _ROLLOUT_TIMEOUT_S,
+    rollout_timeout_s: float = ROLLOUT_TIMEOUT_S,
 ) -> None:
     """Redeploy the GPU for one engine point's knobs and wait for the rollout (Tier-1).
 
