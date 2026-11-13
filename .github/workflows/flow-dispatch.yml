@@ -234,14 +234,14 @@ jobs:
           fi
 
           # Show the config this run reads in the job summary, and refuse to create the
-          # run unless the one running worker's config is main's (worker-config-check.sh).
+          # run unless the one running worker's config is main's (worker-image-check.sh).
           # The deployment's config parameter is the in-image path (the Dockerfile copies
           # repo files under /app/), so the repo path is that path without the prefix.
           config_path="$(jq -er --arg p "${CONFIG_PARAMETER}" '.parameters[$p]' <<<"${deployment}")" || {
             echo "::error::deployment ${DEPLOYMENT_NAME} has no ${CONFIG_PARAMETER} parameter"
             exit 1
           }
-          orchestration/worker-config-check.sh "${PREFECT_NAMESPACE}" "${config_path#/app/}" \
+          orchestration/worker-image-check.sh "${PREFECT_NAMESPACE}" "${config_path#/app/}" \
             "${CONFIG_HEADING}" "${flow_run_id}"
 
           # Create the run and return; the worker picks it up and runs it to completion

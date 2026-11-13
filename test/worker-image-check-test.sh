@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit test for orchestration/worker-config-check.sh: kubectl is stubbed on PATH to list
+# Unit test for orchestration/worker-image-check.sh: kubectl is stubbed on PATH to list
 # the running prefect-worker images, and the script reads a throwaway git repo whose
 # commits stand in for the worker image's commit and main. It checks that a worker whose
 # config equals main's passes and shows that config in the job summary, that a differing
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script="${repo_root}/orchestration/worker-config-check.sh"
+script="${repo_root}/orchestration/worker-image-check.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 

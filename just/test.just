@@ -50,10 +50,10 @@ orchestration-image-check-test:
 terraform-pin-check-test:
     bash test/terraform-pin-check-test.sh
 
-# Assert worker-config-check.sh passes when the one running worker image's config equals main's, shows it in the job summary, passes with several workers on that one image, and fails on a differing config, on zero or several running worker images, or on a worker commit missing from the history (kubectl stubbed, throwaway git repo).
+# Assert worker-image-check.sh passes when the one running worker image's config equals main's, shows it in the job summary, passes with several workers on that one image, and fails on a differing config, on zero or several running worker images, or on a worker commit missing from the history (kubectl stubbed, throwaway git repo).
 [group('test')]
-worker-config-check-test:
-    bash test/worker-config-check-test.sh
+worker-image-check-test:
+    bash test/worker-image-check-test.sh
 
 # Assert grafana-mcp.sh starts the server read-only at its pinned version with the stack URL, from the environment, tfvars or the grafana stack's state, and the token from the bootstrap secret, and aborts before starting it on a failed read (terraform, aws and uvx stubbed).
 [group('test')]
