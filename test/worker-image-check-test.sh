@@ -5,9 +5,9 @@
 # main. It checks that a worker on main's latest image passes and shows its config in the
 # job summary, that a flow reading no config passes naming the run and image alone and
 # still fails behind main, that a worker behind main fails naming a pending rollout and
-# both commits whether or not its config differs from main's, that zero or several running worker
-# images fail while several workers on one image pass, and that a worker commit missing
-# from the history or a failing worker listing fails.
+# both commits whether or not its config differs from main's, that zero or several
+# running worker images fail while several workers on one image pass, and that a worker
+# commit missing from the history or a failing worker listing fails.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
