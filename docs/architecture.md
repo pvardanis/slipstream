@@ -1,8 +1,8 @@
 # Architecture
 
-Two views of the running system: how code reaches AWS, and how the knob sweep and the
-KV cache A/B measure the GPU replica. The target architecture (routing, autoscaling, P/D
-split) is in [`spec.md`](spec.md) §9.
+Two views of the running system: how code reaches AWS, and how the knob sweep, the
+KV cache A/B and the cold-start breakdown measure the GPU replica. The target
+architecture (routing, autoscaling, P/D split) is in [`spec.md`](spec.md) §9.
 
 ## CI/CD
 
@@ -15,7 +15,7 @@ config:
 flowchart LR
     pr[Pull request] --> ci
     main[Push to main] --> ci & bimg & oimg
-    op([Operator]) -- workflow_dispatch<br/>on main --> sdisp & kdisp
+    op([Operator]) -- workflow_dispatch<br/>on main --> sdisp & kdisp & cdisp
 
     subgraph gha[GitHub Actions]
         ci[ci.yml<br/>prek, pytest, terraform test,<br/>shell tests, no-push image builds]
@@ -23,6 +23,7 @@ flowchart LR
         oimg[orchestration-image.yml]
         sdisp[sweep-dispatch.yml]
         kdisp[kv-ab-dispatch.yml]
+        cdisp[cold-start-dispatch.yml]
         disp[flow-dispatch.yml<br/>reusable body]
     end
 
@@ -38,13 +39,13 @@ flowchart LR
         end
     end
 
-    sdisp & kdisp -- workflow_call --> disp
+    sdisp & kdisp & cdisp -- workflow_call --> disp
     bimg -- OIDC --> brole --> ecr
     oimg -- OIDC --> orole --> ecr
     disp -- OIDC --> drole
     ekslogo ~~~ ps
     drole -- port-forward --> ps
-    disp -- register + run<br/>knob-sweep or<br/>kv-cache-extension-ab --> ps
+    disp -- register + run<br/>knob-sweep,<br/>kv-cache-extension-ab or<br/>cold-start-breakdown --> ps
 ```
 
 - **No long-lived keys.** Every AWS call assumes an OIDC role created by
@@ -56,11 +57,12 @@ flowchart LR
   orchestration image), which only `main` CI publishes
   (`just bench-image` pushes a content tag from a workstation). Pull requests get a
   no-push build in `ci.yml` ([ADR-0008](adr/0008-ci-built-bench-image-and-model-definition.md)).
-- **One dispatch body, two triggers.** `sweep-dispatch` and `kv-ab-dispatch` each call
-  `flow-dispatch.yml`, which looks up the flow's deployment and config parameter in one
-  table, registers the deployment, and starts a run. A called workflow runs in its
-  caller's context and mints the caller's OIDC token, so both triggers assume the same
-  role under the same `main`-only trust.
+- **One dispatch body, three triggers.** `sweep-dispatch`, `kv-ab-dispatch` and
+  `cold-start-dispatch` each call `flow-dispatch.yml`, which looks up the flow's
+  deployment, its config parameter (none for the cold-start breakdown) and whether it
+  takes the bench-client image in one table, registers the deployment, and starts a run.
+  A called workflow runs in its caller's context and mints the caller's OIDC token, so
+  every trigger assumes the same role under the same `main`-only trust.
 - **Flow dispatch is least-privilege.** The role can describe the cluster and list
   buckets. An EKS access entry maps it to a Kubernetes group that can only read and
   port-forward within the Prefect namespace (`terraform/eks`).
@@ -98,13 +100,15 @@ flowchart TB
     ps -- SQLite --> ebs
     ps -- flow run --> pw
     pw -- "Tier 1:<br/>kubectl redeploy<br/>per engine point or A/B arm run" --> vllm
+    pw -- "cold start:<br/>scale 0 → 1 → 0" --> vllm
     pw -- "Tier 2: SSM" --> host
     host -- vllm bench serve --> alb --> vllm
     host -- "result JSON<br/>knob-sweep/run-id/point-slug/,<br/>kv-offload-ab/run-id/arm-rN/" --> s3
     pw -- "charts<br/>knob-sweep/run-id/charts/,<br/>kv-offload-ab/run-id/charts/" --> s3
     pw -- "A/B rung labels<br/>kv-offload-ab/run-id/arm-rN/*.kv_ab.json" --> s3
+    pw -- "cold-start breakdown<br/>cold-start/run-id/r1.json" --> s3
     pw -- "Prefect results + cache keys<br/>prefect/results/, prefect/cache-keys/" --> s3
-    pw -- ceiling and spread tables<br/>as run artifacts --> ps
+    pw -- ceiling, spread and phase tables<br/>as run artifacts --> ps
 ```
 
 - **External vantage.** The bench host sits outside the cluster and reaches vLLM
@@ -136,6 +140,15 @@ flowchart TB
   The workload is [`bench/configs/kv-cache-extension-ab.yaml`](../bench/configs/kv-cache-extension-ab.yaml);
   the refusals and results are in [`operations.md`](operations.md#kv-cache-ab), and the
   decisions in [ADR-0023](adr/0023-kv-cache-extension-cpu-tier-and-ab.md).
+
+- **Cold-start breakdown.** A third flow, `cold-start-breakdown`, on the same worker and
+  pool. It scales the replica to zero, waits until Karpenter has removed every GPU
+  NodeClaim, scales it back to one and waits for Ready, then splits the pod-created →
+  Ready total into capacity wait, node launch, image pull and an unattributed remainder,
+  read from the pod, its NodeClaim and the kubelet events. It leaves the replica at zero
+  and opens no bench endpoint, so the bench host is not on its path. The runbook is in
+  [`operations.md`](operations.md#cold-start-breakdown), and the definitions in
+  [ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md).
 
 ## Terraform stacks
 

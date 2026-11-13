@@ -193,6 +193,73 @@ The chart is public, like the knob sweep's: the bucket serves any `charts/` path
 `kv-offload-ab/` anonymously. So never use `charts` as a run id or a run id segment, or
 that run's raw results become public too.
 
+## Cold-start breakdown
+
+The `cold-start-breakdown` flow (#538) measures one cold start of the GPU replica, from
+its pod being created until the pod is Ready, and splits it into the cluster-side phases
+of [ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md):
+capacity wait (pod created → the hosting NodeClaim's `Launched`), node launch
+(`Launched` → `Initialized`), image pull (kubelet's `Pulling` → `Pulled`), and the
+unattributed remainder, so the phases add up to the total. It runs on the same worker
+and pool as the knob sweep, so it queues behind a sweep or an A/B.
+
+**Every run starts from a true zero.** The run scales `deploy/vllm-gpu` to zero and waits
+up to 15 min for Karpenter to remove every GPU NodeClaim (the GPU pool's
+`consolidateAfter: 1m` reaps an empty node about a minute after scale-down). It then
+scales the replica to one, waits up to 20 min for the pod to go Ready, and reads the
+phases from the pod, its NodeClaim and the kubelet events. **It leaves the replica at
+zero whether it passes or fails**, so no run leaves a GPU node up.
+
+The run opens no bench endpoint and sends no requests. It holds the rollout freeze for
+the cycle, as the knob sweep does, and times out after 1 h. A cancelled, crashed or
+timed-out run scales the replica to zero from a hook, then releases the freeze; the run
+page logs `scaling run <run-id>'s GPU replica to zero` and `scaled run <run-id>'s GPU
+replica to zero`.
+
+**From CI** — Actions → `cold-start-dispatch` → Run workflow, **on `main`**. It takes the
+optional `run_id` input and runs the same steps as `sweep-dispatch`, without the
+bench-client image: the run sends no requests. The job summary names the run and the
+worker image; the flow reads no baked config.
+
+**From a workstation:**
+
+```sh
+just prefect-register-cold-start   # register the deployment on the worker's pool
+just prefect-ui                    # hold a port-forward open; UI at http://localhost:4200
+# in another shell:
+PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run \
+  cold-start-breakdown/cold-start-breakdown \
+  --params '{"run_id": "<run-id>"}'
+```
+
+**Do not run `just gpu-deploy` or `just gpu-up` while a cold start is in flight**: either
+scales the replica up under the run, so the GPU node is never reaped, or the cold start
+reads a pod it did not create. After a run the replica is at zero; `just gpu-up` brings it
+back.
+
+**Failures.** Each fails the run with nothing recorded:
+
+- a GPU NodeClaim still there 15 min after the scale to zero names the NodeClaim; check
+  Karpenter's consolidation of the `gpu` NodePool;
+- a rollout that does not complete within 20 min names the Deployment and kubectl's
+  error; check the pod's events for a capacity shortage or a failing image pull, and the
+  error for a lost API connection or an RBAC denial;
+- a missing marker (no `Pulling` or `Pulled` event, no NodeClaim hosting the pod's node,
+  or a NodeClaim with no `Launched` or `Initialized` condition) names it. Events expire
+  about an hour after they are recorded, and the run reads them as soon as the pod is
+  Ready;
+- any number of pods other than one matching the replica's selector names the count: the
+  breakdown is read from the replica's one pod;
+- an engine container that restarted names its restart count, since its Ready condition
+  then marks its last start; check the engine's previous log.
+
+**Results** land in the bench-results bucket at `cold-start/<run-id>/r1.json`: the total
+and each phase in seconds. The run page shows the same phase table as the
+`cold-start-breakdown` artifact. `just bench-results-sync` does not pull `cold-start/`;
+fetch a record with `aws s3 cp s3://<bucket>/cold-start/<run-id>/r1.json -`. The run
+logs the breakdown before writing it (`cold-start run=<run-id> measured …`), so a failed
+write still leaves the numbers on the run page.
+
 ## One point, prefix cache
 
 Against whatever engine point is currently deployed, over a bench endpoint brought up by
