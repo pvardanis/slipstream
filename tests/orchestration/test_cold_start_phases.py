@@ -54,6 +54,34 @@ def test_another_pods_events_do_not_move_the_image_pull() -> None:
     assert read_cold_start_breakdown(cluster, run=1).image_pull_s == 264.0
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("fieldPath", "spec.initContainers{model-fetch}"), ("kind", "ReplicaSet")],
+)
+def test_an_earlier_pull_by_another_container_or_object_does_not_move_the_image_pull(
+    field: str, value: str
+) -> None:
+    cluster = RecordedCluster()
+    pulling = next(e for e in cluster.events["items"] if e["reason"] == "Pulling")
+    other = deepcopy(pulling)
+    other["involvedObject"][field] = value
+    other["firstTimestamp"] = other["lastTimestamp"] = "2026-11-13T15:22:00Z"
+    cluster.events["items"].insert(0, other)
+
+    assert read_cold_start_breakdown(cluster, run=1).image_pull_s == 264.0
+
+
+def test_a_restarted_engine_container_fails_naming_its_restarts() -> None:
+    cluster = RecordedCluster()
+    cluster.pod["status"]["containerStatuses"][0]["restartCount"] = 2
+
+    with pytest.raises(
+        ColdStartMarkerError,
+        match=r"container vllm of pod vllm-gpu-bcd494f9-xsjvl restarted 2 times",
+    ):
+        read_cold_start_breakdown(cluster, run=1)
+
+
 @pytest.mark.parametrize("condition", ["Launched", "Initialized"])
 def test_a_nodeclaim_missing_a_condition_fails_naming_it(condition: str) -> None:
     cluster = RecordedCluster()
