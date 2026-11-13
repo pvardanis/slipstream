@@ -20,7 +20,10 @@ flow_run_id="$4"
 
 worker_images="$(kubectl -n "${prefect_namespace}" get pods \
   -l app.kubernetes.io/name=prefect-worker --field-selector=status.phase=Running \
-  -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)"
+  -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}' | sort -u)" || {
+  echo "::error::cannot list running prefect-worker pods in namespace ${prefect_namespace}; check the dispatch role's cluster access"
+  exit 1
+}
 if [[ -z "${worker_images}" || "${worker_images}" == *$'\n'* ]]; then
   echo "::error::expected one running prefect-worker image, got: ${worker_images:-none}"
   exit 1

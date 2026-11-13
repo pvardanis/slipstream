@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker config check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, the local Helm chart render check, and the app-of-apps chart's child Applications (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker image check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, the local Helm chart render check, and the app-of-apps chart's child Applications (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -50,7 +50,7 @@ orchestration-image-check-test:
 terraform-pin-check-test:
     bash test/terraform-pin-check-test.sh
 
-# Assert worker-image-check.sh passes when the one running worker image is main's latest, shows its config in the job summary, passes with several workers on that one image, and fails naming a pending rollout when the worker is behind main, on zero or several running worker images, or on a worker commit missing from the history (kubectl stubbed, throwaway git repo).
+# Assert worker-image-check.sh passes when the one running worker image is main's latest, shows its config in the job summary, passes with several workers on that one image, and fails naming a pending rollout when the worker is behind main, on zero or several running worker images, on a worker commit missing from the history, or on a failing worker listing (kubectl stubbed, throwaway git repo).
 [group('test')]
 worker-image-check-test:
     bash test/worker-image-check-test.sh

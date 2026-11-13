@@ -6,19 +6,21 @@
 # job summary, that a worker behind main fails naming a pending rollout and both commits
 # whether or not its config differs from main's, that zero or several running worker
 # images fail while several workers on one image pass, and that a worker commit missing
-# from the history fails.
+# from the history or a failing worker listing fails.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
-# Stub kubectl: answer only the running-worker image query, printing WORKER_IMAGES.
+# Stub kubectl: answer only the running-worker image query, printing WORKER_IMAGES, or
+# failing when KUBECTL_FAILS is set.
 mkdir -p "${tmp}/bin"
 cat >"${tmp}/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 expected="-n prefect get pods -l app.kubernetes.io/name=prefect-worker --field-selector=status.phase=Running -o jsonpath={range .items[*]}{.spec.containers[0].image}{\"\n\"}{end}"
 [[ "$*" == "${expected}" ]] || { echo "unexpected call: $*" >&2; exit 2; }
+[[ -z "${KUBECTL_FAILS:-}" ]] || { echo "error: forbidden" >&2; exit 1; }
 printf '%s' "${WORKER_IMAGES}"
 EOF
 chmod +x "${tmp}/bin/kubectl"
@@ -129,8 +131,19 @@ if WORKER_IMAGES="${image_repo}:000000000000"$'\n' run_check; then
 else
   grep -qxF "::error::cannot read bench/configs/sweep-grid.yaml at worker image commit 000000000000" "${tmp}/out" ||
     fail "unknown commit: no unreadable-config message: $(cat "${tmp}/out" "${tmp}/err")"
+  [[ ! -s "${tmp}/summary" ]] || fail "unknown commit: wrote the summary anyway"
 fi
 report "${before}" "a worker commit main's history lacks fails"
+
+before="${failures}"
+if KUBECTL_FAILS=1 WORKER_IMAGES="${worker_image}"$'\n' run_check; then
+  fail "kubectl failure: exited zero"
+else
+  grep -qxF "::error::cannot list running prefect-worker pods in namespace prefect; check the dispatch role's cluster access" "${tmp}/out" ||
+    fail "kubectl failure: no cluster-access message: $(cat "${tmp}/out" "${tmp}/err")"
+  [[ ! -s "${tmp}/summary" ]] || fail "kubectl failure: wrote the summary anyway"
+fi
+report "${before}" "a failing worker listing fails naming the cluster access"
 
 [[ "${failures}" == 0 ]] || {
   echo "${failures} failure(s)" >&2
