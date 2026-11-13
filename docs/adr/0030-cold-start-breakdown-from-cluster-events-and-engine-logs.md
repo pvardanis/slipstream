@@ -89,7 +89,8 @@ the flow reads from the cluster or the engine's log:**
 - **Engine init starts where `Loading weights took`'s duration starts and ends at `init
   engine (profile, create kv cache, warmup model) took`.** The first line's timer covers
   loading weights onto the GPU and excludes the download; the second covers profiling, KV
-  cache sizing, torch.compile and CUDA graph capture. `Model loading took` was rejected as
+  cache sizing, torch.compile and CUDA graph capture. Weight post-processing runs between
+  the two, so it falls inside engine init. `Model loading took` was rejected as
   a marker: its timer includes the download, so it would count the download twice.
 - **Readiness lag runs from `Starting vLLM server on` to the pod's Ready condition.** It
   is the gap between the server listening and the kubelet's probes passing. Ready can
@@ -100,8 +101,8 @@ the flow reads from the cluster or the engine's log:**
 **Each run reports `unattributed` as its total minus the sum of the six phases**, so the
 stacked bar adds up to the real pod-created → Ready total. It covers the gaps no marker
 bounds: scheduling and sandbox creation between node launch and image pull, container
-start through the engine's imports and process start, model init and weight
-post-processing.
+start through the engine's imports, process start and model init, and the API server's
+start between engine init and `Starting vLLM server on`.
 
 - *Stretching phases to meet each other* was rejected: it would hide a missing or moved
   marker inside a neighbouring phase. A large unattributed share instead points at one.
