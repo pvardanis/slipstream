@@ -134,7 +134,8 @@ def wait_for_replica_ready(
     :param namespace: the namespace the replica runs in.
     :param deployment: the replica's Deployment.
     :param timeout_s: the ceiling the wait trips at.
-    :raise ColdStartMarkerError: when the pod is not Ready within ``timeout_s``.
+    :raise ColdStartMarkerError: when the pod is not Ready within ``timeout_s``, or the
+        rollout cannot be read.
     """
     try:
         kubectl(
@@ -150,8 +151,9 @@ def wait_for_replica_ready(
         )
     except KubectlError as error:
         raise ColdStartMarkerError(
-            f"deployment {deployment}'s pod was not Ready within {timeout_s:.0f}s: the "
-            f"cold start is bounded by its Ready condition ({error})"
+            f"rollout status of deployment {deployment} failed: its pod was not Ready "
+            f"within {timeout_s:.0f}s or kubectl could not read it, and the cold start "
+            f"is bounded by its Ready condition ({error})"
         ) from error
 
 
