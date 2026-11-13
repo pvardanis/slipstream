@@ -16,7 +16,8 @@
 # (results bucket) + SSM SendCommand (bench host), and an in-namespace Role scopes it
 # to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys). The
 # scoped rights to apply and destroy the bench-endpoint stack live beside it in
-# worker_bench_endpoint.tf.
+# worker_bench_endpoint.tf, and the read-only cold-start rights on NodeClaims and nodes
+# in worker_cold_start.tf.
 
 locals {
   worker_service_account = "prefect-worker"
@@ -119,6 +120,14 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Action   = ["s3:PutObject"]
         Resource = "${local.bench_results_arn}/kv-offload-ab/*.kv_ab.json"
       },
+      # The cold-start-breakdown flow writes each run's breakdown record under cold-start/
+      # (ADR-0030). No host writes under that root, so PutObject covers the whole of it.
+      {
+        Sid      = "ColdStartRecordObjects"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${local.bench_results_arn}/cold-start/*"
+      },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;
       # the send is split so the document is unconditional and the instance target is
@@ -182,8 +191,8 @@ resource "kubernetes_namespace_v1" "slipstream" {
   }
 }
 
-# The worker's RBAC, scoped to managing deploy/vllm-gpu and reading its rollout/logs —
-# nothing wider. Namespaced (not a ClusterRole), so the grant can never reach beyond
+# The worker's RBAC, scoped to managing deploy/vllm-gpu and reading its rollout, logs and
+# its pods' events — nothing wider. Namespaced (not a ClusterRole), so the grant can never reach beyond
 # the slipstream namespace.
 resource "kubernetes_role_v1" "vllm_gpu_manage" {
   metadata {
@@ -216,6 +225,13 @@ resource "kubernetes_role_v1" "vllm_gpu_manage" {
     api_groups = [""]
     resources  = ["pods/log"]
     verbs      = ["get"]
+  }
+  # The cold-start-breakdown flow reads kubelet's Pulling/Pulled events for the replica's
+  # pod (ADR-0030); list only, so it cannot create or delete them.
+  rule {
+    api_groups = [""]
+    resources  = ["events"]
+    verbs      = ["list"]
   }
 
   depends_on = [kubernetes_namespace_v1.slipstream]
