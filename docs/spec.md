@@ -391,3 +391,4 @@ map is [Map: slipstream platform spec](https://github.com/pvardanis/slipstream/i
 | Phase sequencing, per-layer DoD, cut markers | [#10](https://github.com/pvardanis/slipstream/issues/10) |
 | Spec assembly (this document) | [#11](https://github.com/pvardanis/slipstream/issues/11) |
 | Deploy substrate: Argo CD | [#36](https://github.com/pvardanis/slipstream/issues/36) · [ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md) |
+| Cold-start breakdown (L2a experiment design) | [#37](https://github.com/pvardanis/slipstream/issues/37) · [ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md) |
