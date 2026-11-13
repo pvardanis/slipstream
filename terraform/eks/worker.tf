@@ -16,7 +16,8 @@
 # (results bucket) + SSM SendCommand (bench host), and an in-namespace Role scopes it
 # to managing deploy/vllm-gpu — nothing wider (no cluster-admin, no static keys). The
 # scoped rights to apply and destroy the bench-endpoint stack live beside it in
-# worker_bench_endpoint.tf.
+# worker_bench_endpoint.tf, and the read-only cold-start rights on NodeClaims and nodes
+# in worker_cold_start.tf.
 
 locals {
   worker_service_account = "prefect-worker"
@@ -216,6 +217,13 @@ resource "kubernetes_role_v1" "vllm_gpu_manage" {
     api_groups = [""]
     resources  = ["pods/log"]
     verbs      = ["get"]
+  }
+  # The cold-start-breakdown flow reads kubelet's Pulling/Pulled events for the replica's
+  # pod (ADR-0030); list only, so it cannot create or delete them.
+  rule {
+    api_groups = [""]
+    resources  = ["events"]
+    verbs      = ["list"]
   }
 
   depends_on = [kubernetes_namespace_v1.slipstream]
