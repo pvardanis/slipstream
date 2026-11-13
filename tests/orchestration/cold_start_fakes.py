@@ -2,8 +2,8 @@
 
 Answers a ``get`` of pods, events or NodeClaims with the recorded objects, as ``kubectl``
 returns them with ``-o json``: the pod and the NodeClaim inside a list, the namespace's
-events as captured. A test edits the loaded objects to drop a marker before replaying, or sets ``pods``
-to list other than the one recorded pod.
+events as captured. A test edits the loaded objects to drop a marker before replaying,
+or sets ``pods`` to list other than the one recorded pod.
 """
 
 import json
