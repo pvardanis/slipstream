@@ -286,8 +286,8 @@ jobs:
       # terraform-pin-check-test stubs nothing: it checks the orchestration Dockerfile's
       # Terraform download against the real mise.lock, and against mutated copies that must
       # fail, so a pin bump that leaves the Dockerfile behind fails here on every PR.
-      # worker-image-check-test stubs kubectl, so no cluster call runs; it reads a
-      # throwaway git repo built in the test, not this checkout's history.
+      # worker-image-check-test stubs kubectl, so no cluster call runs; it derives main's
+      # image from a throwaway git repo built in the test, not this checkout's history.
       - name: Run shell unit tests
         run: |
           set -euo pipefail
