@@ -18,6 +18,7 @@ ahead of the hook that releases the freeze.
 """
 
 import json
+import logging
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -50,6 +51,8 @@ from slipstream_bench.orchestration.flows.run_setup import (
     tag_run_with_group,
 )
 
+# Reaches the run page through the package logger milestone logging lifts (ADR-0020).
+_LOGGER = logging.getLogger(__name__)
 # The results bucket's root for the cold-start experiment (ADR-0024).
 _RECORD_ROOT = "cold-start"
 # One cold start is measured per run id.
@@ -86,8 +89,9 @@ def scale_run_replica_to_zero(
     logger.info("scaled run %s's GPU replica to zero", run_id)
 
 
-# The run's crash and cancellation hooks, in the order they run: the scale to zero before
-# the release, since the release lets Argo CD roll the worker the scale runs in.
+# The run's crash, cancellation and timeout hooks, in the order they run: the scale to
+# zero before the release, since the release lets Argo CD roll the worker the scale runs
+# in.
 _TEARDOWN_HOOKS = (scale_run_replica_to_zero, release_run_rollout_freeze)
 
 
@@ -204,7 +208,8 @@ def record_cold_start(
     """Drive one cold start inside the run's freeze, then record and publish it.
 
     The record is written once the freeze is released and the replica is back at zero,
-    so a write that fails leaves no GPU node up; a cycle that fails records nothing.
+    so a write that fails leaves no GPU node up, and the breakdown is logged first, so it
+    leaves the measurement in the run's log; a cycle that fails records nothing.
 
     :param run_id: the run id the record nests under.
     :param bucket: the results bucket.
@@ -220,13 +225,20 @@ def record_cold_start(
     with freeze:
         breakdown = drive_cold_start(collaborators, run=_RUN)
     key = f"{_RECORD_ROOT}/{run_id}/r{breakdown.run}.json"
+    pointer = f"s3://{bucket}/{key}"
+    # Logged before the write, so a write that fails still leaves the measurement.
+    _LOGGER.info(
+        "cold-start run=%s measured %s; writing it to %s",
+        run_id,
+        breakdown.to_record(),
+        pointer,
+    )
     s3_client.put_object(
         Bucket=bucket,
         Key=key,
         Body=json.dumps(breakdown.to_record()).encode("utf-8"),
         ContentType="application/json",
     )
-    pointer = f"s3://{bucket}/{key}"
     publish_artifact(
         key=_ARTIFACT_KEY,
         markdown=_breakdown_to_markdown(breakdown, run_id=run_id, pointer=pointer),
