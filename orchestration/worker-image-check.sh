@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Check the Prefect worker runs main's copy of a flow's config before flow-dispatch.yml
-# creates a run, and show that config in the job summary. The worker reads the config
-# baked into its image, not this checkout, and the worker image's tag is the last commit
-# that touched the image's inputs, the baked configs among them (orchestration-image.yml),
-# so that commit's copy of the file is the config the worker runs. A config that differs
-# from main's means the worker has not been re-pinned since the config changed. Run from
-# a checkout of main with full history.
+# Check the Prefect worker runs main's latest orchestration image before
+# flow-dispatch.yml creates a run, and show the flow's config in the job summary. The
+# image's tag is the content tag: 12 hex characters of the last commit that touched the
+# image's inputs, flow code and baked configs among them (content-tag.sh). Main's latest
+# image is the one content-tag.sh derives from this checkout, so a worker tag that
+# differs from it means the worker runs code or config main no longer holds: Image
+# Updater has not yet polled the new image, a rollout freeze is holding the rollout back,
+# or the image is still building. The worker reads the config baked into its image, not
+# this checkout, so the summary shows the worker commit's copy. Run from a checkout of
+# main with full history.
 # Usage: worker-image-check.sh <prefect-namespace> <config-repo-path> <summary-heading> <flow-run-id>
 set -euo pipefail
 
@@ -36,10 +39,11 @@ config_yaml="$(git show "${worker_commit}:${config_repo_path}")" || {
   echo "${config_yaml}"
   echo '```'
 } >>"${GITHUB_STEP_SUMMARY}"
-# Refuse to create the run when the worker's config is not main's: the run would
-# execute a config main no longer holds. Checked after the summary, so the job page
-# still shows the config the worker would have run.
-if ! git diff --quiet "${worker_commit}" HEAD -- "${config_repo_path}"; then
-  echo "::error::the worker runs ${config_repo_path} from ${worker_commit}, which differs from main's; re-pin the worker (just cluster-up) and dispatch again"
+# Refuse to create the run unless the worker runs main's latest image: the run would
+# execute flow code or config main no longer holds. Checked after the summary, so the
+# job page still shows the config the worker would have run.
+main_tag="$("$(dirname "${BASH_SOURCE[0]}")/content-tag.sh")"
+if [[ "${worker_commit}" != "${main_tag}" ]]; then
+  echo "::error::rollout pending: the worker runs image ${worker_commit}, main's latest is ${main_tag}; retry once the rollout lands"
   exit 1
 fi

@@ -110,8 +110,8 @@ jobs:
             echo "config_heading=${config_heading}"
           } >>"${GITHUB_OUTPUT}"
 
-      # Full history, so the config summary can read the flow's config at the commit the
-      # worker image was built from, not only at main.
+      # Full history, so the worker check can derive main's image tag (content-tag.sh) and
+      # read the flow's config at the commit the worker image was built from.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -234,7 +234,7 @@ jobs:
           fi
 
           # Show the config this run reads in the job summary, and refuse to create the
-          # run unless the one running worker's config is main's (worker-image-check.sh).
+          # run unless the one running worker runs main's latest image (worker-image-check.sh).
           # The deployment's config parameter is the in-image path (the Dockerfile copies
           # repo files under /app/), so the repo path is that path without the prefix.
           config_path="$(jq -er --arg p "${CONFIG_PARAMETER}" '.parameters[$p]' <<<"${deployment}")" || {

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Unit test for orchestration/worker-image-check.sh: kubectl is stubbed on PATH to list
-# the running prefect-worker images, and the script reads a throwaway git repo whose
-# commits stand in for the worker image's commit and main. It checks that a worker whose
-# config equals main's passes and shows that config in the job summary, that a differing
-# config fails naming the re-pin, that zero or several running worker images fail while
-# several workers on one image pass, and that a worker commit missing from the history
-# fails.
+# the running prefect-worker images, and the script runs from a throwaway git repo, with
+# content-tag.sh beside it, whose commits stand in for the worker image's commit and
+# main. It checks that a worker on main's latest image passes and shows its config in the
+# job summary, that a worker behind main fails naming a pending rollout and both commits
+# whether or not its config differs from main's, that zero or several running worker
+# images fail while several workers on one image pass, and that a worker commit missing
+# from the history fails.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-script="${repo_root}/orchestration/worker-image-check.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
 
@@ -24,24 +24,34 @@ EOF
 chmod +x "${tmp}/bin/kubectl"
 export PATH="${tmp}/bin:${PATH}"
 
-# A repo with a stale config, then the config at the worker's commit, then an unrelated
-# commit on top: HEAD (main) holds the worker's config and not the stale one.
+# A repo with a stale config, then the config the later images hold, then a code-only
+# change (main's latest image), then a commit outside the image's inputs on top: HEAD
+# (main) builds the code-only commit's image, and the image before it holds main's config
+# but not main's code. The script and content-tag.sh run from the repo's orchestration/,
+# so the content tag derives from this repo's history.
 repo="${tmp}/repo"
 git init -q "${repo}"
 git_in_repo() {
   git -C "${repo}" -c user.name=test -c user.email=test@example.com "$@"
 }
-mkdir -p "${repo}/bench/configs"
+mkdir -p "${repo}/bench/configs" "${repo}/packages" "${repo}/orchestration"
 echo "concurrency: [1]" >"${repo}/bench/configs/sweep-grid.yaml"
 git_in_repo add . && git_in_repo commit -qm stale
 stale_commit="$(git_in_repo rev-parse HEAD)"
 echo "concurrency: [1, 2]" >"${repo}/bench/configs/sweep-grid.yaml"
-git_in_repo add . && git_in_repo commit -qm worker
-worker_commit="$(git_in_repo rev-parse HEAD)"
+git_in_repo add . && git_in_repo commit -qm config
+config_commit="$(git_in_repo rev-parse HEAD)"
+echo "flow = 1" >"${repo}/packages/flow.py"
+git_in_repo add . && git_in_repo commit -qm code
+main_commit="$(git_in_repo rev-parse HEAD)"
 echo "unrelated" >"${repo}/README.md"
 git_in_repo add . && git_in_repo commit -qm main
+cp "${repo_root}/orchestration/worker-image-check.sh" "${repo_root}/orchestration/content-tag.sh" \
+  "${repo}/orchestration/"
+script="${repo}/orchestration/worker-image-check.sh"
 image_repo="123.dkr.ecr.eu-west-1.amazonaws.com/slipstream/orchestration"
-worker_image="${image_repo}:${worker_commit}"
+worker_tag="${main_commit:0:12}"
+worker_image="${image_repo}:${worker_tag}"
 
 failures=0
 fail() {
@@ -63,24 +73,30 @@ run_check() {
 
 before="${failures}"
 if WORKER_IMAGES="${worker_image}"$'\n' run_check; then
-  grep -qxF "## Sweep grid" "${tmp}/summary" || fail "matching: no heading in summary"
+  grep -qxF "## Sweep grid" "${tmp}/summary" || fail "on main: no heading in summary"
   grep -qF "Run \`run-1\` reads \`bench/configs/sweep-grid.yaml\` as built into worker image \`${worker_image}\`." \
-    "${tmp}/summary" || fail "matching: summary does not name the run, config and image"
-  grep -qxF "concurrency: [1, 2]" "${tmp}/summary" || fail "matching: summary does not show the config"
+    "${tmp}/summary" || fail "on main: summary does not name the run, config and image"
+  grep -qxF "concurrency: [1, 2]" "${tmp}/summary" || fail "on main: summary does not show the config"
 else
-  fail "matching config: exited non-zero: $(cat "${tmp}/out" "${tmp}/err")"
+  fail "on main: exited non-zero: $(cat "${tmp}/out" "${tmp}/err")"
 fi
-report "${before}" "matching config passes and shows it in the summary"
+report "${before}" "a worker on main's latest image passes and shows its config in the summary"
 
-before="${failures}"
-if WORKER_IMAGES="${image_repo}:${stale_commit}"$'\n' run_check; then
-  fail "differing config: exited zero"
-else
-  expected="::error::the worker runs bench/configs/sweep-grid.yaml from ${stale_commit}, which differs from main's; re-pin the worker (just cluster-up) and dispatch again"
-  grep -qxF "${expected}" "${tmp}/out" || fail "differing config: no re-pin message: $(cat "${tmp}/out" "${tmp}/err")"
-  grep -qxF "concurrency: [1]" "${tmp}/summary" || fail "differing config: summary does not show the worker's config"
-fi
-report "${before}" "differing config fails naming the re-pin, after the summary"
+# Each case: a name, the worker's commit, and the config the summary must show.
+while IFS='|' read -r name commit config; do
+  before="${failures}"
+  if WORKER_IMAGES="${image_repo}:${commit:0:12}"$'\n' run_check; then
+    fail "${name}: exited zero"
+  else
+    expected="::error::rollout pending: the worker runs image ${commit:0:12}, main's latest is ${main_commit:0:12}; retry once the rollout lands"
+    grep -qxF "${expected}" "${tmp}/out" || fail "${name}: no rollout-pending message: $(cat "${tmp}/out" "${tmp}/err")"
+    grep -qxF "${config}" "${tmp}/summary" || fail "${name}: summary does not show the worker's config"
+  fi
+  report "${before}" "${name} fails naming the pending rollout, after the summary"
+done <<CASES
+a worker behind main with main's config|${config_commit}|concurrency: [1, 2]
+a worker behind main with a stale config|${stale_commit}|concurrency: [1]
+CASES
 
 # Each case: a name, the kubectl output, and the image list the error names.
 while IFS='|' read -r name images named; do
@@ -108,10 +124,10 @@ fi
 report "${before}" "two running workers on one image pass"
 
 before="${failures}"
-if WORKER_IMAGES="${image_repo}:0000000"$'\n' run_check; then
+if WORKER_IMAGES="${image_repo}:000000000000"$'\n' run_check; then
   fail "unknown commit: exited zero"
 else
-  grep -qxF "::error::cannot read bench/configs/sweep-grid.yaml at worker image commit 0000000" "${tmp}/out" ||
+  grep -qxF "::error::cannot read bench/configs/sweep-grid.yaml at worker image commit 000000000000" "${tmp}/out" ||
     fail "unknown commit: no unreadable-config message: $(cat "${tmp}/out" "${tmp}/err")"
 fi
 report "${before}" "a worker commit main's history lacks fails"
