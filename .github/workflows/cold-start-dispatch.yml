@@ -1,0 +1,43 @@
+# Manual CI trigger for the cold-start breakdown (#538, ADR-0030), the knob sweep's
+# sweep-dispatch counterpart (ADR-0015 'CI later' arm): a workflow_dispatch that registers
+# the cold-start-breakdown deployment and fires a run of it against a live cluster, from
+# the GitHub UI without a workstation's kubectl. The run cycles the GPU replica through
+# zero, records one cold start's cluster-side phases and leaves the replica at zero; it
+# opens no bench endpoint. The body is flow-dispatch.yml, shared with the other flows'
+# triggers; see it for what each step does and what it leaves to the operator.
+# Dispatch it from main: the OIDC role trusts only main-branch runs.
+name: cold-start-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: >-
+          Run id to tag this run's record under in S3. Leave blank to generate a
+          UTC timestamp (the same default the manual `just bench` arm uses).
+        required: false
+        type: string
+        default: ""
+
+# Least privilege at the top: only read. The trigger job raises id-token for the OIDC
+# exchange the called workflow makes; a called workflow gets no more than its caller grants.
+permissions:
+  contents: read
+
+# The sweep pool is concurrency 1 server-side, so a cold start queues behind a live sweep
+# or A/B rather than cycling the replica under it. This guard only stops two dispatches
+# racing the same trigger; never cancel an in-flight trigger, so a dispatch
+# mid-port-forward is not torn down.
+concurrency:
+  group: cold-start-dispatch
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    permissions:
+      contents: read
+      id-token: write # the OIDC exchange for the sweep-dispatch role
+    uses: ./.github/workflows/flow-dispatch.yml
+    with:
+      flow: cold-start
+      run_id: ${{ inputs.run_id }}

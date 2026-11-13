@@ -1,11 +1,12 @@
 # The shared body of the manual CI triggers for the unattended Prefect flows (ADR-0015 'CI
-# later' arm, ADR-0012 'CI/CD later'): sweep-dispatch.yml calls it for the knob sweep and
-# kv-ab-dispatch.yml for the KV cache A/B. It fires `prefect deployment run` against the
+# later' arm, ADR-0012 'CI/CD later'): sweep-dispatch.yml calls it for the knob sweep,
+# kv-ab-dispatch.yml for the KV cache A/B and cold-start-dispatch.yml for the cold-start
+# breakdown. It fires `prefect deployment run` against the
 # self-hosted, no-public-endpoint Prefect server, so a run is kicked off from the GitHub
 # UI without a workstation's kubectl. It registers the flow's deployment (the same
-# `register-*` command `just prefect-register-sweep` or `just prefect-register-kv-ab`
-# runs), then triggers a run of it against a live cluster; each flow opens and closes its
-# own bench endpoint. Registration overwrites the deployment, so every dispatch runs with
+# `register-*` command its `just prefect-register-*` recipe runs), then triggers a run of
+# it against a live cluster; the sweep and the A/B each open and close their own bench
+# endpoint, and the cold-start breakdown opens none. Registration overwrites the deployment, so every dispatch runs with
 # defaults resolved from the live stack and main, including after a cluster-down wiped the
 # server's SQLite. It does not stand the cluster up (`just stack-up`), which stays a
 # deliberate operator step that brackets the GPU spend (ADR-0015). The run itself executes
@@ -20,7 +21,7 @@ on:
     inputs:
       flow:
         description: >-
-          Which flow to register and trigger: knob-sweep or kv-ab.
+          Which flow to register and trigger: knob-sweep, kv-ab or cold-start.
         required: true
         type: string
       run_id:
@@ -77,8 +78,9 @@ jobs:
       # The one place a flow's per-flow values live: the orchestration CLI
       # command that registers its deployment, the deployment's `<flow>/<deployment>`
       # name, the deployment parameter holding the in-image path of the config the
-      # worker reads, and the job summary's heading for that config. Checked before any
-      # AWS call, so a caller naming an unknown flow fails here.
+      # worker reads (empty for a flow that reads none), the job summary's heading, and
+      # whether the flow takes the bench-client image (only flows that send requests do).
+      # Checked before any AWS call, so a caller naming an unknown flow fails here.
       - name: Resolve the flow's deployment
         id: flow
         env:
@@ -91,15 +93,24 @@ jobs:
               deployment="knob-sweep/knob-sweep"
               config_parameter="sweep_grid"
               config_heading="Sweep grid"
+              bench_image="true"
               ;;
             kv-ab)
               register="register-kv-ab"
               deployment="kv-cache-extension-ab/kv-cache-extension-ab"
               config_parameter="kv_ab_config"
               config_heading="KV cache A/B workload"
+              bench_image="true"
+              ;;
+            cold-start)
+              register="register-cold-start"
+              deployment="cold-start-breakdown/cold-start-breakdown"
+              config_parameter=""
+              config_heading="Cold-start breakdown"
+              bench_image="false"
               ;;
             *)
-              echo "::error::unknown flow '${FLOW}'; expected knob-sweep or kv-ab"
+              echo "::error::unknown flow '${FLOW}'; expected knob-sweep, kv-ab or cold-start"
               exit 1
               ;;
           esac
@@ -108,6 +119,7 @@ jobs:
             echo "deployment=${deployment}"
             echo "config_parameter=${config_parameter}"
             echo "config_heading=${config_heading}"
+            echo "bench_image=${bench_image}"
           } >>"${GITHUB_OUTPUT}"
 
       # Full history, so the worker check can derive main's image tag (content-tag.sh) and
@@ -186,6 +198,7 @@ jobs:
           DEPLOYMENT_NAME: ${{ steps.flow.outputs.deployment }}
           CONFIG_PARAMETER: ${{ steps.flow.outputs.config_parameter }}
           CONFIG_HEADING: ${{ steps.flow.outputs.config_heading }}
+          BENCH_IMAGE: ${{ steps.flow.outputs.bench_image }}
         run: |
           set -euo pipefail
           : "${BUCKET:?resolved results bucket is empty}"
@@ -209,11 +222,12 @@ jobs:
           # Register (or overwrite) the deployment with the resolved defaults; the
           # in-image paths and the sweep-pool work pool keep the command's defaults, as
           # in the `just prefect-register-*` recipes. The command fails if the work pool
-          # is absent.
-          uv run slipstream-orchestrate "${REGISTER}" \
-            --region "${AWS_REGION}" \
-            --bucket "${BUCKET}" \
-            --image-ref "${IMAGE_REF}"
+          # is absent. Only a flow that sends requests takes the bench-client image.
+          register_args=(--region "${AWS_REGION}" --bucket "${BUCKET}")
+          if [[ "${BENCH_IMAGE}" == "true" ]]; then
+            register_args+=(--image-ref "${IMAGE_REF}")
+          fi
+          uv run slipstream-orchestrate "${REGISTER}" "${register_args[@]}"
 
           # `prefect deployment run` only creates the run; it exits 0 whether or not a
           # worker is there to pick it up. Check before creating it that the deployment
@@ -236,11 +250,15 @@ jobs:
           # Show the config this run reads in the job summary, and refuse to create the
           # run unless the one running worker runs main's latest image (worker-image-check.sh).
           # The deployment's config parameter is the in-image path (the Dockerfile copies
-          # repo files under /app/), so the repo path is that path without the prefix.
-          config_path="$(jq -er --arg p "${CONFIG_PARAMETER}" '.parameters[$p]' <<<"${deployment}")" || {
-            echo "::error::deployment ${DEPLOYMENT_NAME} has no ${CONFIG_PARAMETER} parameter"
-            exit 1
-          }
+          # repo files under /app/), so the repo path is that path without the prefix; a
+          # flow that reads no config passes an empty path.
+          config_path=""
+          if [[ -n "${CONFIG_PARAMETER}" ]]; then
+            config_path="$(jq -er --arg p "${CONFIG_PARAMETER}" '.parameters[$p]' <<<"${deployment}")" || {
+              echo "::error::deployment ${DEPLOYMENT_NAME} has no ${CONFIG_PARAMETER} parameter"
+              exit 1
+            }
+          fi
           orchestration/worker-image-check.sh "${PREFECT_NAMESPACE}" "${config_path#/app/}" \
             "${CONFIG_HEADING}" "${flow_run_id}"
 
