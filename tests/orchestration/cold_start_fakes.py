@@ -12,6 +12,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from slipstream_bench.orchestration.cluster import KubectlError
+
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "cold-start"
 
 
@@ -46,3 +48,80 @@ class RecordedCluster:
         if resource == "nodeclaims":
             return {"kind": "List", "items": self.nodeclaims}
         raise AssertionError(f"unexpected kubectl get {resource}")
+
+
+class CyclingCluster(RecordedCluster):
+    """Replay the recorded cold start behind a replica the flow scales to zero and back.
+
+    A ``patch`` of the Deployment sets its replicas. Once scaled to zero, the warm GPU
+    NodeClaim outlives ``drain_polls`` polls of the GPU pool's NodeClaims before Karpenter
+    removes it; scaled back to one, the recorded NodeClaim hosts the new pod. A rollout
+    wait returns once the replica is Ready, or fails as ``kubectl`` does on its timeout
+    when ``ready`` is unset. Each step is appended to ``steps``, which a test may share
+    with a recording freeze to place them among its acquire and release.
+    """
+
+    def __init__(
+        self,
+        *,
+        drain_polls: int = 1,
+        ready: bool = True,
+        steps: list[str] | None = None,
+    ) -> None:
+        super().__init__()
+        warm = deepcopy(self.nodeclaims[0])
+        warm["metadata"]["name"] = "gpu-warm"
+        self.gpu_nodeclaims: list[dict[str, Any]] = [warm]
+        self.replicas = 1
+        self.drain_polls = drain_polls
+        self.ready = ready
+        self.steps = [] if steps is None else steps
+
+    def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
+        if "patch" in args:
+            self.calls.append(list(args))
+            self._scale(json.loads(args[args.index("-p") + 1])["spec"]["replicas"])
+            return ""
+        if "rollout" in args:
+            self.calls.append(list(args))
+            self.steps.append("wait ready")
+            if not self.ready:
+                raise KubectlError(
+                    f"kubectl {' '.join(args)} exited 1: error: timed out waiting for "
+                    f"the condition"
+                )
+            return 'deployment "vllm-gpu" successfully rolled out\n'
+        if "-l" in args and "nodeclaims" in args:
+            self.calls.append(list(args))
+            self.steps.append("poll gpu nodeclaims")
+            return json.dumps({"kind": "List", "items": self._poll_gpu_nodeclaims()})
+        self.steps.append(f"get {args[args.index('get') + 1]}")
+        return super().__call__(args, stdin)
+
+    def _scale(self, replicas: int) -> None:
+        self.steps.append(f"scale {replicas}")
+        self.replicas = replicas
+        if replicas == 1:
+            self.gpu_nodeclaims = deepcopy(self.nodeclaims)
+
+    def _poll_gpu_nodeclaims(self) -> list[dict[str, Any]]:
+        if self.replicas == 0 and self.gpu_nodeclaims and self.drain_polls == 0:
+            self.gpu_nodeclaims = []
+        elif self.replicas == 0:
+            self.drain_polls -= 1
+        return deepcopy(self.gpu_nodeclaims)
+
+
+class FakeClock:
+    """A monotonic clock a poll's sleeps advance, so a timeout elapses instantly."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.sleeps: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.t += seconds
