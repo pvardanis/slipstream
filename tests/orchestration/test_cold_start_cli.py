@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 
 from slipstream_bench.orchestration import cli as cli_module
 from slipstream_bench.orchestration.cli import app
+from tests.orchestration.cli_output import plain_output
 
 _CLUSTER_INPUTS = {"region": "us-east-1", "bucket": "bench-bucket"}
 
@@ -33,7 +34,7 @@ def _invoke(monkeypatch: pytest.MonkeyPatch, **options: str) -> dict[str, Any]:
         argv += [f"--{name}", value]
     result = CliRunner().invoke(app, argv)
     captured["exit_code"] = result.exit_code
-    captured["output"] = result.output
+    captured["output"] = plain_output(result.output)
     return captured
 
 
