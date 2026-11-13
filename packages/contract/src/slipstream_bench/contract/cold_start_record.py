@@ -1,13 +1,14 @@
 """One cold start's breakdown: its pod-created → Ready total split into phases (ADR-0030).
 
 The cold-start-breakdown flow writes one record per run under the results bucket's
-``cold-start`` root, and the report reads only these records. Each phase is a duration
-in seconds bounded by named cluster markers; the unattributed remainder is the total
-minus the phases, so the phases always add up to the cold start. It can read slightly
-negative, since the markers carry up to about a second of rounding.
+``cold-start`` root. Each phase is a duration in seconds bounded by named cluster
+markers; the unattributed remainder is the total minus the phases, so the phases always
+add up to the cold start. The remainder holds scheduling, container start and the
+engine-side phases ADR-0030 reads from the engine's log, so it runs to minutes. It is
+not checked for sign, since the markers carry up to about a second of rounding.
 
 Like the KV cache A/B's record, the module is kept out of the kernel's package surface:
-only the cold-start flow and the report need it.
+only the cold-start flow needs it.
 """
 
 from dataclasses import dataclass
@@ -62,7 +63,7 @@ class ColdStartBreakdown:
         )
 
     def to_record(self) -> dict[str, int | float]:
-        """Return the record the results bucket stores and the report reads.
+        """Return the record the results bucket stores.
 
         :return: the run number, the total, each phase and the unattributed remainder.
         """
