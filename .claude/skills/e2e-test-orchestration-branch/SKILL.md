@@ -14,7 +14,7 @@ The agent runs every command: build, push, the worker swap, registration, grid c
 
 The stack is up (`kubectl -n prefect get deploy prefect-worker` lists it), Docker is running, and the branch's work is committed. If the stack is down, stop and say so; bringing it up is the user's call.
 
-A knob sweep and a KV cache A/B each bring their own bench endpoint and refuse to start while one is up, so before either scenario `terraform -chdir=terraform/bench-endpoint state list` must print nothing; otherwise ask the user to run `just bench-endpoint-down`. Never run `just bench-endpoint-down` or `just stack-down` while a run is in flight: either destroys that run's endpoint.
+A knob sweep and a KV cache A/B each bring their own bench endpoint and refuse to start while one is up, so before either scenario `terraform -chdir=terraform/bench-endpoint state list` must print nothing; otherwise ask the user to run `just bench-endpoint-down`. A checkout that has never initialised that stack answers "Backend initialization required"; initialise it first with `terraform -chdir=terraform/bench-endpoint init -input=false -backend-config="bucket=$(terraform -chdir=terraform/bootstrap output -raw state_bucket_name)"`. Never run `just bench-endpoint-down` or `just stack-down` while a run is in flight: either destroys that run's endpoint.
 
 ## Step 1 — Build and push a `qa-` image
 
@@ -84,6 +84,8 @@ Derive one scenario per behaviour the branch's issues or PRs claim. Give each it
 ```bash
 PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run knob-sweep/knob-sweep \
   --params '{"run_id": "<run-id>", "sweep_grid": "/tmp/<grid>.yaml"}'
+PREFECT_API_URL=http://127.0.0.1:4200/api uv run prefect deployment run kv-cache-extension-ab/kv-cache-extension-ab \
+  --params '{"run_id": "<run-id>", "kv_ab_config": "/tmp/<workload>.yaml"}'
 ```
 
 - Each scenario gets a fresh `run_id`: a rejected cell's JSON stays under its run's S3 prefix and clutters the next look.
