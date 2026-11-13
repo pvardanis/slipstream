@@ -120,6 +120,14 @@ resource "aws_iam_role_policy" "prefect_worker" {
         Action   = ["s3:PutObject"]
         Resource = "${local.bench_results_arn}/kv-offload-ab/*.kv_ab.json"
       },
+      # The cold-start-breakdown flow writes each run's breakdown record under cold-start/
+      # (ADR-0030). No host writes under that root, so PutObject covers the whole of it.
+      {
+        Sid      = "ColdStartRecordObjects"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "${local.bench_results_arn}/cold-start/*"
+      },
       # SendCommand needs the document and the instance both authorized. The document
       # carries no Project tag, so a single tag-conditioned statement would deny it;
       # the send is split so the document is unconditional and the instance target is

@@ -122,8 +122,8 @@ run "worker_layer_shape" {
   # outputs. The host writes the cell result objects the
   # worker reads back; the worker itself writes only its own objects: Prefect's resume
   # state under prefect/, the render tasks' charts under knob-sweep/<run>/charts/ and
-  # kv-offload-ab/<run>/charts/, and the kv-ab flow's rung labels, the *.kv_ab.json
-  # objects under kv-offload-ab/.
+  # kv-offload-ab/<run>/charts/, the kv-ab flow's rung labels, the *.kv_ab.json
+  # objects under kv-offload-ab/, and the cold-start flow's records under cold-start/.
   assert {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ResultsBucketObjects" && contains(s.Action, "s3:GetObject") && s.Resource == "arn:aws:s3:::slipstream-bench-results-abc123/*"]) == 1
     error_message = "The policy must allow s3:GetObject on the bench-results bucket objects, by its exact ARN."
@@ -159,6 +159,13 @@ run "worker_layer_shape" {
     condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "KvAbLabelObjects" && s.Effect == "Allow" && length(s.Action) == 1 && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-results-abc123/kv-offload-ab/*.kv_ab.json")]) == 1
     error_message = "The policy must allow only s3:PutObject on the kv-offload-ab/ *.kv_ab.json labels for the kv-ab flow's rung labels."
   }
+  # The cold-start-breakdown flow writes each run's breakdown record under cold-start/
+  # (ADR-0030). No host writes under that root, so the worker's PutObject covers the whole
+  # root: a separate statement allowing that one action on exactly it.
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.prefect_worker.policy).Statement : s if s.Sid == "ColdStartRecordObjects" && s.Effect == "Allow" && length(s.Action) == 1 && contains(s.Action, "s3:PutObject") && length(try(tolist(s.Resource), [s.Resource])) == 1 && contains(try(tolist(s.Resource), [s.Resource]), "arn:aws:s3:::slipstream-bench-results-abc123/cold-start/*")]) == 1
+    error_message = "The policy must allow only s3:PutObject on the cold-start/ root for the cold-start-breakdown flow's records."
+  }
   # Every PutObject resource across all statements is exactly the worker's own objects,
   # so no added statement or resource lets the worker write the host's raw cell results.
   assert {
@@ -168,8 +175,9 @@ run "worker_layer_shape" {
       "arn:aws:s3:::slipstream-bench-results-abc123/knob-sweep/*/charts/*",
       "arn:aws:s3:::slipstream-bench-results-abc123/kv-offload-ab/*/charts/*",
       "arn:aws:s3:::slipstream-bench-results-abc123/kv-offload-ab/*.kv_ab.json",
+      "arn:aws:s3:::slipstream-bench-results-abc123/cold-start/*",
     ])
-    error_message = "s3:PutObject must cover exactly the worker's prefect state, charts, and kv-ab label objects."
+    error_message = "s3:PutObject must cover exactly the worker's prefect state, charts, kv-ab label and cold-start record objects."
   }
   # Resource is normalised to a list so a bucket-wide grant is caught whether it is
   # written as a bare string or appended to a statement's resource list.
