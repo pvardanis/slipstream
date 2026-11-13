@@ -129,9 +129,10 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 
 - **Rollout** — a change on main reaching the workloads of a live cluster: what a Sentry
   deploy marks, under the release named by main's commit. Not a redeploy.
-- **Rollout freeze** — the hold a knob sweep or KV cache A/B puts on rollouts for its
-  run: no rollout lands under it until it ends, or until its timeout passes if it dies
-  without releasing. Its holder is the run id. A manual sync still goes through.
+- **Rollout freeze** — the hold a knob sweep, KV cache A/B or cold-start breakdown puts
+  on rollouts for its run: no rollout lands under it until it ends, or until its timeout
+  passes if it dies without releasing. Its holder is the run id. A manual sync still goes
+  through.
 
 ## Observability
 
