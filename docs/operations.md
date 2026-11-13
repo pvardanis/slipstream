@@ -145,9 +145,9 @@ same optional inputs as `sweep-dispatch` and runs the same steps: both call
 `.github/workflows/flow-dispatch.yml`. Each dispatch re-registers the deployment with
 defaults from the live stack and the `-main` bench image, so it overwrites any override a
 manual `just prefect-register-kv-ab` set, and runs the workload baked into the running
-worker image. That image is pinned at `cluster-up`, so it can lag `main`; the dispatch
-fails without creating the run when its workload differs from `main`'s, and a re-run of
-`just cluster-up` re-pins it.
+worker image. Image Updater rolls that image to `main`'s latest after its build, unless a
+flow run's rollout freeze holds it back; until it lands, the dispatch fails without
+creating the run, naming both images, and a re-run once it lands goes through.
 
 **From a workstation:**
 

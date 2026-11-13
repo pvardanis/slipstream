@@ -1,4 +1,4 @@
-<!-- ADR recording the deploy substrate (issue #36): Argo CD deploys the cluster's application workloads. Terraform keeps the cluster, the add-ons, IAM and Pod Identity, and installs Argo CD, Image Updater and one root Application, its only handoff to Argo CD; Argo CD owns the Prefect worker and the OTel Collector now and the serving fleet and Router later; the experiment flows keep the bench Engine. Image Updater is the single writer of the worker's image tag; an autoscaled workload's autoscaler alone owns its replicas; a flow run holds a rollout freeze that expires with the flow's timeout, and the worker's RBAC widens only to that freeze's sync windows; the dispatch guard stays, as a tested script; Argo CD Notifications creates the Sentry release marker; Argo Rollouts is the planned path for progressive delivery; the L3 PostHog split and a future Rollouts traffic router would both write HTTPRoute weights. Records why Flux + Flagger, CI-driven Helm and Terraform were rejected. Settles spec §10's open deploy substrate and names §5.1's marker mechanism; builds on ADR-0015's "Argo, if adopted at all, reconciles the L2a production serving deployment" and reuses ADR-0028's hook discipline. Amended with the knob sweep's freeze as built: the 19 h timeout, the window's shape, the failure hooks that tear down a timed-out run, and the Role's patch reaching every field of the AppProject. Amended with Image Updater as built: the ImageUpdater resource that reads the worker app's annotations, its ECR login, the root ignoring the tag it writes, and the worker's bring-up before the first write. -->
+<!-- ADR recording the deploy substrate (issue #36): Argo CD deploys the cluster's application workloads. Terraform keeps the cluster, the add-ons, IAM and Pod Identity, and installs Argo CD, Image Updater and one root Application, its only handoff to Argo CD; Argo CD owns the Prefect worker and the OTel Collector now and the serving fleet and Router later; the experiment flows keep the bench Engine. Image Updater is the single writer of the worker's image tag; an autoscaled workload's autoscaler alone owns its replicas; a flow run holds a rollout freeze that expires with the flow's timeout, and the worker's RBAC widens only to that freeze's sync windows; the dispatch guard stays, as a tested script; Argo CD Notifications creates the Sentry release marker; Argo Rollouts is the planned path for progressive delivery; the L3 PostHog split and a future Rollouts traffic router would both write HTTPRoute weights. Records why Flux + Flagger, CI-driven Helm and Terraform were rejected. Settles spec §10's open deploy substrate and names §5.1's marker mechanism; builds on ADR-0015's "Argo, if adopted at all, reconciles the L2a production serving deployment" and reuses ADR-0028's hook discipline. Amended with the knob sweep's freeze as built: the 19 h timeout, the window's shape, the failure hooks that tear down a timed-out run, and the Role's patch reaching every field of the AppProject. Amended with Image Updater as built: the ImageUpdater resource that reads the worker app's annotations, its ECR login, the root ignoring the tag it writes, and the worker's bring-up before the first write. Amended with the dispatch guard as built: main's latest image is derived from git with content-tag.sh, not read from ECR's `:main`. -->
 
 # ADR-0029: Argo CD deploys the cluster's application workloads
 
@@ -138,9 +138,9 @@ before relying on it at L3.
 - A merge during a flow run waits for it to end. A flow run that crashes without its hooks
   running holds rollouts until its timeout, and a flow run that outlives its timeout is
   failed by Prefect, so the timeout must exceed the longest knob sweep or KV cache A/B.
-- `:main` moves only when the orchestration image build finishes, so between a merge that
-  touches the image's inputs and the end of that build, the dispatch guard passes on a
-  worker running the previous image.
+- Between a merge that touches the image's inputs and the end of that image's build, the
+  dispatch guard fails: the worker runs the previous image, and main's latest is not yet
+  published. A failed build holds dispatches until it is fixed.
 - `just cluster-up` installs Argo CD and Image Updater on every bring-up, and the worker
   and the Collector come up only once Argo CD has synced them.
 - The Image Updater's override lives on the Application, not in git, so git does not show
@@ -258,3 +258,16 @@ and hooks.
   restores the newest content tag (`.claude/skills/e2e-test-orchestration-branch`).
 - **Not yet checked on a live cluster:** that a merge to main rolls the idle worker with
   no `cluster-up`.
+
+## Amendment (2026-11-13, #513): the dispatch guard as built
+
+- **Main's latest image comes from git.** `orchestration/worker-image-check.sh` derives
+  main's latest image tag with `orchestration/content-tag.sh` on the dispatch's checkout
+  of main, the derivation the orchestration image workflow tags with, and compares it to
+  the one running worker's tag. It does not read the image behind `:main` in ECR: the
+  dispatch role holds no ECR rights, and `:main` lags a merge until its build finishes,
+  so a guard keyed on it would pass on a worker running code main no longer holds.
+- **The message.** A differing tag fails the dispatch with "rollout pending — the worker
+  runs image <worker>, main's latest is <main>; retry once it lands, or fix main's
+  orchestration-image run if it failed". The guard still writes the flow's config, as
+  baked into the worker's image, to the job summary first.
