@@ -1,8 +1,8 @@
 # Architecture
 
 Two views of the running system: how code reaches AWS, and how the knob sweep, the
-KV cache A/B and the cold-start breakdown measure the GPU replica. The target architecture (routing, autoscaling, P/D
-split) is in [`spec.md`](spec.md) §9.
+KV cache A/B and the cold-start breakdown measure the GPU replica. The target
+architecture (routing, autoscaling, P/D split) is in [`spec.md`](spec.md) §9.
 
 ## CI/CD
 
