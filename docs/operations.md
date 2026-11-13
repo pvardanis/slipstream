@@ -241,19 +241,24 @@ back.
 
 - a GPU NodeClaim still there 15 min after the scale to zero names the NodeClaim; check
   Karpenter's consolidation of the `gpu` NodePool;
-- a pod not Ready within 20 min names the Deployment and kubectl's error; check the pod's
-  events for a capacity shortage or a failing image pull;
+- a rollout that does not complete within 20 min names the Deployment and kubectl's
+  error; check the pod's events for a capacity shortage or a failing image pull, and the
+  error for a lost API connection or an RBAC denial;
 - a missing marker (no `Pulling` or `Pulled` event, no NodeClaim hosting the pod's node,
   or a NodeClaim with no `Launched` or `Initialized` condition) names it. Events expire
   about an hour after they are recorded, and the run reads them as soon as the pod is
   Ready;
-- more than one pod matching the replica's selector names the count: the breakdown is
-  read from the replica's one pod.
+- any number of pods other than one matching the replica's selector names the count: the
+  breakdown is read from the replica's one pod;
+- an engine container that restarted names its restart count, since its Ready condition
+  then marks its last start; check the engine's previous log.
 
 **Results** land in the bench-results bucket at `cold-start/<run-id>/r1.json`: the total
 and each phase in seconds. The run page shows the same phase table as the
 `cold-start-breakdown` artifact. `just bench-results-sync` does not pull `cold-start/`;
-fetch a record with `aws s3 cp s3://<bucket>/cold-start/<run-id>/r1.json -`.
+fetch a record with `aws s3 cp s3://<bucket>/cold-start/<run-id>/r1.json -`. The run
+logs the breakdown before writing it (`cold-start run=<run-id> measured …`), so a failed
+write still leaves the numbers on the run page.
 
 ## One point, prefix cache
 
