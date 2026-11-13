@@ -6,13 +6,14 @@ total into capacity wait (pod created → the NodeClaim's ``Launched``), node la
 (``Launched`` → ``Initialized``) and image pull (kubelet's ``Pulling`` → ``Pulled`` for
 the engine container); the rest is unattributed.
 
-Kubernetes records these markers to the second. Every event the cluster writes has a
-null ``eventTime``, so an event is timed by its ``firstTimestamp``; repeated events are
-aggregated into one record with a ``count``. The namespace's events also hold other
-objects' events, so they are filtered by the pod's kind and name. Karpenter's NodeClaim
-events are cluster-scoped, so the NodeClaim's times come from its conditions. A missing
-marker raises :class:`ColdStartMarkerError` naming it, so a run never reports a wrong
-phase.
+Kubernetes records these markers to the second. Kubelet's events carry a null
+``eventTime``, so a Pulling or Pulled event is timed by its ``firstTimestamp``; repeated
+events are aggregated into one record with a ``count``. The namespace's events also hold
+other objects' events, so they are filtered by the pod's kind and name and the engine
+container. Karpenter's NodeClaim events are cluster-scoped, so the NodeClaim's times come
+from its conditions. A missing marker raises :class:`ColdStartMarkerError` naming it, so
+a run never reports a wrong phase. So does an engine container that restarted, since the
+Ready condition then marks its last start rather than its cold start.
 """
 
 import json
@@ -51,6 +52,7 @@ def read_cold_start_breakdown(
     :raise ColdStartMarkerError: when a marker a phase is bounded by is missing.
     """
     pod = _get_replica_pod(kubectl, namespace=namespace, selector=selector)
+    _require_no_restarts(pod, container=container)
     created = _parse_time(pod["metadata"]["creationTimestamp"])
     ready = _get_condition_time(pod, "Ready", kind="pod")
     nodeclaim = _get_hosting_nodeclaim(kubectl, pod)
@@ -79,6 +81,17 @@ def _get_replica_pod(
             f"from the replica's one pod once it is Ready"
         )
     return pods[0]
+
+
+def _require_no_restarts(pod: dict[str, Any], *, container: str) -> None:
+    """Fail when the engine container restarted, which moves the Ready condition."""
+    for status in pod.get("status", {}).get("containerStatuses", []):
+        if status["name"] == container and status["restartCount"]:
+            raise ColdStartMarkerError(
+                f"container {container} of pod {pod['metadata']['name']} restarted "
+                f"{status['restartCount']} times: its Ready condition marks its last "
+                f"start, not the cold start, so check the engine's previous log"
+            )
 
 
 def _get_hosting_nodeclaim(kubectl: Kubectl, pod: dict[str, Any]) -> dict[str, Any]:
