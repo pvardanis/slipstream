@@ -39,7 +39,7 @@ flowchart TB
     subgraph gha[GitHub Actions]
         ci[ci.yml<br/>lint, tests, no-push builds]
         img[bench-image /<br/>orchestration-image]
-        disp[sweep-dispatch /<br/>kv-ab-dispatch]
+        disp[sweep-dispatch /<br/>kv-ab-dispatch /<br/>cold-start-dispatch]
     end
 
     subgraph aws[AWS]
@@ -164,6 +164,8 @@ just stack-up             # cluster + Prefect + GPU pool + vLLM
 # a KV cache A/B:          Actions → kv-ab-dispatch → Run workflow (on main)
 # a knob sweep:            Actions → sweep-dispatch → Run workflow (on main)
 #                          each run brings up and destroys its own bench endpoint
+# a cold-start breakdown:  Actions → cold-start-dispatch → Run workflow (on main)
+#                          no bench endpoint; leaves the GPU replica at zero
 just bench-results-sync   # pull results into bench/results/
 just stack-down           # tear down, then zero-leak sweep (spend → 0)
 ```
