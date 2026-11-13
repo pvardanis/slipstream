@@ -52,7 +52,7 @@ from slipstream_bench.orchestration.flows.run_setup import (
 
 # The results bucket's root for the cold-start experiment (ADR-0024).
 _RECORD_ROOT = "cold-start"
-# The tracer bullet measures one cold start per run id.
+# One cold start is measured per run id.
 _RUN = 1
 _ARTIFACT_KEY = "cold-start-breakdown"
 # The run's timeout, which its rollout freeze lasts too: above the cycle's longest
