@@ -1,0 +1,422 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "v1",
+            "count": 37,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T12:33:39Z",
+            "involvedObject": {
+                "apiVersion": "external-secrets.io/v1",
+                "kind": "SecretStore",
+                "name": "aws-secrets-manager",
+                "namespace": "slipstream",
+                "resourceVersion": "2625",
+                "uid": "56b58ff6-6cf5-4d25-8afb-c96c4cd46fa3"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:28:39Z",
+            "message": "store validated",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T12:33:39Z",
+                "name": "aws-secrets-manager.18e79ad5b8de13b7",
+                "namespace": "slipstream",
+                "resourceVersion": "52827",
+                "uid": "7c54621f-21a6-461b-8f4f-30500d6e1ad2"
+            },
+            "reason": "Valid",
+            "reportingComponent": "secret-store",
+            "reportingInstance": "",
+            "source": {
+                "component": "secret-store"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:21:43Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "50590",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:21:43Z",
+            "message": "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector. no new claims to deallocate, preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:21:43Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a4018b74d237",
+                "namespace": "slipstream",
+                "resourceVersion": "50593",
+                "uid": "3d8cc4d4-ad9b-4b78-938f-a977b3d29fe1"
+            },
+            "reason": "FailedScheduling",
+            "reportingComponent": "default-scheduler",
+            "reportingInstance": "",
+            "source": {
+                "component": "default-scheduler"
+            },
+            "type": "Warning"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:21:44Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "50594",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:21:44Z",
+            "message": "Pod should schedule on: nodeclaim/gpu-xqwqj",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:21:44Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a401cd1edb6d",
+                "namespace": "slipstream",
+                "resourceVersion": "50602",
+                "uid": "dcce5487-d295-4cf9-8a24-0904a30440ce"
+            },
+            "reason": "Nominated",
+            "reportingComponent": "karpenter",
+            "reportingInstance": "",
+            "source": {
+                "component": "karpenter"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 4,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:22:13Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "50594",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:22:15Z",
+            "message": "0/2 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 1 node(s) had untolerated taint(s). no new claims to deallocate, preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling.",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:22:13Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a40897d256e9",
+                "namespace": "slipstream",
+                "resourceVersion": "50836",
+                "uid": "b89c0904-ec29-4970-9c0b-e19759642d56"
+            },
+            "reason": "FailedScheduling",
+            "reportingComponent": "default-scheduler",
+            "reportingInstance": "",
+            "source": {
+                "component": "default-scheduler"
+            },
+            "type": "Warning"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 2,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:22:23Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "50751",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:22:25Z",
+            "message": "0/2 nodes are available: 1 Insufficient nvidia.com/gpu, 1 node(s) didn't match Pod's node affinity/selector. no new claims to deallocate, preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling.",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:22:23Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a40aec0dbf5f",
+                "namespace": "slipstream",
+                "resourceVersion": "50968",
+                "uid": "ac7d7581-2b84-45bf-a751-c8b27a01501d"
+            },
+            "reason": "FailedScheduling",
+            "reportingComponent": "default-scheduler",
+            "reportingInstance": "",
+            "source": {
+                "component": "default-scheduler"
+            },
+            "type": "Warning"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:22:33Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "50927",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:22:33Z",
+            "message": "Successfully assigned slipstream/vllm-gpu-bcd494f9-xsjvl to ip-10-0-17-228.eu-west-1.compute.internal",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:22:33Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a40d413d5efb",
+                "namespace": "slipstream",
+                "resourceVersion": "51035",
+                "uid": "67a87718-9336-47fc-b2c2-58dc54aac2cb"
+            },
+            "reason": "Scheduled",
+            "reportingComponent": "default-scheduler",
+            "reportingInstance": "",
+            "source": {
+                "component": "default-scheduler"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:22:33Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "fieldPath": "spec.containers{vllm}",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "51034",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:22:33Z",
+            "message": "Pulling image \"vllm/vllm-openai:v0.29.0\"",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:22:33Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a40d5ff5774b",
+                "namespace": "slipstream",
+                "resourceVersion": "51044",
+                "uid": "2ccbdfb5-6e90-4a2c-87ed-10585c517a0d"
+            },
+            "reason": "Pulling",
+            "reportingComponent": "kubelet",
+            "reportingInstance": "ip-10-0-17-228.eu-west-1.compute.internal",
+            "source": {
+                "component": "kubelet",
+                "host": "ip-10-0-17-228.eu-west-1.compute.internal"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:26:57Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "fieldPath": "spec.containers{vllm}",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "51034",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:26:57Z",
+            "message": "Successfully pulled image \"vllm/vllm-openai:v0.29.0\" in 4m23.973s (4m23.973s including waiting). Image size: 8674228795 bytes.",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:26:57Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a44ad5fbcfcb",
+                "namespace": "slipstream",
+                "resourceVersion": "52328",
+                "uid": "7cb57c97-fc03-4912-a005-58796a3efe16"
+            },
+            "reason": "Pulled",
+            "reportingComponent": "kubelet",
+            "reportingInstance": "ip-10-0-17-228.eu-west-1.compute.internal",
+            "source": {
+                "component": "kubelet",
+                "host": "ip-10-0-17-228.eu-west-1.compute.internal"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:26:58Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "fieldPath": "spec.containers{vllm}",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "51034",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:26:58Z",
+            "message": "Container created",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:26:58Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a44ae2dfdbfa",
+                "namespace": "slipstream",
+                "resourceVersion": "52329",
+                "uid": "f7195d6d-d6e0-447e-94a1-366a1135e824"
+            },
+            "reason": "Created",
+            "reportingComponent": "kubelet",
+            "reportingInstance": "ip-10-0-17-228.eu-west-1.compute.internal",
+            "source": {
+                "component": "kubelet",
+                "host": "ip-10-0-17-228.eu-west-1.compute.internal"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:27:03Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "fieldPath": "spec.containers{vllm}",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "51034",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:27:03Z",
+            "message": "Container started",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:27:03Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a44c16057ab9",
+                "namespace": "slipstream",
+                "resourceVersion": "52355",
+                "uid": "8138d587-1fe8-4e6e-b6e0-976dad2e77a6"
+            },
+            "reason": "Started",
+            "reportingComponent": "kubelet",
+            "reportingInstance": "ip-10-0-17-228.eu-west-1.compute.internal",
+            "source": {
+                "component": "kubelet",
+                "host": "ip-10-0-17-228.eu-west-1.compute.internal"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 15,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:27:03Z",
+            "involvedObject": {
+                "apiVersion": "v1",
+                "fieldPath": "spec.containers{vllm}",
+                "kind": "Pod",
+                "name": "vllm-gpu-bcd494f9-xsjvl",
+                "namespace": "slipstream",
+                "resourceVersion": "51034",
+                "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:30:33Z",
+            "message": "Startup probe failed: Get \"http://10.0.19.46:8000/health\": dial tcp 10.0.19.46:8000: connect: connection refused",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:27:03Z",
+                "name": "vllm-gpu-bcd494f9-xsjvl.18e7a44c31d4256c",
+                "namespace": "slipstream",
+                "resourceVersion": "53378",
+                "uid": "8aad246a-52d9-46fa-b7e2-9f2397fedf41"
+            },
+            "reason": "Unhealthy",
+            "reportingComponent": "kubelet",
+            "reportingInstance": "ip-10-0-17-228.eu-west-1.compute.internal",
+            "source": {
+                "component": "kubelet",
+                "host": "ip-10-0-17-228.eu-west-1.compute.internal"
+            },
+            "type": "Warning"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:21:43Z",
+            "involvedObject": {
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "name": "vllm-gpu-bcd494f9",
+                "namespace": "slipstream",
+                "resourceVersion": "50586",
+                "uid": "92f2269c-f548-482c-b4c9-83094a4610c8"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:21:43Z",
+            "message": "Created pod: vllm-gpu-bcd494f9-xsjvl",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:21:43Z",
+                "name": "vllm-gpu-bcd494f9.18e7a4018b4b496e",
+                "namespace": "slipstream",
+                "resourceVersion": "50591",
+                "uid": "7066a822-61d0-4819-b6f6-0ee953eac7f7"
+            },
+            "reason": "SuccessfulCreate",
+            "reportingComponent": "replicaset-controller",
+            "reportingInstance": "",
+            "source": {
+                "component": "replicaset-controller"
+            },
+            "type": "Normal"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-13T15:21:43Z",
+            "involvedObject": {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "name": "vllm-gpu",
+                "namespace": "slipstream",
+                "resourceVersion": "50585",
+                "uid": "81942bb2-9b15-427c-a69e-13005f72156f"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-13T15:21:43Z",
+            "message": "Scaled up replica set vllm-gpu-bcd494f9 from 0 to 1",
+            "metadata": {
+                "creationTimestamp": "2026-11-13T15:21:43Z",
+                "name": "vllm-gpu.18e7a4018a05921a",
+                "namespace": "slipstream",
+                "resourceVersion": "50588",
+                "uid": "e69f2b42-ea9c-4fbb-b5bb-21d204347b1c"
+            },
+            "reason": "ScalingReplicaSet",
+            "reportingComponent": "deployment-controller",
+            "reportingInstance": "",
+            "source": {
+                "component": "deployment-controller"
+            },
+            "type": "Normal"
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

@@ -1,0 +1,376 @@
+{
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+        "creationTimestamp": "2026-11-13T15:21:43Z",
+        "generateName": "vllm-gpu-bcd494f9-",
+        "generation": 1,
+        "labels": {
+            "app": "vllm-gpu",
+            "pod-template-hash": "bcd494f9",
+            "topology.kubernetes.io/region": "eu-west-1",
+            "topology.kubernetes.io/zone": "eu-west-1b"
+        },
+        "name": "vllm-gpu-bcd494f9-xsjvl",
+        "namespace": "slipstream",
+        "ownerReferences": [
+            {
+                "apiVersion": "apps/v1",
+                "blockOwnerDeletion": true,
+                "controller": true,
+                "kind": "ReplicaSet",
+                "name": "vllm-gpu-bcd494f9",
+                "uid": "92f2269c-f548-482c-b4c9-83094a4610c8"
+            }
+        ],
+        "resourceVersion": "53450",
+        "uid": "5089ef57-9faa-412f-a8d3-ddd8119f35a5"
+    },
+    "spec": {
+        "containers": [
+            {
+                "args": [
+                    "--model",
+                    "Qwen/Qwen3-8B-AWQ",
+                    "--revision",
+                    "4da05a8edb55c6046cce958586c33b61da07bb79",
+                    "--quantization",
+                    "awq_marlin",
+                    "--kv-cache-dtype",
+                    "fp8",
+                    "--tensor-parallel-size",
+                    "1",
+                    "--max-model-len",
+                    "4096",
+                    "--gpu-memory-utilization",
+                    "0.90",
+                    "--kv-cache-memory-bytes",
+                    "None",
+                    "--max-num-seqs",
+                    "64",
+                    "--enable-prefix-caching",
+                    "--kv-transfer-config",
+                    "None",
+                    "--otlp-traces-endpoint",
+                    "grpc://otel-collector.slipstream.svc:4317"
+                ],
+                "env": [
+                    {
+                        "name": "VLLM_API_KEY",
+                        "valueFrom": {
+                            "secretKeyRef": {
+                                "key": "api-key",
+                                "name": "vllm-api-key"
+                            }
+                        }
+                    },
+                    {
+                        "name": "LMCACHE_LOCAL_CPU",
+                        "value": "True"
+                    },
+                    {
+                        "name": "LMCACHE_MAX_LOCAL_CPU_SIZE",
+                        "value": "4.0"
+                    },
+                    {
+                        "name": "LMCACHE_CHUNK_SIZE",
+                        "value": "256"
+                    },
+                    {
+                        "name": "OTEL_EXPORTER_OTLP_TRACES_INSECURE",
+                        "value": "true"
+                    },
+                    {
+                        "name": "OTEL_SERVICE_NAME",
+                        "value": "vllm"
+                    },
+                    {
+                        "name": "POD_NAME",
+                        "valueFrom": {
+                            "fieldRef": {
+                                "apiVersion": "v1",
+                                "fieldPath": "metadata.name"
+                            }
+                        }
+                    },
+                    {
+                        "name": "OTEL_RESOURCE_ATTRIBUTES",
+                        "value": "k8s.pod.name=$(POD_NAME)"
+                    }
+                ],
+                "image": "vllm/vllm-openai:v0.29.0",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                    "failureThreshold": 3,
+                    "httpGet": {
+                        "path": "/health",
+                        "port": "http",
+                        "scheme": "HTTP"
+                    },
+                    "periodSeconds": 30,
+                    "successThreshold": 1,
+                    "timeoutSeconds": 1
+                },
+                "name": "vllm",
+                "ports": [
+                    {
+                        "containerPort": 8000,
+                        "name": "http",
+                        "protocol": "TCP"
+                    }
+                ],
+                "readinessProbe": {
+                    "failureThreshold": 3,
+                    "httpGet": {
+                        "path": "/health",
+                        "port": "http",
+                        "scheme": "HTTP"
+                    },
+                    "periodSeconds": 10,
+                    "successThreshold": 1,
+                    "timeoutSeconds": 1
+                },
+                "resources": {
+                    "limits": {
+                        "memory": "8Gi",
+                        "nvidia.com/gpu": "1"
+                    },
+                    "requests": {
+                        "cpu": "2",
+                        "memory": "8Gi",
+                        "nvidia.com/gpu": "1"
+                    }
+                },
+                "startupProbe": {
+                    "failureThreshold": 80,
+                    "httpGet": {
+                        "path": "/health",
+                        "port": "http",
+                        "scheme": "HTTP"
+                    },
+                    "periodSeconds": 15,
+                    "successThreshold": 1,
+                    "timeoutSeconds": 1
+                },
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                    {
+                        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                        "name": "kube-api-access-jd7md",
+                        "readOnly": true
+                    }
+                ]
+            }
+        ],
+        "dnsPolicy": "ClusterFirst",
+        "enableServiceLinks": false,
+        "nodeName": "ip-10-0-17-228.eu-west-1.compute.internal",
+        "nodeSelector": {
+            "nvidia.com/gpu": "true"
+        },
+        "preemptionPolicy": "PreemptLowerPriority",
+        "priority": 0,
+        "restartPolicy": "Always",
+        "schedulerName": "default-scheduler",
+        "securityContext": {},
+        "serviceAccount": "default",
+        "serviceAccountName": "default",
+        "terminationGracePeriodSeconds": 30,
+        "tolerations": [
+            {
+                "effect": "NoSchedule",
+                "key": "nvidia.com/gpu",
+                "operator": "Equal",
+                "value": "true"
+            },
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/not-ready",
+                "operator": "Exists",
+                "tolerationSeconds": 300
+            },
+            {
+                "effect": "NoExecute",
+                "key": "node.kubernetes.io/unreachable",
+                "operator": "Exists",
+                "tolerationSeconds": 300
+            },
+            {
+                "effect": "NoSchedule",
+                "key": "nvidia.com/gpu",
+                "operator": "Exists"
+            }
+        ],
+        "volumes": [
+            {
+                "name": "kube-api-access-jd7md",
+                "projected": {
+                    "defaultMode": 420,
+                    "sources": [
+                        {
+                            "serviceAccountToken": {
+                                "expirationSeconds": 3607,
+                                "path": "token"
+                            }
+                        },
+                        {
+                            "configMap": {
+                                "items": [
+                                    {
+                                        "key": "ca.crt",
+                                        "path": "ca.crt"
+                                    }
+                                ],
+                                "name": "kube-root-ca.crt"
+                            }
+                        },
+                        {
+                            "downwardAPI": {
+                                "items": [
+                                    {
+                                        "fieldRef": {
+                                            "apiVersion": "v1",
+                                            "fieldPath": "metadata.namespace"
+                                        },
+                                        "path": "namespace"
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    },
+    "status": {
+        "allocatedResources": {
+            "cpu": "2",
+            "memory": "8Gi",
+            "nvidia.com/gpu": "1"
+        },
+        "conditions": [
+            {
+                "lastProbeTime": null,
+                "lastTransitionTime": "2026-11-13T15:22:33Z",
+                "observedGeneration": 1,
+                "status": "True",
+                "type": "PodReadyToStartContainers"
+            },
+            {
+                "lastProbeTime": null,
+                "lastTransitionTime": "2026-11-13T15:22:33Z",
+                "observedGeneration": 1,
+                "status": "True",
+                "type": "Initialized"
+            },
+            {
+                "lastProbeTime": null,
+                "lastTransitionTime": "2026-11-13T15:30:48Z",
+                "observedGeneration": 1,
+                "status": "True",
+                "type": "Ready"
+            },
+            {
+                "lastProbeTime": null,
+                "lastTransitionTime": "2026-11-13T15:30:48Z",
+                "observedGeneration": 1,
+                "status": "True",
+                "type": "ContainersReady"
+            },
+            {
+                "lastProbeTime": null,
+                "lastTransitionTime": "2026-11-13T15:22:33Z",
+                "observedGeneration": 1,
+                "status": "True",
+                "type": "PodScheduled"
+            }
+        ],
+        "containerStatuses": [
+            {
+                "allocatedResources": {
+                    "cpu": "2",
+                    "memory": "8Gi",
+                    "nvidia.com/gpu": "1"
+                },
+                "allocatedResourcesStatus": [
+                    {
+                        "name": "nvidia.com/gpu",
+                        "resources": [
+                            {
+                                "health": "Healthy",
+                                "resourceID": "GPU-c127eab5-6acc-9372-4c49-f53e66b920bc"
+                            }
+                        ]
+                    }
+                ],
+                "containerID": "containerd://bb04db13ee5cb29850077c50a861edb8357ae67e61f4e3af83705c4f6342d864",
+                "image": "docker.io/vllm/vllm-openai:v0.29.0",
+                "imageID": "docker.io/vllm/vllm-openai@sha256:c2914767605584b6d8f45686b82de173ecc99e781897aa3d0a66dacd72c51ae1",
+                "lastState": {},
+                "name": "vllm",
+                "ready": true,
+                "resources": {
+                    "limits": {
+                        "memory": "8Gi",
+                        "nvidia.com/gpu": "1"
+                    },
+                    "requests": {
+                        "cpu": "2",
+                        "memory": "8Gi",
+                        "nvidia.com/gpu": "1"
+                    }
+                },
+                "restartCount": 0,
+                "started": true,
+                "state": {
+                    "running": {
+                        "startedAt": "2026-11-13T15:27:03Z"
+                    }
+                },
+                "user": {
+                    "linux": {
+                        "gid": 0,
+                        "supplementalGroups": [
+                            0
+                        ],
+                        "uid": 0
+                    }
+                },
+                "volumeMounts": [
+                    {
+                        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                        "name": "kube-api-access-jd7md",
+                        "readOnly": true,
+                        "recursiveReadOnly": "Disabled"
+                    }
+                ]
+            }
+        ],
+        "hostIP": "10.0.17.228",
+        "hostIPs": [
+            {
+                "ip": "10.0.17.228"
+            }
+        ],
+        "observedGeneration": 1,
+        "phase": "Running",
+        "podIP": "10.0.19.46",
+        "podIPs": [
+            {
+                "ip": "10.0.19.46"
+            }
+        ],
+        "qosClass": "Burstable",
+        "resources": {
+            "limits": {
+                "memory": "8Gi"
+            },
+            "requests": {
+                "cpu": "1999m",
+                "memory": "8Gi"
+            }
+        },
+        "startTime": "2026-11-13T15:22:33Z"
+    }
+}
