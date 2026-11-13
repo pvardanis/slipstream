@@ -123,15 +123,24 @@ prefect-register-sweep: (_prefect-register "knob-sweep")
 [group('prefect')]
 prefect-register-kv-ab: (_prefect-register "kv-ab")
 
+# A cold-start breakdown is then triggered with `prefect deployment run
+# cold-start-breakdown/cold-start-breakdown --params '{"run_id": "..."}'` and picked up by
+# the in-cluster worker; it sends no requests, so it registers no bench-client image. Run
+# it after `prefect-up`; `_prefect-register` holds what registration stores.
+# Register the cold-start-breakdown deployment on the process work pool.
+[group('prefect')]
+prefect-register-cold-start: (_prefect-register "cold-start" "false")
+
 # Register one deployment with `slipstream-orchestrate register-<deployment>`. The
 # worker runs the baked orchestration image, so the deployment stores a module-path
 # entrypoint resolved by import — no source is fetched and no image is built for the
 # process pool. Registration hits the in-cluster Prefect API over a transient
 # port-forward (reaped on exit), the same way `prefect-up` creates the pool. The
 # cluster-stable inputs become the deployment's default parameters: region and results
-# bucket are read from terraform, the bench-client image from `_bench-image-ref`; run_id
-# is supplied per run at trigger.
-_prefect-register deployment: _bootstrap-init
+# bucket are read from terraform, the bench-client image from `_bench-image-ref` unless
+# `bench_image` is false, for a flow that runs no bench client; run_id is supplied per run
+# at trigger.
+_prefect-register deployment bench_image="true": _bootstrap-init
     #!/usr/bin/env bash
     set -euo pipefail
     # Bare assignments so a failed output lookup aborts; the non-empty checks then catch
@@ -142,10 +151,15 @@ _prefect-register deployment: _bootstrap-init
     [[ -n "${region}" ]] || { echo "eks output region is empty" >&2; exit 1; }
     bucket="$(terraform -chdir={{ bootstrap_dir }} output -raw bench_results_bucket_name)"
     [[ -n "${bucket}" ]] || { echo "bootstrap output bench_results_bucket_name is empty" >&2; exit 1; }
-    # Forward bench_image_tag into the nested call: a command-line override does not cross
-    # into a child `just`, so an unforwarded pin would fall back to the floating main tag.
-    image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
-    [[ -n "${image}" ]] || { echo "_bench-image-ref resolved empty" >&2; exit 1; }
+    image_args=()
+    if [[ "{{ bench_image }}" == "true" ]]; then
+      # Forward bench_image_tag into the nested call: a command-line override does not
+      # cross into a child `just`, so an unforwarded pin would fall back to the floating
+      # main tag.
+      image="$(just bench_image_tag='{{ bench_image_tag }}' _bench-image-ref)"
+      [[ -n "${image}" ]] || { echo "_bench-image-ref resolved empty" >&2; exit 1; }
+      image_args=(--image-ref "${image}")
+    fi
     # Reach the API over a transient port-forward (reaped on exit), so registration needs
     # no public endpoint.
     source orchestration/prefect-portforward.sh
@@ -154,7 +168,7 @@ _prefect-register deployment: _bootstrap-init
     uv run slipstream-orchestrate register-{{ deployment }} \
       --region "${region}" \
       --bucket "${bucket}" \
-      --image-ref "${image}" \
+      ${image_args[@]+"${image_args[@]}"} \
       --work-pool {{ prefect_work_pool }}
 
 # Port-forward the Prefect UI/API to localhost and hold it open (Ctrl-C to stop).

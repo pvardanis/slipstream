@@ -8,7 +8,8 @@ ladder, skipping a point whose cells already hold valid measurements. ``point-sw
 ``knob-sweep`` runs per point, kept its own command for driving one point by hand.
 ``register-knob-sweep`` registers ``knob-sweep`` as a Prefect deployment on the process
 work pool, the entrypoint the EKS worker runs unattended; ``register-kv-ab`` registers the
-KV cache offload A/B (#326) the same way.
+KV cache offload A/B (#326) the same way, and ``register-cold-start`` the cold-start
+breakdown (ADR-0030).
 
 The two sweep commands read the point context and the run-wide config digest inputs, and
 wire the S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
@@ -26,6 +27,7 @@ from prefect.exceptions import ObjectNotFound
 
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
+from slipstream_bench.orchestration.flows.cold_start import cold_start_flow
 from slipstream_bench.orchestration.flows.knob_sweep import knob_sweep_flow
 from slipstream_bench.orchestration.flows.kv_ab import ENGINE_METRICS_URL, kv_ab_flow
 from slipstream_bench.orchestration.flows.point_sweep import (
@@ -340,6 +342,39 @@ def register_kv_ab(
     typer.echo(f"registered kv-cache-extension-ab deployment {deployment_id}")
 
 
+@app.command("register-cold-start")
+def register_cold_start(
+    *,
+    region: Annotated[str, typer.Option(help="AWS region of the results bucket.")],
+    bucket: Annotated[str, typer.Option(help="Results bucket (RESULTS_BUCKET).")],
+    work_pool: Annotated[
+        str, typer.Option(help="Process work pool the sweep worker polls.")
+    ] = "sweep-pool",
+) -> None:
+    """Register the cold-start-breakdown deployment on the process work pool (ADR-0030).
+
+    Creates the deployment a run triggers with the run id alone. Registered as
+    ``register-knob-sweep`` registers the knob sweep: a module-path entrypoint, no image
+    build, the cluster-stable inputs as default parameters. The run sends no requests, so
+    no bench-client image is a parameter. Region and bucket are checked non-empty and the
+    work pool present first.
+
+    :param region: AWS region of the results bucket.
+    :param bucket: results bucket (RESULTS_BUCKET).
+    :param work_pool: process work pool the sweep worker polls.
+    """
+    _require_cluster_inputs(region=region, bucket=bucket, work_pool=work_pool)
+    deployment_id = cold_start_flow.deploy(
+        name="cold-start-breakdown",
+        work_pool_name=work_pool,
+        entrypoint_type=EntrypointType.MODULE_PATH,
+        build=False,
+        push=False,
+        parameters={"region": region, "bucket": bucket},
+    )
+    typer.echo(f"registered cold-start-breakdown deployment {deployment_id}")
+
+
 def build_sweep_context(
     *,
     run_id: str,
@@ -384,22 +419,17 @@ def build_sweep_context(
     )
 
 
-def _require_cluster_inputs(
-    *, region: str, bucket: str, image_ref: str, work_pool: str
-) -> None:
+def _require_cluster_inputs(*, work_pool: str, **inputs: str) -> None:
     """Reject an empty cluster-stable input, then check the work pool is present.
 
+    :param work_pool: the process work pool the deployment targets.
+    :param inputs: the command's other cluster-stable inputs, keyed by parameter name.
     :raise typer.BadParameter: when an input is blank or the work pool is absent.
     """
-    for name, value in (
-        ("region", region),
-        ("bucket", bucket),
-        ("image-ref", image_ref),
-        ("work-pool", work_pool),
-    ):
+    for name, value in {**inputs, "work_pool": work_pool}.items():
         if not value.strip():
             raise typer.BadParameter(
-                "must be a non-empty string", param_hint=f"--{name}"
+                "must be a non-empty string", param_hint=f"--{name.replace('_', '-')}"
             )
     _require_work_pool(work_pool)
 
