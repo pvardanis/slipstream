@@ -1,10 +1,10 @@
 # The Prefect worker's cold-start rights (ADR-0030): the cold-start-breakdown flow waits
 # until no GPU NodeClaim remains before it scales the replica up, then reads the hosting
-# NodeClaim's Launched and Initialized conditions. NodeClaims and nodes are cluster-scoped,
-# so this is the worker's first ClusterRole; it is read-only (get, list, watch) on those
-# two resources and nothing else. The flow's list on events sits in the namespaced
-# vllm-gpu-manage Role (worker.tf), and scaling the replica uses that Role's patch on the
-# Deployment.
+# NodeClaim's Launched and Initialized conditions. The read on nodes is the one ADR-0030
+# grants with it. NodeClaims and nodes are cluster-scoped, so the read sits in a
+# ClusterRole; it is read-only (get, list, watch) on those two resources and nothing
+# else. The flow's list on events sits in the namespaced vllm-gpu-manage Role
+# (worker.tf), and scaling the replica uses that Role's patch on the Deployment.
 resource "kubernetes_cluster_role_v1" "cold_start_read" {
   metadata {
     name = "cold-start-read"

@@ -191,8 +191,8 @@ resource "kubernetes_namespace_v1" "slipstream" {
   }
 }
 
-# The worker's RBAC, scoped to managing deploy/vllm-gpu and reading its rollout/logs —
-# nothing wider. Namespaced (not a ClusterRole), so the grant can never reach beyond
+# The worker's RBAC, scoped to managing deploy/vllm-gpu and reading its rollout, logs and
+# its pods' events — nothing wider. Namespaced (not a ClusterRole), so the grant can never reach beyond
 # the slipstream namespace.
 resource "kubernetes_role_v1" "vllm_gpu_manage" {
   metadata {
