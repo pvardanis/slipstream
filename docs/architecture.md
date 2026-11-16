@@ -144,8 +144,9 @@ flowchart TB
 - **Cold-start breakdown.** A third flow, `cold-start-breakdown`, on the same worker and
   pool. It scales the replica to zero, waits until Karpenter has removed every GPU
   NodeClaim, scales it back to one and waits for Ready, then splits the pod-created →
-  Ready total into capacity wait, node launch, image pull and an unattributed remainder,
-  read from the pod, its NodeClaim and the kubelet events. It leaves the replica at zero
+  Ready total into capacity wait, node launch, image pull, weight download, engine init,
+  readiness lag and an unattributed remainder, read from the pod, its NodeClaim, the
+  kubelet events and the engine's log. It leaves the replica at zero
   and opens no bench endpoint, so the bench host is not on its path. The runbook is in
   [`operations.md`](operations.md#cold-start-breakdown), and the definitions in
   [ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md).

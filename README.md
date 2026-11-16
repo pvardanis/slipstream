@@ -194,8 +194,9 @@ The platform runs three kinds of benchmark:
 - **Cold-start breakdown** measures how long the GPU replica takes to serve from zero.
   It scales vLLM to zero, waits until Karpenter has removed the GPU node, scales back to
   one, and splits the pod-created → Ready time into capacity wait, node launch, image
-  pull and an unattributed remainder, read from the pod's and NodeClaim's conditions and
-  kubelet's image-pull events ([ADR-0030](docs/adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md)).
+  pull, weight download, engine init, readiness lag and an unattributed remainder, read
+  from the pod's and NodeClaim's conditions, kubelet's image-pull events and the engine's
+  startup log ([ADR-0030](docs/adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md)).
   It sends no requests and leaves the replica at zero.
 
 Each is a Prefect flow run you follow from the UI (`just prefect-ui`). These are from KV
