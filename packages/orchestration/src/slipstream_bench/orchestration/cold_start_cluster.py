@@ -289,13 +289,16 @@ def _read_engine_phases(
     loaded, loading_s = found[_LOADING_WEIGHTS][0]
     initialized, _ = found[_INIT_ENGINE][0]
     serving, _ = found[_SERVER_START][0]
+    _, torch_compile_s = found[_TORCH_COMPILE][0]
+    _, profiling_run_s = found[_PROFILING_RUN][0]
+    graph_capture_s = sum(seconds for _, seconds in found[_GRAPH_CAPTURE])
     return _EnginePhases(
         weight_download_s=round(download_s, SECONDS_DECIMALS),
         engine_init_s=_seconds(loaded - timedelta(seconds=loading_s), initialized),
         readiness_lag_s=_seconds(serving, ready),
-        torch_compile_s=found[_TORCH_COMPILE][0][1],
-        graph_capture_s=sum(seconds for _, seconds in found[_GRAPH_CAPTURE]),
-        profiling_run_s=found[_PROFILING_RUN][0][1],
+        torch_compile_s=round(torch_compile_s, SECONDS_DECIMALS),
+        graph_capture_s=round(graph_capture_s, SECONDS_DECIMALS),
+        profiling_run_s=round(profiling_run_s, SECONDS_DECIMALS),
     )
 
 
@@ -408,7 +411,7 @@ def _get_json(kubectl: Kubectl, args: list[str]) -> dict[str, Any]:
 
 
 def _parse_time(stamp: str) -> datetime:
-    """Parse a Kubernetes RFC 3339 timestamp."""
+    """Parse an RFC 3339 timestamp from a Kubernetes object or a log line's prefix."""
     return datetime.fromisoformat(stamp)
 
 

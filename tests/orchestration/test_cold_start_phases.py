@@ -23,7 +23,7 @@ from slipstream_bench.orchestration.cold_start_cluster import (
 from tests.orchestration.cold_start_fakes import RecordedCluster
 
 
-def test_the_recorded_cold_start_breaks_down_into_its_cluster_side_phases() -> None:
+def test_the_recorded_cold_start_breaks_down_into_its_six_phases() -> None:
     breakdown = read_cold_start_breakdown(RecordedCluster(), run=1)
 
     assert breakdown.run == 1
@@ -43,6 +43,19 @@ def test_engine_init_detail_is_read_and_both_graph_captures_are_summed() -> None
     assert breakdown.torch_compile_s == 44.91
     assert breakdown.graph_capture_s == 4.0
     assert breakdown.profiling_run_s == 0.1
+
+
+def test_summed_graph_captures_are_kept_to_the_millisecond() -> None:
+    cluster = RecordedCluster()
+    captures = iter(["1.1", "2.2"])
+    cluster.engine_log = "\n".join(
+        line.replace("finished in 2 secs", f"finished in {next(captures)} secs")
+        if "Graph capturing finished in" in line
+        else line
+        for line in cluster.engine_log.splitlines()
+    )
+
+    assert read_cold_start_breakdown(cluster, run=1).graph_capture_s == 3.3
 
 
 def test_the_engine_log_is_read_with_the_runtime_s_timestamps() -> None:

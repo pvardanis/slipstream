@@ -2,10 +2,10 @@
 
 :func:`drive_cold_start` is the transport-free cycle. It scales the GPU replica to zero,
 waits until Karpenter has removed every GPU NodeClaim, scales the replica back to one,
-waits for its pod to go Ready, and reads the pod-created → Ready total and its
-phases. Whether the run passes or fails, it scales the replica back to zero
-last, so no run leaves a GPU node up. Its collaborators are injected as callables, so the
-whole cycle is testable against a fake ``Kubectl`` with no cluster.
+waits for its pod to go Ready, and reads the pod-created → Ready total and its phases.
+Whether the run passes or fails, it scales the replica back to zero last, so no run
+leaves a GPU node up. Its collaborators are injected as callables, so the whole cycle is
+testable against a fake ``Kubectl`` with no cluster.
 
 :func:`build_cold_start_collaborators` binds those callables to kubectl, and
 :func:`record_cold_start` drives the cycle inside the run's rollout freeze (ADR-0029),
