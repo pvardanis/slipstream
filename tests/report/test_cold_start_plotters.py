@@ -83,3 +83,28 @@ def test_the_title_names_the_run_id_and_its_run_count() -> None:
         assert figure.axes[0].get_title() == "Cold-start breakdown — cs-1, 3 runs"
     finally:
         plt.close(figure)
+
+
+def test_engine_init_detail_over_engine_init_by_its_rounding_draws_no_rest() -> None:
+    # 44.91 + 4 + 0.1 s of detail in 49 s of engine init: graph capture is logged to the
+    # whole second, so its rounding, not a misread marker, leaves no rest to draw.
+    breakdowns = [build_breakdown(1, engine_init_s=49.0)]
+    figure = _plot_cold_start(breakdowns, run_id="cs-1")
+    try:
+        [rest] = [
+            c
+            for c in figure.axes[0].containers
+            if isinstance(c, BarContainer) and c.get_label() == "Engine init (rest)"
+        ]
+        assert rest.patches[0].get_width() == 0
+    finally:
+        plt.close(figure)
+
+
+def test_engine_init_detail_longer_than_engine_init_is_refused() -> None:
+    # 60 + 4 + 0.1 s of detail cannot sit inside 50 s of engine init: a misread marker,
+    # which a backward segment would hide.
+    breakdowns = [build_breakdown(1, engine_init_s=50.0, torch_compile_s=60.0)]
+
+    with pytest.raises(ValueError, match="run 1's engine init detail .* exceeds"):
+        plot_cold_start_png(breakdowns, run_id="cs-1")
