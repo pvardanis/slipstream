@@ -50,9 +50,12 @@ def test_register_cold_start_registers_a_module_path_deployment(
     assert captured["entrypoint_type"] is EntrypointType.MODULE_PATH
     assert (captured["build"], captured["push"]) == (False, False)
     assert captured["parameters"] == {"region": "us-east-1", "bucket": "bench-bucket"}
-    # run_id is the one flow parameter left for the trigger to supply.
+    # run_id is the one flow parameter left for the trigger to supply; the run count
+    # defaults to three.
     flow_parameters = inspect.signature(cli_module.cold_start_flow.fn).parameters
-    assert set(flow_parameters) - set(captured["parameters"]) == {"run_id"}
+    assert set(flow_parameters) - set(captured["parameters"]) == {"run_id", "runs"}
+    assert flow_parameters["run_id"].default is inspect.Parameter.empty
+    assert flow_parameters["runs"].default == 3
 
 
 @pytest.mark.parametrize("option", ["region", "bucket", "work-pool"])

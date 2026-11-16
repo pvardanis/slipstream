@@ -1,10 +1,11 @@
-"""The cold-start-breakdown run: its cycle under the rollout freeze, its record and artifact.
+"""The cold-start-breakdown run: its cycles under the rollout freeze, records, artifact.
 
-:func:`record_cold_start` drives the cycle inside the run's rollout freeze (ADR-0029), so
-Argo CD rolls nothing while the replica cycles, then writes the run's breakdown under the
-results bucket's ``cold-start`` root and publishes it to the run page. These tests drive
-it over the production collaborators with only ``Kubectl`` faked, the freeze recording
-its acquire and release among the cluster's steps.
+:func:`record_cold_start` drives the run's cycles inside its rollout freeze (ADR-0029), so
+Argo CD rolls nothing while the replica cycles, each from a verified zero, then writes
+each cycle's breakdown under the results bucket's ``cold-start`` root, publishes the
+phases' spread to the run page, and uploads the stacked-bar chart. These tests drive it
+over the production collaborators with only ``Kubectl`` faked, the freeze recording its
+acquire and release among the cluster's steps.
 """
 
 import json
@@ -13,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from slipstream_bench.orchestration.cluster import KubectlError
 from slipstream_bench.orchestration.cold_start_cluster import ColdStartMarkerError
 from slipstream_bench.orchestration.flows.cold_start import (
     build_cold_start_collaborators,
@@ -44,11 +46,12 @@ class _Run:
         self.s3 = _RecordingS3()
         self.artifacts: list[dict[str, Any]] = []
 
-    def record(self) -> str:
+    def record(self, runs: int = 1) -> str:
         clock = FakeClock()
         return record_cold_start(
             run_id="cs-1",
             bucket="bench",
+            runs=runs,
             collaborators=build_cold_start_collaborators(
                 self.cluster, sleep=clock.sleep, now=clock.now
             ),
@@ -69,38 +72,59 @@ def test_the_cycle_runs_inside_the_run_s_rollout_freeze() -> None:
     assert run.cluster.steps[-2:] == ["scale 0", "freeze release"]
 
 
-def test_the_breakdown_is_recorded_under_the_cold_start_root() -> None:
+_RECORDED = {
+    "total_s": 545.0,
+    "capacity_wait_s": 3.0,
+    "node_launch_s": 47.0,
+    "image_pull_s": 264.0,
+    "weight_download_s": 42.213,
+    "engine_init_s": 104.27,
+    "readiness_lag_s": 7.0,
+    "unattributed_s": 77.517,
+    "torch_compile_s": 44.91,
+    "graph_capture_s": 4.0,
+    "profiling_run_s": 0.1,
+}
+
+
+def test_each_run_cycles_the_replica_from_a_verified_zero() -> None:
     run = _Run(CyclingCluster())
 
-    pointer = run.record()
+    run.record(runs=3)
 
-    assert pointer == "s3://bench/cold-start/cs-1/r1.json"
-    [put] = run.s3.puts
-    assert (put["Bucket"], put["Key"], put["ContentType"]) == (
-        "bench",
-        "cold-start/cs-1/r1.json",
-        "application/json",
-    )
-    assert json.loads(put["Body"]) == {
-        "run": 1,
-        "total_s": 545.0,
-        "capacity_wait_s": 3.0,
-        "node_launch_s": 47.0,
-        "image_pull_s": 264.0,
-        "weight_download_s": 42.213,
-        "engine_init_s": 104.27,
-        "readiness_lag_s": 7.0,
-        "unattributed_s": 77.517,
-        "torch_compile_s": 44.91,
-        "graph_capture_s": 4.0,
-        "profiling_run_s": 0.1,
-    }
+    scale_ups = [i for i, step in enumerate(run.cluster.steps) if step == "scale 1"]
+    assert len(scale_ups) == 3
+    # Every scale-up follows a scale to zero, then only NodeClaim polls, the last of which
+    # found no GPU NodeClaim left; the polls before it are the warm node draining.
+    for start, scale_up in zip([0, *scale_ups], scale_ups, strict=False):
+        cycle = run.cluster.steps[start:scale_up]
+        last_scale_zero = len(cycle) - 1 - cycle[::-1].index("scale 0")
+        polls = cycle[last_scale_zero + 1 :]
+        assert polls
+        assert set(polls) == {"poll gpu nodeclaims"}
 
 
-def test_the_breakdown_is_published_to_the_run_page() -> None:
+def test_each_run_s_breakdown_is_recorded_under_the_cold_start_root() -> None:
     run = _Run(CyclingCluster())
 
-    run.record()
+    pointer = run.record(runs=2)
+
+    assert pointer == "s3://bench/cold-start/cs-1/"
+    records = [put for put in run.s3.puts if put["ContentType"] == "application/json"]
+    assert [(put["Bucket"], put["Key"]) for put in records] == [
+        ("bench", "cold-start/cs-1/r1.json"),
+        ("bench", "cold-start/cs-1/r2.json"),
+    ]
+    assert [json.loads(put["Body"]) for put in records] == [
+        {"run": 1, **_RECORDED},
+        {"run": 2, **_RECORDED},
+    ]
+
+
+def test_the_phases_spread_is_published_to_the_run_page() -> None:
+    run = _Run(CyclingCluster())
+
+    run.record(runs=2)
 
     assert run.artifacts == [
         {
@@ -108,25 +132,52 @@ def test_the_breakdown_is_published_to_the_run_page() -> None:
             "markdown": (
                 "## Cold-start breakdown\n"
                 "\n"
-                "Run 1 of cs-1, pod created → Ready (ADR-0030); recorded at "
-                "s3://bench/cold-start/cs-1/r1.json.\n"
+                "2 runs of cs-1, pod created → Ready (ADR-0030): each phase's median "
+                "and, bracketed, its range across the runs; recorded under "
+                "s3://bench/cold-start/cs-1/.\n"
                 "\n"
-                "| Phase | Seconds |\n"
-                "|---|---:|\n"
-                "| Capacity wait | 3.0 |\n"
-                "| Node launch | 47.0 |\n"
-                "| Image pull | 264.0 |\n"
-                "| Weight download | 42.213 |\n"
-                "| Engine init | 104.27 |\n"
-                "| ↳ torch.compile | 44.91 |\n"
-                "| ↳ Graph capture | 4.0 |\n"
-                "| ↳ Profiling run | 0.1 |\n"
-                "| Readiness lag | 7.0 |\n"
-                "| Unattributed | 77.517 |\n"
-                "| **Total** | **545.0** |\n"
+                "| phase | seconds |\n"
+                "| --- | --- |\n"
+                "| Capacity wait | 3.0 [3.0–3.0] |\n"
+                "| Node launch | 47.0 [47.0–47.0] |\n"
+                "| Image pull | 264.0 [264.0–264.0] |\n"
+                "| Weight download | 42.2 [42.2–42.2] |\n"
+                "| Engine init | 104.3 [104.3–104.3] |\n"
+                "| ↳ torch.compile | 44.9 [44.9–44.9] |\n"
+                "| ↳ Graph capture | 4.0 [4.0–4.0] |\n"
+                "| ↳ Profiling run | 0.1 [0.1–0.1] |\n"
+                "| Readiness lag | 7.0 [7.0–7.0] |\n"
+                "| Unattributed | 77.5 [77.5–77.5] |\n"
+                "| **Total** | **545.0 [545.0–545.0]** |\n"
             ),
         }
     ]
+
+
+def test_the_stacked_bar_chart_is_uploaded_under_the_run_s_charts_prefix() -> None:
+    run = _Run(CyclingCluster())
+
+    run.record(runs=2)
+
+    [chart] = [put for put in run.s3.puts if put["ContentType"] == "image/png"]
+    assert (chart["Bucket"], chart["Key"]) == (
+        "bench",
+        "cold-start/cs-1/charts/cold-start-breakdown.png",
+    )
+    assert chart["Body"].startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.parametrize("runs", [0, 6])
+def test_a_run_count_outside_one_to_five_is_refused_before_the_freeze(
+    runs: int,
+) -> None:
+    run = _Run(CyclingCluster())
+
+    with pytest.raises(ValueError, match=f"run count {runs} is not between 1 and 5"):
+        run.record(runs=runs)
+
+    assert run.freeze.calls == []
+    assert run.cluster.steps == []
 
 
 def test_a_failed_cycle_releases_the_freeze_and_records_nothing() -> None:
@@ -140,7 +191,34 @@ def test_a_failed_cycle_releases_the_freeze_and_records_nothing() -> None:
     assert run.artifacts == []
 
 
-def test_a_failed_write_leaves_the_breakdown_in_the_run_s_log(
+def test_a_run_failing_partway_leaves_the_runs_before_it_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The second run's scale-up (the fifth patch) fails: the first run is logged, and
+    # nothing is recorded, since a failed flow is re-run whole.
+    run = _Run(CyclingCluster(failing_patches={4}))
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(KubectlError, match="server is unavailable"):
+        run.record(runs=3)
+
+    assert _measured(caplog) == [f"cold-start run=cs-1 r1 measured {_logged(1)}"]
+    assert run.cluster.steps[-2:] == ["scale 0", "freeze release"]
+    assert run.s3.puts == []
+    assert run.artifacts == []
+
+
+def test_five_runs_are_measured_and_recorded() -> None:
+    run = _Run(CyclingCluster())
+
+    run.record(runs=5)
+
+    assert [put["Key"] for put in run.s3.puts if put["Key"].endswith(".json")] == [
+        f"cold-start/cs-1/r{n}.json" for n in range(1, 6)
+    ]
+
+
+def test_a_failed_write_leaves_every_breakdown_in_the_run_s_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     run = _Run(CyclingCluster())
@@ -148,22 +226,24 @@ def test_a_failed_write_leaves_the_breakdown_in_the_run_s_log(
     caplog.set_level(logging.INFO)
 
     with pytest.raises(OSError, match="AccessDenied"):
-        run.record()
+        run.record(runs=2)
 
-    *_, last = [
-        (record.levelno, record.getMessage())
+    assert _measured(caplog) == [
+        f"cold-start run=cs-1 r1 measured {_logged(1)}",
+        f"cold-start run=cs-1 r2 measured {_logged(2)}",
+    ]
+
+
+def _logged(run: int) -> dict[str, float]:
+    """The breakdown record as a measured line logs it."""
+    return {"run": run, **_RECORDED}
+
+
+def _measured(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The flow's lines logging a measured breakdown, in order."""
+    return [
+        record.getMessage()
         for record in caplog.records
         if record.name == "slipstream_bench.orchestration.flows.cold_start"
+        and " measured " in record.getMessage()
     ]
-    assert last == (
-        logging.INFO,
-        (
-            "cold-start run=cs-1 measured {'run': 1, 'total_s': 545.0, "
-            "'capacity_wait_s': 3.0, 'node_launch_s': 47.0, 'image_pull_s': "
-            "264.0, 'weight_download_s': 42.213, 'engine_init_s': 104.27, "
-            "'readiness_lag_s': 7.0, 'unattributed_s': 77.517, "
-            "'torch_compile_s': 44.91, 'graph_capture_s': 4.0, "
-            "'profiling_run_s': 0.1}; writing it to "
-            "s3://bench/cold-start/cs-1/r1.json"
-        ),
-    )
