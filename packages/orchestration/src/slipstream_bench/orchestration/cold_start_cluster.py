@@ -14,7 +14,7 @@ timestamp minus that duration. Graph capture is logged twice, once while profili
 and once for real, so its detail is the sum of every capture line. A log with a compile
 cache hit raises :class:`ColdStartCycleError`, since a true-zero run has no cache.
 
-Kubernetes records these markers to the second. Kubelet's events carry a null
+Kubernetes records the cluster markers to the second. Kubelet's events carry a null
 ``eventTime``, so a Pulling or Pulled event is timed by its ``firstTimestamp``; repeated
 events are aggregated into one record with a ``count``. The namespace's events also hold
 other objects' events, so they are filtered by the pod's kind and name and the engine
@@ -287,7 +287,10 @@ def _read_engine_phases(
     return _EnginePhases(
         weight_download_s=round(download_s, SECONDS_DECIMALS),
         engine_init_s=_seconds(loaded - timedelta(seconds=loading_s), initialized),
-        readiness_lag_s=_seconds(serving, ready),
+        # Ready is recorded to the second, so the server's start is read to the second
+        # too: a probe passing within the second the server started reads zero, not
+        # a negative lag.
+        readiness_lag_s=_seconds(serving.replace(microsecond=0), ready),
         torch_compile_s=round(torch_compile_s, SECONDS_DECIMALS),
         graph_capture_s=round(graph_capture_s, SECONDS_DECIMALS),
         profiling_run_s=round(profiling_run_s, SECONDS_DECIMALS),
