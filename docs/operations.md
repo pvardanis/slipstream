@@ -212,8 +212,9 @@ up to 15 min for Karpenter to remove every GPU NodeClaim (the GPU pool's
 `consolidateAfter: 1m` reaps an empty node about a minute after scale-down). It then
 scales the replica to one, waits up to 20 min for the pod to go Ready, and reads the
 phases from the pod, its NodeClaim, the kubelet events and the engine container's log,
-timing each log line by the container runtime's timestamp (`kubectl logs --timestamps`). **It leaves the replica at
-zero whether it passes or fails**, so no run leaves a GPU node up.
+timing each log line by the container runtime's timestamp (`kubectl logs --timestamps`).
+**It leaves the replica at zero whether it passes or fails**, so no run leaves a GPU node
+up.
 
 The run opens no bench endpoint and sends no requests. It holds the rollout freeze for
 the cycle, as the knob sweep does, and times out after 1 h. A cancelled, crashed or
@@ -268,8 +269,10 @@ back.
 
 **Results** land in the bench-results bucket at `cold-start/<run-id>/r1.json`: the total,
 each phase and engine init's torch.compile, graph capture and profiling-run durations, in
-seconds to the millisecond. Graph capture is the sum of both capture lines vLLM logs, one
-while profiling memory and one for real. The run page shows the same phase table as the
+seconds to the millisecond. Graph capture is the sum of every `Graph capturing finished
+in` line; vLLM v0.29.0 logs two, one while profiling memory and one for real, each to the
+whole second. Readiness lag reads the server's start to the second, the resolution of the
+pod's Ready condition. The run page shows the same phase table as the
 `cold-start-breakdown` artifact. `just bench-results-sync` does not pull `cold-start/`;
 fetch a record with `aws s3 cp s3://<bucket>/cold-start/<run-id>/r1.json -`. The run
 logs the breakdown before writing it (`cold-start run=<run-id> measured …`), so a failed
