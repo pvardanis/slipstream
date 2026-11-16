@@ -1,18 +1,22 @@
-"""The cold start's cluster-side phases, read through the ``Kubectl`` seam.
+"""The cold start's phases, read through the ``Kubectl`` seam.
 
-:func:`read_cold_start_breakdown` reads the replica's pod, the namespace's events and the
-hosting NodeClaim and breaks the pod-created → Ready total into capacity wait, node
-launch, image pull and the unattributed remainder (ADR-0030). These tests replay the one
-recorded true-zero cold start (tests/fixtures/cold-start) through a ``Kubectl`` fake; the
-expected seconds are the hand-worked breakdown on #37.
+:func:`read_cold_start_breakdown` reads the replica's pod, the namespace's events, the
+hosting NodeClaim and the engine's log, and breaks the pod-created → Ready total into
+capacity wait, node launch, image pull, weight download, engine init, readiness lag and
+the unattributed remainder, with engine init's torch.compile, graph capture and
+profiling-run detail (ADR-0030). These tests replay the one recorded true-zero cold start
+(tests/fixtures/cold-start) through a ``Kubectl`` fake; the expected seconds are the
+hand-worked breakdown on #37.
 """
 
+import re
 from copy import deepcopy
 
 import pytest
 
 from slipstream_bench.contract.cold_start_record import ColdStartRecordError
 from slipstream_bench.orchestration.cold_start_cluster import (
+    ColdStartCycleError,
     ColdStartMarkerError,
     read_cold_start_breakdown,
 )
@@ -27,7 +31,34 @@ def test_the_recorded_cold_start_breaks_down_into_its_cluster_side_phases() -> N
     assert breakdown.capacity_wait_s == 3.0
     assert breakdown.node_launch_s == 47.0
     assert breakdown.image_pull_s == 264.0
-    assert breakdown.unattributed_s == 231.0
+    assert breakdown.weight_download_s == 42.213
+    assert breakdown.engine_init_s == 104.27
+    assert breakdown.readiness_lag_s == 6.596
+    assert breakdown.unattributed_s == 77.921
+
+
+def test_engine_init_detail_is_read_and_both_graph_captures_are_summed() -> None:
+    breakdown = read_cold_start_breakdown(RecordedCluster(), run=1)
+
+    assert breakdown.torch_compile_s == 44.91
+    assert breakdown.graph_capture_s == 4.0
+    assert breakdown.profiling_run_s == 0.1
+
+
+def test_the_engine_log_is_read_with_the_runtime_s_timestamps() -> None:
+    cluster = RecordedCluster()
+
+    read_cold_start_breakdown(cluster, run=1)
+
+    assert [
+        "-n",
+        "slipstream",
+        "logs",
+        "vllm-gpu-bcd494f9-xsjvl",
+        "-c",
+        "vllm",
+        "--timestamps",
+    ] in cluster.calls
 
 
 def test_the_record_carries_every_phase_and_they_add_up_to_the_total() -> None:
@@ -39,7 +70,13 @@ def test_the_record_carries_every_phase_and_they_add_up_to_the_total() -> None:
         "capacity_wait_s": 3.0,
         "node_launch_s": 47.0,
         "image_pull_s": 264.0,
-        "unattributed_s": 231.0,
+        "weight_download_s": 42.213,
+        "engine_init_s": 104.27,
+        "readiness_lag_s": 6.596,
+        "unattributed_s": 77.921,
+        "torch_compile_s": 44.91,
+        "graph_capture_s": 4.0,
+        "profiling_run_s": 0.1,
     }
 
 
@@ -162,3 +199,49 @@ def test_a_retried_pull_is_timed_from_its_first_pulling_event() -> None:
     cluster.events["items"].append(retry)
 
     assert read_cold_start_breakdown(cluster, run=1).image_pull_s == 264.0
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "Time spent downloading weights",
+        "Loading weights took",
+        "init engine (profile, create kv cache, warmup model) took",
+        "Starting vLLM server on",
+        "torch.compile took",
+        "Graph capturing finished in",
+        "Initial profiling/warmup run took",
+    ],
+)
+def test_a_missing_engine_log_marker_fails_naming_it(marker: str) -> None:
+    cluster = RecordedCluster()
+    cluster.engine_log = "\n".join(
+        line for line in cluster.engine_log.splitlines() if marker not in line
+    )
+
+    with pytest.raises(
+        ColdStartMarkerError,
+        match=(
+            rf"engine log of pod vllm-gpu-bcd494f9-xsjvl has no "
+            rf"`{re.escape(marker)}` line"
+        ),
+    ):
+        read_cold_start_breakdown(cluster, run=1)
+
+
+def test_a_compile_cache_hit_fails_the_run() -> None:
+    cluster = RecordedCluster()
+    cluster.engine_log += (
+        "2026-11-13T15:30:00.000000000Z (EngineCore pid=127) INFO 11-13 15:30:00 "
+        "[backends.py:300] Directly load the compiled graph(s) for compile range "
+        "(1, 2048) from the cache, took 3.120 s\n"
+    )
+
+    with pytest.raises(
+        ColdStartCycleError,
+        match=(
+            r"engine log of pod vllm-gpu-bcd494f9-xsjvl shows a compile cache hit "
+            r"\(`Directly load the compiled graph\(s\)`\)"
+        ),
+    ):
+        read_cold_start_breakdown(cluster, run=1)

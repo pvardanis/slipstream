@@ -49,6 +49,7 @@ def test_the_replica_cycles_through_zero_before_its_cold_start_is_read() -> None
         "get pods",
         "get nodeclaims",
         "get events",
+        "read engine log",
         "scale 0",
     ]
 
@@ -123,6 +124,12 @@ def test_the_driver_returns_the_recorded_cold_start_s_breakdown() -> None:
         capacity_wait_s=3.0,
         node_launch_s=47.0,
         image_pull_s=264.0,
+        weight_download_s=42.213,
+        engine_init_s=104.27,
+        readiness_lag_s=6.596,
+        torch_compile_s=44.91,
+        graph_capture_s=4.0,
+        profiling_run_s=0.1,
     )
 
 

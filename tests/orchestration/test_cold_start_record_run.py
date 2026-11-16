@@ -87,7 +87,13 @@ def test_the_breakdown_is_recorded_under_the_cold_start_root() -> None:
         "capacity_wait_s": 3.0,
         "node_launch_s": 47.0,
         "image_pull_s": 264.0,
-        "unattributed_s": 231.0,
+        "weight_download_s": 42.213,
+        "engine_init_s": 104.27,
+        "readiness_lag_s": 6.596,
+        "unattributed_s": 77.921,
+        "torch_compile_s": 44.91,
+        "graph_capture_s": 4.0,
+        "profiling_run_s": 0.1,
     }
 
 
@@ -110,7 +116,13 @@ def test_the_breakdown_is_published_to_the_run_page() -> None:
                 "| Capacity wait | 3.0 |\n"
                 "| Node launch | 47.0 |\n"
                 "| Image pull | 264.0 |\n"
-                "| Unattributed | 231.0 |\n"
+                "| Weight download | 42.213 |\n"
+                "| Engine init | 104.27 |\n"
+                "| ↳ torch.compile | 44.91 |\n"
+                "| ↳ Graph capture | 4.0 |\n"
+                "| ↳ Profiling run | 0.1 |\n"
+                "| Readiness lag | 6.596 |\n"
+                "| Unattributed | 77.921 |\n"
                 "| **Total** | **545.0** |\n"
             ),
         }
@@ -148,7 +160,10 @@ def test_a_failed_write_leaves_the_breakdown_in_the_run_s_log(
         (
             "cold-start run=cs-1 measured {'run': 1, 'total_s': 545.0, "
             "'capacity_wait_s': 3.0, 'node_launch_s': 47.0, 'image_pull_s': "
-            "264.0, 'unattributed_s': 231.0}; writing it to "
+            "264.0, 'weight_download_s': 42.213, 'engine_init_s': 104.27, "
+            "'readiness_lag_s': 6.596, 'unattributed_s': 77.921, "
+            "'torch_compile_s': 44.91, 'graph_capture_s': 4.0, "
+            "'profiling_run_s': 0.1}; writing it to "
             "s3://bench/cold-start/cs-1/r1.json"
         ),
     )

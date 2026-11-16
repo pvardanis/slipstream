@@ -3,7 +3,7 @@
 :func:`drive_cold_start` is the transport-free cycle. It scales the GPU replica to zero,
 waits until Karpenter has removed every GPU NodeClaim, scales the replica back to one,
 waits for its pod to go Ready, and reads the pod-created → Ready total and its
-cluster-side phases. Whether the run passes or fails, it scales the replica back to zero
+phases. Whether the run passes or fails, it scales the replica back to zero
 last, so no run leaves a GPU node up. Its collaborators are injected as callables, so the
 whole cycle is testable against a fake ``Kubectl`` with no cluster.
 
@@ -103,7 +103,7 @@ def scale_run_replica_to_zero(
     ],
 )
 def cold_start_flow(*, run_id: str, region: str, bucket: str) -> str:
-    """Measure one true-zero cold start's cluster-side phases as one Prefect flow.
+    """Measure one true-zero cold start's phases as one Prefect flow.
 
     The composition root the deployment registers: it binds the driver's collaborators
     to kubectl and drives the cycle inside the run's rollout freeze, then records the
@@ -159,8 +159,9 @@ def drive_cold_start(
 
     :param collaborators: the callables the cycle is sequenced through.
     :param run: the run's 1-based number within its measurement.
-    :return: the run's total and its cluster-side phases.
-    :raise ColdStartCycleError: when a GPU NodeClaim outlives the scale to zero.
+    :return: the run's total, its six phases and engine init's detail.
+    :raise ColdStartCycleError: when a GPU NodeClaim outlives the scale to zero, or
+        the engine's log shows a compile cache hit.
     :raise ColdStartMarkerError: when the pod is never Ready or a marker is missing.
     """
     # Each phase is logged as it starts, so the run page shows a long drain or rollout
@@ -229,7 +230,8 @@ def record_cold_start(
     :param publish_artifact: the markdown-artifact publisher, called with ``key`` and
         ``markdown``.
     :return: the record's ``s3://`` URI.
-    :raise ColdStartCycleError: when a GPU NodeClaim outlives the scale to zero.
+    :raise ColdStartCycleError: when a GPU NodeClaim outlives the scale to zero, or
+        the engine's log shows a compile cache hit.
     :raise ColdStartMarkerError: when the pod is never Ready or a marker is missing.
     """
     with freeze:
@@ -265,6 +267,13 @@ def _breakdown_to_markdown(
         ("Capacity wait", breakdown.capacity_wait_s),
         ("Node launch", breakdown.node_launch_s),
         ("Image pull", breakdown.image_pull_s),
+        ("Weight download", breakdown.weight_download_s),
+        ("Engine init", breakdown.engine_init_s),
+        # Engine init's detail, inside its row's seconds rather than added to them.
+        ("↳ torch.compile", breakdown.torch_compile_s),
+        ("↳ Graph capture", breakdown.graph_capture_s),
+        ("↳ Profiling run", breakdown.profiling_run_s),
+        ("Readiness lag", breakdown.readiness_lag_s),
         ("Unattributed", breakdown.unattributed_s),
     ]
     lines = [
