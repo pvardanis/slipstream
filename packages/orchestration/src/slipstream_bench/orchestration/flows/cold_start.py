@@ -163,11 +163,21 @@ def drive_cold_start(
     :raise ColdStartCycleError: when a GPU NodeClaim outlives the scale to zero.
     :raise ColdStartMarkerError: when the pod is never Ready or a marker is missing.
     """
+    # Each phase is logged as it starts, so the run page shows a long drain or rollout
+    # wait in progress rather than a silent run.
     try:
         collaborators.scale_replica(0)
+        _LOGGER.info(
+            "scaled the GPU replica to 0; waiting until no GPU NodeClaim is left"
+        )
         collaborators.wait_for_no_gpu_nodeclaim()
         collaborators.scale_replica(1)
+        _LOGGER.info(
+            "no GPU NodeClaim is left; scaled the GPU replica to 1, waiting for its "
+            "pod to go Ready"
+        )
         collaborators.wait_for_replica_ready()
+        _LOGGER.info("the GPU replica's pod is Ready; reading its cold start")
         return collaborators.read_breakdown(run)
     finally:
         collaborators.scale_replica(0)

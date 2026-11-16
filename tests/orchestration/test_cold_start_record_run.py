@@ -138,18 +138,17 @@ def test_a_failed_write_leaves_the_breakdown_in_the_run_s_log(
     with pytest.raises(OSError, match="AccessDenied"):
         run.record()
 
-    assert [
+    *_, last = [
         (record.levelno, record.getMessage())
         for record in caplog.records
         if record.name == "slipstream_bench.orchestration.flows.cold_start"
-    ] == [
-        (
-            logging.INFO,
-            (
-                "cold-start run=cs-1 measured {'run': 1, 'total_s': 545.0, "
-                "'capacity_wait_s': 3.0, 'node_launch_s': 47.0, 'image_pull_s': "
-                "264.0, 'unattributed_s': 231.0}; writing it to "
-                "s3://bench/cold-start/cs-1/r1.json"
-            ),
-        )
     ]
+    assert last == (
+        logging.INFO,
+        (
+            "cold-start run=cs-1 measured {'run': 1, 'total_s': 545.0, "
+            "'capacity_wait_s': 3.0, 'node_launch_s': 47.0, 'image_pull_s': "
+            "264.0, 'unattributed_s': 231.0}; writing it to "
+            "s3://bench/cold-start/cs-1/r1.json"
+        ),
+    )

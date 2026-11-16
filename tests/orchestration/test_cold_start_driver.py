@@ -7,6 +7,8 @@ collaborators (:func:`build_cold_start_collaborators`) with only the ``Kubectl``
 faked, by a cluster that replays the recorded cold start (tests/fixtures/cold-start).
 """
 
+import logging
+
 import pytest
 
 from slipstream_bench.contract.cold_start_record import ColdStartBreakdown
@@ -48,6 +50,27 @@ def test_the_replica_cycles_through_zero_before_its_cold_start_is_read() -> None
         "get nodeclaims",
         "get events",
         "scale 0",
+    ]
+
+
+def test_each_phase_of_the_cycle_is_logged_as_it_starts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+
+    _drive(CyclingCluster(drain_polls=1))
+
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "slipstream_bench.orchestration.flows.cold_start"
+    ] == [
+        "scaled the GPU replica to 0; waiting until no GPU NodeClaim is left",
+        (
+            "no GPU NodeClaim is left; scaled the GPU replica to 1, waiting for its "
+            "pod to go Ready"
+        ),
+        "the GPU replica's pod is Ready; reading its cold start",
     ]
 
 
