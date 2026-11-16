@@ -9,7 +9,8 @@ from slipstream_bench.contract.cold_start_record import (
     ColdStartRecordError,
 )
 
-# The hand-worked breakdown of the recorded cold start on #37.
+# The hand-worked breakdown of the recorded cold start on #37, with readiness lag read
+# from the server's start to the second, the resolution of the pod's Ready condition.
 _RECORDED = ColdStartBreakdown(
     run=1,
     total_s=545.0,
@@ -18,7 +19,7 @@ _RECORDED = ColdStartBreakdown(
     image_pull_s=264.0,
     weight_download_s=42.213,
     engine_init_s=104.27,
-    readiness_lag_s=6.596,
+    readiness_lag_s=7.0,
     torch_compile_s=44.91,
     graph_capture_s=4.0,
     profiling_run_s=0.1,
@@ -40,15 +41,15 @@ def test_a_negative_duration_is_refused(name: str) -> None:
 
 
 def test_the_six_phases_and_unattributed_add_up_to_the_total() -> None:
-    assert _RECORDED.unattributed_s == 77.921
+    assert _RECORDED.unattributed_s == 77.517
 
 
 def test_engine_init_detail_is_not_subtracted_from_the_total() -> None:
-    assert replace(_RECORDED, torch_compile_s=100.0).unattributed_s == 77.921
+    assert replace(_RECORDED, torch_compile_s=100.0).unattributed_s == 77.517
 
 
 def test_the_unattributed_remainder_may_read_slightly_negative() -> None:
-    assert replace(_RECORDED, total_s=466.579).unattributed_s == -0.5
+    assert replace(_RECORDED, total_s=466.983).unattributed_s == -0.5
 
 
 def test_the_record_carries_each_phase_its_detail_and_the_remainder() -> None:
@@ -60,8 +61,8 @@ def test_the_record_carries_each_phase_its_detail_and_the_remainder() -> None:
         "image_pull_s": 264.0,
         "weight_download_s": 42.213,
         "engine_init_s": 104.27,
-        "readiness_lag_s": 6.596,
-        "unattributed_s": 77.921,
+        "readiness_lag_s": 7.0,
+        "unattributed_s": 77.517,
         "torch_compile_s": 44.91,
         "graph_capture_s": 4.0,
         "profiling_run_s": 0.1,

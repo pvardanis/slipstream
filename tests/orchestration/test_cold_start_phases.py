@@ -6,7 +6,8 @@ capacity wait, node launch, image pull, weight download, engine init, readiness 
 the unattributed remainder, with engine init's torch.compile, graph capture and
 profiling-run detail (ADR-0030). These tests replay the one recorded true-zero cold start
 (tests/fixtures/cold-start) through a ``Kubectl`` fake; the expected seconds are the
-hand-worked breakdown on #37.
+hand-worked breakdown on #37, with readiness lag read from the server's start to the
+second, the resolution of the pod's Ready condition.
 """
 
 import re
@@ -33,8 +34,8 @@ def test_the_recorded_cold_start_breaks_down_into_its_six_phases() -> None:
     assert breakdown.image_pull_s == 264.0
     assert breakdown.weight_download_s == 42.213
     assert breakdown.engine_init_s == 104.27
-    assert breakdown.readiness_lag_s == 6.596
-    assert breakdown.unattributed_s == 77.921
+    assert breakdown.readiness_lag_s == 7.0
+    assert breakdown.unattributed_s == 77.517
 
 
 def test_engine_init_detail_is_read_and_both_graph_captures_are_summed() -> None:
@@ -85,8 +86,8 @@ def test_the_record_carries_every_phase_and_they_add_up_to_the_total() -> None:
         "image_pull_s": 264.0,
         "weight_download_s": 42.213,
         "engine_init_s": 104.27,
-        "readiness_lag_s": 6.596,
-        "unattributed_s": 77.921,
+        "readiness_lag_s": 7.0,
+        "unattributed_s": 77.517,
         "torch_compile_s": 44.91,
         "graph_capture_s": 4.0,
         "profiling_run_s": 0.1,
@@ -258,3 +259,12 @@ def test_a_compile_cache_hit_fails_the_run() -> None:
         ),
     ):
         read_cold_start_breakdown(cluster, run=1)
+
+
+def test_a_pod_ready_in_the_second_its_server_started_has_no_readiness_lag() -> None:
+    # Ready is recorded to the second, so the server's start is read to the second too.
+    cluster = RecordedCluster()
+    ready = next(c for c in cluster.pod["status"]["conditions"] if c["type"] == "Ready")
+    ready["lastTransitionTime"] = "2026-11-13T15:30:41Z"
+
+    assert read_cold_start_breakdown(cluster, run=1).readiness_lag_s == 0.0

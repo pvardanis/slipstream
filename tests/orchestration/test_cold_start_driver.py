@@ -126,7 +126,7 @@ def test_the_driver_returns_the_recorded_cold_start_s_breakdown() -> None:
         image_pull_s=264.0,
         weight_download_s=42.213,
         engine_init_s=104.27,
-        readiness_lag_s=6.596,
+        readiness_lag_s=7.0,
         torch_compile_s=44.91,
         graph_capture_s=4.0,
         profiling_run_s=0.1,
