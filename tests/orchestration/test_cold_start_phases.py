@@ -243,13 +243,24 @@ def test_a_missing_engine_log_marker_fails_naming_it(marker: str) -> None:
         read_cold_start_breakdown(cluster, run=1)
 
 
+_CACHE_HIT_LINE = (
+    "2026-11-13T15:30:00.000000000Z (EngineCore pid=127) INFO 11-13 15:30:00 "
+    "[backends.py:300] Directly load the compiled graph(s) for compile range "
+    "(1, 2048) from the cache, took 3.120 s\n"
+)
+
+
+def test_the_recorded_cache_directory_line_is_not_a_compile_cache_hit() -> None:
+    # vLLM logs ``Using cache directory`` on a miss too; the recorded run was a miss.
+    cluster = RecordedCluster()
+    assert "Using cache directory" in cluster.engine_log
+
+    assert read_cold_start_breakdown(cluster, run=1).torch_compile_s == 44.91
+
+
 def test_a_compile_cache_hit_fails_the_run() -> None:
     cluster = RecordedCluster()
-    cluster.engine_log += (
-        "2026-11-13T15:30:00.000000000Z (EngineCore pid=127) INFO 11-13 15:30:00 "
-        "[backends.py:300] Directly load the compiled graph(s) for compile range "
-        "(1, 2048) from the cache, took 3.120 s\n"
-    )
+    cluster.engine_log += _CACHE_HIT_LINE
 
     with pytest.raises(
         ColdStartCycleError,
@@ -268,3 +279,16 @@ def test_a_pod_ready_in_the_second_its_server_started_has_no_readiness_lag() -> 
     ready["lastTransitionTime"] = "2026-11-13T15:30:41Z"
 
     assert read_cold_start_breakdown(cluster, run=1).readiness_lag_s == 0.0
+
+
+def test_a_compile_cache_hit_is_named_over_a_missing_marker() -> None:
+    cluster = RecordedCluster()
+    cluster.engine_log = "\n".join(
+        line
+        for line in cluster.engine_log.splitlines()
+        if "torch.compile took" not in line
+    )
+    cluster.engine_log += "\n" + _CACHE_HIT_LINE
+
+    with pytest.raises(ColdStartCycleError, match="compile cache hit"):
+        read_cold_start_breakdown(cluster, run=1)
