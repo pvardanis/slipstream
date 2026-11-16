@@ -180,7 +180,7 @@ images and the cloud-verify check are in [`docs/operations.md`](docs/operations.
 
 ## What a benchmark run looks like
 
-The platform runs two kinds of benchmark:
+The platform runs three kinds of benchmark:
 
 - **Knob sweep** finds the engine config to deploy. It redeploys vLLM once per point of an
   engine-knob grid (`max_num_seqs` × KV cache dtype × prefix caching) and steps each point up a
@@ -191,6 +191,12 @@ The platform runs two kinds of benchmark:
   top of the GPU prefix cache. It runs one engine point with offload off and on,
   interleaved over repeated runs, up the same kind of ladder, and compares the arms' ranges
   at each rung.
+- **Cold-start breakdown** measures how long the GPU replica takes to serve from zero.
+  It scales vLLM to zero, waits until Karpenter has removed the GPU node, scales back to
+  one, and splits the pod-created → Ready time into capacity wait, node launch, image
+  pull and an unattributed remainder, read from the pod's and NodeClaim's conditions and
+  kubelet's image-pull events ([ADR-0030](docs/adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md)).
+  It sends no requests and leaves the replica at zero.
 
 Each is a Prefect flow run you follow from the UI (`just prefect-ui`). These are from KV
 cache offload A/B run `20261022T131457Z`. Each arm
