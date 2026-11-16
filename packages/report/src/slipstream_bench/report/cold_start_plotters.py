@@ -35,6 +35,9 @@ _AFTER_ENGINE_INIT = (*PHASES[PHASES.index(_ENGINE_INIT) + 1 :], "unattributed_s
 # The segment that holds the part of engine init its detail does not cover, and its label.
 _ENGINE_INIT_REST = "engine_init_rest_s"
 _SEGMENT_LABELS = {**FIELD_LABELS, _ENGINE_INIT_REST: "Engine init (rest)"}
+# How far engine init's detail may overrun engine init before it counts as a misread
+# marker: graph capture is logged to the whole second and summed over two captures.
+_ROUNDING_S = 1.0
 
 # Each segment's colour: the phases from tab10, engine init's split in shades of orange,
 # and the unattributed remainder grey, so it reads as no phase.
@@ -58,7 +61,8 @@ def plot_cold_start_png(breakdowns: list[ColdStartBreakdown], *, run_id: str) ->
     :param breakdowns: every run's breakdown, in any order.
     :param run_id: the run id the runs were measured under, for the title.
     :return: the chart encoded as PNG bytes.
-    :raise ValueError: when ``breakdowns`` is empty, so there is nothing to draw.
+    :raise ValueError: when ``breakdowns`` is empty, so there is nothing to draw, or a
+        run's engine init detail overruns its engine init by more than its rounding.
     """
     if not breakdowns:
         raise ValueError("cannot chart a cold start with no runs")
@@ -91,12 +95,26 @@ def _plot_cold_start(breakdowns: list[ColdStartBreakdown], *, run_id: str) -> Fi
 
 
 def _get_segments(breakdown: ColdStartBreakdown) -> dict[str, float]:
-    """Split one run's record into its bar's segments, in stacking order, by field."""
+    """Split one run's record into its bar's segments, in stacking order, by field.
+
+    A rest under zero by no more than the markers' rounding is drawn as none.
+
+    :raise ValueError: when the run's engine init detail overruns its engine init by
+        more than the markers' rounding, which means a marker was misread; drawn, the
+        rest would stack backwards.
+    """
     record = breakdown.to_record()
     detail = {field: record[field] for field in ENGINE_INIT_DETAIL}
+    rest = record[_ENGINE_INIT] - sum(detail.values())
+    if rest < -_ROUNDING_S:
+        raise ValueError(
+            f"cold-start run {breakdown.run}'s engine init detail "
+            f"({sum(detail.values()):g} s) exceeds its engine init "
+            f"({record[_ENGINE_INIT]:g} s): a marker was misread"
+        )
     return {
         **{field: record[field] for field in _BEFORE_ENGINE_INIT},
         **detail,
-        _ENGINE_INIT_REST: record[_ENGINE_INIT] - sum(detail.values()),
+        _ENGINE_INIT_REST: max(rest, 0.0),
         **{field: record[field] for field in _AFTER_ENGINE_INIT},
     }

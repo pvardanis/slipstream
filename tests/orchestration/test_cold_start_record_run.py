@@ -208,6 +208,22 @@ def test_a_run_failing_partway_leaves_the_runs_before_it_in_the_log(
     assert run.artifacts == []
 
 
+def test_a_run_whose_chart_cannot_be_drawn_records_nothing() -> None:
+    # torch.compile logged longer than the whole of engine init: a misread marker the
+    # chart refuses, found before any record or the artifact is written.
+    cluster = CyclingCluster()
+    cluster.engine_log = cluster.engine_log.replace(
+        "torch.compile took 44.91 s", "torch.compile took 200.00 s"
+    )
+    run = _Run(cluster)
+
+    with pytest.raises(ValueError, match="exceeds its engine init"):
+        run.record()
+
+    assert run.s3.puts == []
+    assert run.artifacts == []
+
+
 def test_five_runs_are_measured_and_recorded() -> None:
     run = _Run(CyclingCluster())
 
