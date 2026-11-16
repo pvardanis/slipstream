@@ -1,10 +1,18 @@
-"""Read one cold start's cluster-side phases through the ``Kubectl`` transport (ADR-0030).
+"""Read one cold start's phases through the ``Kubectl`` transport (ADR-0030).
 
 Once the replica's pod is Ready, the cold-start-breakdown flow reads the pod, the
-namespace's events and the NodeClaim hosting the pod, and breaks the pod-created → Ready
-total into capacity wait (pod created → the NodeClaim's ``Launched``), node launch
-(``Launched`` → ``Initialized``) and image pull (kubelet's ``Pulling`` → ``Pulled`` for
-the engine container); the rest is unattributed.
+namespace's events, the NodeClaim hosting the pod and the engine container's log, and
+breaks the pod-created → Ready total into capacity wait (pod created → the NodeClaim's
+``Launched``), node launch (``Launched`` → ``Initialized``), image pull (kubelet's
+``Pulling`` → ``Pulled`` for the engine container), weight download, engine init and
+readiness lag (from the engine's log lines); the rest is unattributed.
+
+Each engine log line is timed by the container runtime's nanosecond timestamp, read with
+``kubectl logs --timestamps``, since vLLM's own prefix is to the second with no year. A
+line that reports a duration marks the end of what it times, so its start is its
+timestamp minus that duration. Graph capture is logged twice, once while profiling memory
+and once for real, so its detail is the sum of every capture line. A log with a compile
+cache hit raises :class:`ColdStartCycleError`, since a true-zero run has no cache.
 
 Kubernetes records these markers to the second. Kubelet's events carry a null
 ``eventTime``, so a Pulling or Pulled event is timed by its ``firstTimestamp``; repeated
@@ -23,12 +31,17 @@ get/patch the worker's RBAC grants on it, not the ``deployments/scale`` subresou
 """
 
 import json
+import re
 import time
 from collections.abc import Callable
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
-from slipstream_bench.contract.cold_start_record import ColdStartBreakdown
+from slipstream_bench.contract.cold_start_record import (
+    SECONDS_DECIMALS,
+    ColdStartBreakdown,
+)
 from slipstream_bench.orchestration.cluster import (
     ROLLOUT_TIMEOUT_S,
     VLLM_DEPLOYMENT,
@@ -47,6 +60,31 @@ _GPU_NODECLAIM_SELECTOR = "karpenter.sh/nodepool=gpu"
 # drains and terminates its instance; 15 min leaves room for a slow termination.
 _NODECLAIM_DRAIN_TIMEOUT_S = 900.0
 _NODECLAIM_POLL_INTERVAL_S = 10.0
+# The engine log lines the engine-side phases and engine init's detail are bounded by,
+# checked against vLLM v0.29.0 (ADR-0030); each named by the text a missing line's error
+# quotes, with the duration it reports, if any, as its ``seconds`` group.
+_WEIGHT_DOWNLOAD = "Time spent downloading weights"
+_LOADING_WEIGHTS = "Loading weights took"
+_INIT_ENGINE = "init engine (profile, create kv cache, warmup model) took"
+_SERVER_START = "Starting vLLM server on"
+_TORCH_COMPILE = "torch.compile took"
+_GRAPH_CAPTURE = "Graph capturing finished in"
+_PROFILING_RUN = "Initial profiling/warmup run took"
+_SECONDS = r"(?P<seconds>\d+(?:\.\d+)?)"
+_ENGINE_LOG_MARKERS = {
+    _WEIGHT_DOWNLOAD: re.compile(
+        rf"{re.escape(_WEIGHT_DOWNLOAD)} for \S+: {_SECONDS} seconds"
+    ),
+    _LOADING_WEIGHTS: re.compile(rf"{re.escape(_LOADING_WEIGHTS)} {_SECONDS} seconds"),
+    _INIT_ENGINE: re.compile(rf"{re.escape(_INIT_ENGINE)} {_SECONDS} s"),
+    _SERVER_START: re.compile(re.escape(_SERVER_START)),
+    _TORCH_COMPILE: re.compile(rf"{re.escape(_TORCH_COMPILE)} {_SECONDS} s in total"),
+    _GRAPH_CAPTURE: re.compile(rf"{re.escape(_GRAPH_CAPTURE)} {_SECONDS} secs"),
+    _PROFILING_RUN: re.compile(rf"{re.escape(_PROFILING_RUN)} {_SECONDS} s"),
+}
+# Logged only when the engine loads compiled graphs from its torch.compile cache; vLLM
+# logs ``Using cache directory`` on a miss too, so that line is not a hit.
+_COMPILE_CACHE_HIT = "Directly load the compiled graph(s)"
 
 
 class ColdStartMarkerError(Exception):
@@ -54,7 +92,23 @@ class ColdStartMarkerError(Exception):
 
 
 class ColdStartCycleError(Exception):
-    """A warm GPU node that outlived the replica's scale to zero."""
+    """A cold start that was not from a true zero.
+
+    Either a warm GPU node outlived the replica's scale to zero, or the engine loaded
+    its compiled graphs from a cache.
+    """
+
+
+@dataclass(frozen=True)
+class _EnginePhases:
+    """The engine-side phases and engine init's detail read from the engine's log."""
+
+    weight_download_s: float
+    engine_init_s: float
+    readiness_lag_s: float
+    torch_compile_s: float
+    graph_capture_s: float
+    profiling_run_s: float
 
 
 def scale_replica(
@@ -165,15 +219,16 @@ def read_cold_start_breakdown(
     selector: str = _REPLICA_SELECTOR,
     container: str = _ENGINE_CONTAINER,
 ) -> ColdStartBreakdown:
-    """Read the Ready replica's pod, events and NodeClaim and break its cold start down.
+    """Read the Ready replica's pod, events, NodeClaim and log and break its cold start down.
 
     :param kubectl: the transport the reads are issued through.
     :param run: the run's 1-based number within its measurement.
     :param namespace: the namespace the replica runs in.
     :param selector: the label selector matching the replica's pod.
-    :param container: the engine container whose image pull is timed.
-    :return: the run's total and its cluster-side phases.
+    :param container: the engine container whose image pull and log are read.
+    :return: the run's total, its six phases and engine init's detail.
     :raise ColdStartMarkerError: when a marker a phase is bounded by is missing.
+    :raise ColdStartCycleError: when the engine's log shows a compile cache hit.
     """
     pod = _get_replica_pod(kubectl, namespace=namespace, selector=selector)
     _require_no_restarts(pod, container=container)
@@ -185,6 +240,7 @@ def read_cold_start_breakdown(
     events = _list_container_events(kubectl, pod, container=container)
     pulling = _get_event_time(events, "Pulling", pod=pod, container=container)
     pulled = _get_event_time(events, "Pulled", pod=pod, container=container)
+    engine = _read_engine_phases(kubectl, pod, ready=ready, container=container)
 
     return ColdStartBreakdown(
         run=run,
@@ -192,7 +248,79 @@ def read_cold_start_breakdown(
         capacity_wait_s=_seconds(created, launched),
         node_launch_s=_seconds(launched, initialized),
         image_pull_s=_seconds(pulling, pulled),
+        weight_download_s=engine.weight_download_s,
+        engine_init_s=engine.engine_init_s,
+        readiness_lag_s=engine.readiness_lag_s,
+        torch_compile_s=engine.torch_compile_s,
+        graph_capture_s=engine.graph_capture_s,
+        profiling_run_s=engine.profiling_run_s,
     )
+
+
+def _read_engine_phases(
+    kubectl: Kubectl, pod: dict[str, Any], *, ready: datetime, container: str
+) -> _EnginePhases:
+    """Read the engine container's log and time its phases and engine init's detail."""
+    metadata = pod["metadata"]
+    log = kubectl(
+        [
+            "-n",
+            metadata["namespace"],
+            "logs",
+            metadata["name"],
+            "-c",
+            container,
+            "--timestamps",
+        ],
+        None,
+    )
+    lines = log.splitlines()
+    if any(_COMPILE_CACHE_HIT in line for line in lines):
+        raise ColdStartCycleError(
+            f"engine log of pod {metadata['name']} shows a compile cache hit "
+            f"(`{_COMPILE_CACHE_HIT}`): a true-zero cold start lands on a fresh node "
+            f"with no torch.compile cache, so check what persists the engine's cache"
+        )
+    found = {
+        marker: _find_log_lines(lines, marker, pod=pod)
+        for marker in _ENGINE_LOG_MARKERS
+    }
+    _, download_s = found[_WEIGHT_DOWNLOAD][0]
+    loaded, loading_s = found[_LOADING_WEIGHTS][0]
+    initialized, _ = found[_INIT_ENGINE][0]
+    serving, _ = found[_SERVER_START][0]
+    return _EnginePhases(
+        weight_download_s=round(download_s, SECONDS_DECIMALS),
+        engine_init_s=_seconds(loaded - timedelta(seconds=loading_s), initialized),
+        readiness_lag_s=_seconds(serving, ready),
+        torch_compile_s=found[_TORCH_COMPILE][0][1],
+        graph_capture_s=sum(seconds for _, seconds in found[_GRAPH_CAPTURE]),
+        profiling_run_s=found[_PROFILING_RUN][0][1],
+    )
+
+
+def _find_log_lines(
+    lines: list[str], marker: str, *, pod: dict[str, Any]
+) -> list[tuple[datetime, float]]:
+    """Return each line with the marker, as its timestamp and the duration it reports.
+
+    A line that reports no duration has zero for it.
+    """
+    pattern = _ENGINE_LOG_MARKERS[marker]
+    found = []
+    for line in lines:
+        stamp, _, message = line.partition(" ")
+        match = pattern.search(message)
+        if match:
+            seconds = match.groupdict().get("seconds")
+            found.append((_parse_time(stamp), float(seconds) if seconds else 0.0))
+    if not found:
+        raise ColdStartMarkerError(
+            f"engine log of pod {pod['metadata']['name']} has no `{marker}` line, a "
+            f"marker the cold-start breakdown is bounded by; an engine upgrade past "
+            f"vLLM v0.29.0 must re-check every marker ADR-0030 names"
+        )
+    return found
 
 
 def _get_replica_pod(
@@ -285,5 +413,5 @@ def _parse_time(stamp: str) -> datetime:
 
 
 def _seconds(start: datetime, end: datetime) -> float:
-    """Return the seconds from start to end."""
-    return (end - start).total_seconds()
+    """Return the seconds from start to end, to the millisecond."""
+    return round((end - start).total_seconds(), SECONDS_DECIMALS)

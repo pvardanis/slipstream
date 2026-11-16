@@ -2,8 +2,9 @@
 
 Answers a ``get`` of pods, events or NodeClaims with the recorded objects, as ``kubectl``
 returns them with ``-o json``: the pod and the NodeClaim inside a list, the namespace's
-events as captured. A test edits the loaded objects to drop a marker before replaying,
-or sets ``pods`` to list other than the one recorded pod.
+events as captured. Answers a ``logs`` read with the engine log as captured with
+``--timestamps``. A test edits the loaded objects or the log to drop a marker before
+replaying, or sets ``pods`` to list other than the one recorded pod.
 """
 
 import json
@@ -30,10 +31,13 @@ class RecordedCluster:
         self.pods: list[dict[str, Any]] | None = None
         self.events: dict[str, Any] = load_fixture("events.json")
         self.nodeclaims: list[dict[str, Any]] = [load_fixture("nodeclaim.json")]
+        self.engine_log = (FIXTURES / "engine.log").read_text(encoding="utf-8")
         self.calls: list[list[str]] = []
 
     def __call__(self, args: Sequence[str], stdin: str | None = None) -> str:
         self.calls.append(list(args))
+        if "logs" in args:
+            return self.engine_log
         if "get" not in args:
             raise AssertionError(f"unexpected kubectl call: {list(args)}")
         resource = args[args.index("get") + 1]
@@ -107,7 +111,10 @@ class CyclingCluster(RecordedCluster):
             self.calls.append(list(args))
             self.steps.append("poll gpu nodeclaims")
             return json.dumps({"kind": "List", "items": self._poll_gpu_nodeclaims()})
-        self.steps.append(f"get {args[args.index('get') + 1]}")
+        if "logs" in args:
+            self.steps.append("read engine log")
+        else:
+            self.steps.append(f"get {args[args.index('get') + 1]}")
         return super().__call__(args, stdin)
 
     def _scale(self, replicas: int) -> None:
