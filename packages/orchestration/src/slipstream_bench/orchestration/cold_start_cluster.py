@@ -267,23 +267,28 @@ def _read_engine_phases(
         None,
     )
     lines = log.splitlines()
+
     if any(_COMPILE_CACHE_HIT in line for line in lines):
         raise ColdStartCycleError(
             f"engine log of pod {metadata['name']} shows a compile cache hit "
             f"(`{_COMPILE_CACHE_HIT}`): a true-zero cold start lands on a fresh node "
             f"with no torch.compile cache, so check what persists the engine's cache"
         )
+
     found = {
         marker: _find_log_lines(lines, marker, pod=pod)
         for marker in _ENGINE_LOG_MARKERS
     }
+
     _, download_s = found[_WEIGHT_DOWNLOAD][0]
     loaded, loading_s = found[_LOADING_WEIGHTS][0]
     initialized, _ = found[_INIT_ENGINE][0]
     serving, _ = found[_SERVER_START][0]
+
     _, torch_compile_s = found[_TORCH_COMPILE][0]
     _, profiling_run_s = found[_PROFILING_RUN][0]
     graph_capture_s = sum(seconds for _, seconds in found[_GRAPH_CAPTURE])
+
     return _EnginePhases(
         weight_download_s=round(download_s, SECONDS_DECIMALS),
         engine_init_s=_seconds(loaded - timedelta(seconds=loading_s), initialized),
