@@ -3,9 +3,9 @@
 The cold-start-breakdown flow writes one record per run under the results bucket's
 ``cold-start`` root. Each of the six phases is a duration in seconds bounded by named
 cluster or engine-log markers; the unattributed remainder is the total minus the phases,
-so the phases always add up to the cold start. The remainder holds scheduling, container
-start, the engine's imports and process start, and the API server's start. It is not
-checked for sign, since the markers carry up to about a second of rounding. Engine init's
+so the phases always add up to the cold start. The remainder holds scheduling and
+sandbox creation, container start through the engine's imports, process start and model
+init, and the API server's start. It is not checked for sign, since the markers carry up to about a second of rounding. Engine init's
 torch.compile, graph capture and profiling-run durations are detail inside engine init,
 not phases, so they are not subtracted from the total.
 
@@ -48,6 +48,7 @@ class ColdStartBreakdown:
     :param torch_compile_s: engine init's ``torch.compile took`` duration.
     :param graph_capture_s: engine init's ``Graph capturing finished in`` durations,
         summed, since the engine captures once while profiling memory and once for real.
+        vLLM logs each to the whole second.
     :param profiling_run_s: engine init's ``Initial profiling/warmup run took`` duration.
     """
 
