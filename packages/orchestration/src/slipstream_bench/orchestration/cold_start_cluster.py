@@ -34,9 +34,8 @@ import json
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict
 
 from slipstream_bench.contract.cold_start_record import (
     SECONDS_DECIMALS,
@@ -99,8 +98,7 @@ class ColdStartCycleError(Exception):
     """
 
 
-@dataclass(frozen=True)
-class _EnginePhases:
+class _EnginePhases(TypedDict):
     """The engine-side phases and engine init's detail read from the engine's log."""
 
     weight_download_s: float
@@ -240,7 +238,6 @@ def read_cold_start_breakdown(
     events = _list_container_events(kubectl, pod, container=container)
     pulling = _get_event_time(events, "Pulling", pod=pod, container=container)
     pulled = _get_event_time(events, "Pulled", pod=pod, container=container)
-    engine = _read_engine_phases(kubectl, pod, ready=ready, container=container)
 
     return ColdStartBreakdown(
         run=run,
@@ -248,12 +245,7 @@ def read_cold_start_breakdown(
         capacity_wait_s=_seconds(created, launched),
         node_launch_s=_seconds(launched, initialized),
         image_pull_s=_seconds(pulling, pulled),
-        weight_download_s=engine.weight_download_s,
-        engine_init_s=engine.engine_init_s,
-        readiness_lag_s=engine.readiness_lag_s,
-        torch_compile_s=engine.torch_compile_s,
-        graph_capture_s=engine.graph_capture_s,
-        profiling_run_s=engine.profiling_run_s,
+        **_read_engine_phases(kubectl, pod, ready=ready, container=container),
     )
 
 
