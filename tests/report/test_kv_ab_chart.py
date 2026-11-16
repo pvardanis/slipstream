@@ -4,15 +4,12 @@ The A/B's render publishes both tables to the flow run page beside its chart: ea
 median and range across the runs, and each arm run's ceiling.
 """
 
-from slipstream_bench.report.kv_ab_aggregation import (
-    KvAbCeiling,
-    KvAbRungSummary,
-    MetricSpread,
-)
+from slipstream_bench.report.kv_ab_aggregation import KvAbCeiling, KvAbRungSummary
 from slipstream_bench.report.kv_ab_chart import (
     kv_ab_ceilings_to_markdown,
     kv_ab_spreads_to_markdown,
 )
+from slipstream_bench.report.spread import MetricSpread
 
 
 def _spread(median: float, low: float, high: float) -> MetricSpread:
