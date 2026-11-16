@@ -160,6 +160,20 @@ def test_a_missing_marker_fails_naming_it_and_leaves_the_replica_at_zero() -> No
     assert cluster.steps[-2:] == ["get events", "scale 0"]
 
 
+def test_a_compile_cache_hit_fails_and_leaves_the_replica_at_zero() -> None:
+    cluster = CyclingCluster()
+    cluster.engine_log += (
+        "2026-11-13T15:30:00.000000000Z (EngineCore pid=127) INFO 11-13 15:30:00 "
+        "[backends.py:300] Directly load the compiled graph(s) for compile range "
+        "(1, 2048) from the cache, took 3.120 s\n"
+    )
+
+    with pytest.raises(ColdStartCycleError, match=r"compile cache hit"):
+        _drive(cluster)
+
+    assert cluster.steps[-2:] == ["read engine log", "scale 0"]
+
+
 def test_a_warm_node_that_outlives_the_drain_wait_fails_naming_it() -> None:
     cluster = CyclingCluster(drain_polls=1000)
     clock = FakeClock()
