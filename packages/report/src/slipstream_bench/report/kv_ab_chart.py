@@ -10,11 +10,8 @@ import statistics
 from collections import defaultdict
 
 from slipstream_bench.report.chart import to_markdown_table
-from slipstream_bench.report.kv_ab_aggregation import (
-    KvAbCeiling,
-    KvAbRungSummary,
-    MetricSpread,
-)
+from slipstream_bench.report.kv_ab_aggregation import KvAbCeiling, KvAbRungSummary
+from slipstream_bench.report.spread import format_spread
 
 # The spread table's columns: the arm's rung, its run count, then each metric's spread.
 _SPREAD_COLUMNS = (
@@ -83,19 +80,13 @@ def _spread_cells(spread: KvAbRungSummary) -> list[str]:
         spread["arm"],
         str(spread["max_concurrency"]),
         str(spread["runs"]),
-        _format_spread(spread["goodput_fraction"], _FRACTION),
-        _format_spread(spread["p95_ttft_ms"], _MS),
-        _format_spread(spread["p95_tpot_ms"], _MS),
-        _format_spread(spread["output_throughput"], _RATE),
-        _format_spread(spread["gpu_hit_rate"], _FRACTION),
-        _format_spread(spread["combined_hit_rate"], _FRACTION),
+        format_spread(spread["goodput_fraction"], _FRACTION),
+        format_spread(spread["p95_ttft_ms"], _MS),
+        format_spread(spread["p95_tpot_ms"], _MS),
+        format_spread(spread["output_throughput"], _RATE),
+        format_spread(spread["gpu_hit_rate"], _FRACTION),
+        format_spread(spread["combined_hit_rate"], _FRACTION),
     ]
-
-
-def _format_spread(spread: MetricSpread, fmt: str) -> str:
-    """Print a spread as its median with its range bracketed."""
-    median, low, high = (fmt.format(spread[key]) for key in ("median", "min", "max"))
-    return f"{median} [{low}–{high}]"
 
 
 def _format_ceiling(by_run: dict[int, int | None], run: int) -> str:

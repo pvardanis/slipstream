@@ -11,7 +11,6 @@ arm run's concurrency ceiling off its own ladder (:func:`get_kv_ab_ceilings`) th
 knob sweep reads a point's (ADR-0009).
 """
 
-import statistics
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from typing import TypedDict, cast, get_args
 from slipstream_bench.contract import LoadCell, SweepAggregationError, to_numeric_metric
 from slipstream_bench.contract.kv_ab_record import LABELS_KEY, Arm
 from slipstream_bench.report.aggregation import get_ceiling
+from slipstream_bench.report.spread import MetricSpread, get_spread
 
 
 @dataclass(frozen=True)
@@ -61,14 +61,6 @@ class KvAbRung:
             gpu_hit_rate=gpu_hit_rate,
             combined_hit_rate=combined_hit_rate,
         )
-
-
-class MetricSpread(TypedDict):
-    """A metric's median and range across an arm's runs of one rung."""
-
-    median: float
-    min: float
-    max: float
 
 
 class KvAbRungSummary(TypedDict):
@@ -181,12 +173,7 @@ def _get_metric_spread(
     group: list[KvAbRung], metric: Callable[[KvAbRung], float]
 ) -> MetricSpread:
     """Read a metric's median and range across the runs in ``group``."""
-    values = [metric(rung) for rung in group]
-    return {
-        "median": statistics.median(values),
-        "min": min(values),
-        "max": max(values),
-    }
+    return get_spread([metric(rung) for rung in group])
 
 
 def _read_labels(record: dict[str, object], source: Path) -> dict[str, object]:
