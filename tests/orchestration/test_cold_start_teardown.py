@@ -89,3 +89,8 @@ def test_flow_scales_a_killed_run_s_replica_to_zero_before_releasing_its_freeze(
 
 def test_flow_is_named_for_its_deployment() -> None:
     assert cold_start_flow.name == "cold-start-breakdown"
+
+
+def test_flow_times_out_after_an_hour_for_each_run_it_may_measure() -> None:
+    # Five runs at most, each given an hour: a hung run fails within five hours.
+    assert cold_start_flow.timeout_seconds == 5 * 3600
