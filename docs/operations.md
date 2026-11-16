@@ -196,18 +196,23 @@ that run's raw results become public too.
 ## Cold-start breakdown
 
 The `cold-start-breakdown` flow (#538) measures one cold start of the GPU replica, from
-its pod being created until the pod is Ready, and splits it into the cluster-side phases
-of [ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md):
+its pod being created until the pod is Ready, and splits it into the six phases of
+[ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md):
 capacity wait (pod created → the hosting NodeClaim's `Launched`), node launch
-(`Launched` → `Initialized`), image pull (kubelet's `Pulling` → `Pulled`), and the
-unattributed remainder, so the phases add up to the total. It runs on the same worker
-and pool as the knob sweep, so it queues behind a sweep or an A/B.
+(`Launched` → `Initialized`), image pull (kubelet's `Pulling` → `Pulled`), weight
+download (the duration `Time spent downloading weights` reports), engine init (the start
+of `Loading weights took`'s duration → `init engine (profile, create kv cache, warmup
+model) took`), readiness lag (`Starting vLLM server on` → Ready), and the unattributed
+remainder, so the phases add up to the total. Engine init's torch.compile, graph capture
+and profiling-run durations are recorded beside it. It runs on the same worker and pool
+as the knob sweep, so it queues behind a sweep or an A/B.
 
 **Every run starts from a true zero.** The run scales `deploy/vllm-gpu` to zero and waits
 up to 15 min for Karpenter to remove every GPU NodeClaim (the GPU pool's
 `consolidateAfter: 1m` reaps an empty node about a minute after scale-down). It then
 scales the replica to one, waits up to 20 min for the pod to go Ready, and reads the
-phases from the pod, its NodeClaim and the kubelet events. **It leaves the replica at
+phases from the pod, its NodeClaim, the kubelet events and the engine container's log,
+timing each log line by the container runtime's timestamp (`kubectl logs --timestamps`). **It leaves the replica at
 zero whether it passes or fails**, so no run leaves a GPU node up.
 
 The run opens no bench endpoint and sends no requests. It holds the rollout freeze for
@@ -251,10 +256,20 @@ back.
 - any number of pods other than one matching the replica's selector names the count: the
   breakdown is read from the replica's one pod;
 - an engine container that restarted names its restart count, since its Ready condition
-  then marks its last start; check the engine's previous log.
+  then marks its last start; check the engine's previous log;
+- an engine log missing a marker (`Time spent downloading weights`, `Loading weights
+  took`, `init engine (profile, create kv cache, warmup model) took`, `Starting vLLM
+  server on`, `torch.compile took`, `Graph capturing finished in` or `Initial
+  profiling/warmup run took`) names the line. An engine upgrade past vLLM v0.29.0 must
+  re-check every marker ADR-0030 names;
+- an engine log that shows a compile cache hit (`Directly load the compiled graph(s)`)
+  fails the run: a true-zero cold start has no torch.compile cache, so check what
+  persists the engine's cache.
 
-**Results** land in the bench-results bucket at `cold-start/<run-id>/r1.json`: the total
-and each phase in seconds. The run page shows the same phase table as the
+**Results** land in the bench-results bucket at `cold-start/<run-id>/r1.json`: the total,
+each phase and engine init's torch.compile, graph capture and profiling-run durations, in
+seconds to the millisecond. Graph capture is the sum of both capture lines vLLM logs, one
+while profiling memory and one for real. The run page shows the same phase table as the
 `cold-start-breakdown` artifact. `just bench-results-sync` does not pull `cold-start/`;
 fetch a record with `aws s3 cp s3://<bucket>/cold-start/<run-id>/r1.json -`. The run
 logs the breakdown before writing it (`cold-start run=<run-id> measured …`), so a failed
