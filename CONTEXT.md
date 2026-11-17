@@ -23,6 +23,12 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
   not replace it.
 - **Replica** — one running Engine instance serving the model. Concurrency happens *inside* a
   replica; routing happens *between* replicas.
+- **Serving fleet** — the platform's serving path: the replicas that serve the model at one
+  fixed set of engine knobs, whose replica count the autoscaler alone decides. What
+  autoscaling, spot-eviction survival and routing act on.
+- **Bench Engine** — the replica the measurements own: a flow sets its engine knobs and its
+  replica count for the length of a run. The instrument behind the bench endpoint, never
+  part of the serving fleet.
 - **Continuous batching** — a replica interleaving many in-flight requests on one GPU, adding
   and retiring them token by token.
 - **KV cache** — the per-request key/value tensors the model computes during prefill and reuses
