@@ -1,0 +1,14 @@
+{
+  "run": 1,
+  "total_s": 760.0,
+  "capacity_wait_s": 205.0,
+  "node_launch_s": 44.0,
+  "image_pull_s": 284.0,
+  "weight_download_s": 41.237,
+  "engine_init_s": 104.155,
+  "readiness_lag_s": 12.0,
+  "unattributed_s": 69.608,
+  "torch_compile_s": 44.84,
+  "graph_capture_s": 4.0,
+  "profiling_run_s": 0.1
+}

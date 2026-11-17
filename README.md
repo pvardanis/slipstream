@@ -234,6 +234,35 @@ the SLO. It measures the mechanism on the capped pool, not a gain on the uncappe
 full verdict is in
 [`reports/kv-cache-ab-20261022T131457Z/`](reports/kv-cache-ab-20261022T131457Z/RECOMMENDATION.md).
 
+### Cold-start baseline
+
+Cold-start breakdown run `20261117T143332Z` is the baseline that cold-start elimination
+work is measured against. One cold start from a true zero on the g5.xlarge took 760 s
+(12.7 min) from the pod being created until it was Ready:
+
+![Cold-start breakdown of run 20261117T143332Z](reports/cold-start-20261117T143332Z/cold-start-breakdown.png)
+
+| phase | seconds |
+| --- | --- |
+| Capacity wait | 205.0 |
+| Node launch | 44.0 |
+| Image pull | 284.0 |
+| Weight download | 41.2 |
+| Engine init (torch.compile 44.8, graph capture 4.0) | 104.2 |
+| Readiness lag | 12.0 |
+| Unattributed | 69.6 |
+
+Pulling the vLLM image onto the fresh node is the largest phase (37%). The capacity
+wait comes from one `InsufficientInstanceCapacity` launch failure and Karpenter's
+retry about 3 minutes later; the launch that succeeded took 3.5 s. With the capacity
+gap removed, image pull and engine init together are about 70% of the cold start.
+
+This is one run, not the flow's default three: during the second run, EC2 had no
+on-demand g5.xlarge in any eu-west-1 zone for over 12 minutes, and the run was
+cancelled. The baseline therefore has no spread yet; re-running the flow unchanged
+adds it. The full report is in
+[`reports/cold-start-20261117T143332Z/`](reports/cold-start-20261117T143332Z/BASELINE.md).
+
 ## Observability
 
 The fleet's metrics and traces live in Grafana Cloud's free tier, so dashboards and 14
