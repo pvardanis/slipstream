@@ -248,7 +248,7 @@ work is measured against. One cold start from a true zero on the g5.xlarge took 
 | Node launch | 44.0 |
 | Image pull | 284.0 |
 | Weight download | 41.2 |
-| Engine init (torch.compile 44.8, graph capture 4.0) | 104.2 |
+| Engine init (torch.compile 44.8, graph capture 4.0, profiling run 0.1) | 104.2 |
 | Readiness lag | 12.0 |
 | Unattributed | 69.6 |
 
