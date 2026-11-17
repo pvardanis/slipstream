@@ -47,8 +47,8 @@ six half-finished layers. Every decision below favours depth-first over breadth-
 
 ### 3.1 GPU, model, serving substrate
 
-- **Instance:** `g5.xlarge` — 1× NVIDIA A10G (24 GB), **spot**, with autoscale-to-zero. Best
-  spot value of the 24 GB cards (~$0.44–0.64/hr `us-east-1`). A single card is the target: one
+- **Instance:** `g5.xlarge` — 1× NVIDIA A10G (24 GB), **on-demand** through L2a and **spot** from
+  L2b, with autoscale-to-zero ([ADR-0031](adr/0031-serving-fleet-autoscales-on-running-requests-woken-by-envoy.md)). Best spot value of the 24 GB cards (~$0.44–0.64/hr `us-east-1`). A single card is the target: one
   48 GB card would beat 2-GPU tensor parallel, and TP needs both GPUs in one instance — but 8B
   fits one A10G, so **no tensor parallelism** (this supersedes the brief's "L1 = TP-across-2-GPU").
 - **Model:** **Qwen3-8B (dense), AWQ-INT4 (`awq_marlin` kernel), FP8 KV cache.** Chosen for
@@ -63,8 +63,9 @@ six half-finished layers. Every decision below favours depth-first over breadth-
   - **L1 (single replica):** **vLLM** — every knob is native (`--max-num-seqs`,
     `--max-num-batched-tokens`, `--gpu-memory-utilization`, chunked prefill, AWQ, FP8 KV,
     automatic prefix caching). The other substrates orchestrate vLLM; they do not replace it.
-  - **L2 (platform):** **Kubernetes-native — Karpenter (spot + node scaling) + KEDA/HPA on
-    inference signals** (`num_requests_waiting`, KV-cache pressure). Not Ray Serve, which would
+  - **L2 (platform):** **Kubernetes-native — Karpenter (node scaling, spot from L2b) + KEDA on
+    inference signals** (running and waiting requests per replica; [ADR-0031](adr/0031-serving-fleet-autoscales-on-running-requests-woken-by-envoy.md) records
+    why KV-cache usage is not a trigger). Not Ray Serve, which would
     add a second control plane and autoscaler on EKS.
   - **L3/L4 (routing + disaggregation):** **Gateway API Inference Extension (IGW, GA) as the
     routing contract + a version-pinned pre-1.0 llm-d Router/EPP as the scheduler.** These are
@@ -117,7 +118,7 @@ independently.
 |---|---|---|---|
 | **L0** — harness | `vllm bench serve` wrapper + cost/1M post-processor + prefix-cache-hit scraper | all three run and join | Baseline **$/1M self-hosted vs commercial API at SLO** (TTFT p95 ≤1000, TPOT ≤50), one config |
 | **L1** — tuned replica | knob sweep: `max-num-seqs` · KV quant · chunked prefill · prefix cache · **LMCache offload** | sweep hits SLO at max concurrency | **Knob-sweep chart:** max sustained concurrency at SLO + the LMCache cache-extension win |
-| **L2a** — cold start + autoscale | cold-start-from-zero (image pull + weight load) measured; KEDA/HPA on `num_requests_waiting`; Karpenter provisioning | scales up under load from zero | **Cold-start latency breakdown + autoscaling-under-load timeline** |
+| **L2a** — cold start + autoscale | cold-start-from-zero (image pull + weight load) measured; KEDA on running + waiting requests per replica, woken from zero by request rate; Karpenter provisioning | scales up under load from zero | **Cold-start latency breakdown + autoscaling-under-load timeline** |
 | **L2b** — spot + chaos | scale-to-zero + wake; spot-eviction drain; **chaos day** (evict node mid-generation, token stream survives) | a generation survives a spot eviction | **"vLLM on EKS spot: cold start, autoscaling, what breaks"** write-up + chaos-day survival capture |
 | **L3** — routing + obs spine | IGW + llm-d Router/EPP; prefix-cache-aware routing vs round-robin **across a prefix-share sweep**; request-ID join spine live | the sweep reports a crossover point, pivot demo works | **"Prefix-cache-aware routing vs round-robin"** write-up (a curve, not a point — where cache-aware routing wins, and where it stops) + the cross-tool pivot demo |
 | **L4** — P/D disaggregation | separate prefill/decode node pools; **LMCache KV transfer** between them; measured vs colocated | disagg runs and is measured | **P/D disaggregation result**, including an honest "where it didn't pay" |
@@ -352,8 +353,8 @@ The output is public evidence, not the cluster:
                  │                                  ├─▶ Prom/Grafana
                  │                                  └─▶ Loki     │
                  │                                             │ │
-                 │  Karpenter (spot nodes) + KEDA/HPA ─────────┘ │
-                 │  (scale-to-zero, autoscale on num_requests_waiting)
+                 │  Karpenter (GPU nodes) + KEDA ──────────────┘ │
+                 │  (scale-to-zero, autoscale on running requests)
                  └─────────────────────────────────────────────┘
    Terraform provisions the cluster and its add-ons; Argo CD deploys the workloads.
    just cluster-up / just cluster-down.
