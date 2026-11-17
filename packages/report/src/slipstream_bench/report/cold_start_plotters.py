@@ -88,7 +88,8 @@ def _plot_cold_start(breakdowns: list[ColdStartBreakdown], *, run_id: str) -> Fi
         starts = [start + width for start, width in zip(starts, widths, strict=True)]
     ax.invert_yaxis()
     ax.set_xlabel("seconds (pod created → Ready)")
-    ax.set_title(f"Cold-start breakdown — {run_id}, {len(ordered)} runs")
+    runs_label = "run" if len(ordered) == 1 else "runs"
+    ax.set_title(f"Cold-start breakdown — {run_id}, {len(ordered)} {runs_label}")
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize="small")
     figure.tight_layout()
     return figure

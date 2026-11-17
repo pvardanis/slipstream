@@ -85,6 +85,14 @@ def test_the_title_names_the_run_id_and_its_run_count() -> None:
         plt.close(figure)
 
 
+def test_the_title_counts_a_single_run_in_the_singular() -> None:
+    figure = _plot_cold_start([build_breakdown(1)], run_id="cs-1")
+    try:
+        assert figure.axes[0].get_title() == "Cold-start breakdown — cs-1, 1 run"
+    finally:
+        plt.close(figure)
+
+
 def test_engine_init_detail_over_engine_init_by_its_rounding_draws_no_rest() -> None:
     # 44.91 + 4 + 0.1 s of detail in 49 s of engine init: graph capture is logged to the
     # whole second, so its rounding, not a misread marker, leaves no rest to draw.
