@@ -7,15 +7,13 @@ then the unattributed remainder and the total. Like :mod:`slipstream_bench.repor
 the renderer is pure and imports no plotting stack.
 """
 
+from slipstream_bench.contract.cold_start_record import ENGINE_INIT_DETAIL
 from slipstream_bench.report.chart import to_markdown_table
 from slipstream_bench.report.cold_start_aggregation import (
     FIELD_LABELS,
     ColdStartSummary,
 )
 from slipstream_bench.report.spread import format_spread
-
-# Engine init's detail: durations inside engine init, not phases of their own.
-ENGINE_INIT_DETAIL = ("torch_compile_s", "graph_capture_s", "profiling_run_s")
 
 _TOTAL = "total_s"
 _COLUMNS = ("phase", "seconds")
