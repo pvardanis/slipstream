@@ -53,20 +53,24 @@ unattributed remainder add up to the 760.0 s total exactly.
   the vLLM image onto a fresh node. It is close to the 4.5 min pull on the Fleet health
   dashboard's one recorded bring-up.
 - **Capacity wait here is a capacity gap, not scheduling.** Karpenter's first NodeClaim
-  (14:34:00) failed with `InsufficientInstanceCapacity`. Karpenter marks a failed
-  offering unavailable for about 3 minutes, so the next NodeClaim was created at
-  14:37:20, and Karpenter's log shows it launched 3.5 s later. Without the gap, capacity
-  wait would have been about 4 s and the cold start about 560 s. Run 2's 12+ minutes of failed launches
-  are the same effect at a larger scale (#243 recorded 10–20 min on bad days).
+  (14:34:00) failed with `InsufficientInstanceCapacity`. The next NodeClaim was created
+  at 14:37:20, 3 min 20 s later, which fits Karpenter's 3-minute cache of unavailable
+  offerings; run 2's retries were about 3 min 10 s apart. Karpenter's log shows the
+  second NodeClaim launched 3.5 s after it was created. Without the gap, capacity
+  wait would have been about 4 s and the cold start about 560 s. Run 2's 12+ minutes of
+  failed launches are the same effect at a larger scale (#243 recorded 10–20 min on bad
+  days).
 - **Node launch** (NodeClaim `Launched` → `Initialized`, 44 s) covers EC2 boot, node
   registration and the GPU device plugin advertising the GPU.
 - **Engine init is 104 s.** torch.compile is 44.8 s of it, which a persisted compile
-  cache could remove. Graph capture is 4 s, which no cache removes. The other 55 s
+  cache could largely remove. Graph capture is 4 s, which the compile cache does not
+  persist. The other 55 s
   covers loading weights onto the GPU, weight post-processing, KV cache sizing and
   warmup.
 - **Weight download** from Hugging Face takes 41 s.
-- **Readiness lag** is 12 s, within the startupProbe's 15 s period on the GPU pod
-  (`k8s/vllm-gpu.yaml`): the pod goes Ready on the first probe after the server starts.
+- **Readiness lag** is 12 s. Ready needs the startupProbe (15 s period) and then the
+  readinessProbe (10 s period) to pass on the GPU pod (`k8s/vllm-gpu.yaml`), so the
+  probe periods set most of this gap.
 - **Unattributed is 69.6 s (9%).** It covers the gaps no marker bounds (ADR-0030):
   scheduling and sandbox creation between node launch and image pull, container start
   through the engine's imports, process start and model init, and the API server's start
