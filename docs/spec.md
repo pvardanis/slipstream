@@ -392,3 +392,4 @@ map is [Map: slipstream platform spec](https://github.com/pvardanis/slipstream/i
 | Spec assembly (this document) | [#11](https://github.com/pvardanis/slipstream/issues/11) |
 | Deploy substrate: Argo CD | [#36](https://github.com/pvardanis/slipstream/issues/36) · [ADR-0029](adr/0029-argo-cd-deploys-the-application-workloads.md) |
 | Cold-start breakdown (L2a experiment design) | [#37](https://github.com/pvardanis/slipstream/issues/37) · [ADR-0030](adr/0030-cold-start-breakdown-from-cluster-events-and-engine-logs.md) |
+| Autoscaling under load (L2a): serving fleet, signals, wake | [#38](https://github.com/pvardanis/slipstream/issues/38) · [ADR-0031](adr/0031-serving-fleet-autoscales-on-running-requests-woken-by-envoy.md) |
