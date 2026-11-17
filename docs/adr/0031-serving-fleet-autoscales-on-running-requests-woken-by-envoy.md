@@ -1,4 +1,4 @@
-<!-- ADR recording how L2a autoscales (issue #38): the serving fleet is a Deployment separate from the bench Engine, deployed by Argo CD, whose replicas KEDA alone owns from 0 to 2; its manifest is generated from k8s/vllm-gpu.yaml at the 0%-share knob-sweep winner and committed with a drift test, so the bench path is untouched; KEDA scales 1→N on running requests per replica with waiting requests as a backstop, and kv_cache_usage_perc is left out because vLLM counts evictable prefix blocks as free and the Rig breaches its SLO at about 10% KV usage; a static Envoy proxy in front of the serving fleet publishes the request rate that wakes it from zero, and the KEDA HTTP add-on is deferred to L2b's request survival; every trigger reads the in-cluster Prometheus, not Grafana Cloud; the ceiling of 2 replicas is the on-demand G quota; #38 owns the control loop 0→N→0 and L2b owns no request lost during wake; the autoscale-under-load flow drives an open-loop wake/surge/idle profile through a per-run bench endpoint and passes on the replica path 0→1→2→0, recording the SLO without gating on it; each flow refuses to start while the other role holds GPUs. Builds on ADR-0006, ADR-0009, ADR-0026, ADR-0028, ADR-0029 and ADR-0030. -->
+<!-- ADR recording how L2a autoscales (issue #38): the serving fleet is a Deployment separate from the bench Engine, in its own `serving` namespace, deployed by Argo CD, whose replicas KEDA alone owns from 0 to 2; its manifest is generated from k8s/vllm-gpu.yaml at the 0%-share knob-sweep winner and committed with a drift test, so the bench path is untouched; KEDA scales 1→N on running requests per replica with waiting requests as a backstop, and kv_cache_usage_perc is left out because vLLM counts evictable prefix blocks as free and the Rig breaches its SLO at about 10% KV usage; a static Envoy proxy in front of the serving fleet publishes the request rate that wakes it from zero, and the KEDA HTTP add-on is deferred to L2b's request survival; every trigger reads the in-cluster Prometheus, not Grafana Cloud; the ceiling of 2 replicas is the on-demand G quota; #38 owns the control loop 0→N→0 and L2b owns no request lost during wake; the autoscale-under-load flow drives an open-loop wake/surge/idle profile through a per-run bench endpoint and passes on the replica path 0→1→2→0, recording the SLO without gating on it; each flow refuses to start while the other role holds GPUs. Builds on ADR-0006, ADR-0009, ADR-0026, ADR-0028, ADR-0029 and ADR-0030. -->
 
 # ADR-0031: The serving fleet autoscales on running requests, woken by Envoy
 
@@ -53,6 +53,16 @@ serving fleet's count all the time.
 
 - *A ScaledObject on `vllm-gpu`*, applied for the length of an autoscale run, was
   rejected: whether KEDA or a flow owns the replicas would depend on which flow is running.
+
+**The serving fleet lives in its own namespace, `serving`.** The worker's Role in
+`slipstream` lists and watches Deployments namespace-wide on the grounds that the
+namespace holds only the bench Engine; a separate namespace keeps that true and keeps the
+two roles apart in RBAC as well. The worker gets read on the serving fleet's Deployment
+in `serving` and nothing else there. The `vllm-api-key` Secret is provisioned in
+`serving` too.
+
+- *Sharing `slipstream`* was rejected: the worker's namespace-wide list and watch would
+  reach the serving fleet, and the Role's justification would no longer hold.
 
 **The serving fleet's manifest is generated from `k8s/vllm-gpu.yaml` and committed, and
 a test fails when the committed file differs from a fresh render.** The render fixes the
