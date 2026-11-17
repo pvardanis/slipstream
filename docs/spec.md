@@ -47,10 +47,12 @@ six half-finished layers. Every decision below favours depth-first over breadth-
 
 ### 3.1 GPU, model, serving substrate
 
-- **Instance:** `g5.xlarge` — 1× NVIDIA A10G (24 GB), **on-demand** through L2a and **spot** from
-  L2b, with autoscale-to-zero ([ADR-0031](adr/0031-serving-fleet-autoscales-on-running-requests-woken-by-envoy.md)). Best spot value of the 24 GB cards (~$0.44–0.64/hr `us-east-1`). A single card is the target: one
-  48 GB card would beat 2-GPU tensor parallel, and TP needs both GPUs in one instance — but 8B
-  fits one A10G, so **no tensor parallelism** (this supersedes the brief's "L1 = TP-across-2-GPU").
+- **Instance:** `g5.xlarge` — 1× NVIDIA A10G (24 GB), **on-demand** through L2a and **spot**
+  from L2b, with autoscale-to-zero ([ADR-0031](adr/0031-serving-fleet-autoscales-on-running-requests-woken-by-envoy.md)).
+  Best spot value of the 24 GB cards (~$0.44–0.64/hr `us-east-1`). A single card is the
+  target: one 48 GB card would beat 2-GPU tensor parallel, and TP needs both GPUs in one
+  instance — but 8B fits one A10G, so **no tensor parallelism** (this supersedes the
+  brief's "L1 = TP-across-2-GPU").
 - **Model:** **Qwen3-8B (dense), AWQ-INT4 (`awq_marlin` kernel), FP8 KV cache.** Chosen for
   concurrency headroom, not coding quality. **FP8 *weights* are rejected** — Ampere (A10G) has no
   hardware FP8, so INT4 AWQ is the right quantization for this card. FP8 KV cache is still used
@@ -354,7 +356,7 @@ The output is public evidence, not the cluster:
                  │                                  └─▶ Loki     │
                  │                                             │ │
                  │  Karpenter (GPU nodes) + KEDA ──────────────┘ │
-                 │  (scale-to-zero, autoscale on running requests)
+                 │  (scale-to-zero, autoscale on running + waiting requests)
                  └─────────────────────────────────────────────┘
    Terraform provisions the cluster and its add-ons; Argo CD deploys the workloads.
    just cluster-up / just cluster-down.
