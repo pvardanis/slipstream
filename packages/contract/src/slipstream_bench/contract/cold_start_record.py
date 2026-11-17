@@ -16,7 +16,7 @@ only the cold-start flow needs it.
 from dataclasses import dataclass, fields
 
 # The six phases, in order, which with the remainder add up to the total.
-_PHASES = (
+PHASES = (
     "capacity_wait_s",
     "node_launch_s",
     "image_pull_s",
@@ -24,6 +24,8 @@ _PHASES = (
     "engine_init_s",
     "readiness_lag_s",
 )
+# Engine init's detail: durations inside engine init, not phases of their own.
+ENGINE_INIT_DETAIL = ("torch_compile_s", "graph_capture_s", "profiling_run_s")
 # Seconds are recorded to the millisecond, so the remainder carries no float noise.
 SECONDS_DECIMALS = 3
 
@@ -87,7 +89,7 @@ class ColdStartBreakdown:
     @property
     def unattributed_s(self) -> float:
         """The part of the total no phase covers, to the millisecond."""
-        covered = sum(getattr(self, phase) for phase in _PHASES)
+        covered = sum(getattr(self, phase) for phase in PHASES)
         return round(self.total_s - covered, SECONDS_DECIMALS)
 
     def to_record(self) -> dict[str, int | float]:
@@ -99,9 +101,7 @@ class ColdStartBreakdown:
         return {
             "run": self.run,
             "total_s": self.total_s,
-            **{phase: getattr(self, phase) for phase in _PHASES},
+            **{phase: getattr(self, phase) for phase in PHASES},
             "unattributed_s": self.unattributed_s,
-            "torch_compile_s": self.torch_compile_s,
-            "graph_capture_s": self.graph_capture_s,
-            "profiling_run_s": self.profiling_run_s,
+            **{detail: getattr(self, detail) for detail in ENGINE_INIT_DETAIL},
         }
