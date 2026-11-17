@@ -8,25 +8,29 @@
 ## Context
 
 L2a's second deliverable is an autoscaling-under-load timeline: the platform scales up
-from zero under load (spec §4). The spec names KEDA/HPA on `num_requests_waiting` and
-Karpenter provisioning. Until now the GPU replica is scaled by hand (`just gpu-up` /
-`gpu-down`, ADR-0006) or by a flow (ADR-0030), and no autoscaler is installed.
+from zero under load (spec §4). Before this ADR the spec named KEDA/HPA on
+`num_requests_waiting` and Karpenter provisioning. The GPU replica is scaled by hand
+(`just gpu-up` / `gpu-down`, ADR-0006) or by a flow (ADR-0030), and no autoscaler is
+installed.
 
 Facts that shaped the decisions below:
 
 - The only GPU Deployment, `vllm-gpu`, is the instrument the knob sweep, the KV cache A/B
   and the cold-start flow own: they set its engine knobs and replica count per run, and
   the worker's RBAC is scoped to it.
-- The cluster runs EKS 1.36, where the `HPAScaleToZero` feature gate is alpha. Plain HPA
-  cannot reach zero replicas; KEDA can.
-- The account's on-demand G quota is 8 vCPU, two g5.xlarge. The spot G quota is 4 vCPU,
-  one node, and the GPU NodePool is on-demand only (ADR-0030).
+- The cluster runs EKS 1.36, where the `HPAScaleToZero` feature gate is alpha
+  ([feature gates](https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/)),
+  and EKS's managed control plane does not expose alpha gates. Plain HPA cannot reach
+  zero replicas; KEDA can.
+- The account's on-demand G quota in eu-west-1 is 8 vCPU, two g5.xlarge; the spot G quota
+  is 4 vCPU, one node (Service Quotas `L-DB2E81BA` and `L-3819A6DF`, read 2026-11-17). The
+  GPU NodePool is on-demand only (ADR-0006).
 - A cold start from a true zero takes about 760 s
   (`reports/cold-start-20261117T143332Z/BASELINE.md`).
-- The 0%-share knob-sweep winner, `32 fp8 off`, holds the SLO up to a concurrency ceiling
-  of 8 and breaches it at the next rung, 16, on TPOT
-  (`reports/sweep-grid-20261008T130350Z/RECOMMENDATION.md`).
-- An in-cluster Prometheus already scrapes the Engine and remote-writes an allowlist to
+- The 0%-share knob-sweep winner, `32 fp8 off`, has a concurrency ceiling of 8 (ADR-0009):
+  goodput falls to 0.755 at the next rung, 16, where p95 TPOT is 55 ms against the 50 ms
+  gate and TTFT still passes (`reports/sweep-grid-20261008T130350Z/RECOMMENDATION.md`).
+- An in-cluster Prometheus scrapes the Engine and remote-writes an allowlist to
   Grafana Cloud (ADR-0026).
 
 ## Decision
@@ -57,8 +61,8 @@ Service and NodePort, and drops `replicas` so Argo CD never resets KEDA's count.
 spec keeps one source, and neither the recipe's nor the flows' renderer changes.
 
 - *A hand copy* was rejected: two 240-line pod specs drift apart.
-- *A shared Kustomize or Helm base* was rejected for now: it rewrites both renderers and
-  the RBAC-scoped apply path. It stays open if the two roles diverge.
+- *A shared Kustomize or Helm base* was rejected: it rewrites both renderers and the
+  RBAC-scoped apply path. It stays open if the two roles diverge.
 
 **The serving fleet runs `32 fp8 off`, the 0%-share winner, and the autoscale load runs
 at 0% prefix share.** That share has the lowest ceiling, so its threshold is the most
@@ -66,7 +70,7 @@ conservative, and one config gives one ceiling to set the threshold against.
 
 **The two roles share the quota, so each flow refuses to start while the other holds
 GPUs:** the autoscale flow while `vllm-gpu` has replicas, the bench flows while the
-serving fleet does, each failing with which role holds them. The rollout freeze already
+serving fleet does, each failing with which role holds them. The rollout freeze
 serializes flow runs; this covers a manual `just gpu-up` and leftover load.
 
 ### Ceiling of two replicas, on-demand
@@ -74,7 +78,7 @@ serializes flow runs; this covers a manual `just gpu-up` and leftover load.
 **KEDA's `maxReplicaCount` is 2 and the GPU NodePool's limit rises from 1 to 2 GPUs.**
 Two on-demand g5.xlarge are the whole G quota. A second replica is what tests the
 queue-driven scale-out; 0→1 alone only tests the wake. Spot stays in L2b: its quota fits
-one node and it thrashed CreateFleet (ADR-0030).
+one node and it thrashed CreateFleet (ADR-0006).
 
 ### 1→N on running requests; waiting as a backstop; KV cache usage left out
 
@@ -85,7 +89,8 @@ scales to whichever asks for more.
 - The Rig breaches its SLO on TPOT, the cost of a bigger decode batch on the A10G, before
   any request has to wait. At the 0%-share breach rung, 16 running is below `max-num-seqs`
   32, so the queue is about empty. The running count is the signal that moves with the
-  breach, matching GKE's guidance to scale latency-sensitive serving on batch size.
+  breach, matching [GKE's guidance](https://docs.cloud.google.com/kubernetes-engine/docs/best-practices/machine-learning/inference/autoscaling)
+  to scale latency-sensitive serving on batch size.
 - The target sits below the ceiling of 8 because a new replica takes about 760 s to come
   up: scaling out at the ceiling would leave the replica past it for the whole cold start.
 - Waiting requests are counted in the primary trigger so a replica mid-generation is never
@@ -125,7 +130,7 @@ L3's Router replaces the proxy as both the front and the metric source.
 ### Every trigger reads the in-cluster Prometheus
 
 **KEDA's Prometheus triggers query the in-cluster Prometheus, and the serving fleet's
-ServiceMonitor scrapes every 15 s.** It already scrapes the Engine, needs no credentials,
+ServiceMonitor scrapes every 15 s.** It scrapes the Engine, needs no credentials,
 and keeps the control loop inside the cluster. Grafana Cloud stays the store results are
 read from (ADR-0026), not a control path: it would add remote-write lag, free-tier query
 limits and a read token in the cluster.
@@ -164,9 +169,7 @@ results bucket and a committed report with a timeline chart.
 
 ## Consequences
 
-- KEDA is a new cluster add-on installed by Terraform (ADR-0029's split); the serving
-  fleet, its Envoy proxy and its ScaledObject are one Argo CD app.
-- The spec and issue #38 still say spot and `num_requests_waiting`; they are corrected
-  separately.
+- KEDA is a cluster add-on installed by Terraform (ADR-0029's split); the serving fleet,
+  its Envoy proxy and its ScaledObject are one Argo CD app.
 - The serving fleet and the bench Engine cannot run at the same time, because two
   replicas fill the quota.

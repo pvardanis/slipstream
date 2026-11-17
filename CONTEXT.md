@@ -26,9 +26,9 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 - **Serving fleet** — the platform's serving path: the replicas that serve the model at one
   fixed set of engine knobs, whose replica count the autoscaler alone decides. What
   autoscaling, spot-eviction survival and routing act on.
-- **Bench Engine** — the replica the measurements own: a flow sets its engine knobs and its
-  replica count for the length of a run. The instrument behind the bench endpoint, never
-  part of the serving fleet.
+- **Bench Engine** — the GPU deployment the knob sweep, the KV cache A/B and the cold-start
+  measurement own: a flow sets its engine knobs and its replica count for the length of a
+  run. Never part of the serving fleet.
 - **Continuous batching** — a replica interleaving many in-flight requests on one GPU, adding
   and retiring them token by token.
 - **KV cache** — the per-request key/value tensors the model computes during prefill and reuses
@@ -144,7 +144,8 @@ the inference server. Terms below are the shared vocabulary; use them exactly.
 
 - **Request-ID** — one identifier carried across Grafana (fleet health), Sentry (code-path
   errors), and PostHog (product) via OpenTelemetry, so a single request is traceable end to end.
-- **Fleet health** — the live state of the serving fleet while a session runs: GPU, KV
+- **Fleet health** — the live state of the GPU replicas, serving fleet or bench Engine,
+  while a session runs: GPU, KV
   cache, queue, latency, and scaling.
 - **Cost scoreboard** — the live $/1M tokens and tokens/s per $/h of what slipstream itself
   serves, priced at the hourly price of the GPU capacity running it.
