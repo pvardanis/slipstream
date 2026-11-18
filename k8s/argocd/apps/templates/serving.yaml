@@ -1,0 +1,22 @@
+# The serving fleet's child Application (ADR-0031, #569): Argo CD deploys the fleet, its
+# proxy and the ScaledObject that owns its replicas (k8s/serving, a kustomization) into
+# the serving namespace from the root Application's repository and revision. Terraform
+# creates the namespace and its vllm-api-key Secret (terraform/eks/serving.tf), so the
+# app creates neither. Server-side apply leaves the fleet's replica count to KEDA: the
+# Deployment carries no replicas, and a sync releases the field rather than resetting it.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: serving
+  namespace: argocd
+spec:
+  project: workloads
+  source:
+    repoURL: {{ required "source.repoURL is required" .Values.source.repoURL }}
+    targetRevision: {{ required "source.targetRevision is required" .Values.source.targetRevision }}
+    path: k8s/serving
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: serving
+  syncPolicy:
+    {{- include "slipstream-apps.syncPolicy" . | nindent 4 }}
