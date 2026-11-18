@@ -1,0 +1,157 @@
+"""Tests for the serving fleet's manifest, rendered from the bench Engine's template.
+
+The serving fleet's Deployment and Service are generated from ``k8s/vllm-gpu.yaml`` at
+the 0%-share knob-sweep winner (``32 fp8 off``) under their own name, labels, ``serving``
+namespace and NodePort, with no ``replicas`` so Argo CD never resets KEDA's count
+(ADR-0031). The committed render must equal a fresh one, so the two pod specs keep one
+source.
+"""
+
+import re
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from slipstream_bench.orchestration.cluster import render_gpu_manifest
+from slipstream_bench.orchestration.serving_manifest import (
+    SERVING_ENGINE_ARGS,
+    SERVING_NODE_PORT,
+    render_serving_manifest,
+)
+
+_REPO = Path(__file__).parents[2]
+_TEMPLATE = _REPO / "k8s" / "vllm-gpu.yaml"
+_CPU_MANIFEST = _REPO / "k8s" / "vllm.yaml"
+_BENCH_ENDPOINT_VARIABLES = _REPO / "terraform" / "bench-endpoint" / "variables.tf"
+
+
+def _render_documents() -> dict[str, dict[str, Any]]:
+    """Render the committed template and key its documents by kind."""
+    rendered = render_serving_manifest(_TEMPLATE.read_text(encoding="utf-8"))
+    return {doc["kind"]: doc for doc in yaml.safe_load_all(rendered)}
+
+
+def _render_bench_documents() -> dict[str, dict[str, Any]]:
+    """Render the template as the bench Engine at the serving knobs, keyed by kind."""
+    rendered = render_gpu_manifest(
+        _TEMPLATE.read_text(encoding="utf-8"),
+        engine_args=SERVING_ENGINE_ARGS,
+        kv_cache_offload=False,
+    )
+    return {doc["kind"]: doc for doc in yaml.safe_load_all(rendered)}
+
+
+def _arg_value(args: list[str], flag: str) -> str:
+    """Return the value following ``flag`` in a container's args."""
+    return args[args.index(flag) + 1]
+
+
+def test_the_serving_engine_runs_the_zero_share_winner() -> None:
+    """32 fp8 off: max-num-seqs 32, fp8 KV cache, prefix caching off, no cap, no offload."""
+    deployment = _render_documents()["Deployment"]
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    args = container["args"]
+
+    assert _arg_value(args, "--max-num-seqs") == "32"
+    assert _arg_value(args, "--kv-cache-dtype") == "fp8"
+    assert "--no-enable-prefix-caching" in args
+    assert "--enable-prefix-caching" not in args
+    assert _arg_value(args, "--kv-cache-memory-bytes") == "None"
+    assert _arg_value(args, "--kv-transfer-config") == "None"
+    assert container["resources"]["limits"]["memory"] == "8Gi"
+
+
+def test_the_serving_fleet_lives_in_the_serving_namespace() -> None:
+    documents = _render_documents()
+
+    assert documents["Namespace"]["metadata"]["name"] == "serving"
+    assert documents["Deployment"]["metadata"]["namespace"] == "serving"
+    assert documents["Service"]["metadata"]["namespace"] == "serving"
+
+
+def test_the_serving_deployment_has_its_own_name_and_labels() -> None:
+    deployment = _render_documents()["Deployment"]
+
+    assert deployment["metadata"]["name"] == "vllm-serving"
+    assert deployment["metadata"]["labels"] == {"app": "vllm-serving"}
+    assert deployment["spec"]["selector"] == {"matchLabels": {"app": "vllm-serving"}}
+    assert deployment["spec"]["template"]["metadata"]["labels"] == {
+        "app": "vllm-serving"
+    }
+
+
+def test_the_serving_deployment_leaves_its_replica_count_to_the_autoscaler() -> None:
+    """No replicas field, so an Argo CD sync never resets the count KEDA set."""
+    deployment = _render_documents()["Deployment"]
+
+    assert "replicas" not in deployment["spec"]
+
+
+def test_the_serving_service_selects_the_fleet_on_its_own_node_port() -> None:
+    """NodePort 30801, apart from the bench endpoint's 30800."""
+    service = _render_documents()["Service"]
+
+    assert service["metadata"]["name"] == "vllm-serving"
+    assert service["metadata"]["labels"] == {"app": "vllm-serving"}
+    assert service["spec"]["selector"] == {"app": "vllm-serving"}
+    assert service["spec"]["ports"] == [
+        {"name": "http", "port": 8000, "targetPort": "http", "nodePort": 30801}
+    ]
+
+
+def _service_node_port(manifest: Path) -> int:
+    """Return the nodePort a manifest's one Service claims."""
+    (service,) = [
+        doc
+        for doc in yaml.safe_load_all(manifest.read_text(encoding="utf-8"))
+        if doc["kind"] == "Service"
+    ]
+    (port,) = service["spec"]["ports"]
+    return port["nodePort"]
+
+
+def _bench_endpoint_default_node_port() -> int:
+    """Return the bench endpoint stack's default target NodePort, vllm_nodeport."""
+    variables = _BENCH_ENDPOINT_VARIABLES.read_text(encoding="utf-8")
+    match = re.search(
+        r'variable "vllm_nodeport" \{[^}]*?default\s*=\s*(\d+)', variables
+    )
+    assert match is not None, "bench-endpoint has no vllm_nodeport default"
+    return int(match[1])
+
+
+def test_the_serving_node_port_is_apart_from_the_bench_ports() -> None:
+    """The bench endpoint targets 30800 by default, which both bench replicas claim."""
+    bench_ports = {
+        _service_node_port(_TEMPLATE),
+        _service_node_port(_CPU_MANIFEST),
+        _bench_endpoint_default_node_port(),
+    }
+
+    assert bench_ports == {30800}
+    assert SERVING_NODE_PORT not in bench_ports
+
+
+def test_a_template_already_on_the_serving_node_port_is_rejected() -> None:
+    """Both Services would claim one port; the cluster rejects the second at apply."""
+    template = _TEMPLATE.read_text(encoding="utf-8").replace(
+        "nodePort: 30800", f"nodePort: {SERVING_NODE_PORT}"
+    )
+
+    with pytest.raises(ValueError, match=f"NodePort {SERVING_NODE_PORT}"):
+        render_serving_manifest(template)
+
+
+def test_the_serving_pod_spec_is_the_bench_engine_pod_spec() -> None:
+    """Only identity, replicas and the NodePort differ: the pod spec keeps one source."""
+    serving = _render_documents()
+    bench = _render_bench_documents()
+
+    serving_spec = serving["Deployment"]["spec"]
+    bench_spec = bench["Deployment"]["spec"]
+    assert serving_spec["template"]["spec"] == bench_spec["template"]["spec"]
+    for field in ("strategy", "progressDeadlineSeconds"):
+        assert serving_spec[field] == bench_spec[field]
+    assert serving["Service"]["spec"]["type"] == "NodePort"
