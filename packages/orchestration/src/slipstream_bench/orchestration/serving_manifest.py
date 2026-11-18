@@ -3,9 +3,11 @@
 The serving fleet runs the same pod spec as the bench Engine (``k8s/vllm-gpu.yaml``), so
 its manifest is generated from that template rather than copied by hand. The render fixes
 the engine knobs at the 0%-share knob-sweep winner, ``32 fp8 off``, through the same
-:func:`render_gpu_manifest` the flows use, then gives the fleet its own name, labels,
-``serving`` namespace and NodePort, and drops ``replicas`` so an Argo CD sync never
-resets the count KEDA alone owns. The template's Namespace document is dropped: the
+:func:`render_gpu_manifest` the flows use, then gives the fleet its own name, labels and
+``serving`` namespace, drops ``replicas`` so an Argo CD sync never resets the count KEDA
+alone owns, and makes its Service ClusterIP: outside traffic reaches the fleet only
+through its proxy (``k8s/serving/serving-proxy.yaml``), whose request rate wakes it from
+zero. The template's Namespace document is dropped: the
 workloads AppProject allows no cluster-scoped resources, so the ``serving`` namespace is
 created outside this manifest.
 """
@@ -31,12 +33,6 @@ _SERVING_NAMESPACE = "serving"
 _SERVING_NAME = "vllm-serving"
 _SERVING_LABELS = {"app": _SERVING_NAME}
 
-# The bench Engine's Service claims NodePort 30800, the bench endpoint's default target
-# (its vllm_nodeport input), so the serving fleet's Service takes the next port: both
-# Services coexist on the node group, and a run points the bench endpoint here by
-# overriding that input.
-SERVING_NODE_PORT = 30801
-
 # Opens the committed manifest: the file is an output, so a reader edits the template
 # and re-renders rather than editing it. A drift test holds it to a fresh render.
 _HEADER = f"""\
@@ -44,7 +40,8 @@ _HEADER = f"""\
 # The serving fleet (ADR-0031), at the 0%-share knob-sweep winner:
 #   --max-num-seqs {SERVING_ENGINE_ARGS.max_num_seqs} \
 --kv-cache-dtype {SERVING_ENGINE_ARGS.kv_engine_token} {SERVING_ENGINE_ARGS.prefix_caching_flag}
-# Namespace {_SERVING_NAMESPACE}, NodePort {SERVING_NODE_PORT}, and no replicas: KEDA alone owns the count.
+# Namespace {_SERVING_NAMESPACE}, a ClusterIP Service behind the serving proxy, and no replicas:
+# KEDA alone owns the count.
 """
 
 
@@ -54,8 +51,7 @@ def render_serving_manifest(template_text: str) -> str:
     :param template_text: the raw ``k8s/vllm-gpu.yaml`` text with its placeholders.
     :return: the serving fleet's manifest.
     :raise ValueError: when the template holds anything besides its Namespace, one
-        Deployment and one Service, or when its Service already claims the serving
-        fleet's NodePort — the cluster would reject whichever Service applies second.
+        Deployment and one Service.
     """
     rendered = render_gpu_manifest(
         template_text, engine_args=SERVING_ENGINE_ARGS, kv_cache_offload=False
@@ -88,11 +84,6 @@ def _assign_serving_identity(document: dict[str, Any]) -> None:
         spec["template"]["metadata"]["labels"] = dict(_SERVING_LABELS)
     elif document["kind"] == "Service":
         spec["selector"] = dict(_SERVING_LABELS)
-        (port,) = spec["ports"]
-        if port["nodePort"] == SERVING_NODE_PORT:
-            raise ValueError(
-                f"the bench Engine's Service already claims NodePort "
-                f"{SERVING_NODE_PORT}, the serving fleet's: move one of them so the "
-                f"two Services do not collide"
-            )
-        port["nodePort"] = SERVING_NODE_PORT
+        spec["type"] = "ClusterIP"
+        for port in spec["ports"]:
+            port.pop("nodePort", None)
