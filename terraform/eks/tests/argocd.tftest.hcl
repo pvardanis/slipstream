@@ -297,7 +297,7 @@ run "app_projects_are_scoped" {
 
   # The workloads project deploys from this repo and the upstream prefect-helm chart
   # repository (the worker's chart) into the namespaces the application workloads run
-  # in, and nowhere else.
+  # in (serving: the serving fleet's app, ADR-0031), and nowhere else.
   assert {
     condition     = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.sourceRepos == ["https://github.com/pvardanis/slipstream.git", "https://prefecthq.github.io/prefect-helm"]
     error_message = "The workloads project must source only from the slipstream repository and the prefect-helm chart repository."
@@ -313,8 +313,9 @@ run "app_projects_are_scoped" {
     condition = yamldecode(helm_release.argocd_apps.values[0]).projects.workloads.destinations == [
       { server = "https://kubernetes.default.svc", namespace = "prefect" },
       { server = "https://kubernetes.default.svc", namespace = "slipstream" },
+      { server = "https://kubernetes.default.svc", namespace = "serving" },
     ]
-    error_message = "The workloads project must deploy only into the in-cluster prefect and slipstream namespaces."
+    error_message = "The workloads project must deploy only into the in-cluster prefect, slipstream and serving namespaces."
   }
 
   # Argo CD denies every cluster-scoped kind a project does not whitelist, so neither

@@ -441,6 +441,49 @@ run "service_monitors_scrape_vllm_karpenter_dcgm_exporter_and_the_collector" {
   }
 }
 
+# The serving fleet's proxy (k8s/serving/serving-proxy.yaml, ADR-0031) publishes the
+# request rate KEDA's activation trigger reads, so Prometheus scrapes its stats every 15 s,
+# KEDA's polling interval, from the port that serves only /stats/prometheus.
+run "service_monitor_scrapes_the_serving_proxy" {
+  command = plan
+
+  assert {
+    condition = yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.serving-proxy == {
+      namespaceSelector = { matchNames = ["serving"] }
+      selector          = { matchLabels = { app = "serving-proxy" } }
+      endpoints         = [{ port = "metrics", path = "/stats/prometheus", interval = "15s" }]
+    }
+    error_message = "The serving proxy's ServiceMonitor must scrape /stats/prometheus on the metrics port of the serving-proxy Service in serving every 15s."
+  }
+
+  # The selector matches the Service the proxy's manifest deploys, so a label, port or
+  # namespace renamed on one side only fails here rather than silently stopping the scrape,
+  # which would leave the fleet at zero.
+  assert {
+    condition = length([
+      for d in [for doc in split("\n---\n", file("../../k8s/serving/serving-proxy.yaml")) : yamldecode(doc)] : d
+      if d.kind == "Service"
+      && d.metadata.labels.app == yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.serving-proxy.selector.matchLabels.app
+      && contains(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.serving-proxy.namespaceSelector.matchNames, d.metadata.namespace)
+      && contains([for p in d.spec.ports : p.name], yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.serving-proxy.endpoints[0].port)
+    ]) == 1
+    error_message = "The serving proxy's ServiceMonitor app label, namespace and port must match the Service in k8s/serving/serving-proxy.yaml."
+  }
+
+  # KEDA's wake trigger (k8s/serving/scaled-object.yaml) queries this release's
+  # Prometheus, whose Service the chart names after the release, so a renamed release
+  # or namespace fails here rather than leaving the trigger with nothing to query.
+  assert {
+    condition = alltrue([
+      for d in [for doc in split("\n---\n", file("../../k8s/serving/scaled-object.yaml")) : yamldecode(doc)] : alltrue([
+        for t in d.spec.triggers :
+        t.metadata.serverAddress == "http://${helm_release.kube_prometheus_stack.name}-prometheus.${helm_release.kube_prometheus_stack.namespace}.svc:9090"
+      ])
+    ])
+    error_message = "Every Prometheus trigger in k8s/serving/scaled-object.yaml must query the kube-prometheus-stack release's Prometheus Service."
+  }
+}
+
 # dcgm-exporter (#368) is one DaemonSet on the GPU nodes only, read against the GPU
 # NodePool's own label and taint (k8s/gpu-node-pool.yaml), so a renamed label or taint on
 # either side fails here rather than leaving the exporter on no GPU node, or on the wrong nodes.

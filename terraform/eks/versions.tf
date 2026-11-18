@@ -21,5 +21,11 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 3.2"
     }
+    # Generates the serving fleet's api-key as an ephemeral value (serving.tf), so it
+    # is never stored in state.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.9"
+    }
   }
 }
