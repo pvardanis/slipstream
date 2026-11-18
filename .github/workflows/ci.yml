@@ -319,11 +319,12 @@ jobs:
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           version: 2026.10.21
-          install_args: helm kubeconform yq
+          install_args: helm kubeconform kubectl yq
       # Lints and renders every local chart under terraform/*/charts/, the app-of-apps
-      # chart and the Collector chart Argo CD deploys, and validates the output against
-      # the Kubernetes and CRD schemas, so a chart fails here, not on a live cluster, on a
-      # template that fails to render or a resource the API server would reject.
+      # chart, the Collector chart and the serving kustomization Argo CD deploys, and
+      # validates the output against the Kubernetes and CRD schemas, so a chart fails here,
+      # not on a live cluster, on a template that fails to render or a resource the API
+      # server would reject.
       - name: Render and validate the local Helm charts
         run: bash test/chart-render-test.sh
       # Checks the child Applications the root Application's app-of-apps chart renders:

@@ -7,8 +7,11 @@
 # same lint, render and schema check; each of its templates must render, and each
 # Application it renders must carry the shared sync policy. The OTel Collector's chart (k8s/otel-collector), which Argo CD deploys, is linted, rendered
 # and validated with model.yaml as its values file, and must stamp model.yaml's model and
-# roll its pod on a change to its config or that model.
-# Needs helm, kubeconform and yq on PATH; no cluster.
+# roll its pod on a change to its config or that model. The serving fleet's kustomization
+# (k8s/serving), which Argo CD deploys, is rendered and validated, must land in its
+# Application's namespace, and must leave the replicas of the Deployment its ScaledObject
+# scales unset.
+# Needs helm, kubeconform, kubectl (for kustomize) and yq on PATH; no cluster.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -161,5 +164,42 @@ echo '# a merged config change' >>"${tmp}/chart/config.yaml"
 other_config_checksum="$(get_config_checksum "${tmp}/chart" "${model_values}")"
 if [[ "${other_config_checksum}" == "${checksum}" ]]; then
   echo "${collector_chart}'s checksum/config does not change with config.yaml, so a config change would not roll the Collector" >&2
+  exit 1
+fi
+
+# The serving fleet's child Application (ADR-0031), rendered as Argo CD renders it: the
+# kustomization at the Application's path. The fleet, its proxy and its ScaledObject
+# must validate, land in the Application's destination namespace, and leave the
+# replicas of the Deployment the ScaledObject scales unset, so a sync never resets the
+# count KEDA owns. Server-side apply, which releases that dropped field, is checked
+# with the shared sync policy above.
+serving_app="$(yq 'select(.kind == "Application" and .metadata.name == "serving")' <<<"${apps_rendered}")"
+if [[ -z "${serving_app}" ]]; then
+  echo "${apps_chart} renders no serving Application" >&2
+  exit 1
+fi
+serving_path="$(yq -e '.spec.source.path' <<<"${serving_app}")"
+serving_destination="$(yq -e '.spec.destination.namespace' <<<"${serving_app}")"
+if [[ "${serving_path}" != "k8s/serving" || "${serving_destination}" != "serving" ]]; then
+  echo "the serving Application must sync k8s/serving into the serving namespace, not ${serving_path} into ${serving_destination}" >&2
+  exit 1
+fi
+echo "--- ${serving_path}"
+serving_rendered="$(kubectl kustomize "${repo_root}/${serving_path}")"
+validate_schemas <<<"${serving_rendered}"
+elsewhere="$(yq -N "select(.metadata.namespace != \"${serving_destination}\") | .kind + \"/\" + .metadata.name" <<<"${serving_rendered}")"
+if [[ -n "${elsewhere}" ]]; then
+  echo "${serving_path} renders manifests outside its Application's destination namespace ${serving_destination}:" >&2
+  echo "${elsewhere}" >&2
+  exit 1
+fi
+scaled_target="$(yq -N 'select(.kind == "ScaledObject") | .spec.scaleTargetRef.name' <<<"${serving_rendered}")"
+scaled_deployment="$(yq -N "select(.kind == \"Deployment\" and .metadata.name == \"${scaled_target}\")" <<<"${serving_rendered}")"
+if [[ -z "${scaled_target}" || -z "${scaled_deployment}" ]]; then
+  echo "${serving_path} renders no ScaledObject whose scaleTargetRef names a Deployment it renders: '${scaled_target}'" >&2
+  exit 1
+fi
+if [[ "$(yq '.spec | has("replicas")' <<<"${scaled_deployment}")" != "false" ]]; then
+  echo "${serving_path}'s Deployment ${scaled_target} sets replicas, which a sync would reset under KEDA" >&2
   exit 1
 fi
