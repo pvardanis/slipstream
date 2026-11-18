@@ -26,6 +26,7 @@ from prefect.client.orchestration import get_client
 from prefect.deployments.runner import EntrypointType
 from prefect.exceptions import ObjectNotFound
 
+from slipstream_bench.orchestration import serving_manifest
 from slipstream_bench.orchestration.cell_run import build_s3_client
 from slipstream_bench.orchestration.digest import ServingConfig, read_serving_config
 from slipstream_bench.orchestration.flows.cold_start import cold_start_flow
@@ -36,7 +37,6 @@ from slipstream_bench.orchestration.flows.point_sweep import (
     run_point_sweep,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
-from slipstream_bench.orchestration.serving_manifest import render_serving_manifest
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
 
@@ -378,7 +378,7 @@ def register_cold_start(
 
 
 @app.command("render-serving-manifest")
-def render_serving_manifest_command(
+def render_serving_manifest(
     *,
     template: Annotated[
         Path, typer.Option(help="The bench Engine's template, k8s/vllm-gpu.yaml.")
@@ -395,7 +395,9 @@ def render_serving_manifest_command(
     :param template: the bench Engine's template, k8s/vllm-gpu.yaml.
     :param output: where the serving fleet's manifest is written.
     """
-    rendered = render_serving_manifest(template.read_text(encoding="utf-8"))
+    rendered = serving_manifest.render_serving_manifest(
+        template.read_text(encoding="utf-8")
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8")
     typer.echo(f"rendered the serving fleet's manifest to {output}")
