@@ -75,6 +75,10 @@ from slipstream_bench.orchestration.flows.run_setup import (
     open_run_rollout_freeze,
     tag_run_with_group,
 )
+from slipstream_bench.orchestration.gpu_roles import (
+    SERVING_FLEET,
+    refuse_while_role_holds_gpus,
+)
 from slipstream_bench.orchestration.model_config import read_model_id
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task, is_cell_cached
@@ -268,6 +272,9 @@ def knob_sweep_flow(
         publish=create_markdown_artifact,
     )
     kubectl = build_kubectl()
+    # The serving fleet shares the GPU quota, so the run refuses to start while it has
+    # replicas, before it touches the cluster or the bucket (ADR-0031).
+    refuse_while_role_holds_gpus(kubectl, SERVING_FLEET)
     s3_client = build_s3_client(region)
     task = cell_task(bucket, retries=retries)
     # Argo CD holds off the workloads from before the endpoint opens until the render has
