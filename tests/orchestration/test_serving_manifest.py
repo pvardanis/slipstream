@@ -87,8 +87,29 @@ def test_the_serving_fleet_lives_in_the_serving_namespace() -> None:
 
 
 def test_the_serving_manifest_holds_only_the_deployment_and_service() -> None:
-    """Terraform owns the serving namespace; the workloads AppProject syncs no Namespace."""
-    assert sorted(_render_documents()) == ["Deployment", "Service"]
+    """The workloads AppProject syncs no cluster-scoped resource, so no Namespace."""
+    kinds = [doc["kind"] for doc in yaml.safe_load_all(_render_serving())]
+
+    assert sorted(kinds) == ["Deployment", "Service"]
+
+
+@pytest.mark.parametrize(
+    "extra_document",
+    [
+        "kind: ConfigMap\nmetadata:\n  name: extra\n",
+        "kind: Service\nmetadata:\n  name: vllm-gpu-metrics\n",
+    ],
+    ids=["another-kind", "a-second-service"],
+)
+def test_a_template_beyond_one_deployment_and_one_service_is_rejected(
+    extra_document: str,
+) -> None:
+    """Only the Deployment and Service get the fleet's selectors; anything else would
+    come out renamed but still pointing at the bench Engine."""
+    template = f"{_template_text()}\n---\n{extra_document}"
+
+    with pytest.raises(ValueError, match="one Deployment and one Service"):
+        render_serving_manifest(template)
 
 
 def test_the_serving_deployment_has_its_own_name_and_labels() -> None:
@@ -159,17 +180,27 @@ def test_a_template_already_on_the_serving_node_port_is_rejected() -> None:
         render_serving_manifest(template)
 
 
-def test_the_serving_pod_spec_is_the_bench_engine_pod_spec() -> None:
-    """Only identity, replicas and the NodePort differ: the pod spec keeps one source."""
+def _drop_serving_identity(documents: dict[str, dict[str, Any]]) -> None:
+    """Remove, in place, the spec fields the serving identity sets, leaving the rest."""
+    deployment_spec = documents["Deployment"]["spec"]
+    deployment_spec.pop("replicas", None)
+    del deployment_spec["selector"]
+    del deployment_spec["template"]["metadata"]["labels"]
+    service_spec = documents["Service"]["spec"]
+    del service_spec["selector"]
+    del service_spec["ports"][0]["nodePort"]
+
+
+def test_the_serving_specs_are_the_bench_engine_specs() -> None:
+    """Only identity, replicas and the NodePort differ: the specs keep one source."""
     serving = _render_documents()
     bench = _render_bench_documents()
 
-    serving_spec = serving["Deployment"]["spec"]
-    bench_spec = bench["Deployment"]["spec"]
-    assert serving_spec["template"]["spec"] == bench_spec["template"]["spec"]
-    for field in ("strategy", "progressDeadlineSeconds"):
-        assert serving_spec[field] == bench_spec[field]
-    assert serving["Service"]["spec"]["type"] == "NodePort"
+    _drop_serving_identity(serving)
+    _drop_serving_identity(bench)
+
+    for kind in ("Deployment", "Service"):
+        assert serving[kind]["spec"] == bench[kind]["spec"], kind
 
 
 def test_the_committed_serving_manifest_matches_a_fresh_render() -> None:
