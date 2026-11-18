@@ -1,0 +1,33 @@
+# The ScaledObject that alone owns the serving fleet's replica count (ADR-0031): KEDA
+# wakes the fleet 0→1 when requests reach its proxy, and returns it to 0 once no request
+# has arrived for the cooldown. The Deployment carries no replicas, so an Argo CD sync
+# never resets the count KEDA sets.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-serving
+  namespace: serving
+spec:
+  scaleTargetRef:
+    name: vllm-serving
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  # Matches the proxy's 15 s scrape (terraform/eks/monitoring.tf).
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    # The activation trigger: the fleet's proxy's incoming request rate, read from the
+    # in-cluster Prometheus. At zero replicas the Engine publishes no series, so the
+    # proxy, which stays up, is what shows load arriving. Above activationThreshold 0 the
+    # fleet wakes; at 0, or with no series yet (KEDA reads an empty result as 0), it
+    # stays down. Only the ingress listener counts: the proxy's metrics listener counts
+    # Prometheus's own scrapes. test/serving-wake-promql-test.sh tests this query.
+    - type: prometheus
+      name: wake
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+        query: sum(rate(envoy_http_downstream_rq_total{namespace="serving",envoy_http_conn_manager_prefix="ingress"}[1m]))
+        # With maxReplicaCount 1 the scaling target only has to ask for one replica
+        # whenever the trigger is active.
+        threshold: "1"
+        activationThreshold: "0"
