@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 import pytest
 
+from slipstream_bench.orchestration.cluster import KubectlError
 from slipstream_bench.orchestration.gpu_roles import (
     BENCH_ENGINE,
     SERVING_FLEET,
@@ -78,6 +79,16 @@ def test_the_check_reports_whether_the_role_has_replicas(
 def test_the_check_raises_on_a_replica_count_it_cannot_read() -> None:
     with pytest.raises(ValueError, match="deployment/vllm-serving in serving"):
         role_has_replicas(_FakeKubectl("two"), SERVING_FLEET)
+
+
+def test_the_check_raises_when_the_read_fails() -> None:
+    # A forbidden read is not an absent Deployment: it must stop the run, never read as
+    # holding no GPUs.
+    def forbidden(_args: Sequence[str], _stdin: str | None = None) -> str:
+        raise KubectlError("kubectl get exited 1: forbidden")
+
+    with pytest.raises(KubectlError, match="forbidden"):
+        role_has_replicas(forbidden, SERVING_FLEET)
 
 
 def test_the_refusal_names_the_role_that_holds_the_gpus() -> None:

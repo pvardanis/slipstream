@@ -466,7 +466,7 @@ def _measure_and_render(
     """
     kubectl = build_kubectl()
     # The serving fleet shares the GPU quota, so the run refuses to start while it has
-    # replicas, before it touches the cluster or the bucket (ADR-0031).
+    # replicas, before it changes the cluster or the bucket (ADR-0031).
     refuse_while_role_holds_gpus(kubectl, SERVING_FLEET)
     ssm_client = build_ssm_client(region)
     s3_client = build_s3_client(region)
