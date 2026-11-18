@@ -9,6 +9,8 @@ grafana_dir := "terraform/grafana"
 manifests := "k8s/vllm.yaml"
 gpu_pool_manifests := "k8s/gpu-node-pool.yaml"
 gpu_manifests := "k8s/vllm-gpu.yaml"
+# The serving fleet's manifest, generated from gpu_manifests (ADR-0031).
+serving_manifests := "k8s/serving/vllm-serving.yaml"
 bench_dockerfile := "bench/Dockerfile"
 # Derives the bench image's served model, tokenizer slug, and content tags from
 # model.yaml + git; the build, the pull ref, and the completion smokes all read
