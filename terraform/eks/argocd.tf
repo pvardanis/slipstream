@@ -80,8 +80,8 @@ locals {
   }
 
   # Two projects scope what each layer may deploy: root writes only Application objects
-  # into Argo CD's namespace, and workloads deploys only into the prefect and slipstream
-  # namespaces. Neither whitelists a cluster-scoped kind, and Argo CD denies every
+  # into Argo CD's namespace, and workloads deploys only into the prefect, slipstream and
+  # serving namespaces. Neither whitelists a cluster-scoped kind, and Argo CD denies every
   # cluster-scoped kind a project does not whitelist. Argo CD's built-in default project
   # is left permissive, and a child Application names its own project, so these limits
   # hold for the child Applications that name workloads.
@@ -99,9 +99,9 @@ locals {
       ]
       namespaceResourceWhitelist = [{ group = "argoproj.io", kind = "Application" }]
     }
-    # The application workloads' project: it deploys into the namespaces the worker and
-    # the OTel Collector run in, from this repo and the prefect-helm chart repository the
-    # worker's chart comes from (the Prefect server's, too).
+    # The application workloads' project: it deploys into the namespaces the worker, the
+    # OTel Collector and the serving fleet run in, from this repo and the prefect-helm
+    # chart repository the worker's chart comes from (the Prefect server's, too).
     workloads = {
       namespace   = local.argocd_namespace
       description = "The cluster's application workloads, deployed from this repo and the charts it pins."
@@ -109,6 +109,7 @@ locals {
       destinations = [
         { server = local.argocd_in_cluster_server, namespace = local.prefect_namespace },
         { server = local.argocd_in_cluster_server, namespace = kubernetes_namespace_v1.slipstream.metadata[0].name },
+        { server = local.argocd_in_cluster_server, namespace = kubernetes_namespace_v1.serving.metadata[0].name },
       ]
     }
   }
@@ -165,11 +166,14 @@ resource "helm_release" "argocd_apps" {
   # restarts a pod that started without them, so the worker's association exists before
   # the root writes the worker app. The OTel Collector's app reads the
   # grafana-cloud-endpoints ConfigMap under its fixed name (k8s/otel-collector), so the
-  # root applies only once that ConfigMap exists.
+  # root applies only once that ConfigMap exists. The serving fleet's pods read the
+  # vllm-api-key Secret in serving (serving.tf), so the root applies only once it exists
+  # too.
   depends_on = [
     helm_release.argocd,
     helm_release.prefect_server,
     aws_eks_pod_identity_association.prefect_worker,
     kubernetes_config_map_v1.grafana_cloud_endpoints,
+    kubernetes_secret_v1.serving_api_key,
   ]
 }
