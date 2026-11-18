@@ -90,11 +90,12 @@ _render-gpu-manifest:
     MEMORY_LIMIT="${memory_limit}" \
       envsubst '${MAX_NUM_SEQS} ${KV_CACHE_DTYPE} ${PREFIX_CACHING_FLAG} ${KV_CACHE_MEMORY_BYTES} ${KV_TRANSFER_CONFIG} ${MEMORY_LIMIT}' <{{ gpu_manifests }}
 
-# The render fixes the 0%-share winner's engine knobs and gives the serving fleet its
-# own name, labels, `serving` namespace and NodePort, with no replicas so KEDA alone
-# owns the count (ADR-0031). Commit the result: a test fails while the committed file
-# differs from a fresh render. Deploys nothing.
-# Render the serving fleet's manifest from the GPU template into k8s/serving/.
+# Render the serving fleet's manifest from the GPU template into
+# k8s/serving/vllm-serving.yaml. The render fixes the 0%-share winner's engine knobs and
+# gives the serving fleet its own name, labels, `serving` namespace and NodePort, with no
+# replicas so KEDA alone owns the count (ADR-0031). Commit the result: a test fails
+# while the committed file differs from a fresh render. Deploys nothing.
+[doc("Render the serving fleet's manifest from the GPU template into k8s/serving/.")]
 [group('serve')]
 render-serving-manifest:
     uv run slipstream-orchestrate render-serving-manifest \
