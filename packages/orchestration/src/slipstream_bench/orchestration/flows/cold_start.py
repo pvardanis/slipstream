@@ -146,7 +146,7 @@ def cold_start_flow(
     logger.info("cold-start run=%s starting", run_id)
     kubectl = build_kubectl()
     # The serving fleet shares the GPU quota, so the run refuses to start while it has
-    # replicas, before it touches the cluster or the bucket (ADR-0031).
+    # replicas, before it changes the cluster or the bucket (ADR-0031).
     refuse_while_role_holds_gpus(kubectl, SERVING_FLEET)
     pointer = record_cold_start(
         run_id=run_id,

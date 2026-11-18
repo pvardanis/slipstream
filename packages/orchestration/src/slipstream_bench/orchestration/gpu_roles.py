@@ -3,10 +3,11 @@
 The serving fleet and the bench Engine each run a Deployment of GPU replicas, and the
 on-demand quota fits two GPUs in all, so a flow that needs the GPUs refuses to start while
 the other role has replicas: the knob sweep, the KV cache A/B and the cold-start flow
-inspect the serving fleet, and the autoscale flow the bench Engine. The check reads the
-role's Deployment over the injected :data:`~slipstream_bench.orchestration.cluster.Kubectl`
-transport, under a get on that one Deployment (``terraform/eks/worker.tf`` for the bench
-Engine, ``terraform/eks/worker_serving_read.tf`` for the serving fleet).
+inspect the serving fleet, and ADR-0031 has the autoscale flow inspect the bench Engine.
+The check reads the role's Deployment over the injected
+:data:`~slipstream_bench.orchestration.cluster.Kubectl` transport, under a get on that one
+Deployment (``terraform/eks/worker.tf`` for the bench Engine,
+``terraform/eks/worker_serving_read.tf`` for the serving fleet).
 """
 
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ def role_has_replicas(kubectl: Kubectl, role: GpuRole) -> bool:
     :param role: the role whose Deployment is read.
     :return: whether the Deployment's ``spec.replicas`` is above zero.
     :raise ValueError: when the replica count is not an integer.
+    :raise KubectlError: when the read fails, such as a get the worker is forbidden.
     """
     stdout = kubectl(
         [
@@ -86,6 +88,7 @@ def refuse_while_role_holds_gpus(kubectl: Kubectl, role: GpuRole) -> None:
     :param kubectl: the transport the Deployment is read through.
     :param role: the role that must hold no GPUs for the run to start.
     :raise GpusHeldError: when the role's Deployment has replicas.
+    :raise KubectlError: when the read fails, such as a get the worker is forbidden.
     """
     if role_has_replicas(kubectl, role):
         raise GpusHeldError(
