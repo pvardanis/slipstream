@@ -82,9 +82,13 @@ def test_the_serving_engine_runs_the_zero_share_winner() -> None:
 def test_the_serving_fleet_lives_in_the_serving_namespace() -> None:
     documents = _render_documents()
 
-    assert documents["Namespace"]["metadata"]["name"] == "serving"
     assert documents["Deployment"]["metadata"]["namespace"] == "serving"
     assert documents["Service"]["metadata"]["namespace"] == "serving"
+
+
+def test_the_serving_manifest_holds_only_the_deployment_and_service() -> None:
+    """Terraform owns the serving namespace; the workloads AppProject syncs no Namespace."""
+    assert sorted(_render_documents()) == ["Deployment", "Service"]
 
 
 def test_the_serving_deployment_has_its_own_name_and_labels() -> None:
