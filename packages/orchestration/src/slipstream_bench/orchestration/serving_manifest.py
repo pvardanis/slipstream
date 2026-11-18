@@ -7,9 +7,8 @@ the engine knobs at the 0%-share knob-sweep winner, ``32 fp8 off``, through the 
 ``serving`` namespace, drops ``replicas`` so an Argo CD sync never resets the count KEDA
 alone owns, and makes its Service ClusterIP: outside traffic reaches the fleet only
 through its proxy (``k8s/serving/serving-proxy.yaml``), whose request rate wakes it from
-zero. The template's Namespace document is dropped: the
-workloads AppProject allows no cluster-scoped resources, so the ``serving`` namespace is
-created outside this manifest.
+zero. The template's Namespace document is dropped: the workloads AppProject allows no
+cluster-scoped resources, so the ``serving`` namespace is created outside this manifest.
 """
 
 from typing import Any

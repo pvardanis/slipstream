@@ -456,6 +456,16 @@ run "service_monitor_scrapes_the_serving_proxy" {
     error_message = "The serving proxy's ServiceMonitor must scrape /stats/prometheus on the metrics port of the serving-proxy Service in serving every 15s."
   }
 
+  # KEDA polls the wake trigger as often as Prometheus scrapes the proxy, so each poll
+  # can see a new sample; a change to either one alone fails here.
+  assert {
+    condition = alltrue([
+      for d in [for doc in split("\n---\n", file("../../k8s/serving/scaled-object.yaml")) : yamldecode(doc)] :
+      "${d.spec.pollingInterval}s" == yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.serving-proxy.endpoints[0].interval
+    ])
+    error_message = "The ScaledObject's pollingInterval must equal the serving proxy's scrape interval."
+  }
+
   # The selector matches the Service the proxy's manifest deploys, so a label, port or
   # namespace renamed on one side only fails here rather than silently stopping the scrape,
   # which would leave the fleet at zero.
