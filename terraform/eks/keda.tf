@@ -1,4 +1,4 @@
-# KEDA, the autoscaler that owns the serving fleet's replicas from 0 to 2 (ADR-0031): its
+# KEDA, the autoscaler that owns the serving fleet's replicas (ADR-0031): its
 # operator, metrics server, admission webhooks and CRDs, installed as a cluster add-on
 # (ADR-0029's split). The serving fleet's ScaledObject is Argo CD's; this release only
 # makes the kind exist. Like the other add-ons it rides the cluster's duty-cycle: up with
@@ -12,8 +12,11 @@ resource "helm_release" "keda" {
   chart            = "keda"
   version          = var.keda_chart_version
 
-  # The chart templates its CRDs (crds.install, on by default), so Helm tracks them: an
-  # upgrade updates their schemas and an uninstall removes them with the release.
+  # The chart templates its CRDs rather than shipping them under crds/, so Helm tracks
+  # them: an upgrade updates their schemas and an uninstall removes them with the
+  # release. install is the chart's default, set here because the CRDs are what the
+  # serving fleet's ScaledObject needs.
+  values = [yamlencode({ crds = { install = true } })]
 
   # Block apply until the operator, metrics server and webhooks are Ready and roll back
   # atomically on failure, so a broken install fails cluster-up loudly rather than
