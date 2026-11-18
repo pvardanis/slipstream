@@ -1,6 +1,6 @@
 """The orchestration entrypoint: drive the knob sweep or one point's Tier-2 sweep, register flows.
 
-Four commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
+Six commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
 sweep as one parent flow: it enumerates the grid's engine points and, per point,
 redeploys the GPU (Tier-1), scrapes the concurrency ceiling, and runs the point's Tier-2
 ladder, skipping a point whose cells already hold valid measurements. ``point-sweep``
@@ -9,7 +9,8 @@ ladder, skipping a point whose cells already hold valid measurements. ``point-sw
 ``register-knob-sweep`` registers ``knob-sweep`` as a Prefect deployment on the process
 work pool, the entrypoint the EKS worker runs unattended; ``register-kv-ab`` registers the
 KV cache offload A/B (#326) the same way, and ``register-cold-start`` the cold-start
-breakdown (ADR-0030).
+breakdown (ADR-0030). ``render-serving-manifest`` writes the serving fleet's manifest
+from the bench Engine's template (ADR-0031).
 
 The two sweep commands read the point context and the run-wide config digest inputs, and
 wire the S3-backed cell task so an interrupted run resumes at cell granularity. Kept its own
@@ -35,6 +36,7 @@ from slipstream_bench.orchestration.flows.point_sweep import (
     run_point_sweep,
 )
 from slipstream_bench.orchestration.model_config import read_model_id
+from slipstream_bench.orchestration.serving_manifest import render_serving_manifest
 from slipstream_bench.orchestration.ssm import build_ssm_client
 from slipstream_bench.orchestration.tasks.cell import cell_task
 
@@ -373,6 +375,30 @@ def register_cold_start(
         parameters={"region": region, "bucket": bucket},
     )
     typer.echo(f"registered cold-start-breakdown deployment {deployment_id}")
+
+
+@app.command("render-serving-manifest")
+def render_serving_manifest_command(
+    *,
+    template: Annotated[
+        Path, typer.Option(help="The bench Engine's template, k8s/vllm-gpu.yaml.")
+    ],
+    output: Annotated[
+        Path, typer.Option(help="Where the serving fleet's manifest is written.")
+    ],
+) -> None:
+    """Render the serving fleet's manifest from the bench Engine's template (ADR-0031).
+
+    Writes the generated manifest the serving fleet's Argo CD app syncs; a drift test
+    holds the committed file to a fresh render.
+
+    :param template: the bench Engine's template, k8s/vllm-gpu.yaml.
+    :param output: where the serving fleet's manifest is written.
+    """
+    rendered = render_serving_manifest(template.read_text(encoding="utf-8"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered, encoding="utf-8")
+    typer.echo(f"rendered the serving fleet's manifest to {output}")
 
 
 def build_sweep_context(
