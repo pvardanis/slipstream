@@ -10,8 +10,9 @@ tests:
   # Prometheus's own scrapes counted on the metrics listener.
   # Window (4m, 5m] holds the ingress samples at 4m15..5m, 34..40: 6 over 45 s, with a
   # 15 s gap to the window's start, under 1.1 scrape intervals, so extrapolated to 60 s:
-  # 8, and 8 / 60 s = 2/15 per second. promtool compares floats exactly, so the value is
-  # 2/15 as the division rounds it. Above 0, so the trigger is active.
+  # 8, and 8 / 60 s = 2/15 per second. promtool compares floats exactly, and the rate's
+  # float arithmetic lands one ulp below the double nearest 2/15, so the value is
+  # 0.1333333333333333. Above 0, so the trigger is active.
   - interval: 15s
     input_series:
       - series: 'envoy_http_downstream_rq_total{namespace="serving",pod="serving-proxy-a",envoy_http_conn_manager_prefix="ingress"}'

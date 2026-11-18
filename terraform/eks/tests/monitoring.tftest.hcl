@@ -443,7 +443,7 @@ run "service_monitors_scrape_vllm_karpenter_dcgm_exporter_and_the_collector" {
 
 # The serving fleet's proxy (k8s/serving/serving-proxy.yaml, ADR-0031) publishes the
 # request rate KEDA's activation trigger reads, so Prometheus scrapes its stats every 15 s,
-# KEDA's polling interval, from the port that serves only /stats/prometheus.
+# KEDA's polling interval, from the port that serves only /stats/prometheus and /ready.
 run "service_monitor_scrapes_the_serving_proxy" {
   command = plan
 

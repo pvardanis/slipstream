@@ -35,7 +35,7 @@ resolve_queries='load(strenv(SCALED_OBJECT)) as $s
       | del(.trigger))'
 
 # Writes the cases, with the queries from the ScaledObject file $1, as promtool tests,
-# and fails naming a case whose trigger has no query.
+# and fails counting the cases whose trigger has no query.
 write_tests() {
   SCALED_OBJECT="$1" yq "${resolve_queries}" "${cases}" >"${tmp}/tests.yaml"
   local missing

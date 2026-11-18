@@ -145,9 +145,9 @@ locals {
           }]
         }
         # The serving fleet's proxy (k8s/serving/serving-proxy.yaml), on the port serving
-        # only its /stats/prometheus. Its request rate is what KEDA's activation trigger
-        # reads to wake the fleet from zero (ADR-0031), so it is scraped every 15 s, KEDA's
-        # polling interval.
+        # only its /stats/prometheus and /ready. Its request rate is what KEDA's activation
+        # trigger reads to wake the fleet from zero (ADR-0031), so it is scraped every
+        # 15 s, KEDA's polling interval.
         serving-proxy = {
           namespaceSelector = { matchNames = [kubernetes_namespace_v1.serving.metadata[0].name] }
           selector          = { matchLabels = { app = "serving-proxy" } }

@@ -2,8 +2,8 @@
 # proxy and the ScaledObject that owns its replicas (k8s/serving, a kustomization) into
 # the serving namespace from the root Application's repository and revision. Terraform
 # creates the namespace and its vllm-api-key Secret (terraform/eks/serving.tf), so the
-# app creates neither. Server-side apply leaves the fleet's replica count to KEDA: the
-# Deployment carries no replicas, and a sync releases the field rather than resetting it.
+# app creates neither. The fleet's replica count is KEDA's: the Deployment carries no
+# replicas, so Argo CD never owns the field and a sync never resets it.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

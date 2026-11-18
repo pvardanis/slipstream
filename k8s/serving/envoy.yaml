@@ -32,9 +32,14 @@ static_resources:
                             cluster: serving-fleet
                             # Envoy's 15 s default would cut off a generation. A
                             # 4,096-token context at the 0%-share breach rung's 55 ms
-                            # TPOT runs under 4 min, so 10 min bounds a stuck request
-                            # without cutting off a slow one.
-                            timeout: 600s
+                            # TPOT runs under 4 min, so 5 min, the connection manager's
+                            # default stream idle timeout too, bounds a stuck request
+                            # without cutting off a slow one. It also ends a request
+                            # before KEDA could scale the fleet away under it: the wake
+                            # trigger counts a request as it starts, so a lone request
+                            # leaves the rate at 0 within 1 min, and the 5 min cooldown
+                            # (scaled-object.yaml) runs from there.
+                            timeout: 300s
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
