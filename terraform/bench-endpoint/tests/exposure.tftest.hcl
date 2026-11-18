@@ -140,7 +140,7 @@ run "targets_another_nodeport" {
   }
   assert {
     condition     = one(aws_lb_target_group.vllm.health_check).port == "traffic-port"
-    error_message = "Target group must health-check the NodePort it is given."
+    error_message = "Target group must health-check its traffic port, so the probe follows the NodePort it is given."
   }
   assert {
     condition     = aws_vpc_security_group_ingress_rule.node_from_alb.from_port == 31800 && aws_vpc_security_group_ingress_rule.node_from_alb.to_port == 31800
