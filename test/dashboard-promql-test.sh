@@ -12,16 +12,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dashboard="${repo_root}/terraform/grafana/dashboards/fleet-health.json"
 cases="${PROMQL_CASES:-${repo_root}/test/dashboard-promql-cases.yaml}"
 
-for tool in yq jq promtool; do
-  if ! command -v "${tool}" >/dev/null; then
-    echo "FAIL: ${tool} is not on PATH; this test needs yq, jq and promtool, and" \
-      "'mise install' installs the ones mise.toml pins" >&2
-    exit 1
-  fi
-done
-
-tmp="$(mktemp -d)"
-trap 'rm -r "${tmp}"' EXIT
+# shellcheck source=test/lib/promql-cases.sh
+source "${repo_root}/test/lib/promql-cases.sh"
+require_tools yq jq promtool
 
 # Fills in each case's expr from the dashboard at $DASHBOARD, with $__range set to 60m and
 # $__interval to 1m, keeping the panel, ref or annotation it names.
@@ -70,51 +63,23 @@ write_tests() {
   DASHBOARD="$1" yq "${resolve_queries} | ${drop_query_names}" "${cases}" >"${tmp}/tests.yaml"
 }
 
-# Runs promtool over the tests write_tests wrote, printing its output.
-run_tests() {
-  promtool test rules "${tmp}/tests.yaml" 2>&1
-}
-
-write_tests "${dashboard}"
-if ! output="$(run_tests)"; then
-  echo "FAIL: promtool test rules failed on ${cases#"${repo_root}/"}:" >&2
-  echo "${output}" >&2
-  exit 1
-fi
-
-fail=0
-mutations=0
+check_cases_pass "${dashboard}"
 
 # Replaces the regex $3 with $4 in panel $1's refId $2 query, in a copy of the dashboard,
-# and checks the cases fail against it, so a case catches the defect $5 names. Fails when
-# $3 no longer matches the query, or when the mutated query does not parse, as the cases
-# then fail without catching anything.
+# and checks the cases fail against it, so a case catches the defect $5 names.
 check_mutation_fails() {
   local panel="$1" ref="$2" pattern="$3" replacement="$4" defect="$5"
   local query='.panels[] | select(.id == $id) | .targets[] | select(.refId == $ref) | .expr'
   local args=(--argjson id "${panel}" --arg ref "${ref}" --arg re "${pattern}")
+  local query_name="panel ${panel} ${ref}'s query"
   mutations=$((mutations + 1))
   if ! jq -e "${args[@]}" "[${query} | test(\$re)] == [true]" "${dashboard}" >/dev/null; then
-    echo "FAIL: panel ${panel} ${ref}'s query no longer matches /${pattern}/, so the" \
-      "mutation for ${defect} cannot be applied; update it to the query's current text" >&2
-    fail=1
+    report_unmatched_mutation "${query_name}" "${pattern}" "${defect}"
     return
   fi
   jq "${args[@]}" --arg to "${replacement}" "(${query}) |= sub(\$re; \$to)" \
     "${dashboard}" >"${tmp}/mutant.json"
-  write_tests "${tmp}/mutant.json"
-  local mutant_output
-  if mutant_output="$(run_tests)"; then
-    echo "FAIL: the cases still pass with ${defect} in panel ${panel} ${ref}; add a case" \
-      "to ${cases#"${repo_root}/"} that catches it. promtool's output:" >&2
-    echo "${mutant_output}" >&2
-    fail=1
-  elif grep -q 'parse error:' <<<"${mutant_output}"; then
-    echo "FAIL: the mutation for ${defect} leaves panel ${panel} ${ref}'s query unparseable," \
-      "so the cases fail without catching it; fix its replacement. promtool's output:" >&2
-    echo "${mutant_output}" >&2
-    fail=1
-  fi
+  check_mutant_fails "${tmp}/mutant.json" "${defect}" "${query_name}"
 }
 
 # The scoreboard panels: $ per 1M tokens and Tokens/s per $/h.
