@@ -88,7 +88,7 @@ run "worker_serving_fleet_read" {
     error_message = "The serving fleet read Role must grant get on deployment/vllm-serving and nothing else."
   }
   assert {
-    condition     = kubernetes_role_binding_v1.serving_fleet_read.metadata[0].namespace == "serving" && kubernetes_role_binding_v1.serving_fleet_read.role_ref[0].kind == "Role" && kubernetes_role_binding_v1.serving_fleet_read.role_ref[0].name == kubernetes_role_v1.serving_fleet_read.metadata[0].name
+    condition     = kubernetes_role_binding_v1.serving_fleet_read.metadata[0].namespace == "serving" && kubernetes_role_binding_v1.serving_fleet_read.role_ref[0].kind == "Role" && kubernetes_role_binding_v1.serving_fleet_read.role_ref[0].api_group == "rbac.authorization.k8s.io" && kubernetes_role_binding_v1.serving_fleet_read.role_ref[0].name == kubernetes_role_v1.serving_fleet_read.metadata[0].name
     error_message = "The serving fleet read binding must reference the serving fleet read Role in the serving namespace."
   }
   assert {
@@ -98,8 +98,23 @@ run "worker_serving_fleet_read" {
 
   # --- The worker's slipstream Role keeps its own five rules ---
 
+  # Each rule as "api_groups|resources|verbs", pinned exactly so no verb or resource is
+  # added to it; resource_names is known at plan only where set, so the first rule's is
+  # pinned on its own.
   assert {
-    condition     = length(kubernetes_role_v1.vllm_gpu_manage.rule) == 5 && alltrue([for r in kubernetes_role_v1.vllm_gpu_manage.rule : !contains(r.resources, "deployments") || toset(r.verbs) == toset(["get", "patch"]) || toset(r.verbs) == toset(["list", "watch"])])
-    error_message = "The worker's slipstream Role must keep its five rules: the serving fleet read is a separate Role."
+    condition = [
+      for r in kubernetes_role_v1.vllm_gpu_manage.rule : join("|", [
+        join(",", sort(r.api_groups)),
+        join(",", sort(r.resources)),
+        join(",", sort(r.verbs)),
+      ])
+      ] == [
+      "apps|deployments|get,patch",
+      "apps|deployments|list,watch",
+      "|pods|get,list",
+      "|pods/log|get",
+      "|events|list",
+    ] && toset(kubernetes_role_v1.vllm_gpu_manage.rule[0].resource_names) == toset(["vllm-gpu"])
+    error_message = "The worker's slipstream Role must keep its five rules unchanged: the serving fleet read is a separate Role."
   }
 }
