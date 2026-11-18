@@ -1,7 +1,9 @@
 # The ScaledObject that alone owns the serving fleet's replica count (ADR-0031): KEDA
 # wakes the fleet 0→1 when requests reach its proxy, and returns it to 0 once no request
 # has arrived for the cooldown. The Deployment carries no replicas, so an Argo CD sync
-# never resets the count KEDA sets.
+# never resets the count KEDA sets. At the first sync the API server defaults that count
+# to 1 until KEDA's first poll sets it to 0, so the pending replica may have Karpenter
+# launch a GPU node, which it removes once the node is empty.
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
