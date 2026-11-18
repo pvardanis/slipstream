@@ -11,28 +11,27 @@ variables {
   state_bucket                = "slipstream-tf-state-test"
   bench_host_instance_profile = "slipstream-bench-host"
   vllm_api_key                = "test-key"
-  vllm_nodeport               = 30800
   vpc_id                      = "vpc-test"
   public_subnets              = ["subnet-a", "subnet-b", "subnet-c"]
   node_security_group_id      = "sg-nodes"
   node_autoscaling_groups     = ["slipstream-cpu"]
 }
 
-run "exposure_invariants" {
-  command = plan
-
-  # The bootstrap read feeds the bench host, not the exposure resources, but it is
-  # part of the stack, so it must be overridden here too or the test reaches for
-  # real remote state.
-  override_data {
-    target = data.terraform_remote_state.bootstrap
-    values = {
-      outputs = {
-        bench_image_repo_url      = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
-        bench_results_bucket_name = "slipstream-bench-results-abc123"
-      }
+# The bootstrap read feeds the bench host, not the exposure resources, but it is
+# part of the stack, so it must be overridden here too or the test reaches for
+# real remote state. File-scoped so every run plans against it.
+override_data {
+  target = data.terraform_remote_state.bootstrap
+  values = {
+    outputs = {
+      bench_image_repo_url      = "111122223333.dkr.ecr.eu-west-1.amazonaws.com/slipstream-bench"
+      bench_results_bucket_name = "slipstream-bench-results-abc123"
     }
   }
+}
+
+run "exposure_invariants" {
+  command = plan
 
   # The load balancer is public and an ALB (only the ALB terminates mutual TLS).
   assert {
@@ -81,9 +80,10 @@ run "exposure_invariants" {
 
   # The target group forwards to the vLLM NodePort on the node group over plain
   # HTTP (TLS is already terminated at the listener) and health-checks /health.
+  # With no NodePort given, the target is the bench Engine's 30800.
   assert {
-    condition     = aws_lb_target_group.vllm.port == var.vllm_nodeport
-    error_message = "Target group must forward to the vLLM NodePort."
+    condition     = aws_lb_target_group.vllm.port == 30800
+    error_message = "Target group must forward to the bench Engine's NodePort 30800 by default."
   }
   assert {
     condition     = aws_lb_target_group.vllm.protocol == "HTTP"
@@ -92,6 +92,10 @@ run "exposure_invariants" {
   assert {
     condition     = one(aws_lb_target_group.vllm.health_check).path == "/health"
     error_message = "Target group must health-check /health, which vLLM leaves unauthenticated."
+  }
+  assert {
+    condition     = one(aws_lb_target_group.vllm.health_check).port == "traffic-port"
+    error_message = "Target group must health-check the port it forwards to, so the probe follows the NodePort."
   }
 
   # The node group's instances are registered as targets via the autoscaling
@@ -114,7 +118,32 @@ run "exposure_invariants" {
     error_message = "NodePort ingress rule must be attached to the eks node security group."
   }
   assert {
-    condition     = aws_vpc_security_group_ingress_rule.node_from_alb.from_port == var.vllm_nodeport && aws_vpc_security_group_ingress_rule.node_from_alb.to_port == var.vllm_nodeport && aws_vpc_security_group_ingress_rule.node_from_alb.ip_protocol == "tcp"
-    error_message = "NodePort ingress rule must admit only TCP on the vLLM NodePort."
+    condition     = aws_vpc_security_group_ingress_rule.node_from_alb.from_port == 30800 && aws_vpc_security_group_ingress_rule.node_from_alb.to_port == 30800 && aws_vpc_security_group_ingress_rule.node_from_alb.ip_protocol == "tcp"
+    error_message = "NodePort ingress rule must admit only TCP on the bench Engine's NodePort 30800 by default."
+  }
+}
+
+# The bench endpoint can front another vLLM Service, such as the serving fleet's,
+# by its NodePort. The override must reach every place the port is used: the target
+# group, its health check, and the node group's ingress rule; a miss in any of them
+# leaves the load balancer with no healthy target.
+run "targets_another_nodeport" {
+  command = plan
+
+  variables {
+    vllm_nodeport = 31800
+  }
+
+  assert {
+    condition     = aws_lb_target_group.vllm.port == 31800
+    error_message = "Target group must forward to the NodePort it is given."
+  }
+  assert {
+    condition     = one(aws_lb_target_group.vllm.health_check).port == "traffic-port"
+    error_message = "Target group must health-check the NodePort it is given."
+  }
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.node_from_alb.from_port == 31800 && aws_vpc_security_group_ingress_rule.node_from_alb.to_port == 31800
+    error_message = "NodePort ingress rule must admit the load balancer on the NodePort it is given."
   }
 }

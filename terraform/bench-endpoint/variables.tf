@@ -52,7 +52,7 @@ variable "bench_host_instance_profile" {
 }
 
 variable "vllm_nodeport" {
-  description = "NodePort the vLLM Service is exposed on. The load balancer target group forwards to this port on the node group."
+  description = "NodePort of the vLLM Service the bench endpoint fronts; defaults to the bench Engine's 30800. The load balancer target group and its health check forward to this port on the node group."
   type        = number
   default     = 30800
 }
