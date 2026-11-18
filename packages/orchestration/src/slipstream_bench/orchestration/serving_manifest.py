@@ -55,8 +55,9 @@ def render_serving_manifest(template_text: str) -> str:
 
     :param template_text: the raw ``k8s/vllm-gpu.yaml`` text with its placeholders.
     :return: the serving fleet's manifest.
-    :raise ValueError: when the template's Service already claims the serving fleet's
-        NodePort — the cluster would reject whichever Service applies second.
+    :raise ValueError: when the template holds anything besides its Namespace, one
+        Deployment and one Service, or when its Service already claims the serving
+        fleet's NodePort — the cluster would reject whichever Service applies second.
     """
     rendered = render_gpu_manifest(
         template_text, engine_args=SERVING_ENGINE_ARGS, kv_cache_offload=False
@@ -64,6 +65,14 @@ def render_serving_manifest(template_text: str) -> str:
     documents = [
         doc for doc in yaml.safe_load_all(rendered) if doc["kind"] != "Namespace"
     ]
+    kinds = sorted(doc["kind"] for doc in documents)
+    if kinds != ["Deployment", "Service"]:
+        raise ValueError(
+            f"the serving fleet's manifest takes one Deployment and one Service from "
+            f"the bench Engine's template besides its Namespace, but the template "
+            f"holds {kinds}: only those two get the fleet's selectors, so give any "
+            f"other resource its own place in the serving manifest"
+        )
     for document in documents:
         _assign_serving_identity(document)
     return _HEADER + yaml.safe_dump_all(documents, sort_keys=False)
