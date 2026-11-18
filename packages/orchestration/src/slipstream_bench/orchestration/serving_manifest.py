@@ -8,7 +8,8 @@ the engine knobs at the 0%-share knob-sweep winner, ``32 fp8 off``, through the 
 alone owns, and makes its Service ClusterIP: outside traffic reaches the fleet only
 through its proxy (``k8s/serving/serving-proxy.yaml``), whose request rate wakes it from
 zero. The template's Namespace document is dropped: the workloads AppProject allows no
-cluster-scoped resources, so the ``serving`` namespace is created outside this manifest.
+cluster-scoped resources, so Terraform creates the ``serving`` namespace
+(``terraform/eks/serving.tf``).
 """
 
 from typing import Any

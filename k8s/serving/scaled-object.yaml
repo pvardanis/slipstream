@@ -1,6 +1,6 @@
 # The ScaledObject that alone owns the serving fleet's replica count (ADR-0031): KEDA
-# wakes the fleet 0→1 when requests reach its proxy, and returns it to 0 once no request
-# has arrived for the cooldown. The Deployment carries no replicas, so an Argo CD sync
+# wakes the fleet 0→1 when requests reach its proxy, and returns it to 0 once the wake
+# trigger has been inactive for the cooldown. The Deployment carries no replicas, so an Argo CD sync
 # never resets the count KEDA sets. At the first sync the API server defaults that count
 # to 1 until KEDA's first poll sets it to 0, so the pending replica may have Karpenter
 # launch a GPU node, which it removes once the node is empty.
@@ -22,8 +22,10 @@ spec:
     # in-cluster Prometheus. At zero replicas the Engine publishes no series, so the
     # proxy, which stays up, is what shows load arriving. Above activationThreshold 0 the
     # fleet wakes; at 0, or with no series yet (KEDA reads an empty result as 0), it
-    # stays down. Only the ingress listener counts: the proxy's metrics listener counts
-    # Prometheus's own scrapes. test/serving-wake-promql-test.sh tests this query.
+    # stays down, so a scrape that stops reading the proxy fails toward zero replicas,
+    # where requests get Envoy's 503. Only the ingress listener counts: the proxy's
+    # metrics listener counts Prometheus's own scrapes. test/serving-wake-promql-test.sh
+    # tests this query.
     - type: prometheus
       name: wake
       metadata:
