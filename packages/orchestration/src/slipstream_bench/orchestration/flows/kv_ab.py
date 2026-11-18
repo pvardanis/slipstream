@@ -66,6 +66,10 @@ from slipstream_bench.orchestration.flows.run_setup import (
     open_run_rollout_freeze,
     tag_run_with_group,
 )
+from slipstream_bench.orchestration.gpu_roles import (
+    SERVING_FLEET,
+    refuse_while_role_holds_gpus,
+)
 from slipstream_bench.orchestration.kv_ab_cell import (
     fetch_metrics,
     get_kv_ab_cell,
@@ -461,6 +465,9 @@ def _measure_and_render(
     :return: the result — the cell pointers and the run/resume split.
     """
     kubectl = build_kubectl()
+    # The serving fleet shares the GPU quota, so the run refuses to start while it has
+    # replicas, before it touches the cluster or the bucket (ADR-0031).
+    refuse_while_role_holds_gpus(kubectl, SERVING_FLEET)
     ssm_client = build_ssm_client(region)
     s3_client = build_s3_client(region)
     task = kv_ab_cell_task(inputs.bucket, retries=retries)

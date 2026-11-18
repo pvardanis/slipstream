@@ -52,6 +52,10 @@ from slipstream_bench.orchestration.flows.run_setup import (
     release_run_rollout_freeze,
     tag_run_with_group,
 )
+from slipstream_bench.orchestration.gpu_roles import (
+    SERVING_FLEET,
+    refuse_while_role_holds_gpus,
+)
 from slipstream_bench.orchestration.tasks.render import upload_plot
 from slipstream_bench.report.cold_start_aggregation import summarize_cold_starts
 from slipstream_bench.report.cold_start_chart import cold_start_spreads_to_markdown
@@ -141,6 +145,9 @@ def cold_start_flow(
     tag_run_with_group(run_id)
     logger.info("cold-start run=%s starting", run_id)
     kubectl = build_kubectl()
+    # The serving fleet shares the GPU quota, so the run refuses to start while it has
+    # replicas, before it touches the cluster or the bucket (ADR-0031).
+    refuse_while_role_holds_gpus(kubectl, SERVING_FLEET)
     pointer = record_cold_start(
         run_id=run_id,
         bucket=bucket,
