@@ -1,0 +1,83 @@
+# The serving proxy (ADR-0031): one CPU pod running a static Envoy in front of the serving
+# fleet's Service (envoy.yaml). It stays up while the fleet is at zero replicas, answers
+# 503 until a replica is Ready, and publishes the request rate that KEDA's activation
+# trigger reads to wake the fleet (scaled-object.yaml). Its Service is the fleet's only
+# way in from outside the cluster: NodePort 30801, apart from the bench Engine's 30800.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: serving-proxy
+  namespace: serving
+  labels:
+    app: serving-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: serving-proxy
+  template:
+    metadata:
+      labels:
+        app: serving-proxy
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: envoy
+          image: envoyproxy/envoy:v1.40.2
+          args: ["-c", "/etc/envoy/envoy.yaml"]
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: metrics
+              containerPort: 9102
+          # Envoy reports ready once its listeners are up, whatever the fleet's state:
+          # the proxy has to be in its Service to answer 503 and count requests at zero.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+          # Sits on the system node beside the cluster's add-ons; memory limit equals
+          # the request so the node's memory is never overcommitted.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            # The image's envoy user.
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/envoy
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: serving-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: serving-proxy
+  namespace: serving
+  labels:
+    app: serving-proxy
+spec:
+  type: NodePort
+  selector:
+    app: serving-proxy
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      nodePort: 30801
+    - name: metrics
+      port: 9102
+      targetPort: metrics

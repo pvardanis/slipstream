@@ -1,0 +1,90 @@
+# The serving proxy's Envoy config (ADR-0031): a static proxy in front of the serving
+# fleet's Service, the component that stays up while the fleet is at zero replicas.
+# Kustomize puts it in a ConfigMap named by its content hash (kustomization.yaml), so a
+# merged change rolls the proxy's pod.
+#
+# - ingress (:8000) forwards every request to the fleet's Service, headers included, so
+#   the Authorization header vLLM checks the api-key against passes through. With no
+#   replica Ready the Service has no endpoints, the connection is refused, and Envoy
+#   answers 503. Its downstream request count, envoy_http_downstream_rq_total with
+#   envoy_http_conn_manager_prefix="ingress", is what KEDA's activation trigger reads.
+# - metrics (:9102) serves only /stats/prometheus and /ready from the admin interface,
+#   which listens on localhost alone, as its other endpoints can change or stop Envoy.
+static_resources:
+  listeners:
+    - name: ingress
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8000 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress
+                route_config:
+                  name: serving-fleet
+                  virtual_hosts:
+                    - name: serving-fleet
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: serving-fleet
+                            # Envoy's 15 s default would cut off a generation. A
+                            # 4,096-token context at the 0%-share breach rung's 55 ms
+                            # TPOT runs under 4 min, so 10 min bounds a stuck request
+                            # without cutting off a slow one.
+                            timeout: 600s
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+    - name: metrics
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 9102 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: metrics
+                route_config:
+                  name: admin
+                  virtual_hosts:
+                    - name: admin
+                      domains: ["*"]
+                      routes:
+                        - match: { path: /stats/prometheus }
+                          route: { cluster: admin }
+                        - match: { path: /ready }
+                          route: { cluster: admin }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    # The fleet's ClusterIP Service (vllm-serving.yaml), resolved through cluster DNS;
+    # kube-proxy spreads connections across the Ready replicas.
+    - name: serving-fleet
+      type: STRICT_DNS
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: serving-fleet
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: vllm-serving.serving.svc.cluster.local, port_value: 8000 }
+    - name: admin
+      type: STATIC
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: admin
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: 9901 }
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: 9901 }

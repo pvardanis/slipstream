@@ -1,9 +1,9 @@
 """Tests for the serving fleet's manifest, rendered from the bench Engine's template.
 
 The serving fleet's Deployment and Service are generated from ``k8s/vllm-gpu.yaml`` at
-the 0%-share knob-sweep winner (``32 fp8 off``) under their own name, labels, ``serving``
-namespace and NodePort, with no ``replicas`` so Argo CD never resets KEDA's count
-(ADR-0031). The committed render must equal a fresh one, so the two pod specs keep one
+the 0%-share knob-sweep winner (``32 fp8 off``) under their own name, labels and
+``serving`` namespace, with no ``replicas`` so Argo CD never resets KEDA's count, and a
+ClusterIP Service, so traffic reaches the fleet only through its proxy (ADR-0031). The committed render must equal a fresh one, so the two pod specs keep one
 source.
 """
 
@@ -19,13 +19,13 @@ from slipstream_bench.orchestration.cli import app
 from slipstream_bench.orchestration.cluster import render_gpu_manifest
 from slipstream_bench.orchestration.serving_manifest import (
     SERVING_ENGINE_ARGS,
-    SERVING_NODE_PORT,
     render_serving_manifest,
 )
 
 _REPO = Path(__file__).parents[2]
 _TEMPLATE = _REPO / "k8s" / "vllm-gpu.yaml"
 _COMMITTED = _REPO / "k8s" / "serving" / "vllm-serving.yaml"
+_PROXY_MANIFEST = _REPO / "k8s" / "serving" / "serving-proxy.yaml"
 _CPU_MANIFEST = _REPO / "k8s" / "vllm.yaml"
 _BENCH_ENDPOINT_VARIABLES = _REPO / "terraform" / "bench-endpoint" / "variables.tf"
 
@@ -130,22 +130,23 @@ def test_the_serving_deployment_leaves_its_replica_count_to_the_autoscaler() -> 
     assert "replicas" not in deployment["spec"]
 
 
-def test_the_serving_service_selects_the_fleet_on_its_own_node_port() -> None:
-    """NodePort 30801, apart from the bench endpoint's 30800."""
+def test_the_serving_service_is_reached_only_inside_the_cluster() -> None:
+    """ClusterIP, no NodePort: outside traffic goes through the proxy, which wakes it."""
     service = _render_documents()["Service"]
 
     assert service["metadata"]["name"] == "vllm-serving"
     assert service["metadata"]["labels"] == {"app": "vllm-serving"}
     assert service["spec"]["selector"] == {"app": "vllm-serving"}
+    assert service["spec"]["type"] == "ClusterIP"
     assert service["spec"]["ports"] == [
-        {"name": "http", "port": 8000, "targetPort": "http", "nodePort": 30801}
+        {"name": "http", "port": 8000, "targetPort": "http"}
     ]
 
 
 def _service_node_port(manifest: Path) -> int:
     """Return the nodePort a manifest's one Service claims."""
     service = _documents_by_kind(manifest.read_text(encoding="utf-8"))["Service"]
-    (port,) = service["spec"]["ports"]
+    (port,) = [port for port in service["spec"]["ports"] if "nodePort" in port]
     return port["nodePort"]
 
 
@@ -159,7 +160,7 @@ def _bench_endpoint_default_node_port() -> int:
     return int(match[1])
 
 
-def test_the_serving_node_port_is_apart_from_the_bench_ports() -> None:
+def test_the_serving_proxy_node_port_is_apart_from_the_bench_ports() -> None:
     """The bench endpoint targets 30800 by default, which both bench replicas claim."""
     bench_ports = {
         _service_node_port(_TEMPLATE),
@@ -167,17 +168,7 @@ def test_the_serving_node_port_is_apart_from_the_bench_ports() -> None:
         _bench_endpoint_default_node_port(),
     }
 
-    assert SERVING_NODE_PORT not in bench_ports
-
-
-def test_a_template_already_on_the_serving_node_port_is_rejected() -> None:
-    """Both Services would claim one port; the cluster rejects the second at apply."""
-    template = _template_text().replace(
-        "nodePort: 30800", f"nodePort: {SERVING_NODE_PORT}"
-    )
-
-    with pytest.raises(ValueError, match=f"NodePort {SERVING_NODE_PORT}"):
-        render_serving_manifest(template)
+    assert _service_node_port(_PROXY_MANIFEST) not in bench_ports
 
 
 def _drop_serving_identity(documents: dict[str, dict[str, Any]]) -> None:
@@ -188,11 +179,12 @@ def _drop_serving_identity(documents: dict[str, dict[str, Any]]) -> None:
     del deployment_spec["template"]["metadata"]["labels"]
     service_spec = documents["Service"]["spec"]
     del service_spec["selector"]
-    del service_spec["ports"][0]["nodePort"]
+    del service_spec["type"]
+    service_spec["ports"][0].pop("nodePort", None)
 
 
 def test_the_serving_specs_are_the_bench_engine_specs() -> None:
-    """Only identity, replicas and the NodePort differ: the specs keep one source."""
+    """Only identity, replicas and the Service type differ: the specs keep one source."""
     serving = _render_documents()
     bench = _render_bench_documents()
 
