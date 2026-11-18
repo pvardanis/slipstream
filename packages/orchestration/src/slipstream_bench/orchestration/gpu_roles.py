@@ -75,7 +75,8 @@ def role_has_replicas(kubectl: Kubectl, role: GpuRole) -> bool:
     except ValueError as error:
         raise ValueError(
             f"deployment/{role.deployment} in {role.namespace} reported replicas "
-            f"{stdout!r}, not an integer: cannot tell whether the {role.name} holds GPUs"
+            f"{stdout!r}, not an integer: cannot tell whether the {role.name} holds "
+            f"GPUs. Check `kubectl -n {role.namespace} get deployment {role.deployment}`."
         ) from error
 
 

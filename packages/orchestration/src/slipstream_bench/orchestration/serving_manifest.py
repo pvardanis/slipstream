@@ -30,9 +30,7 @@ SERVING_ENGINE_ARGS = EngineArgs(
     kv_cache_memory_bytes=None,
 )
 
-_SERVING_NAMESPACE = SERVING_FLEET.namespace
-_SERVING_NAME = SERVING_FLEET.deployment
-_SERVING_LABELS = {"app": _SERVING_NAME}
+_SERVING_LABELS = {"app": SERVING_FLEET.deployment}
 
 # Opens the committed manifest: the file is an output, so a reader edits the template
 # and re-renders rather than editing it. A drift test holds it to a fresh render.
@@ -41,7 +39,7 @@ _HEADER = f"""\
 # The serving fleet (ADR-0031), at the 0%-share knob-sweep winner:
 #   --max-num-seqs {SERVING_ENGINE_ARGS.max_num_seqs} \
 --kv-cache-dtype {SERVING_ENGINE_ARGS.kv_engine_token} {SERVING_ENGINE_ARGS.prefix_caching_flag}
-# Namespace {_SERVING_NAMESPACE}, a ClusterIP Service behind the serving proxy, and no replicas:
+# Namespace {SERVING_FLEET.namespace}, a ClusterIP Service behind the serving proxy, and no replicas:
 # KEDA alone owns the count.
 """
 
@@ -76,7 +74,7 @@ def render_serving_manifest(template_text: str) -> str:
 def _assign_serving_identity(document: dict[str, Any]) -> None:
     """Give one of the template's documents the serving fleet's identity, in place."""
     metadata = document["metadata"]
-    metadata.update(name=_SERVING_NAME, namespace=_SERVING_NAMESPACE)
+    metadata.update(name=SERVING_FLEET.deployment, namespace=SERVING_FLEET.namespace)
     metadata["labels"] = dict(_SERVING_LABELS)
     spec = document["spec"]
     if document["kind"] == "Deployment":
