@@ -3,11 +3,6 @@
 # The serving fleet (ADR-0031), at the 0%-share knob-sweep winner:
 #   --max-num-seqs 32 --kv-cache-dtype fp8 --no-enable-prefix-caching
 # Namespace serving, NodePort 30801, and no replicas: KEDA alone owns the count.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: serving
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -5,7 +5,10 @@ its manifest is generated from that template rather than copied by hand. The ren
 the engine knobs at the 0%-share knob-sweep winner, ``32 fp8 off``, through the same
 :func:`render_gpu_manifest` the flows use, then gives the fleet its own name, labels,
 ``serving`` namespace and NodePort, and drops ``replicas`` so an Argo CD sync never
-resets the count KEDA alone owns.
+resets the count KEDA alone owns. The template's Namespace document is dropped: Terraform
+owns the ``serving`` namespace, as it owns ``slipstream``, because the api-key Secret and
+the worker's RBAC need it before Argo CD syncs, and the workloads AppProject allows no
+cluster-scoped resources.
 """
 
 from typing import Any
@@ -58,7 +61,9 @@ def render_serving_manifest(template_text: str) -> str:
     rendered = render_gpu_manifest(
         template_text, engine_args=SERVING_ENGINE_ARGS, kv_cache_offload=False
     )
-    documents = list(yaml.safe_load_all(rendered))
+    documents = [
+        doc for doc in yaml.safe_load_all(rendered) if doc["kind"] != "Namespace"
+    ]
     for document in documents:
         _assign_serving_identity(document)
     return _HEADER + yaml.safe_dump_all(documents, sort_keys=False)
@@ -67,9 +72,6 @@ def render_serving_manifest(template_text: str) -> str:
 def _assign_serving_identity(document: dict[str, Any]) -> None:
     """Give one of the template's documents the serving fleet's identity, in place."""
     metadata = document["metadata"]
-    if document["kind"] == "Namespace":
-        metadata["name"] = _SERVING_NAMESPACE
-        return
     metadata.update(name=_SERVING_NAME, namespace=_SERVING_NAMESPACE)
     metadata["labels"] = dict(_SERVING_LABELS)
     spec = document["spec"]
