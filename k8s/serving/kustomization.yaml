@@ -1,0 +1,15 @@
+# The serving fleet's Argo CD app (k8s/argocd/apps/templates/serving.yaml): the fleet,
+# its proxy and the ScaledObject that owns the fleet's replicas (ADR-0031). The proxy's
+# Envoy config becomes a ConfigMap named by its content hash, which Kustomize writes into
+# the proxy's pod template, so a merged config change rolls the pod.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - vllm-serving.yaml
+  - serving-proxy.yaml
+  - scaled-object.yaml
+configMapGenerator:
+  - name: serving-proxy-config
+    namespace: serving
+    files:
+      - envoy.yaml
