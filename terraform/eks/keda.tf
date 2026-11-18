@@ -14,7 +14,9 @@ resource "helm_release" "keda" {
 
   # The chart templates its CRDs rather than shipping them under crds/, so Helm tracks
   # them: an upgrade updates their schemas and an uninstall removes them with the
-  # release. install is the chart's default, set here because the CRDs are what the
+  # release, taking every ScaledObject with them (the CRDs carry no
+  # helm.sh/resource-policy: keep), which cluster-down's teardown of the whole cluster
+  # does anyway. install is the chart's default, set here because the CRDs are what the
   # serving fleet's ScaledObject needs.
   values = [yamlencode({ crds = { install = true } })]
 

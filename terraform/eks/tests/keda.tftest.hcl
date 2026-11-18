@@ -3,8 +3,9 @@
 # ready for the serving fleet's ScaledObject. They run offline — the aws, helm, and
 # kubernetes providers are mocked — so the assertions check the install's shape (the
 # release, its pinned chart and namespace, wait/atomic) without standing a cluster up.
-# The ScaledObject CRD actually existing is the manual tier: `just cluster-up`, then
-# `kubectl get crd scaledobjects.keda.sh`.
+# KEDA serving on a live cluster is the manual tier, checked after cluster-up: the
+# scaledobjects.keda.sh CRD exists, the v1beta1.external.metrics.k8s.io APIService is
+# Available, and a ScaledObject passes a server-side dry-run apply through the webhook.
 
 # The eks module builds IAM roles whose assume_role_policy is validated as JSON at
 # plan; the mock provider's random string is not valid JSON, so every policy
@@ -98,8 +99,9 @@ run "keda_release_shape" {
   }
 
   # KEDA's compatibility matrix (keda.sh/docs/2.21/operate/cluster/, read 2026-11-18)
-  # tests v2.21 against Kubernetes v1.34 - v1.36, which covers the cluster's 1.36. The
-  # literal pin and the cluster version together are the pair that check was made for.
+  # tests v2.21 against Kubernetes v1.34–v1.36, which covers the cluster's 1.36. The two
+  # asserts below fail if either the chart pin or the cluster version moves away from the
+  # pair that was checked.
   assert {
     condition     = helm_release.keda.version == "2.21.1"
     error_message = "The KEDA chart must be pinned to 2.21.1, the version checked against KEDA's compatibility matrix for EKS 1.36. Check a new version against the matrix before moving this pin."
@@ -109,9 +111,9 @@ run "keda_release_shape" {
     error_message = "The cluster's Kubernetes version moved off 1.36: recheck the KEDA chart pin against KEDA's compatibility matrix."
   }
 
-  # A broken install (webhook or metrics server never Ready) must fail cluster-up loudly
-  # and roll back, not leave a half-up operator the serving fleet's ScaledObject then
-  # cannot reach.
+  # A broken install (operator, metrics server or webhook never Ready) must fail
+  # cluster-up loudly and roll back, not leave a ScaledObject to be rejected by a webhook
+  # that never came up.
   assert {
     condition     = helm_release.keda.wait && helm_release.keda.atomic
     error_message = "The KEDA release must set wait and atomic."
