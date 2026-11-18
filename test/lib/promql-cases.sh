@@ -45,7 +45,7 @@ check_cases_pass() {
   fi
 }
 
-# Records a failed mutation check for the defect $3 whose pattern $2 no longer matches
+# Records a failed mutation check for the defect $3 whose pattern $2 does not match
 # the query $1 names.
 report_unmatched_mutation() {
   local query_name="$1" pattern="$2" defect="$3"
@@ -55,8 +55,10 @@ report_unmatched_mutation() {
 }
 
 # Checks the cases fail against the mutated queries in file $1, so a case catches the
-# defect $2 names in the query $3 names. Records a failed check when the cases pass, or
-# when the mutated query does not parse, as the cases then fail without catching anything.
+# defect $2 names in the query $3 names: a case fails on the mutated query, by a value
+# other than the one expected or by an error evaluating it. Records a failed check when
+# the cases pass, when the mutated query does not parse, or when promtool fails on no
+# case, as the cases then fail without catching anything.
 check_mutant_fails() {
   local mutant="$1" defect="$2" query_name="$3"
   write_tests "${mutant}"
@@ -69,6 +71,11 @@ check_mutant_fails() {
   elif grep -q 'parse error:' <<<"${mutant_output}"; then
     echo "FAIL: the mutation for ${defect} leaves ${query_name} unparseable, so the" \
       "cases fail without catching it; fix its replacement. promtool's output:" >&2
+    echo "${mutant_output}" >&2
+    fail=1
+  elif ! grep -q '^ *expr: .*, time: ' <<<"${mutant_output}"; then
+    echo "FAIL: promtool fails with ${defect} in ${query_name}, but on no case, so the" \
+      "cases catch nothing; promtool's output:" >&2
     echo "${mutant_output}" >&2
     fail=1
   fi
