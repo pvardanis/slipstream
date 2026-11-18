@@ -76,7 +76,7 @@ variable "dcgm_exporter_chart_version" {
 }
 
 variable "keda_chart_version" {
-  description = "Pinned keda Helm chart version from the https://kedacore.github.io/charts repo (appVersion 2.21.1). KEDA's compatibility matrix tests v2.21 against Kubernetes v1.34 - v1.36."
+  description = "Pinned keda Helm chart version from the https://kedacore.github.io/charts repo (appVersion 2.21.1); checked against KEDA's compatibility matrix in tests/keda.tftest.hcl."
   type        = string
   default     = "2.21.1"
 }

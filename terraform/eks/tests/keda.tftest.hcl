@@ -81,21 +81,28 @@ variables {
 run "keda_release_shape" {
   command = plan
 
+  # No other release creates the keda namespace, so this one does.
   assert {
-    condition     = helm_release.keda.name == "keda" && helm_release.keda.namespace == "keda"
-    error_message = "KEDA must install as the keda release in the keda namespace."
+    condition     = helm_release.keda.name == "keda" && helm_release.keda.namespace == "keda" && helm_release.keda.create_namespace
+    error_message = "KEDA must install as the keda release in the keda namespace, which the release creates."
   }
   assert {
     condition     = helm_release.keda.repository == "https://kedacore.github.io/charts" && helm_release.keda.chart == "keda"
     error_message = "KEDA must come from the project's chart repository, kedacore/charts."
   }
 
-  # KEDA's compatibility matrix (keda.sh/docs/2.21/operate/cluster/) tests v2.21 against
-  # Kubernetes v1.34 - v1.36, which covers the cluster's 1.36. A patch bump stays inside
-  # that row; a minor bump must be rechecked against the matrix and this pattern moved.
+  # The ScaledObject CRD is what the serving fleet's app needs from this release.
   assert {
-    condition     = can(regex("^2\\.21\\.[0-9]+$", helm_release.keda.version))
-    error_message = "The KEDA chart must be pinned to an exact 2.21.x version, the KEDA minor whose compatibility matrix covers EKS 1.36."
+    condition     = yamldecode(helm_release.keda.values[0]).crds.install
+    error_message = "The KEDA release must install the chart's CRDs, ScaledObject among them."
+  }
+
+  # KEDA's compatibility matrix (keda.sh/docs/2.21/operate/cluster/, read 2026-11-18)
+  # tests v2.21 against Kubernetes v1.34 - v1.36, which covers the cluster's 1.36. The
+  # literal pin and the cluster version together are the pair that check was made for.
+  assert {
+    condition     = helm_release.keda.version == "2.21.1"
+    error_message = "The KEDA chart must be pinned to 2.21.1, the version checked against KEDA's compatibility matrix for EKS 1.36. Check a new version against the matrix before moving this pin."
   }
   assert {
     condition     = var.kubernetes_version == "1.36"
