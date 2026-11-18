@@ -9,8 +9,9 @@
 # and validated with model.yaml as its values file, and must stamp model.yaml's model and
 # roll its pod on a change to its config or that model. The serving fleet's kustomization
 # (k8s/serving), which Argo CD deploys, is rendered and validated, must land in its
-# Application's namespace, and must leave the replicas of the Deployment its ScaledObject
-# scales unset.
+# Application's namespace, must leave the replicas of the Deployment its ScaledObject
+# scales unset, and must wire its proxy's Envoy config to the proxy's ports, the fleet's
+# Service and the wake query.
 # Needs helm, kubeconform, kubectl (for kustomize) and yq on PATH; no cluster.
 set -euo pipefail
 
@@ -171,8 +172,8 @@ fi
 # kustomization at the Application's path. The fleet, its proxy and its ScaledObject
 # must validate, land in the Application's destination namespace, and leave the
 # replicas of the Deployment the ScaledObject scales unset, so a sync never resets the
-# count KEDA owns. Server-side apply, which releases that dropped field, is checked
-# with the shared sync policy above.
+# count KEDA owns. Server-side apply, without which a sync that drops a field resets it,
+# is checked with the shared sync policy above.
 serving_app="$(yq 'select(.kind == "Application" and .metadata.name == "serving")' <<<"${apps_rendered}")"
 if [[ -z "${serving_app}" ]]; then
   echo "${apps_chart} renders no serving Application" >&2
@@ -201,5 +202,54 @@ if [[ -z "${scaled_target}" || -z "${scaled_deployment}" ]]; then
 fi
 if [[ "$(yq '.spec | has("replicas")' <<<"${scaled_deployment}")" != "false" ]]; then
   echo "${serving_path}'s Deployment ${scaled_target} sets replicas, which a sync would reset under KEDA" >&2
+  exit 1
+fi
+
+# The proxy's wiring, each value held in two files and read here from the render: its
+# config volume names the ConfigMap kustomize renders with Envoy's config, its Envoy
+# listeners are its container ports, its readiness probe is a path the listener on its
+# metrics port serves, Envoy's upstream is the fleet's Service, and the listener on its
+# http port counts requests under the conn manager prefix the wake query reads.
+proxy="$(yq -N 'select(.kind == "Deployment" and .metadata.name == "serving-proxy")' <<<"${serving_rendered}")"
+if [[ -z "${proxy}" ]]; then
+  echo "${serving_path} renders no serving-proxy Deployment" >&2
+  exit 1
+fi
+proxy_config_map="$(yq '.spec.template.spec.volumes[] | select(.name == "config") | .configMap.name' <<<"${proxy}")"
+envoy_config="$(yq -N "select(.kind == \"ConfigMap\" and .metadata.name == \"${proxy_config_map}\") | .data[\"envoy.yaml\"]" <<<"${serving_rendered}")"
+if [[ -z "${envoy_config}" ]]; then
+  echo "the serving-proxy's config volume names ConfigMap '${proxy_config_map}', which ${serving_path} does not render with an envoy.yaml" >&2
+  exit 1
+fi
+# Prints the port of the proxy's container port named $1.
+get_proxy_port() {
+  yq ".spec.template.spec.containers[0].ports[] | select(.name == \"$1\") | .containerPort" <<<"${proxy}"
+}
+# Prints the Envoy listener on port $1.
+get_envoy_listener() {
+  yq ".static_resources.listeners[] | select(.address.socket_address.port_value == $1)" <<<"${envoy_config}"
+}
+listener_ports="$(yq '[.static_resources.listeners[].address.socket_address.port_value] | sort | .[]' <<<"${envoy_config}")"
+container_ports="$(yq '[.spec.template.spec.containers[0].ports[].containerPort] | sort | .[]' <<<"${proxy}")"
+if [[ "${listener_ports}" != "${container_ports}" ]]; then
+  echo "the serving-proxy's Envoy listens on ports $(echo "${listener_ports}" | xargs), not its container ports $(echo "${container_ports}" | xargs)" >&2
+  exit 1
+fi
+probe="$(yq '.spec.template.spec.containers[0].readinessProbe.httpGet | .port + " " + .path' <<<"${proxy}")"
+metrics_paths="$(get_envoy_listener "$(get_proxy_port metrics)" | yq '.. | select(has("match")) | .match.path')"
+if [[ "${probe%% *}" != "metrics" ]] || ! grep -qxF "${probe#* }" <<<"${metrics_paths}"; then
+  echo "the serving-proxy's readiness probe '${probe}' is not a path its Envoy serves on the metrics port: $(echo "${metrics_paths}" | xargs)" >&2
+  exit 1
+fi
+fleet_service="$(yq -N "select(.kind == \"Service\" and .metadata.name == \"${scaled_target}\") | .metadata.name + \".\" + .metadata.namespace + \".svc.cluster.local:\" + (.spec.ports[0].port | tostring)" <<<"${serving_rendered}")"
+upstream="$(yq '.static_resources.clusters[] | select(.type == "STRICT_DNS") | .load_assignment.endpoints[].lb_endpoints[].endpoint.address.socket_address | .address + ":" + (.port_value | tostring)' <<<"${envoy_config}")"
+if [[ -z "${fleet_service}" || "${upstream}" != "${fleet_service}" ]]; then
+  echo "the serving-proxy's Envoy forwards to '${upstream}', not the fleet's Service '${fleet_service}'" >&2
+  exit 1
+fi
+ingress_prefix="$(get_envoy_listener "$(get_proxy_port http)" | yq '.. | select(has("stat_prefix")) | .stat_prefix')"
+wake_query="$(yq -N 'select(.kind == "ScaledObject") | .spec.triggers[] | select(.name == "wake") | .metadata.query' <<<"${serving_rendered}")"
+if [[ -z "${ingress_prefix}" || "${wake_query}" != *"envoy_http_conn_manager_prefix=\"${ingress_prefix}\""* ]]; then
+  echo "the wake query does not count the serving-proxy's http listener, stat_prefix '${ingress_prefix}': ${wake_query}" >&2
   exit 1
 fi
