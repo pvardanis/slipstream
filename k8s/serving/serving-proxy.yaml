@@ -1,8 +1,9 @@
 # The serving proxy (ADR-0031): one CPU pod running a static Envoy in front of the serving
 # fleet's Service (envoy.yaml). It stays up while the fleet is at zero replicas, answers
 # 503 until a replica is Ready, and publishes the request rate that KEDA's activation
-# trigger reads to wake the fleet (scaled-object.yaml). Its Service is the fleet's only
-# way in from outside the cluster: NodePort 30801, apart from the bench Engine's 30800.
+# trigger reads to wake the fleet (scaled-object.yaml). Its serving-proxy Service is the
+# fleet's only way in from outside the cluster: NodePort 30801, apart from the bench
+# Engine's 30800.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -78,6 +79,20 @@ spec:
       port: 8000
       targetPort: http
       nodePort: 30801
+---
+# The proxy's stats, for the in-cluster Prometheus only (terraform/eks/monitoring.tf): a
+# ClusterIP Service of its own, as a NodePort Service would give this port a node port too.
+apiVersion: v1
+kind: Service
+metadata:
+  name: serving-proxy-metrics
+  namespace: serving
+  labels:
+    app: serving-proxy
+spec:
+  selector:
+    app: serving-proxy
+  ports:
     - name: metrics
       port: 9102
       targetPort: metrics

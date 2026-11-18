@@ -93,14 +93,20 @@ run "serving_namespace_holds_the_api_key_secret" {
     error_message = "The api-key Secret must be vllm-api-key in the serving namespace."
   }
   assert {
-    condition     = strcontains(file("${path.module}/../../k8s/serving/vllm-serving.yaml"), "name: vllm-api-key\n              key: api-key")
+    condition = length([
+      for d in [for doc in split("\n---\n", file("${path.module}/../../k8s/serving/vllm-serving.yaml")) : yamldecode(doc)] : d
+      if d.kind == "Deployment" && contains([
+        for e in d.spec.template.spec.containers[0].env : try(e.valueFrom.secretKeyRef, null)
+      ], { name = kubernetes_secret_v1.serving_api_key.metadata[0].name, key = "api-key" })
+    ]) == 1
     error_message = "The serving fleet's manifest must read the api-key from the vllm-api-key Secret's api-key key."
   }
 
-  # The key goes through the write-only attribute, so it is in neither plan nor state;
-  # Terraform writes it only when the revision changes, so applies keep the key stable.
+  # The key goes through the write-only data_wo, so it is in neither plan nor state, and
+  # a plan cannot read it back; what the plan shows is the revision, and Terraform writes
+  # the key only when it changes, so applies keep the key stable.
   assert {
     condition     = kubernetes_secret_v1.serving_api_key.data_wo_revision == 1
-    error_message = "The api-key must be written through data_wo at revision 1."
+    error_message = "The api-key Secret's data_wo_revision must be 1, so applies keep the key stable."
   }
 }

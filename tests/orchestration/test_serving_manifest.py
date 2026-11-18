@@ -3,8 +3,8 @@
 The serving fleet's Deployment and Service are generated from ``k8s/vllm-gpu.yaml`` at
 the 0%-share knob-sweep winner (``32 fp8 off``) under their own name, labels and
 ``serving`` namespace, with no ``replicas`` so Argo CD never resets KEDA's count, and a
-ClusterIP Service, so traffic reaches the fleet only through its proxy (ADR-0031). The committed render must equal a fresh one, so the two pod specs keep one
-source.
+ClusterIP Service, so traffic reaches the fleet only through its proxy (ADR-0031). The
+committed render must equal a fresh one, so the two pod specs keep one source.
 """
 
 import re
@@ -144,10 +144,15 @@ def test_the_serving_service_is_reached_only_inside_the_cluster() -> None:
 
 
 def _service_node_port(manifest: Path) -> int:
-    """Return the nodePort a manifest's one Service claims."""
-    service = _documents_by_kind(manifest.read_text(encoding="utf-8"))["Service"]
-    (port,) = [port for port in service["spec"]["ports"] if "nodePort" in port]
-    return port["nodePort"]
+    """Return the one nodePort a manifest's Services claim."""
+    (node_port,) = [
+        port["nodePort"]
+        for doc in yaml.safe_load_all(manifest.read_text(encoding="utf-8"))
+        if doc["kind"] == "Service"
+        for port in doc["spec"]["ports"]
+        if "nodePort" in port
+    ]
+    return node_port
 
 
 def _bench_endpoint_default_node_port() -> int:
