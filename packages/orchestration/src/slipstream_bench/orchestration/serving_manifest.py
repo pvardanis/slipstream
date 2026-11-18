@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from slipstream_bench.orchestration.cluster import render_gpu_manifest
+from slipstream_bench.orchestration.gpu_roles import SERVING_FLEET
 from slipstream_bench.orchestration.grid import EngineArgs, get_kv_engine_token
 
 # The 0%-share knob-sweep winner, `32 fp8 off` (ADR-0009, ADR-0031): the share with the
@@ -29,8 +30,8 @@ SERVING_ENGINE_ARGS = EngineArgs(
     kv_cache_memory_bytes=None,
 )
 
-_SERVING_NAMESPACE = "serving"
-_SERVING_NAME = "vllm-serving"
+_SERVING_NAMESPACE = SERVING_FLEET.namespace
+_SERVING_NAME = SERVING_FLEET.deployment
 _SERVING_LABELS = {"app": _SERVING_NAME}
 
 # Opens the committed manifest: the file is an output, so a reader edits the template
