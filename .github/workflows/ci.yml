@@ -283,6 +283,8 @@ jobs:
       # allowlist's metrics nor its collector_metrics (ADR-0026).
       # dashboard-promql-test stubs nothing: it runs promtool's unit tests against the Fleet
       # health dashboard's real queries, and against mutated copies of them that must fail.
+      # serving-wake-promql-test stubs nothing: it runs promtool's unit tests against the
+      # serving fleet's wake trigger query, read from its ScaledObject, and mutated copies.
       # terraform-pin-check-test stubs nothing: it checks the orchestration Dockerfile's
       # Terraform download against the real mise.lock, and against mutated copies that must
       # fail, so a pin bump that leaves the Dockerfile behind fails here on every PR.
@@ -302,6 +304,7 @@ jobs:
           bash test/otel-collector-check-test.sh
           bash test/dashboard-allowlist-test.sh
           bash test/dashboard-promql-test.sh
+          bash test/serving-wake-promql-test.sh
           bash test/terraform-pin-check-test.sh
           bash test/worker-image-check-test.sh
 

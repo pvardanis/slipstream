@@ -1,4 +1,4 @@
-# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker image check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, the local Helm chart render check, and the app-of-apps chart's child Applications (no cluster).
+# Local test recipes: the Python suite and the shell smokes for the OTel spine and its goodput parity, the dashboards' parse and allowlist check, bench image tagging/build, and the repo-variable setter, the bootstrap external ID lookup, the orchestration image check, the orchestration Dockerfile's Terraform pin, the flow dispatch's worker image check, the Grafana MCP server launcher, the OTel Collector's deploy and delivery checks, the local Helm chart render check, the app-of-apps chart's child Applications, and the serving fleet's wake trigger query (no cluster).
 
 # Run the slipstream-bench Python test suite (no cluster).
 [group('test')]
@@ -65,7 +65,7 @@ grafana-mcp-test:
 otel-collector-check-test:
     bash test/otel-collector-check-test.sh
 
-# Lint and render every local Helm chart under terraform/*/charts/, and the root Application's app-of-apps chart under k8s/argocd/apps, and validate them against the Kubernetes and CRD schemas (needs helm and kubeconform, no cluster).
+# Lint and render every local Helm chart under terraform/*/charts/, the root Application's app-of-apps chart under k8s/argocd/apps, and the serving fleet's kustomization under k8s/serving, and validate them against the Kubernetes and CRD schemas (needs helm, kubeconform and kubectl, no cluster).
 [group('test')]
 chart-render-test:
     bash test/chart-render-test.sh
@@ -74,3 +74,8 @@ chart-render-test:
 [group('test')]
 argocd-apps-test:
     bash test/argocd-apps-test.sh
+
+# Run promtool's unit tests against the serving fleet's wake trigger query, read from its ScaledObject, and against mutated copies of it that must fail (needs yq and promtool, no cluster).
+[group('test')]
+serving-wake-promql-test:
+    bash test/serving-wake-promql-test.sh
