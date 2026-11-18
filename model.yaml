@@ -1,10 +1,11 @@
 # Single source of truth for the model the GPU rig serves and the bench client
 # measures. The bench image (bench/Dockerfile, `just bench-image`) bakes this
-# model's tokenizer and names itself after it; the vLLM manifests carry these values
-# as literal args (k8s/vllm-gpu.yaml, and k8s/serving/vllm-serving.yaml generated
-# from it), and tests/orchestration/test_model_definition_parity.py fails when either
-# differs, until a Helm chart reconciles these keys as chart values (ADR-0008). The
-# keys are shaped to lift one-to-one into that future values.yaml.
+# model's tokenizer and names itself after it. The vLLM manifests (k8s/vllm-gpu.yaml,
+# and k8s/serving/vllm-serving.yaml generated from it) carry the model id, revision and
+# quantization as literal args, and the serving manifest also fixes the KV cache dtype;
+# tests/orchestration/test_model_definition_parity.py fails when any of them differs,
+# until a Helm chart reconciles these keys as chart values (ADR-0008). The keys are
+# shaped to lift one-to-one into that future values.yaml.
 model:
   # Hugging Face id whose tokenizer the bench image bakes and whose name the image
   # tag's slug is derived from.

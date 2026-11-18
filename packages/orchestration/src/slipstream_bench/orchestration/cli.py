@@ -1,4 +1,4 @@
-"""The orchestration entrypoint: drive the knob sweep or one point's Tier-2 sweep, register flows.
+"""The orchestration entrypoint: drive the sweeps, register flows, render the serving manifest.
 
 Six commands, one console script. ``knob-sweep`` (ADR-0015) drives the whole two-tier
 sweep as one parent flow: it enumerates the grid's engine points and, per point,
@@ -389,8 +389,8 @@ def render_serving_manifest(
 ) -> None:
     """Render the serving fleet's manifest from the bench Engine's template (ADR-0031).
 
-    Writes the generated manifest the serving fleet's Argo CD app syncs; a drift test
-    holds the committed file to a fresh render.
+    Writes the serving fleet's generated manifest; a drift test holds the committed file
+    to a fresh render.
 
     :param template: the bench Engine's template, k8s/vllm-gpu.yaml.
     :param output: where the serving fleet's manifest is written.
