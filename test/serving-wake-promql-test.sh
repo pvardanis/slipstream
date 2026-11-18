@@ -12,16 +12,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scaled_object="${repo_root}/k8s/serving/scaled-object.yaml"
 cases="${repo_root}/test/serving-wake-promql-cases.yaml"
 
-for tool in yq promtool; do
-  if ! command -v "${tool}" >/dev/null; then
-    echo "FAIL: ${tool} is not on PATH; this test needs yq and promtool, and" \
-      "'mise install' installs the ones mise.toml pins" >&2
-    exit 1
-  fi
-done
-
-tmp="$(mktemp -d)"
-trap 'rm -r "${tmp}"' EXIT
+# shellcheck source=test/lib/promql-cases.sh
+source "${repo_root}/test/lib/promql-cases.sh"
+require_tools yq promtool
 
 # KEDA activates a trigger when its value is above activationThreshold; the cases show
 # the query above 0 under load and at 0 or empty when idle, so the threshold must be 0.
@@ -54,50 +47,22 @@ write_tests() {
   fi
 }
 
-# Runs promtool over the tests write_tests wrote, printing its output.
-run_tests() {
-  promtool test rules "${tmp}/tests.yaml" 2>&1
-}
-
-write_tests "${scaled_object}"
-if ! output="$(run_tests)"; then
-  echo "FAIL: promtool test rules failed on ${cases#"${repo_root}/"}:" >&2
-  echo "${output}" >&2
-  exit 1
-fi
-
-fail=0
-mutations=0
+check_cases_pass "${scaled_object}"
 
 # Replaces the regex $1 with $2 in the wake trigger's query, in a copy of the
 # ScaledObject, and checks the cases fail against it, so a case catches the defect $3
-# names. Fails when $1 no longer matches the query, or when the mutated query does not
-# parse, as the cases then fail without catching anything.
+# names.
 check_mutation_fails() {
   local pattern="$1" replacement="$2" defect="$3"
   local query='.spec.triggers[] | select(.name == "wake") | .metadata.query'
   mutations=$((mutations + 1))
   if [[ "$(RE="${pattern}" yq "${query} | test(strenv(RE))" "${scaled_object}")" != "true" ]]; then
-    echo "FAIL: the wake query no longer matches /${pattern}/, so the mutation for" \
-      "${defect} cannot be applied; update it to the query's current text" >&2
-    fail=1
+    report_unmatched_mutation "the wake query" "${pattern}" "${defect}"
     return
   fi
   RE="${pattern}" TO="${replacement}" yq "(${query}) |= sub(strenv(RE); strenv(TO))" \
     "${scaled_object}" >"${tmp}/mutant.yaml"
-  write_tests "${tmp}/mutant.yaml"
-  local mutant_output
-  if mutant_output="$(run_tests)"; then
-    echo "FAIL: the cases still pass with ${defect}; add a case to" \
-      "${cases#"${repo_root}/"} that catches it. promtool's output:" >&2
-    echo "${mutant_output}" >&2
-    fail=1
-  elif grep -q 'parse error:' <<<"${mutant_output}"; then
-    echo "FAIL: the mutation for ${defect} leaves the wake query unparseable, so the" \
-      "cases fail without catching it; fix its replacement. promtool's output:" >&2
-    echo "${mutant_output}" >&2
-    fail=1
-  fi
+  check_mutant_fails "${tmp}/mutant.yaml" "${defect}" "the wake query"
 }
 
 check_mutation_fails ',envoy_http_conn_manager_prefix="ingress"' '' \
