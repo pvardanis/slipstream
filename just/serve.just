@@ -93,8 +93,8 @@ _render-gpu-manifest:
 # Render the serving fleet's manifest from the GPU template into
 # k8s/serving/vllm-serving.yaml. The render fixes the 0%-share winner's engine knobs and
 # gives the serving fleet its own name, labels, `serving` namespace and NodePort, with no
-# replicas so KEDA alone owns the count (ADR-0031). Commit the result: a test fails
-# while the committed file differs from a fresh render. Deploys nothing.
+# replicas so KEDA alone owns the count (ADR-0031). A test fails while the committed
+# file differs from a fresh render. Deploys nothing.
 [doc("Render the serving fleet's manifest from the GPU template into k8s/serving/.")]
 [group('serve')]
 render-serving-manifest:
