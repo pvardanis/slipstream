@@ -34,7 +34,7 @@ class GpuRole:
 
 
 BENCH_ENGINE = GpuRole(
-    name="bench Engine", namespace=VLLM_NAMESPACE, deployment=VLLM_DEPLOYMENT
+    name="bench engine", namespace=VLLM_NAMESPACE, deployment=VLLM_DEPLOYMENT
 )
 SERVING_FLEET = GpuRole(
     name="serving fleet", namespace="serving", deployment="vllm-serving"
@@ -70,8 +70,10 @@ def role_has_replicas(kubectl: Kubectl, role: GpuRole) -> bool:
         ],
         None,
     ).strip()
+
     if not stdout:
         return False
+
     try:
         return int(stdout) > 0
     except ValueError as error:
