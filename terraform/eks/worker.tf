@@ -208,8 +208,9 @@ resource "kubernetes_role_v1" "vllm_gpu_manage" {
     verbs          = ["get", "patch"]
     resource_names = [local.vllm_deployment]
   }
-  # Reading the rollout (kubectl rollout status) watches the Deployment; resourceNames
-  # cannot restrict list/watch, but the namespace holds only vllm-gpu.
+  # Reading the rollout (kubectl rollout status) lists and watches the Deployment. This
+  # rule names no resource, so it covers every Deployment in the namespace, which holds
+  # only vllm-gpu.
   rule {
     api_groups = ["apps"]
     resources  = ["deployments"]

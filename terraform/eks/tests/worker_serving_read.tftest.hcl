@@ -76,7 +76,7 @@ run "worker_serving_fleet_read" {
     error_message = "The serving fleet read Role must live in the serving namespace."
   }
   # One rule: get on apps Deployments, narrowed to the serving fleet's by name. No list or
-  # watch, which resourceNames cannot narrow, so no other workload there is visible.
+  # watch, so no other workload there is visible.
   assert {
     condition = (
       length(kubernetes_role_v1.serving_fleet_read.rule) == 1
