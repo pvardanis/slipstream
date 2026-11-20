@@ -29,6 +29,20 @@ tests:
           - labels: '{}'
             value: 1
 
+  # Slow traffic: 3 requests per 15 s scrape. Window (4m, 5m] holds 51..60: 9 over 45 s,
+  # extrapolated to 60 s: 12, a rate of 0.2 per second. Above 0, so wake reads 1 and
+  # wakes the fleet however slowly requests arrive.
+  - interval: 15s
+    input_series:
+      - series: 'envoy_http_downstream_rq_total{namespace="serving",pod="serving-proxy-a",envoy_http_conn_manager_prefix="ingress"}'
+        values: '0+3x40'
+    promql_expr_test:
+      - trigger: wake
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
   # No request reaches the proxy, while Prometheus still scrapes its metrics listener and
   # another namespace's Envoy, if one ran, takes requests: the rate is 0, so wake stays
   # inactive and the fleet returns to 0 after the cooldown.
@@ -101,8 +115,8 @@ tests:
             value: 6
 
   # Two replicas, 6 running and 1 waiting on one, 5 and 1 on the other: 13 in the fleet,
-  # 6.5 per replica, past the target, so load asks for ceil(13 / 6) = 3 replicas, which
-  # maxReplicaCount holds at 2.
+  # 6.5 per replica, within the HPA's 10% tolerance of the target, so the fleet holds at
+  # 2, as maxReplicaCount would hold it.
   - interval: 15s
     input_series:
       - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
@@ -140,15 +154,15 @@ tests:
           - labels: '{}'
             value: 0
 
-  # Requests waiting at every scrape: queue reads 1 on the 15 s steps 4m..5m of the
-  # window (3m45, 5m], a minute of samples all with 2 waiting, so it fires, asking for
-  # ceil(1 × 1 / 0.5) = 2 replicas from one.
+  # A single request waiting at every scrape: queue reads 1 on the 15 s steps 4m..5m of
+  # the window (3m45, 5m], a minute of samples all with 1 waiting, so it fires, asking
+  # for ceil(1 × 1 / 0.5) = 2 replicas from one.
   - interval: 15s
     input_series:
       - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
         values: '32x40'
       - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
-        values: '2x40'
+        values: '1x40'
     promql_expr_test:
       - trigger: queue
         eval_time: 5m

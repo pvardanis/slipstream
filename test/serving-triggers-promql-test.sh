@@ -87,6 +87,8 @@ check_mutation_fails wake 'sum\(rate\((.*)\[1m\]\)\)' 'sum(${1})' \
   'the request count, not its rate, which stays above 0 once any request arrived'
 check_mutation_fails wake ' > bool 0$' '' \
   'the request rate itself, which asks for a replica per request per second'
+check_mutation_fails wake ' > bool 0$' ' > bool 1' \
+  'a rate under 1 per second left asleep, so slow traffic only ever gets 503s'
 check_mutation_fails load ' \+ vllm:num_requests_waiting\{namespace="serving"\}' '' \
   'waiting requests left out, so a replica with only a queue reads idle'
 check_mutation_fails load '\{namespace="serving"\}' '' 'the bench Engine counted'
@@ -96,6 +98,8 @@ check_mutation_fails queue ' or vector\(0\)' '' \
   'a step with no Engine series skipped, so an Engine up under a minute fires it'
 check_mutation_fails queue ' > bool 0\)' ')' \
   'the waiting count, not whether any request waits, which asks for more than twice'
+check_mutation_fails queue ' > bool 0\)' ' > bool 1)' \
+  'a single request waiting a minute left unseen'
 check_mutation_fails queue '\[75s:15s\]' '[1m:15s]' \
   'four steps, 45 s of waiting, firing it'
 

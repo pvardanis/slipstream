@@ -45,9 +45,10 @@ spec:
     # averages over the replicas (AverageValue), asking for one replica per 6. The Rig
     # breaches its SLO on TPOT at 16 running, before requests wait, so running requests
     # are the signal; 6 sits below the concurrency ceiling of 8 because a new replica
-    # takes about 760 s to come up. Counting waiting requests too keeps a replica
-    # mid-generation, or one with only a queue, reading active, so it is never scaled
-    # away. Only the serving fleet's Engines count, not the bench Engine's.
+    # takes about 760 s to come up. Running requests keep a replica mid-generation
+    # reading active, and counting waiting requests too keeps one with only a queue, as
+    # after preemptions, reading active, so the fleet's last replica is not scaled to
+    # zero under either. Only the serving fleet's Engines count, not the bench Engine's.
     - type: prometheus
       name: load
       metricType: AverageValue
