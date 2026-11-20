@@ -1,0 +1,193 @@
+# promtool unit tests for the serving fleet's triggers, run by
+# test/serving-triggers-promql-test.sh. Each promql_expr_test names its ScaledObject
+# trigger by name in place of an expr; the script fills in the expr from
+# k8s/serving/scaled-object.yaml. KEDA reads an empty result as 0, holds a trigger active
+# while its value is above its activationThreshold of 0, and returns the fleet to zero
+# once every trigger has been inactive for the cooldown. The HPA it drives asks for the
+# most replicas any trigger asks for: wake and load are AverageValue triggers, asking
+# for ceil(value / threshold) replicas, and queue is a Value trigger, asking for
+# ceil(current replicas × value / threshold). Expected values are worked by hand from
+# the input series.
+tests:
+  # Requests reach the proxy: 30 per 15 s scrape on the ingress listener, beside
+  # Prometheus's own scrapes counted on the metrics listener. No input carries a vllm:
+  # series: at zero replicas the Engine publishes none.
+  # Window (4m, 5m] holds the ingress samples at 4m15..5m, 510..600: 90 over 45 s, with a
+  # 15 s gap to the window's start, under 1.1 scrape intervals, so extrapolated to 60 s:
+  # 120, a rate of 2 per second. Above 0, so wake reads 1: active, and asking for one
+  # replica over its threshold of 1 however fast requests arrive.
+  - interval: 15s
+    input_series:
+      - series: 'envoy_http_downstream_rq_total{namespace="serving",pod="serving-proxy-a",envoy_http_conn_manager_prefix="ingress"}'
+        values: '0+30x40'
+      - series: 'envoy_http_downstream_rq_total{namespace="serving",pod="serving-proxy-a",envoy_http_conn_manager_prefix="metrics"}'
+        values: '0+1x40'
+    promql_expr_test:
+      - trigger: wake
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # No request reaches the proxy, while Prometheus still scrapes its metrics listener and
+  # another namespace's Envoy, if one ran, takes requests: the rate is 0, so wake stays
+  # inactive and the fleet returns to 0 after the cooldown.
+  - interval: 15s
+    input_series:
+      - series: 'envoy_http_downstream_rq_total{namespace="serving",pod="serving-proxy-a",envoy_http_conn_manager_prefix="ingress"}'
+        values: '7x40'
+      - series: 'envoy_http_downstream_rq_total{namespace="serving",pod="serving-proxy-a",envoy_http_conn_manager_prefix="metrics"}'
+        values: '0+1x40'
+      - series: 'envoy_http_downstream_rq_total{namespace="other",pod="envoy-b",envoy_http_conn_manager_prefix="ingress"}'
+        values: '0+3x40'
+    promql_expr_test:
+      - trigger: wake
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+
+  # The fleet at zero and its proxy not yet scraped: no Envoy or Engine series at all.
+  # wake and load are empty, which KEDA reads as 0, and queue reads 0: all inactive.
+  - interval: 15s
+    input_series:
+      - series: 'up{namespace="serving",job="serving-proxy"}'
+        values: '0x40'
+    promql_expr_test:
+      - trigger: wake
+        eval_time: 5m
+        exp_samples: []
+      - trigger: load
+        eval_time: 5m
+        exp_samples: []
+      - trigger: queue
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+
+  # One replica past the target: 5 running and 2 waiting is 7, above 6, so load asks for
+  # ceil(7 / 6) = 2 replicas. The bench Engine in slipstream, if it ran, is not counted.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '5x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '2x40'
+      - series: 'vllm:num_requests_running{namespace="slipstream",pod="vllm-gpu-a",engine="0",model_name="m"}'
+        values: '8x40'
+      - series: 'vllm:num_requests_waiting{namespace="slipstream",pod="vllm-gpu-a",engine="0",model_name="m"}'
+        values: '3x40'
+    promql_expr_test:
+      - trigger: load
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 7
+
+  # One replica at the target, not past it: 6 running and none waiting is 6, so load
+  # asks for ceil(6 / 6) = 1 replica.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '6x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '0x40'
+    promql_expr_test:
+      - trigger: load
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 6
+
+  # Two replicas, 6 running and 1 waiting on one, 5 and 1 on the other: 13 in the fleet,
+  # 6.5 per replica, past the target, so load asks for ceil(13 / 6) = 3 replicas, which
+  # maxReplicaCount holds at 2.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '6x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '1x40'
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-b",engine="0",model_name="m"}'
+        values: '5x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-b",engine="0",model_name="m"}'
+        values: '1x40'
+    promql_expr_test:
+      - trigger: load
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 13
+
+  # A replica mid-generation with an empty queue: 3 running, none waiting. load reads 3,
+  # above 0, so it stays active and the replica is not scaled away; queue reads 0.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '3x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '0x40'
+    promql_expr_test:
+      - trigger: load
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 3
+      - trigger: queue
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+
+  # Requests waiting at every scrape: queue reads 1 on the 15 s steps 4m15..5m of the
+  # minute (4m, 5m], all with 2 waiting, so it fires, asking for ceil(1 × 1 / 0.5) = 2
+  # replicas from one.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '32x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '2x40'
+    promql_expr_test:
+      - trigger: queue
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # Requests waiting from 4m30 on, none before: at 5m the minute's step at 4m15 had none,
+  # so queue reads 0; at 5m15 its steps 4m30..5m15 all had 2 waiting, so it fires.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '32x40'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '0x17 2x22'
+    promql_expr_test:
+      - trigger: queue
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0
+      - trigger: queue
+        eval_time: 5m15s
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # An Engine first scraped at 4m30 with requests already waiting: at 5m the minute's
+  # step at 4m15 had no Engine series, which counts as none waiting, so queue reads 0
+  # rather than firing on half a minute.
+  - interval: 15s
+    input_series:
+      - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '_x18 32x22'
+      - series: 'vllm:num_requests_waiting{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
+        values: '_x18 2x22'
+    promql_expr_test:
+      - trigger: queue
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0

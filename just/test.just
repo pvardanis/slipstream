@@ -75,7 +75,7 @@ chart-render-test:
 argocd-apps-test:
     bash test/argocd-apps-test.sh
 
-# Run promtool's unit tests against the serving fleet's wake trigger query, read from its ScaledObject, and against mutated copies of it that must fail (needs yq and promtool, no cluster).
+# Run promtool's unit tests against the serving fleet's trigger queries, read from its ScaledObject, and against mutated copies of them that must fail (needs yq and promtool, no cluster).
 [group('test')]
-serving-wake-promql-test:
-    bash test/serving-wake-promql-test.sh
+serving-triggers-promql-test:
+    bash test/serving-triggers-promql-test.sh
