@@ -1,10 +1,13 @@
-"""Tests that the GPU NodePool caps GPU spend at the serving fleet's ceiling.
+"""Tests that the GPU NodePool caps GPU spend at the serving fleet's ceiling and never
+moves a running replica.
 
 The GPU NodePool (k8s/gpu-node-pool.yaml, applied by `just gpu-pool-up`) is the hard cap
 on GPU nodes: two GPUs, on-demand g5.xlarge only, the account's whole on-demand G quota
 of 8 vCPU (ADR-0031). Each serving fleet replica holds one GPU, so the cap equals the
 fleet's maxReplicaCount (k8s/serving/scaled-object.yaml): a lower cap leaves a replica
-Pending, a higher one lets a mistake launch a node past the quota.
+Pending, a higher one lets a mistake launch a node past the quota. Only empty nodes are
+consolidated, so the node a 2→1 scale-down empties is reaped rather than handed the
+surviving replica.
 """
 
 from pathlib import Path
@@ -49,3 +52,10 @@ def test_node_pool_gpu_limit_equals_serving_fleet_ceiling() -> None:
     scaled_object = yaml.safe_load(_SCALED_OBJECT.read_text(encoding="utf-8"))
 
     assert gpu_limit == scaled_object["spec"]["maxReplicaCount"]
+
+
+def test_node_pool_consolidates_only_empty_nodes() -> None:
+    assert _get_node_pool()["spec"]["disruption"] == {
+        "consolidationPolicy": "WhenEmpty",
+        "consolidateAfter": "1m",
+    }

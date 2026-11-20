@@ -97,10 +97,12 @@ spec:
     nvidia.com/gpu: "2"
   # When the replica scales to zero the node goes empty and Karpenter reaps it
   # after the window, returning GPU spend to zero (the duty-cycle requirement,
-  # ADR-0006). Underutilised consolidation cannot disrupt a running replica: each
-  # holds its node's only GPU, so there is no cheaper node to move it to.
+  # ADR-0006). Only empty nodes are consolidated: once the fleet scales 2→1 and one
+  # node goes empty, underutilised consolidation would evict the surviving replica
+  # onto it, leaving no replica serving through its cold start. With one instance
+  # type there is no cheaper node for it to move a replica to anyway.
   disruption:
-    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidationPolicy: WhenEmpty
     consolidateAfter: 1m
 ---
 # The NVIDIA device plugin (github.com/NVIDIA/k8s-device-plugin). Registers each
