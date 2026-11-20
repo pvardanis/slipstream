@@ -226,8 +226,8 @@ run "worker_layer_shape" {
     condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage.rule : r if contains(r.resources, "deployments") && contains(r.verbs, "get") && contains(r.verbs, "patch") && try(contains(r.resource_names, "vllm-gpu"), false)]) == 1
     error_message = "The Role must scope get/patch on deployments to the vllm-gpu resource name."
   }
-  # Reading the rollout needs list/watch on deployments, which resourceNames cannot
-  # restrict; the namespace holds only vllm-gpu, so this stays scoped in practice.
+  # Reading the rollout needs list/watch on deployments. The rule names no resource, so
+  # it covers the whole namespace, which holds only vllm-gpu.
   assert {
     condition     = length([for r in kubernetes_role_v1.vllm_gpu_manage.rule : r if contains(r.resources, "deployments") && contains(r.verbs, "watch") && !contains(r.verbs, "patch")]) == 1
     error_message = "The Role must allow list/watch on deployments so the worker can read the rollout."

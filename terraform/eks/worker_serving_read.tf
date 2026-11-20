@@ -1,9 +1,9 @@
 # The Prefect worker's read on the serving fleet (ADR-0031): the serving fleet and the bench
 # Engine share the GPU quota, so the bench flows refuse to start while the serving fleet's
 # Deployment has replicas, and read its replica count to tell. A get on that one
-# Deployment by name and nothing else in the serving namespace: no list or watch, which
-# resourceNames cannot restrict, so the worker cannot see any other workload there. The
-# worker's slipstream Role (worker.tf) is not widened.
+# Deployment by name and nothing else in the serving namespace: the check reads that one
+# object, so the Role grants no list or watch and the worker cannot see any other workload
+# there. The worker's slipstream Role (worker.tf) is not widened.
 
 locals {
   serving_deployment = "vllm-serving"
