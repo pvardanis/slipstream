@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Steps shared by the promtool case tests, test/dashboard-promql-test.sh and
-# test/serving-wake-promql-test.sh, sourced by both: the tool check, a scratch directory
+# test/serving-triggers-promql-test.sh, sourced by both: the tool check, a scratch directory
 # removed on exit, running the cases, and judging a mutated query against them. The
 # sourcing test sets repo_root and cases (the cases file) and defines write_tests, which
 # writes the cases, with the queries from the file it is given, as promtool tests to

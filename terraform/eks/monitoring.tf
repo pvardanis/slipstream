@@ -153,6 +153,15 @@ locals {
           selector          = { matchLabels = { app = "serving-proxy" } }
           endpoints         = [{ port = "metrics", path = "/stats/prometheus", interval = "15s" }]
         }
+        # The serving fleet's Service (k8s/serving/vllm-serving.yaml). Its Engines' running
+        # and waiting requests are what KEDA's load and queue triggers read to scale the
+        # fleet past one replica (ADR-0031), so it is scraped every 15 s, KEDA's polling
+        # interval.
+        vllm-serving = {
+          namespaceSelector = { matchNames = [kubernetes_namespace_v1.serving.metadata[0].name] }
+          selector          = { matchLabels = { app = "vllm-serving" } }
+          endpoints         = [{ port = "http", path = "/metrics", interval = "15s" }]
+        }
       }
 
       prometheusSpec = {

@@ -84,7 +84,7 @@ The CI/CD pipeline and the benchmark data path are detailed in
 | `docker` | local bench-image builds |
 | `prek`, `tflint` | git hooks |
 | `helm`, `kubeconform` | local Helm chart and serving kustomization checks (`test/chart-render-test.sh`) |
-| `promtool` | Fleet health dashboard and serving wake trigger PromQL tests (`test/dashboard-promql-test.sh`, `test/serving-wake-promql-test.sh`) |
+| `promtool` | Fleet health dashboard and serving fleet trigger PromQL tests (`test/dashboard-promql-test.sh`, `test/serving-triggers-promql-test.sh`) |
 | `yq` | image tags (`bench/image-tag.sh`), the `just prefix-cache` sweep config, and the shell tests that read YAML |
 | `gh` | setting repo variables (`just gh-vars`) |
 

@@ -1,9 +1,11 @@
 # The ScaledObject that alone owns the serving fleet's replica count (ADR-0031): KEDA
-# wakes the fleet 0→1 when requests reach its proxy, and returns it to 0 once the wake
-# trigger has been inactive for the cooldown. The Deployment carries no replicas, so an Argo CD sync
-# never resets the count KEDA sets. At the first sync the API server defaults that count
-# to 1 until KEDA's first poll sets it to 0, so the pending replica may have Karpenter
-# launch a GPU node, which it removes once the node is empty.
+# wakes the fleet 0→1 when requests reach its proxy, scales it 1→2 on the requests each
+# replica holds, and returns it to 0 once every trigger has been inactive for the
+# cooldown. The HPA KEDA drives asks for the most replicas any trigger asks for, and
+# scales 2→1 after its default 5 min stabilization. The Deployment carries no replicas,
+# so an Argo CD sync never resets the count KEDA sets. At the first sync the API server
+# defaults that count to 1 until KEDA's first poll sets it to 0, so the pending replica
+# may have Karpenter launch a GPU node, which it removes once the node is empty.
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -13,25 +15,59 @@ spec:
   scaleTargetRef:
     name: vllm-serving
   minReplicaCount: 0
-  maxReplicaCount: 1
-  # Matches the proxy's 15 s scrape (terraform/eks/monitoring.tf).
+  # Two on-demand g5.xlarge are the account's whole G quota; the GPU NodePool's limit
+  # equals this (tests/test_gpu_node_pool.py).
+  maxReplicaCount: 2
+  # Matches the proxy's and the Engine's 15 s scrapes (terraform/eks/monitoring.tf).
   pollingInterval: 15
   cooldownPeriod: 300
+  # Every trigger reads the in-cluster Prometheus. test/serving-triggers-promql-test.sh
+  # tests their queries.
   triggers:
-    # The activation trigger: the fleet's proxy's incoming request rate, read from the
-    # in-cluster Prometheus. At zero replicas the Engine publishes no series, so the
-    # proxy, which stays up, is what shows load arriving. Above activationThreshold 0 the
-    # fleet wakes; at 0, or with no series yet (KEDA reads an empty result as 0), it
-    # stays down, so a scrape that stops reading the proxy fails toward zero replicas,
-    # where requests get Envoy's 503. Only the ingress listener counts: the proxy's
-    # metrics listener counts Prometheus's own scrapes. test/serving-wake-promql-test.sh
-    # tests this query.
+    # The activation trigger: whether requests reach the fleet's proxy. At zero replicas
+    # the Engine publishes no series, so the proxy, which stays up, is what shows load
+    # arriving. The query reads 1 while the proxy's incoming request rate is above 0,
+    # waking the fleet, and 0 at a rate of 0, or empty with no series yet (KEDA reads an
+    # empty result as 0), so a scrape that stops reading the proxy fails toward zero
+    # replicas, where requests get Envoy's 503. Only the ingress listener counts: the
+    # proxy's metrics listener counts Prometheus's own scrapes. Reading 1 over a
+    # threshold of 1, it asks for one replica however fast requests arrive, leaving
+    # scale-out to load and queue.
     - type: prometheus
       name: wake
+      metricType: AverageValue
       metadata:
         serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
-        query: sum(rate(envoy_http_downstream_rq_total{namespace="serving",envoy_http_conn_manager_prefix="ingress"}[1m]))
-        # With maxReplicaCount 1 the scaling target only has to ask for one replica
-        # whenever the trigger is active.
+        query: sum(rate(envoy_http_downstream_rq_total{namespace="serving",envoy_http_conn_manager_prefix="ingress"}[1m])) > bool 0
         threshold: "1"
+        activationThreshold: "0"
+    # The primary trigger: the fleet's running plus waiting requests, which the HPA
+    # averages over the replicas (AverageValue), asking for one replica per 6. The Rig
+    # breaches its SLO on TPOT at 16 running, before requests wait, so running requests
+    # are the signal; 6 sits below the concurrency ceiling of 8 because a new replica
+    # takes about 760 s to come up. Running requests keep a replica mid-generation
+    # reading active, and counting waiting requests too keeps one with only a queue, as
+    # after preemptions, reading active, so the fleet's last replica is not scaled to
+    # zero under either. Only the serving fleet's Engines count, not the bench Engine's.
+    - type: prometheus
+      name: load
+      metricType: AverageValue
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+        query: sum(vllm:num_requests_running{namespace="serving"} + vllm:num_requests_waiting{namespace="serving"})
+        threshold: "6"
+        activationThreshold: "0"
+    # The backstop: requests waiting in the fleet for a minute, from open-loop overload
+    # or preemptions, which vLLM puts back on the waiting queue. The window is left-open,
+    # so 75 s holds the five 15 s steps that span a minute. The query reads 1 while
+    # requests wait at every step and 0 otherwise; a step with no Engine series counts
+    # as none waiting, so an Engine up for under a minute cannot fire it. As a Value
+    # trigger, reading 1 over a threshold of 0.5 asks for twice the current replicas.
+    - type: prometheus
+      name: queue
+      metricType: Value
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+        query: min_over_time(((sum(vllm:num_requests_waiting{namespace="serving"}) > bool 0) or vector(0))[75s:15s])
+        threshold: "0.5"
         activationThreshold: "0"
