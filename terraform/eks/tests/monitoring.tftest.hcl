@@ -480,9 +480,9 @@ run "service_monitor_scrapes_the_serving_proxy" {
     error_message = "The serving proxy's ServiceMonitor app label, namespace and port must match the Service in k8s/serving/serving-proxy.yaml."
   }
 
-  # KEDA's wake trigger (k8s/serving/scaled-object.yaml) queries this release's
-  # Prometheus, whose Service the chart names after the release, so a renamed release
-  # or namespace fails here rather than leaving the trigger with nothing to query.
+  # KEDA's triggers (k8s/serving/scaled-object.yaml) query this release's Prometheus,
+  # whose Service the chart names after the release, so a renamed release or namespace
+  # fails here rather than leaving the triggers with nothing to query.
   assert {
     condition = alltrue([
       for d in [for doc in split("\n---\n", file("../../k8s/serving/scaled-object.yaml")) : yamldecode(doc)] : alltrue([
@@ -491,6 +491,46 @@ run "service_monitor_scrapes_the_serving_proxy" {
       ])
     ])
     error_message = "Every Prometheus trigger in k8s/serving/scaled-object.yaml must query the kube-prometheus-stack release's Prometheus Service."
+  }
+}
+
+# The serving fleet's Engines (k8s/serving/vllm-serving.yaml, ADR-0031) publish the
+# running and waiting requests KEDA's load and queue triggers read, so Prometheus
+# scrapes them every 15 s, KEDA's polling interval.
+run "service_monitor_scrapes_the_serving_fleet" {
+  command = plan
+
+  assert {
+    condition = yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm-serving == {
+      namespaceSelector = { matchNames = ["serving"] }
+      selector          = { matchLabels = { app = "vllm-serving" } }
+      endpoints         = [{ port = "http", path = "/metrics", interval = "15s" }]
+    }
+    error_message = "The serving fleet's ServiceMonitor must scrape /metrics on the http port of the vllm-serving Service in serving every 15s."
+  }
+
+  # KEDA polls the load and queue triggers as often as Prometheus scrapes the Engines,
+  # so each poll can see a new sample; a change to either one alone fails here.
+  assert {
+    condition = alltrue([
+      for d in [for doc in split("\n---\n", file("../../k8s/serving/scaled-object.yaml")) : yamldecode(doc)] :
+      "${d.spec.pollingInterval}s" == yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm-serving.endpoints[0].interval
+    ])
+    error_message = "The ScaledObject's pollingInterval must equal the serving fleet's scrape interval."
+  }
+
+  # The selector matches the Service the fleet's manifest deploys, so a label, port or
+  # namespace renamed on one side only fails here rather than silently stopping the
+  # scrape, which would leave the fleet unable to scale past one replica.
+  assert {
+    condition = length([
+      for d in [for doc in split("\n---\n", file("../../k8s/serving/vllm-serving.yaml")) : yamldecode(doc)] : d
+      if d.kind == "Service"
+      && d.metadata.labels.app == yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm-serving.selector.matchLabels.app
+      && contains(yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm-serving.namespaceSelector.matchNames, d.metadata.namespace)
+      && contains([for p in d.spec.ports : p.name], yamldecode(helm_release.kube_prometheus_stack.values[0]).prometheus.additionalServiceMonitors.vllm-serving.endpoints[0].port)
+    ]) == 1
+    error_message = "The serving fleet's ServiceMonitor app label, namespace and port must match the Service in k8s/serving/vllm-serving.yaml."
   }
 }
 
