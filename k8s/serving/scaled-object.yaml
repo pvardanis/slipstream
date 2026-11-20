@@ -56,16 +56,17 @@ spec:
         query: sum(vllm:num_requests_running{namespace="serving"} + vllm:num_requests_waiting{namespace="serving"})
         threshold: "6"
         activationThreshold: "0"
-    # The backstop: requests waiting in the fleet at every 15 s step of the last minute,
-    # from open-loop overload or preemptions, which vLLM puts back on the waiting queue.
-    # The query reads 1 then and 0 otherwise; a step with no Engine series counts as
-    # none waiting, so an Engine up for under a minute cannot fire it. As a Value
+    # The backstop: requests waiting in the fleet for a minute, from open-loop overload
+    # or preemptions, which vLLM puts back on the waiting queue. The window is left-open,
+    # so 75 s holds the five 15 s steps that span a minute. The query reads 1 while
+    # requests wait at every step and 0 otherwise; a step with no Engine series counts
+    # as none waiting, so an Engine up for under a minute cannot fire it. As a Value
     # trigger, reading 1 over a threshold of 0.5 asks for twice the current replicas.
     - type: prometheus
       name: queue
       metricType: Value
       metadata:
         serverAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
-        query: min_over_time(((sum(vllm:num_requests_waiting{namespace="serving"}) > bool 0) or vector(0))[1m:15s])
+        query: min_over_time(((sum(vllm:num_requests_waiting{namespace="serving"}) > bool 0) or vector(0))[75s:15s])
         threshold: "0.5"
         activationThreshold: "0"

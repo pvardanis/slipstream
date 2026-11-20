@@ -140,9 +140,9 @@ tests:
           - labels: '{}'
             value: 0
 
-  # Requests waiting at every scrape: queue reads 1 on the 15 s steps 4m15..5m of the
-  # minute (4m, 5m], all with 2 waiting, so it fires, asking for ceil(1 × 1 / 0.5) = 2
-  # replicas from one.
+  # Requests waiting at every scrape: queue reads 1 on the 15 s steps 4m..5m of the
+  # window (3m45, 5m], a minute of samples all with 2 waiting, so it fires, asking for
+  # ceil(1 × 1 / 0.5) = 2 replicas from one.
   - interval: 15s
     input_series:
       - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
@@ -156,8 +156,9 @@ tests:
           - labels: '{}'
             value: 1
 
-  # Requests waiting from 4m30 on, none before: at 5m the minute's step at 4m15 had none,
-  # so queue reads 0; at 5m15 its steps 4m30..5m15 all had 2 waiting, so it fires.
+  # Requests waiting from 4m30 on, none before: at 5m15 the window's step at 4m15 had
+  # none, so 45 s of waiting reads 0; at 5m30 its steps 4m30..5m30, a minute of samples,
+  # all had 2 waiting, so it fires.
   - interval: 15s
     input_series:
       - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
@@ -166,19 +167,19 @@ tests:
         values: '0x17 2x22'
     promql_expr_test:
       - trigger: queue
-        eval_time: 5m
+        eval_time: 5m15s
         exp_samples:
           - labels: '{}'
             value: 0
       - trigger: queue
-        eval_time: 5m15s
+        eval_time: 5m30s
         exp_samples:
           - labels: '{}'
             value: 1
 
-  # An Engine first scraped at 4m30 with requests already waiting: at 5m the minute's
+  # An Engine first scraped at 4m30 with requests already waiting: at 5m15 the window's
   # step at 4m15 had no Engine series, which counts as none waiting, so queue reads 0
-  # rather than firing on half a minute.
+  # rather than firing on the Engine's first 45 s.
   - interval: 15s
     input_series:
       - series: 'vllm:num_requests_running{namespace="serving",pod="vllm-serving-a",engine="0",model_name="m"}'
@@ -187,7 +188,7 @@ tests:
         values: '_x18 2x22'
     promql_expr_test:
       - trigger: queue
-        eval_time: 5m
+        eval_time: 5m15s
         exp_samples:
           - labels: '{}'
             value: 0

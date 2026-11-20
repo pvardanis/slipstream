@@ -30,9 +30,10 @@ metadata:
 spec:
   replicas: 1
   # One replica on one GPU node: tear the old pod down before starting the new one.
-  # A rolling update would try to run both at once and deadlock — a single A10G
-  # holds one copy of the weights, and the node pool's two GPUs are the whole quota
-  # the bench Engine and the serving fleet share (ADR-0031).
+  # A single A10G holds one copy of the weights, so a rolling update would hold a
+  # second GPU node through the new pod's cold start, and would deadlock Pending
+  # while the serving fleet holds the other of the node pool's two GPUs, the whole
+  # quota the two share (ADR-0031).
   strategy:
     type: Recreate
   # A cold g5 must be provisioned by Karpenter, then pull the ~10 GB image and

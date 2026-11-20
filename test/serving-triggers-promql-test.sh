@@ -96,8 +96,8 @@ check_mutation_fails queue ' or vector\(0\)' '' \
   'a step with no Engine series skipped, so an Engine up under a minute fires it'
 check_mutation_fails queue ' > bool 0\)' ')' \
   'the waiting count, not whether any request waits, which asks for more than twice'
-check_mutation_fails queue '\[1m:15s\]' '[30s:15s]' \
-  'half a minute of waiting firing it'
+check_mutation_fails queue '\[75s:15s\]' '[1m:15s]' \
+  'four steps, 45 s of waiting, firing it'
 
 if [[ "${fail}" -ne 0 ]]; then
   exit 1
